@@ -1,0 +1,18 @@
+# 敏感配置（绝对不上传）
+config.py
+*.key
+*.token
+.env
+
+# 记忆数据（个人隐私）
+*.json
+!requirements.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 编辑器
+.vscode/
+.idea/
