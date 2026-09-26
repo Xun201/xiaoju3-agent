@@ -28,3 +28,10 @@ permission.json
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# 忽略数据文件与测试文件
+data/
+test.jpg
+xiaoju3_code.tar.gz
+dev_log_*.md
+ALL_LOGS.md
