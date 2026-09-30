@@ -1,0 +1,28 @@
+# 小橘3号（xiaoju3-agent）第三方依赖
+# 一键安装：bash install.sh（自动建 venv 并安装本清单 + Chromium 内核）
+# 手动安装：python -m pip install -r requirements.txt && python -m playwright install chromium
+#
+# ── 依赖降级说明（香橙派等 Python 3.8/3.9 目标平台）──────────────────
+# 下列钉版面向开发机（Python ≥3.10）。目标平台若为系统自带 Python 3.8/3.9
+# （不升级系统 Python），install.sh 会自动改用以下 3.8 兼容组合（已核实各包
+# requires_python 与本项目 API 用量，行为一致，无需改代码）：
+#   Flask==3.0.3        # Flask 3.1 起要求 ≥3.9；本项目仅用核心 API
+#   requests==2.32.3    # requests 2.33 起要求 ≥3.9
+#   playwright==1.48.0  # 1.49 起要求 ≥3.9；1.48 为最后支持 3.8 的版本，
+#                       # 提供 linux-arm64 Chromium（Ubuntu 20.04/22.04 官方支持）
+#   psutil==7.2.2       # ≥3.6，无需降级
+#   flask-cors          # 全仓代码未 import，3.8 环境跳过不装
+# ─────────────────────────────────────────────────────────────────────
+
+# Web 后端
+Flask==3.1.3
+flask-cors==6.0.5
+
+# 系统监控（仪表盘 /api/status）
+psutil==7.2.2
+
+# HTTP 客户端（Ollama / DeepSeek / Home Assistant / 联网搜索）
+requests==2.34.2
+
+# 无头浏览器（/gen_log 深度分享页抓取；缺内核时优雅降级）
+playwright==1.63.0

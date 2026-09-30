@@ -1,0 +1,657 @@
+# -*- coding: utf-8 -*-
+"""监控仪表盘（xiaoju3_dashboard）单元测试（全部离线）。
+
+覆盖（任务口径，二阶段增补）：
+- GET /api/status 结构断言（code / data 五字段、cpu/memory 为数值），
+  psutil 正常与异常 mock 两态（异常字段回退 0.0）；
+- GET /api/balance：mock requests 断言 GET CLOUD_BALANCE_URL + Bearer 头与
+  返回结构；无 KEY / 请求失败 / 返回格式异常的回退结构（余额 0.0 + 错误提示）；
+- POST /api/chat：mock brain.smart_ask 断言直连（不经路由层、不写
+  agent_state 下 history_qq/history_web 双通道记忆落盘）与 {reply, source}
+  返回；空消息 400、GET 405、大脑异常 500；成功问答落盘控制台历史
+  （HISTORY_FILE 注入 tmp 目录，不污染真实 agent_state）；
+- GET /api/history 返回结构（缺失文件回退空列表）、DELETE /api/history
+  清空、POST /api/chat 后 50 条滚动截断、大脑异常不落盘；
+- GET / 旧版页与 GET /console 新版控制台托管（含关键令牌）；
+- 素材可达：/assets/DSniang1.jpg 200（修复界面文档 §5.1 的 404 已知问题）；
+- 前端三件套静态断言：index.html 无外部 CDN、viewport meta、:root 令牌
+  （默认深蓝 #203170 不变）+ data-theme="orange" 橘色主题、移动端断点与
+  抽屉；console.js 2s 轮询与 >80% 变红、历史加载渲染、刷新/转发实装
+  （无 alert 占位）、主题/音效开关；desktop-pet.js 桌宠规格（250 / 0.88 /
+  拖拽阈值 9 / 5000ms / 60000ms / 报错端口 5003 且不含 5005）、真实素材
+  DSniang1.jpg、scaleX(-1) 翻转、吸附阈值 24px、台词库、AudioContext、
+  600px 移动端缩放。
+
+mock 注意：所有 patch 均走 context manager / start+addCleanup（结束即还原），
+不污染 sys.modules；历史文件一律注入 tmp 目录，可与其它测试文件在同一
+进程中共存。
+"""
+import contextlib
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+import warnings
+from unittest import mock
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+import xiaoju3  # noqa: E402
+import xiaoju3_dashboard as dashboard  # noqa: E402
+
+
+@contextlib.contextmanager
+def _quiet():
+    """吞掉仪表盘的进度 print（含 emoji 与 traceback），保持测试输出干净。"""
+    with contextlib.redirect_stdout(io.StringIO()):
+        yield
+
+
+def _history_files():
+    """agent_state 目录下已有的 history_* 会话记忆文件集合。"""
+    state_dir = xiaoju3.AGENT_STATE_DIR
+    if not os.path.isdir(state_dir):
+        return set()
+    return {n for n in os.listdir(state_dir) if n.startswith("history_")}
+
+
+def _read_json_file(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/status
+# ---------------------------------------------------------------------------
+
+class StatusApiTests(unittest.TestCase):
+    """系统状态接口：结构与 psutil 正常 / 异常两态。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_status_structure_normal(self):
+        """psutil 正常：code=200，data 恰好五字段且数值正确。"""
+        fake_psutil = mock.Mock()
+        fake_psutil.cpu_percent.return_value = 32.5
+        fake_psutil.virtual_memory.return_value = mock.Mock(percent=61.2)
+        fake_psutil.sensors_temperatures.return_value = {
+            "coretemp": [mock.Mock(current=52.3), mock.Mock(current=45.0)],
+        }
+        fake_time = mock.Mock()
+        fake_time.time.return_value = 1727654321.6
+
+        with mock.patch.object(dashboard, "psutil", fake_psutil), \
+                mock.patch.object(dashboard, "time", fake_time):
+            resp = self.client.get("/api/status")
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        data = payload["data"]
+        self.assertEqual(set(data.keys()),
+                         {"cpu", "memory", "temperature", "timestamp"})
+        self.assertEqual(data["cpu"], 32.5)
+        self.assertEqual(data["memory"], 61.2)
+        self.assertEqual(data["temperature"], 52.3)  # 取首个可用温度
+        self.assertEqual(data["timestamp"], 1727654321)
+        self.assertIsInstance(data["timestamp"], int)
+        for key in ("cpu", "memory", "temperature"):
+            self.assertIsInstance(data[key], (int, float))
+        fake_psutil.cpu_percent.assert_called_once_with(interval=0.5)
+
+    def test_status_psutil_exception_fallback(self):
+        """psutil 抛异常：cpu/memory/temperature 回退 0.0，接口不 500。"""
+        fake_psutil = mock.Mock()
+        fake_psutil.cpu_percent.side_effect = RuntimeError("psutil boom")
+        fake_psutil.virtual_memory.side_effect = RuntimeError("psutil boom")
+        fake_psutil.sensors_temperatures.side_effect = NotImplementedError(
+            "sensors not supported")
+
+        with mock.patch.object(dashboard, "psutil", fake_psutil), _quiet():
+            resp = self.client.get("/api/status")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        self.assertEqual(set(data.keys()),
+                         {"cpu", "memory", "temperature", "timestamp"})
+        self.assertEqual(data["cpu"], 0.0)
+        self.assertEqual(data["memory"], 0.0)
+        self.assertEqual(data["temperature"], 0.0)
+        self.assertIsInstance(data["timestamp"], int)
+
+    def test_status_sensors_empty_fallback(self):
+        """sensors_temperatures 返回空：温度回退 0.0。"""
+        fake_psutil = mock.Mock()
+        fake_psutil.cpu_percent.return_value = 10.0
+        fake_psutil.virtual_memory.return_value = mock.Mock(percent=20.0)
+        fake_psutil.sensors_temperatures.return_value = {}
+
+        with mock.patch.object(dashboard, "psutil", fake_psutil):
+            data = self.client.get("/api/status").get_json()["data"]
+
+        self.assertEqual(data["temperature"], 0.0)
+        self.assertEqual(data["cpu"], 10.0)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/balance
+# ---------------------------------------------------------------------------
+
+class BalanceApiTests(unittest.TestCase):
+    """余额接口：Bearer 请求、正常结构、无 KEY / 失败回退。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_balance_success_with_bearer_header(self):
+        """正常：GET CLOUD_BALANCE_URL + Bearer CLOUD_KEY，返回嵌套结构。"""
+        fake_resp = mock.Mock()
+        fake_resp.json.return_value = {
+            "balance_infos": [{"total_balance": "12.34", "currency": "CNY"}],
+        }
+        with mock.patch.object(dashboard, "CLOUD_KEY", "test-key"), \
+                mock.patch.object(dashboard, "CLOUD_BALANCE_URL",
+                                  "https://api.example.com/user/balance"), \
+                mock.patch.object(dashboard, "requests") as mr:
+            mr.get.return_value = fake_resp
+            payload = self.client.get("/api/balance").get_json()
+
+        mr.get.assert_called_once_with(
+            "https://api.example.com/user/balance",
+            headers={"Authorization": "Bearer test-key"},
+            timeout=10,
+        )
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"], {
+            "balance": 12.34,
+            "currency": "CNY",
+            "today_usage": 0.0,   # 文档口径：今日已用恒 0.0
+            "is_peak": False,
+        })
+
+    def test_balance_no_key_fallback(self):
+        """无 KEY：不发起请求，回退余额 0.0 并附错误提示。"""
+        with mock.patch.object(dashboard, "CLOUD_KEY", ""), \
+                mock.patch.object(dashboard, "requests") as mr:
+            payload = self.client.get("/api/balance").get_json()
+
+        mr.get.assert_not_called()
+        self.assertEqual(payload["code"], 500)
+        self.assertTrue(payload.get("error"))
+        self.assertEqual(payload["data"]["balance"], 0.0)
+        self.assertEqual(payload["data"]["today_usage"], 0.0)
+        self.assertEqual(payload["data"]["is_peak"], False)
+
+    def test_balance_request_failure_fallback(self):
+        """请求异常：回退余额 0.0，error 含失败原因。"""
+        with mock.patch.object(dashboard, "CLOUD_KEY", "test-key"), \
+                mock.patch.object(dashboard, "requests") as mr:
+            mr.get.side_effect = OSError("network down")
+            payload = self.client.get("/api/balance").get_json()
+
+        self.assertEqual(payload["code"], 500)
+        self.assertIn("network down", payload["error"])
+        self.assertEqual(payload["data"]["balance"], 0.0)
+
+    def test_balance_abnormal_payload_fallback(self):
+        """返回缺 balance_infos：按格式异常回退。"""
+        fake_resp = mock.Mock()
+        fake_resp.json.return_value = {"error": {"message": "bad request"}}
+        with mock.patch.object(dashboard, "CLOUD_KEY", "test-key"), \
+                mock.patch.object(dashboard, "requests") as mr:
+            mr.get.return_value = fake_resp
+            payload = self.client.get("/api/balance").get_json()
+
+        self.assertEqual(payload["code"], 500)
+        self.assertIn("格式异常", payload["error"])
+        self.assertEqual(payload["data"]["balance"], 0.0)
+
+
+# ---------------------------------------------------------------------------
+# 控制台聊天历史持久化（功能文档 §12 / 界面文档 §10.4 近期项）
+# ---------------------------------------------------------------------------
+
+class HistoryApiTestsBase(unittest.TestCase):
+    """历史接口测试基类：HISTORY_FILE 注入 tmp 目录（自动还原）。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.history_file = os.path.join(tmp.name, "history_console.json")
+        patcher = mock.patch.object(dashboard, "HISTORY_FILE", self.history_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _write_history(self, messages):
+        os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+        with open(self.history_file, "w", encoding="utf-8") as f:
+            json.dump(messages, f, ensure_ascii=False)
+
+
+class HistoryApiTests(HistoryApiTestsBase):
+    """/api/history：GET 结构、DELETE 清空、方法限制。"""
+
+    def test_get_history_structure(self):
+        """GET 返回 {code, data:{messages:[...]}}，消息按落盘顺序返回。"""
+        self._write_history([
+            {"role": "user", "content": "你好"},
+            {"role": "assistant", "content": "你好呀~", "source": "🏠 本地"},
+        ])
+        payload = self.client.get("/api/history").get_json()
+
+        self.assertEqual(payload["code"], 200)
+        self.assertIn("messages", payload["data"])
+        msgs = payload["data"]["messages"]
+        self.assertEqual(len(msgs), 2)
+        self.assertEqual(msgs[0]["role"], "user")
+        self.assertEqual(msgs[0]["content"], "你好")
+        self.assertEqual(msgs[1]["role"], "assistant")
+        self.assertEqual(msgs[1]["source"], "🏠 本地")
+
+    def test_get_history_missing_file_returns_empty(self):
+        """历史文件缺失：GET 回退空列表，不 500。"""
+        payload = self.client.get("/api/history").get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"]["messages"], [])
+
+    def test_delete_history_clears_file(self):
+        """DELETE 清空：文件写回空列表，GET 返回空。"""
+        self._write_history([{"role": "user", "content": "旧消息"}] * 3)
+        payload = self.client.delete("/api/history").get_json()
+
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"]["messages"], [])
+        self.assertEqual(_read_json_file(self.history_file), [])
+        self.assertEqual(self.client.get("/api/history").get_json()
+                         ["data"]["messages"], [])
+
+    def test_history_post_not_allowed(self):
+        """/api/history 仅 GET/DELETE：POST 返回 405。"""
+        resp = self.client.post("/api/history", json={"message": "x"})
+        self.assertEqual(resp.status_code, 405)
+
+
+class ChatHistoryPersistenceTests(HistoryApiTestsBase):
+    """POST /api/chat 成功后的历史落盘与 50 条滚动截断。"""
+
+    def test_chat_persists_user_and_assistant(self):
+        """成功问答：用户消息与回复（含 source）追加落盘。"""
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("你好呀，主人~", "🏠 本地")
+            resp = self.client.post("/api/chat", json={"message": "你好"})
+
+        self.assertEqual(resp.status_code, 200)
+        stored = _read_json_file(self.history_file)
+        self.assertEqual(stored[0], {"role": "user", "content": "你好"})
+        self.assertEqual(stored[1]["role"], "assistant")
+        self.assertEqual(stored[1]["content"], "你好呀，主人~")
+        self.assertEqual(stored[1]["source"], "🏠 本地")
+
+    def test_chat_history_truncated_to_50(self):
+        """50 条滚动截断：旧消息 + 新问答超过 50 条时保留最近 50 条。"""
+        old = [{"role": "user", "content": f"旧消息{i}"} for i in range(49)]
+        self._write_history(old)
+
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("收到", "☁️ 云端")
+            resp = self.client.post("/api/chat", json={"message": "新消息"})
+
+        self.assertEqual(resp.status_code, 200)
+        stored = _read_json_file(self.history_file)
+        self.assertEqual(len(stored), dashboard.MAX_MESSAGES)   # 50 条
+        self.assertEqual(stored[0]["content"], "旧消息1")        # 最旧的被截断
+        self.assertEqual(stored[-2]["content"], "新消息")        # 新问答在末尾
+        self.assertEqual(stored[-1]["content"], "收到")
+
+    def test_chat_brain_failure_persists_nothing(self):
+        """大脑异常 500：不落盘（仅成功问答持久化）。"""
+        self._write_history([{"role": "user", "content": "已有"}])
+        with mock.patch.object(dashboard, "smart_ask",
+                               side_effect=RuntimeError("brain boom")), _quiet():
+            resp = self.client.post("/api/chat", json={"message": "hi"})
+
+        self.assertEqual(resp.status_code, 500)
+        self.assertEqual(_read_json_file(self.history_file),
+                         [{"role": "user", "content": "已有"}])
+
+    def test_chat_empty_message_persists_nothing(self):
+        """空消息 400：不落盘。"""
+        with _quiet():
+            resp = self.client.post("/api/chat", json={"message": ""})
+        self.assertEqual(resp.get_json()["code"], 400)
+        self.assertFalse(os.path.exists(self.history_file))
+
+
+# ---------------------------------------------------------------------------
+# POST /api/chat（直连大脑与双通道隔离）
+# ---------------------------------------------------------------------------
+
+class ChatApiTests(HistoryApiTestsBase):
+    """聊天接口：直连 brain.smart_ask，不写 QQ/网页双通道记忆落盘。"""
+
+    def test_chat_direct_to_brain_and_returns_source(self):
+        """mock smart_ask：直连传参 (message, history)，返回 reply + source。"""
+        history = [{"role": "user", "content": "早上好"},
+                   {"role": "assistant", "content": "早呀"}]
+        before = _history_files()
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("你好呀，主人~", "🏠 本地")
+            resp = self.client.post("/api/chat",
+                                    json={"message": "你好", "history": history})
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"]["reply"], "你好呀，主人~")
+        self.assertEqual(payload["data"]["source"], "🏠 本地")
+        ms.assert_called_once_with("你好", history)
+        # 直连大脑：不写 QQ/网页双通道记忆，agent_state 下无新 history 落盘
+        # （控制台历史已注入 tmp 目录，真实 agent_state 不受影响）
+        self.assertEqual(_history_files(), before)
+        # 控制台侧问答成功后落盘（HISTORY_FILE 已注入 tmp）
+        self.assertTrue(os.path.exists(self.history_file))
+
+    def test_chat_default_empty_history(self):
+        """未传 history：以空列表传给 smart_ask。"""
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("嗯嗯", "☁️ 云端")
+            resp = self.client.post("/api/chat", json={"message": "在吗"})
+
+        self.assertEqual(resp.status_code, 200)
+        ms.assert_called_once_with("在吗", [])
+
+    def test_chat_empty_message_rejected(self):
+        """空消息：业务码 400 + 中文错误提示（参考口径：HTTP 200、body 携带 code）。"""
+        with _quiet():
+            resp = self.client.post("/api/chat", json={"message": ""})
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 400)
+        self.assertEqual(payload["error"], "消息不能为空")
+
+    def test_chat_missing_body_rejected(self):
+        """无 JSON 体：同样业务码 400，不 500。"""
+        with _quiet():
+            resp = self.client.post("/api/chat")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["code"], 400)
+
+    def test_chat_get_not_allowed(self):
+        """/api/chat 仅 POST：GET 返回 405。"""
+        resp = self.client.get("/api/chat")
+        self.assertEqual(resp.status_code, 405)
+
+    def test_chat_brain_exception_returns_500(self):
+        """smart_ask 抛异常：500 + 错误结构。"""
+        with mock.patch.object(dashboard, "smart_ask",
+                               side_effect=RuntimeError("brain boom")), _quiet():
+            resp = self.client.post("/api/chat", json={"message": "hi"})
+
+        self.assertEqual(resp.status_code, 500)
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 500)
+        self.assertIn("brain boom", payload["error"])
+
+
+# ---------------------------------------------------------------------------
+# 旧版页与新版控制台托管
+# ---------------------------------------------------------------------------
+
+class ServingTests(unittest.TestCase):
+    """GET / 旧版蓝色单页与 /console 新版控制台静态托管。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_legacy_index_renders(self):
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("系统监控", html)
+        self.assertIn("运行时长", html)
+        self.assertIn("我是小橘3号", html)
+        # 已知问题修复断言：旧版页改读嵌套字段，不再读取 data.temp/data.uptime
+        self.assertIn("d.temperature", html)
+        self.assertIn("BOOT_TS", html)
+        self.assertNotIn("data.uptime", html)
+        self.assertNotIn("data.temp.", html)
+
+    def test_console_page_with_key_tokens(self):
+        resp = self.client.get("/console")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("#203170", html)
+        self.assertIn("你好！我是小橘3号，很高兴为你服务喵~", html)
+
+    def test_console_static_scripts(self):
+        for path in ("/console/console.js", "/console/desktop-pet.js"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", ResourceWarning)  # werkzeug 读文件句柄告警
+                resp = self.client.get(path)
+            self.assertEqual(resp.status_code, 200, path)
+
+    def test_mascot_asset_served(self):
+        """素材已补齐：/assets/DSniang1.jpg 可达（修复界面文档 §5.1 的 404 已知问题）。"""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            resp = self.client.get("/assets/DSniang1.jpg")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_data())                       # 内容非空
+        self.assertIn("image", resp.headers.get("Content-Type", ""))
+
+    def test_missing_static_asset_returns_404(self):
+        """不存在的静态资源 404。"""
+        resp = self.client.get("/console/__no_such_file__.js")
+        self.assertEqual(resp.status_code, 404)
+
+
+# ---------------------------------------------------------------------------
+# 前端三件套静态断言（直接读文件内容）
+# ---------------------------------------------------------------------------
+
+class FrontendStaticTests(unittest.TestCase):
+    """前端行为以文件内容静态断言（无浏览器，离线可跑）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        def _read(name):
+            with open(os.path.join(PROJECT_ROOT, name), "r", encoding="utf-8") as f:
+                return f.read()
+        cls.index_html = _read("index.html")
+        cls.console_js = _read("console.js")
+        cls.pet_js = _read("desktop-pet.js")
+
+    def test_index_has_no_external_cdn(self):
+        html = self.index_html.lower()
+        self.assertNotIn("http://", html)
+        self.assertNotIn("https://", html)
+        self.assertNotIn("src='//", html)
+
+    def test_index_design_tokens(self):
+        """令牌表重构为 :root CSS 变量（界面 §1.3 → §10.1 皮肤系统基础），
+        默认主题保持深蓝 #203170 不变。"""
+        html = self.index_html
+        tokens = (
+            ":root",                             # CSS 变量令牌表
+            "--color-primary: #203170",          # 主色（默认深蓝，保持不变）
+            "--color-primary-hover: #2f4488",    # 主色悬停
+            "--color-bg: #f4f6f9", "--color-bg-chat: #f9fbfe",   # 页面底色分层
+            "--color-success: #2fa24c",          # 进度条正常态
+            "--color-danger: #e0433f",           # 警示色
+            "--color-like: #ef4444", "--color-like-bg: #fef2f2", # 点赞激活
+            "--color-dislike: #3b82f6", "--color-dislike-bg: #eff6ff",  # 点踩激活
+            "--radius-bubble: 10px",             # 气泡圆角令牌
+            "--shadow-sidebar: 2px 0 10px rgba(0,0,0,0.02)",     # 侧栏单向阴影
+            "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",   # 全局字体栈
+            "width: 33.33%", "min-width: 300px", # 双栏骨架
+            "100vh",                             # 无页面滚动
+            "你好！我是小橘3号，很高兴为你服务喵~",   # 欢迎语
+            "onkeypress",                        # 回车发送
+            "xiaoju3-root",                      # 桌宠容器
+        )
+        for token in tokens:
+            self.assertIn(token, html)
+
+    def test_index_orange_theme(self):
+        """橘色主题（界面 §10.1）：data-theme="orange" 全套变量成体系，
+        右上角主题切换按钮 + localStorage 记忆（记忆逻辑在 console.js）。"""
+        html = self.index_html
+        self.assertIn('[data-theme="orange"]', html)          # 属性选择器
+        orange_tokens = (
+            "--color-primary: #d96f2b",      # 主色·暖橘（狐毛同源）
+            "--color-primary-hover: #e8853f",
+            "--color-bg: #fdf6ee",
+            "--color-card: #fffdf9",
+            "--color-border: #f0e0cb",
+            "--color-text-secondary: #a9683a",
+            "--color-progress-track: #f7ebdb",
+            "--color-danger: #e0433f",       # 警示色成体系保留
+        )
+        for token in orange_tokens:
+            self.assertIn(token, html)
+        self.assertIn("theme-toggle", html)  # 主题切换按钮挂载点
+
+    def test_index_mobile_responsive(self):
+        """移动端适配（界面 §7）：viewport meta + ≤768px 断点单栏折叠
+        （监控侧栏收为可展开抽屉）。"""
+        html = self.index_html
+        self.assertIn('name="viewport"', html)                # viewport meta
+        self.assertIn("initial-scale=1.0", html)
+        self.assertIn("@media (max-width: 768px)", html)      # 移动端断点
+        self.assertIn("sidebar-toggle", html)                 # 抽屉开关按钮
+        self.assertIn("translateX(-105%)", html)              # 抽屉收起态
+        self.assertIn(".sidebar.open", html)                  # 抽屉展开态
+        # 输入区窄屏可用：不因 min-width 挤压
+        self.assertIn("font-size: 16px", html)                # 防 iOS 聚焦放大
+
+    def test_index_card_and_toast(self):
+        """MAA 风格卡片化（令牌化圆角+轻阴影）与 toast 提示挂载点。"""
+        html = self.index_html
+        for token in ("--radius-card", "--shadow-card",
+                      "header-actions", "xiaoju3-toast"):
+            self.assertIn(token, html)
+
+    def test_console_js_polling_and_threshold(self):
+        js = self.console_js
+        self.assertIn("setInterval(fetchStatus, 2000)", js)   # 2 秒轮询
+        self.assertIn("d.cpu > 80", js)                       # >80% 阈值
+        self.assertIn("d.memory > 80", js)
+        self.assertIn("'#e0433f'", js)                        # 变红
+        self.assertIn("'#2fa24c'", js)                        # 正常绿
+        self.assertIn("fetchStatus();", js)                   # 加载即请求一次
+        # 聊天行为
+        self.assertIn("小橘3号正在思考... 🧠", js)             # 占位气泡
+        self.assertIn("speechSynthesis", js)                  # TTS
+        self.assertIn("speechSynthesis.cancel()", js)         # 清队列后朗读
+        self.assertIn("navigator.clipboard", js)              # 剪贴板复制
+        self.assertIn("已复制", js)
+        self.assertIn("active-like", js)                      # 点赞/点踩互斥
+        self.assertIn("active-dislike", js)
+        self.assertIn("source-badge", js)                     # 大脑来源徽标
+        self.assertIn("res.data.source", js)                  # 消费 source 字段
+
+    def test_console_js_history_load(self):
+        """聊天历史持久化前端侧（功能文档 §12 / 界面 §10.4 近期项）。"""
+        js = self.console_js
+        self.assertIn("loadHistory", js)                      # 页面加载拉取历史
+        self.assertIn("'/api/history'", js)                   # 历史接口
+        self.assertIn("res.data.messages", js)                # 渲染 messages
+        self.assertIn("method: 'DELETE'", js)                 # 清空历史（带确认）
+        self.assertIn("confirm(", js)                         # 确认语义
+
+    def test_console_js_refresh_forward_implemented(self):
+        """刷新/转发按钮实装（界面 §4.2）：移除 alert 占位。"""
+        js = self.console_js
+        # 刷新：对触发该回复的原消息重新 POST /api/chat 并替换当前回复气泡
+        self.assertIn("refreshMsg", js)
+        self.assertIn("dataset.prompt", js)                   # 记录原消息
+        self.assertIn("正在重新生成", js)                      # 刷新占位
+        # 转发：剪贴板复制全文并提示可粘贴转发
+        self.assertIn("forwardMsg", js)
+        self.assertIn("可粘贴转发", js)
+        # 移除 alert("开发中") 占位（整个文件不再使用 alert）
+        self.assertNotIn("开发中", js)
+        self.assertNotIn("alert(", js)
+        # toast 轻提示与 XSS 转义（界面 §4.4/§10.4 近期项）
+        self.assertIn("showToast", js)
+        self.assertIn("escapeHtml", js)
+
+    def test_console_js_theme_and_sound(self):
+        """主题切换（localStorage 记忆）与回复到达提示音接线。"""
+        js = self.console_js
+        self.assertIn("xiaoju3_theme", js)                    # 主题记忆键
+        self.assertIn("data-theme", js)                       # 橘色主题切换
+        self.assertIn("xiaoju3Sound", js)                     # 桌宠音效引擎
+        self.assertIn("ding()", js)                           # 回复到达提示音
+        self.assertIn("sound-toggle", js)                     # 音效总开关按钮
+
+    def test_desktop_pet_specs(self):
+        js = self.pet_js
+        self.assertIn("window.__xiaoju3Pet", js)              # IIFE 单例防重复注入
+        self.assertIn("250px * var(--pet-scale)", js)         # 250px 基准缩放
+        self.assertIn("scaleY(0.88) scaleX(1.05)", js)        # 按压形变
+        self.assertIn("cubic-bezier(.34,1.56,.64,1)", js)     # 0.22s 回弹曲线
+        self.assertIn("setPointerCapture", js)                # Pointer Events 拖拽
+        self.assertIn("dx * dx + dy * dy > 9", js)            # 拖拽阈值（位移平方）
+        self.assertIn("chat-area", js)                        # 左界：聊天区左缘
+        self.assertIn("chat-input-area", js)                  # 下界：输入区上沿
+        self.assertIn("window.addEventListener('resize'", js) # resize 重钳制
+        self.assertIn("5000", js)                             # 气泡 5s 自动关闭
+        self.assertIn("60000", js)                            # 余额 60s 轮询
+        self.assertIn("今日已用", js)                          # 气泡含今日已用
+        self.assertIn("5003", js)                             # 报错端口写 5003
+        self.assertNotIn("5005", js)                          # 不含参考的 5005 笔误
+
+    def test_desktop_pet_real_asset(self):
+        """真实素材挂载（界面 §5.1 的 404 已知问题修复）。"""
+        js = self.pet_js
+        self.assertIn("/assets/DSniang1.jpg", js)             # 官方素材图
+        self.assertNotIn("DSniang1.png", js)                  # 不再引用不存在的 png
+        self.assertIn("xiaoju-overlay", js)                   # 素材气泡区文字覆盖层
+        self.assertIn("img-ok", js)                           # 素材可用性检测
+        self.assertIn("xiaoju-pop", js)                       # SVG 兜底气泡保留
+
+    def test_desktop_pet_flip(self):
+        """左右翻转（界面 §5.2）：拖拽方向决定面向，scaleX(-1) 镜像。"""
+        js = self.pet_js
+        self.assertIn("scaleX(-1)", js)                       # 镜像切换
+        self.assertIn("facing-right", js)                     # 面向状态类
+        self.assertIn("facing", js)                           # 面向变量（拖拽方向决定）
+        self.assertIn("xiaoju-flip", js)                      # 独立翻转层（与按压形变分离）
+
+    def test_desktop_pet_edge_snap(self):
+        """边缘吸附（界面 §5.2）：松手后距屏幕左/右边缘 < 24px 磁吸贴边。"""
+        js = self.pet_js
+        self.assertIn("SNAP_THRESHOLD = 24", js)              # 吸附阈值 24px
+        self.assertIn("snapToEdge", js)                       # 吸附逻辑
+
+    def test_desktop_pet_random_lines(self):
+        """随机台词气泡（界面 §5.3/§10.2）：内置 8-12 条中文台词，与余额轮换。"""
+        js = self.pet_js
+        self.assertIn("PET_LINES", js)                        # 台词库常量
+        start = js.index("const PET_LINES = [")
+        block = js[start:js.index("];", start)]
+        count = block.count("',")                             # 每行台词以 ', 结尾
+        self.assertGreaterEqual(count, 8)                     # 台词库 ≥ 8 条
+        self.assertLessEqual(count, 12)                       # 台词库 ≤ 12 条
+        self.assertIn("bubbleTurn", js)                       # 轮换计数
+
+    def test_desktop_pet_sound_and_mobile_scale(self):
+        """音效（界面 §6.2）与移动端缩放（界面 §7）。"""
+        js = self.pet_js
+        self.assertIn("AudioContext", js)                     # WebAudio 程序合成
+        self.assertIn("webkitAudioContext", js)               # 兼容前缀 + 静默降级
+        self.assertIn("xiaoju3_sound", js)                    # 总开关 localStorage 记忆
+        self.assertIn("createOscillator", js)                 # 零外部音频文件（程序合成）
+        self.assertIn("vw < 600", js)                         # 视口 <600px 缩放
+        self.assertIn("--pet-scale", js)                      # 复用 --pet-scale 机制
+
+
+if __name__ == "__main__":
+    unittest.main()
