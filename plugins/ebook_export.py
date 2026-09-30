@@ -244,7 +244,7 @@ def export_from_history(history, title="小橘3号对话导出"):
     chapters = []
     for i in range(0, len(msgs), CHAPTER_SIZE):
         chunk = msgs[i:i + CHAPTER_SIZE]
-        lines = [f"{'XUN' if role == 'user' else '小橘3号'}：{content}"
+        lines = [f"{'用户' if role == 'user' else '小橘3号'}：{content}"
                  for role, content in chunk]
         chapters.append({"title": f"第 {i // CHAPTER_SIZE + 1} 章",
                          "content": "\n".join(lines)})

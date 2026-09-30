@@ -310,8 +310,10 @@ class TestInstaller(unittest.TestCase):
         self.assertIn("优雅降级", self.content)
 
     def test_env_bootstrap_from_template(self):
-        """ .env 从模板生成；密钥交互不回显（read -s）；非交互只复制模板并提示手工填写。"""
-        self.assertIn("cp .env.example .env", self.content)
+        """隔离区 .env 从模板生成；密钥交互不回显（read -s）；非交互只复制模板并提示手工填写。"""
+        self.assertIn('ENV_PATH="xiaoju3_data/.env"', self.content)
+        self.assertIn("mkdir -p xiaoju3_data", self.content)
+        self.assertIn('cp .env.example "$ENV_PATH"', self.content)
         self.assertIn("read -s", self.content)
         for key in (
             "DEEPSEEK_API_KEY",
@@ -463,8 +465,8 @@ class TestInstallerFunctional(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, f"install.sh 非交互安装失败:\n{out}")
 
-            # .env 已从模板生成，内容与模板一致
-            env_content = (root / ".env").read_text(encoding="utf-8")
+            # 隔离区 .env 已从模板生成，内容与模板一致
+            env_content = (root / "xiaoju3_data" / ".env").read_text(encoding="utf-8")
             self.assertIn("DEEPSEEK_API_KEY=", env_content)
             self.assertIn("changeme-xiaoju3", env_content)
 
@@ -518,8 +520,8 @@ class TestInstallerFunctional(unittest.TestCase):
             self.assertEqual(
                 first.returncode, 0, first.stdout.decode("utf-8", "replace")
             )
-            # 用户已填写的 .env 加一个标记
-            with open(root / ".env", "a", encoding="utf-8", newline="\n") as f:
+            # 用户已填写的隔离区 .env 加一个标记
+            with open(root / "xiaoju3_data" / ".env", "a", encoding="utf-8", newline="\n") as f:
                 f.write("MARKER_TEST=1\n")
             second = _run_installer(root, stub_dir, "--non-interactive")
             out2 = second.stdout.decode("utf-8", "replace") + second.stderr.decode(
@@ -527,7 +529,7 @@ class TestInstallerFunctional(unittest.TestCase):
             )
             self.assertEqual(second.returncode, 0, f"二次安装失败:\n{out2}")
             # .env 未被覆盖（标记仍在），venv 跳过创建，配置引导跳过
-            env_content = (root / ".env").read_text(encoding="utf-8")
+            env_content = (root / "xiaoju3_data" / ".env").read_text(encoding="utf-8")
             self.assertIn("MARKER_TEST=1", env_content)
             self.assertIn("跳过创建", out2)
             self.assertIn("跳过配置引导", out2)

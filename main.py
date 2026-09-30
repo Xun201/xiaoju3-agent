@@ -11,7 +11,8 @@
   （migration.health_bp 一行接入，架构 §8）。
 
 指令族（§7 用户新权限表，覆盖旧"固定认证码"口径）：
-- /register <密码>：Lv.2 注册（env XIAOJU3_REGISTER_PASSWORD，落盘）。
+- /register <密码> [称呼]：Lv.2 注册（env XIAOJU3_REGISTER_PASSWORD，落盘；称呼不得占用创造者保留名）。
+- /name <称呼>：设置/修改自称称呼（创造者保留名不可占用）。
 - /coder_auth <6位动态密码>：TOTP 激活 Lv.3（等级持久化接线，修复"重启回落"）。
 - /sudo <6位动态密码>：开启 120 秒写操作窗口（窗口内写文件免逐次密码）。
 - /lv4_auth：两步流——先发 /lv4_auth 看类 Root 警告，再 /lv4_auth confirm <TOTP>
@@ -329,7 +330,14 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
 
     # === 🛡️ Lv.2 注册（§7：env 注册密码校验，等级落盘） ===
     if message.startswith("/register"):
-        return permission_manager.register_user(user_key, _arg_after(raw_message, "/register"))
+        arg = _arg_after(raw_message, "/register").strip()
+        parts = arg.split(None, 1)
+        password = parts[0] if parts else ""
+        name = parts[1].strip() if len(parts) > 1 else None
+        return permission_manager.register_user(user_key, password, name=name)
+
+    if message.startswith("/name"):
+        return permission_manager.claim_name(user_key, _arg_after(raw_message, "/name"))
 
     # === 🛡️ Lv.3 TOTP 动态密码激活（等级持久化接线，修复"重启回落"） ===
     if message.startswith("/coder_auth"):

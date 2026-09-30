@@ -96,6 +96,95 @@ def _default_execute(tool_name, args):
     return execute_tool(tool_name, args, pm)
 
 
+# ==================== 紧急豁免机制（危险传感器报警 → 强制关闭） ====================
+# 定稿口径：当 HA 的危险传感器（煤气/烟雾/水浸等）报警时，心跳引擎绕过所有
+# 权限限制，对关联的危险设备直接发送 turn_off（只准关不准开）；每次豁免必须
+# 打印日志并 QQ 推送通知主人。物理机械开关优先级永远高于软件控制。
+
+_EMERGENCY_SENSOR_PAT = re.compile(r"gas|smoke|flood|leak|燃气|煤气|烟雾|水浸|漏水", re.IGNORECASE)
+_EMERGENCY_ALARM_STATES = {"on", "alarm", "triggered", "gas", "smoke", "leak", "wet"}
+
+
+def notify_master(text):
+    """QQ 推送通知主人（NapCat send_private_msg；未配置则仅日志，不抛错）。"""
+    api = (os.environ.get("NAPCAT_API_URL", "") or "http://127.0.0.1:3000").rstrip("/")
+    owner = (os.environ.get("XIAOJU3_OWNER_QQ", "") or "").strip()
+    if not owner:
+        print("📨 [紧急豁免] 未配置 XIAOJU3_OWNER_QQ，跳过 QQ 推送（仅记录日志）。")
+        return False
+    try:
+        import requests
+        requests.post(f"{api}/send_private_msg",
+                      json={"user_id": owner, "message": text}, timeout=5)
+        print("📨 已推送 QQ 通知主人（紧急豁免）。")
+        return True
+    except Exception as e:
+        print(f"⚠️ [紧急豁免] QQ 推送失败（不影响豁免动作）: {e}")
+        return False
+
+
+def _is_emergency_sensor(entity_id, state):
+    """是否处于报警状态的危险传感器（煤气/烟雾/水浸类）。
+
+    限定 binary_sensor./sensor. 域 + 实体名匹配 + 报警态——避免把名字里带
+    gas 的开关/阀门设备本身误判为报警源。
+    """
+    eid = (entity_id or "").lower()
+    if not (eid.startswith("binary_sensor.") or eid.startswith("sensor.")):
+        return False
+    if not _EMERGENCY_SENSOR_PAT.search(eid):
+        return False
+    return str(state or "").strip().lower() in _EMERGENCY_ALARM_STATES
+
+
+def _emergency_targets(sensor_entity, states):
+    """与报警传感器关联的危险设备：优先共享名称词元（如同属厨房），
+    无词元交集时回退为全部危险设备（宁多关不漏关；只发 turn_off）。
+    报警传感器自身永不作为关闭目标。"""
+    import home_tools
+    tokens = {t for t in re.split(r"[_\W]+", (sensor_entity or "").lower()) if t}
+    dangerous = [e.get("entity_id") for e in states
+                 if home_tools.is_dangerous_entity(e.get("entity_id", ""))
+                 and e.get("entity_id") != sensor_entity]
+    shared = [d for d in dangerous
+              if tokens & {t for t in re.split(r"[_\W]+", (d or "").lower()) if t}]
+    return shared or dangerous
+
+
+def emergency_check(states, verbose=True):
+    """紧急豁免主入口：扫描结构化状态，报警即强制关闭关联危险设备。
+
+    - 绕过 tools.execute_tool 权限门禁，直接调 home_tools.control_ha_device；
+    - 只允许 turn_off，代码级禁止 turn_on；
+    - 每次豁免打印日志并 QQ 推送通知主人。
+    返回豁免动作说明文本；无报警返回 None。
+    """
+    triggered = [(e.get("entity_id", ""), e.get("state", "")) for e in (states or [])
+                 if _is_emergency_sensor(e.get("entity_id", ""), e.get("state", ""))]
+    if not triggered:
+        return None
+
+    from home_tools import control_ha_device
+    logs = []
+    for sensor_id, state in triggered:
+        targets = _emergency_targets(sensor_id, states)
+        if not targets:
+            continue
+        for dev in targets:
+            print(f"🚨 [紧急豁免] {sensor_id} 报警（state={state}）："
+                  f"绕过权限限制，强制关闭危险设备 {dev}（只准关不准开）")
+            try:
+                result = control_ha_device(dev, "turn_off")
+            except Exception as e:
+                result = f"❌ 下发失败: {e}"
+            logline = f"🚨 紧急豁免：{sensor_id} 报警 → 强制关闭 {dev} → {result}"
+            print(logline)
+            logs.append(logline)
+            notify_master(f"🚨 小橘3号紧急豁免：{sensor_id} 报警（{state}），"
+                          f"已强制关闭 {dev}。结果：{result}")
+    return "\n".join(logs) if logs else None
+
+
 # ==================== 传感器场景规则引擎（§10 #10，纯函数） ====================
 
 def _humidity_threshold():
@@ -253,6 +342,12 @@ def heartbeat_once(sense_fn=None, ask_fn=None, execute_fn=None,
         if states_fn is not None:
             states = states_fn()
             if isinstance(states, list):
+                # 🚨 紧急豁免：危险传感器报警 → 绕过权限强制关闭关联危险设备
+                # （优先级最高，先于一切场景规则与大模型决策）
+                emergency = emergency_check(states, verbose=verbose)
+                if emergency:
+                    last_decision_source = "🚨 紧急豁免"
+                    return emergency
                 actions = apply_scene_rules(last_states, states)
                 last_states = states
                 if actions:

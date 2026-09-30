@@ -69,7 +69,40 @@ ACTION_LEVELS = {
     "manage_plugins": 3,
     "control_dangerous_devices": 4,     # 危险家居（门锁/燃气等）
     "system_manage": 4,                 # 一键装卸系统组件
+    "read_private_memory": 4,           # 核心记忆库/私有数据读取（Lv.4 主人独家）
 }
+
+
+# ==================== 专属称呼与命名防重（创造者保留名） ====================
+# 仅当运行在创造者本人的设备上（XIAOJU3_CREATOR_DEVICE=1）时，主人默认称呼
+# 才为创造者名；公开部署/他人设备上一律泛称"主人"，且任何人都不能注册占用
+# 创造者保留名（防止冒充创造者）。公开代码不将创造者名硬编码为全局默认主人名。
+CREATOR_NAME = "XUN"
+CREATOR_DEVICE_ENV = "XIAOJU3_CREATOR_DEVICE"
+
+
+def is_creator_device():
+    """当前是否运行在创造者本人的设备上（环境变量显式声明，默认否）。"""
+    return os.environ.get(CREATOR_DEVICE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def default_master_name():
+    """主人默认称呼：创造者设备为创造者名，其余环境泛称"主人"。"""
+    return CREATOR_NAME if is_creator_device() else "主人"
+
+
+def validate_claim_name(name):
+    """注册/改名时的称呼校验：非空、不得占用创造者保留名（大小写不敏感）。
+
+    返回 (ok, 称呼或拒绝原因)。
+    """
+    n = str(name or "").strip()
+    if not n:
+        return False, "❌ 称呼不能为空。"
+    if n.lower() == CREATOR_NAME.lower():
+        return False, ("❌ 该称呼为创造者专属保留名，任何账号都不允许注册占用，"
+                       "请换一个称呼。")
+    return True, n
 
 
 class PermissionManager:
@@ -82,6 +115,7 @@ class PermissionManager:
         self.last_auth_time = 0
         self.user_id = "local"      # 单用户助手：门禁接口 user_id 的缺省值
         self.owner = None           # Lv.4 主人级标记（identity.json "owner" 字段）
+        self.display_name = ""      # 用户自选称呼（命名防重校验后落盘）
         self._op_windows = {}       # {user_id: 过期时间戳}——Lv.3 操作窗口，仅内存
         self.last_lv4_message = ""  # 最近一次 lv4_mfa_check 明细（含未接入提示）
         # Lv.4 双因子链：TOTP 动态密码 + 生物认证（默认未接入，明确降级提示）
@@ -98,6 +132,7 @@ class PermissionManager:
                     data = json.load(f)
                     self.current_level = data.get("current_level", "Lv.1")
                     self.owner = data.get("owner") or None
+                    self.display_name = data.get("display_name") or ""
             except Exception:
                 pass
 
@@ -107,10 +142,23 @@ class PermissionManager:
                 json.dump({
                     "current_level": self.current_level,
                     "owner": self.owner,
+                    "display_name": self.display_name,
                     "updated_at": time.time()
                 }, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"⚠️ 保存身份状态失败: {e}")
+
+    # ==================== 称呼命名（创造者保留名防重） ====================
+
+    def claim_name(self, user_id, name):
+        """注册/改名：称呼经保留名校验后落盘（Lv.2 及以上均可自定称呼）。"""
+        ok, result = validate_claim_name(name)
+        if not ok:
+            return result
+        self.display_name = result
+        self.save_identity()
+        return (f"✅ 称呼已设为「{result}」（用户 {user_id}），已落盘。"
+                f"当前等级：{self.current_level}。")
 
     # ==================== 等级判定（继承语义） ====================
 
@@ -130,10 +178,12 @@ class PermissionManager:
 
     # ==================== Lv.2 密码注册 ====================
 
-    def register_user(self, user_id, password):
+    def register_user(self, user_id, password, name=None):
         """Lv.2 普通用户注册（/register）：校验 env 注册密码，通过升 Lv.2 并落盘。
 
-        未配置 XIAOJU3_REGISTER_PASSWORD 时明确降级拒绝（不得硬编码默认密码）。
+        name 为可选自称称呼，经保留名校验（不得占用创造者名）；校验失败时
+        整个注册中止。未配置 XIAOJU3_REGISTER_PASSWORD 时明确降级拒绝
+        （不得硬编码默认密码）。
         """
         expected = os.environ.get(REGISTER_PASSWORD_ENV, "").strip()
         if not expected:
@@ -142,10 +192,16 @@ class PermissionManager:
         supplied = str(password or "").strip()
         if not hmac.compare_digest(supplied, expected):
             return "❌ 注册密码错误，Lv.2 注册失败。请联系主人核对注册密码。"
+        if name is not None and str(name).strip():
+            ok, result = validate_claim_name(name)
+            if not ok:
+                return result
+            self.display_name = result
         if self.level_value() < 2:
             self.current_level = "Lv.2"
         self.save_identity()
-        return (f"✅ 用户 {user_id} 注册成功，已升级 Lv.2（普通用户）："
+        name_note = f"，称呼「{self.display_name}」" if self.display_name else ""
+        return (f"✅ 用户 {user_id} 注册成功{name_note}，已升级 Lv.2（普通用户）："
                 "可读文件、列目录、控制普通家居设备。权限已落盘。")
 
     # ==================== Lv.3 TOTP 激活与逐次动态密码 ====================

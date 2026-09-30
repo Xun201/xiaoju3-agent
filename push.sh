@@ -32,7 +32,7 @@ FOUND_PRIVACY=0
 # ===== [1/4] 文件名黑名单扫描（配置/密钥/身份/记忆/历史/.env 等） =====
 echo -e "${YELLOW}🔎 [1/4] 文件名黑名单扫描...${NC}"
 # 关键词按"子串匹配"生效：identity.json/记忆/历史/密钥/日志/工作区/隔离区私有文件
-PRIVACY_LIST=("config.py" ".env" "identity.json" ".key" ".token" ".pem" "secret" "password" "memory" "history" "long_term.db" "logs" ".log" "agent_state/conversations" "agent_state/memory" "workspace/" "private")
+PRIVACY_LIST=("config.py" ".env" "xiaoju3_data" "identity.json" ".key" ".token" ".pem" "secret" "password" "memory" "history" "long_term.db" "logs" ".log" "agent_state/conversations" "agent_state/memory" "workspace/" "private")
 for file in $CHANGES; do
     # .env.example 是键名模板（不含真实值），允许上传
     [ "$file" = ".env.example" ] && continue

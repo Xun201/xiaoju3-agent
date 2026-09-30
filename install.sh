@@ -3,10 +3,10 @@
 # 职责：环境自检 → 虚拟环境与依赖 → .env 配置引导 → 完整性校验 → 启动与 LV2/LV3 引导。
 # 用法：
 #   ./install.sh                     交互式安装（推荐）
-#   ./install.sh --non-interactive   非交互安装：.env 只复制模板并提示"请手工填写"
+#   ./install.sh --non-interactive   非交互安装：隔离区配置只复制模板并提示"请手工填写"
 #   ./install.sh --register <密码>   启动后经本机 /onebot 自动发一条 LV2 注册请求（失败不中断）
 # 安全红线：本脚本不含任何密钥/内网 IP/真实密码；密钥输入一律 read -s 不回显。
-# 幂等：重复安装安全（.venv 已存在跳过创建、pip 增量安装、.env 已存在不覆盖）。
+# 幂等：重复安装安全（.venv 已存在跳过创建、pip 增量安装、xiaoju3_data/.env 已存在不覆盖）。
 
 # 不用 set -e：关键步骤逐个显式判错，失败时打印已完成步骤清单（见 fail_exit）
 set -u
@@ -162,12 +162,14 @@ fi
 # ===== [3/5] .env 配置引导 =====
 echo "⚙️  [3/5] 配置引导（.env）..."
 
-# 值写入 .env：用 python 逐行替换（对特殊字符安全，跨平台通用）
+# 值写入隔离区 xiaoju3_data/.env：用 python 逐行替换（对特殊字符安全，跨平台通用）
+mkdir -p xiaoju3_data
+ENV_PATH="xiaoju3_data/.env"
 replace_env_value() {
     python3 - "$1" "$2" <<'PYEOF'
 import sys
 key, value = sys.argv[1], sys.argv[2]
-with open(".env", "r", encoding="utf-8") as f:
+with open(ENV_PATH, "r", encoding="utf-8") as f:
     lines = f.read().splitlines()
 out, found = [], False
 for line in lines:
@@ -208,19 +210,19 @@ prompt_plain() {
     fi
 }
 
-if [ -f ".env" ]; then
-    echo "✅ 检测到已有 .env，跳过配置引导（绝不覆盖现有配置）。"
+if [ -f "$ENV_PATH" ]; then
+    echo "✅ 检测到已有 $ENV_PATH，跳过配置引导（绝不覆盖现有配置）。"
     mark_done "配置检查（.env 已存在，跳过引导）"
 else
     if [ ! -f ".env.example" ]; then
-        fail_exit "缺少 .env.example 模板，无法生成 .env。"
+        fail_exit "缺少 .env.example 模板，无法生成隔离区配置。"
     fi
-    cp .env.example .env || fail_exit "从 .env.example 复制生成 .env 失败。"
-    echo "✅ 已从模板生成 .env"
+    cp .env.example "$ENV_PATH" || fail_exit "从 .env.example 复制生成 $ENV_PATH 失败。"
+    echo "✅ 已从模板生成 $ENV_PATH（敏感配置隔离区）"
     mark_done ".env 生成（自模板）"
 
     if [ "$NON_INTERACTIVE" -eq 1 ]; then
-        echo "⚠️ 非交互模式：.env 已由模板生成，请手工填写以下配置后再使用："
+        echo "⚠️ 非交互模式：$ENV_PATH 已由模板生成，请手工填写以下配置后再使用："
         echo "   DEEPSEEK_API_KEY / WEB_API_KEY / XIAOJU3_TOTP_SECRET /"
         echo "   XIAOJU3_REGISTER_PASSWORD / HA_URL / HA_TOKEN"
     else
@@ -333,7 +335,7 @@ echo ""
 echo "📖 权限引导："
 echo "   • LV2 注册：在对话中发送 /register <注册密码>（密码即 .env 的 XIAOJU3_REGISTER_PASSWORD）"
 echo "   • LV3/LV4 授权需 TOTP/双因子，首次授权会看到类 Root 安全警告，请阅读风险后确认"
-echo "     （Lv.3 用 /coder_auth <TOTP>；Lv.4 走双因子授权，TOTP 密钥见 .env 的 XIAOJU3_TOTP_SECRET）"
+echo "     （Lv.3 用 /coder_auth <TOTP>；Lv.4 走双因子授权，TOTP 密钥见 xiaoju3_data/.env 的 XIAOJU3_TOTP_SECRET）"
 echo ""
 echo "📖 常用命令："
 echo "   • 重启全部：./restart_all.sh    彻底停止：./stop_all.sh"
