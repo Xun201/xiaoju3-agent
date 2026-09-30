@@ -1,0 +1,878 @@
+# -*- coding: utf-8 -*-
+"""接入层 main.py 离线单测（Flask test client，大脑与 NapCat 网络全 mock）。
+
+- /chat：无/错 X-API-Key 拒绝；正确 key 走 mock brain.smart_ask 返回回复。
+- /onebot：私聊响应；群聊触发词 / @（CQ 码）/ 戳一戳彩蛋；图片收藏。
+- handle_message：标点清洗、内置指令族（/help、/register、/coder_auth、
+  /sudo、/lv4_auth、/lv4_revoke、/confirm、/reset_fuse、/gen_log、/send_image）。
+- 第二阶段 §7 权限接线：TOTP 激活 Lv.3 落盘持久、/sudo 写操作窗口、
+  /lv4_auth 两步流（类 Root 警告 + 双因子 + 撤销）、/gen_log Lv.3 门槛、
+  /send_image 等级 ≥ Lv.3。
+- 第二阶段架构接线：意图路由命中/透传、前情提要压缩与失败回退、长期记忆
+  存取注入、熔断重置、高危设备二次确认令牌流、/api/health 迁移守望端点。
+- 记忆与状态目录一律注入临时目录，不触碰真实 agent_state（identity.json /
+  long_term.db 均经 patch 隔离）；TOTP 用固定测试密钥现场生成；mock 全部经
+  unittest.mock.patch + addCleanup 自动还原，不向 sys.modules 注入任何伪模块。
+"""
+import json
+import os
+import re
+import tempfile
+import time
+import unittest
+from unittest.mock import MagicMock, patch
+
+import auth_lv4
+import brain
+import main
+import xiaoju3
+from agent_state.state_manager import StateManager
+from intent_router import IntentResult
+from permission import PermissionManager
+from tools import execute_tool
+
+# 固定 TOTP 测试密钥（Base32，仅测试用，与任何真实密钥无关）
+TEST_TOTP_SECRET = "JBSWY3DPEHPK3PXP"
+
+
+class _MainCase(unittest.TestCase):
+    """公共夹具：临时目录注入 + 双通道记忆隔离 + 大脑/NapCat 全 mock。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xiaoju3_main_")
+        self.state_dir = os.path.join(self.tmp, "state")
+        self.mem_web = os.path.join(self.state_dir, "history_web.json")
+        self.mem_qq = os.path.join(self.state_dir, "history_qq.json")
+        self.totp_secret = TEST_TOTP_SECRET
+
+        self.smart_ask = MagicMock(return_value=("测试回复", "🏠 本地"))
+        self.napcat = MagicMock()
+        state_manager = StateManager(self.state_dir)
+
+        for target, value in [
+            ("main.smart_ask", self.smart_ask),
+            ("main.requests", self.napcat),
+            ("main.MEMORY_FILE_WEB", self.mem_web),
+            ("main.MEMORY_FILE_QQ", self.mem_qq),
+            ("main.messages_web", [main.SYSTEM_PROMPT]),
+            ("main.messages_qq", [main.SYSTEM_PROMPT]),
+            ("main.state_manager", state_manager),
+        ]:
+            p = patch(target, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+        # 权限单例的可变状态每例结束后还原，避免污染全局
+        self.pm = main.permission_manager
+        old_level, old_owner = self.pm.current_level, self.pm.owner
+
+        def _restore_pm():
+            self.pm.current_level = old_level
+            self.pm.owner = old_owner
+            self.pm._op_windows.clear()
+
+        self.addCleanup(_restore_pm)
+        self.addCleanup(main._mfa_sessions.clear)
+        self.addCleanup(main._pending_confirms.clear)
+
+        # identity.json 一律指向临时目录：任何测试都不读写真实 agent_state 隔离区
+        self.identity = os.path.join(self.tmp, "identity.json")
+        p = patch.object(PermissionManager, "IDENTITY_PATH", self.identity)
+        p.start()
+        self.addCleanup(p.stop)
+
+        self.client = main.app.test_client()
+
+    # ---------- 小工具 ----------
+    def onebot(self, payload):
+        return self.client.post("/onebot", json=payload)
+
+    def chat(self, message, key=None):
+        headers = {}
+        if key is not None:
+            headers["X-API-Key"] = key
+        return self.client.post("/chat", json={"message": message}, headers=headers)
+
+    def napcat_url(self, endpoint):
+        return f"{main.NAPCAT_API_URL}/{endpoint}"
+
+    def napcat_payload(self):
+        return self.napcat.post.call_args[1]["json"]
+
+    def make_ws(self):
+        ws = os.path.join(self.tmp, "ws")
+        os.makedirs(ws, exist_ok=True)
+        return ws
+
+    def touch(self, path, content=b"png"):
+        with open(path, "wb") as f:
+            f.write(content)
+        return path
+
+    def set_env(self, **kwargs):
+        """注入环境变量（测试结束自动还原）。"""
+        p = patch.dict(os.environ, kwargs)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def identity_path(self):
+        """本例隔离的 identity.json 路径（夹具已统一 patch，见 setUp）。"""
+        return self.identity
+
+    def fresh_lv4(self):
+        """给全局权限单例换上全新 Lv.4 因子链（TOTP + 生物），测试后还原。"""
+        fresh = auth_lv4.LV4AuthManager(
+            factors=[auth_lv4.TOTPFactor(), auth_lv4.BiometricFactor()])
+        p = patch.object(self.pm, "_lv4", fresh)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def totp_code(self):
+        """用固定测试密钥现场生成 6 位动态密码。"""
+        return auth_lv4.generate_totp(self.totp_secret)
+
+
+class TestWebEntry(_MainCase):
+    """网页入口：GET / 深色聊天页 + POST /chat 的 X-API-Key 鉴权。"""
+
+    def test_index_renders_dark_page_with_injected_key(self):
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("小橘3号", html)
+        # Key 经统一配置渲染注入，而非前端源码硬编码
+        self.assertIn(xiaoju3.WEB_API_KEY, html)
+        self.assertNotIn("{{ api_key }}", html)
+
+    def test_chat_without_key_rejected(self):
+        resp = self.chat("你好")
+        self.assertEqual(resp.status_code, 401)
+        self.assertIn("未授权", resp.get_json()["reply"])
+        self.smart_ask.assert_not_called()
+
+    def test_chat_wrong_key_rejected(self):
+        resp = self.chat("你好", key="wrong-key")
+        self.assertEqual(resp.status_code, 401)
+        self.assertIn("未授权", resp.get_json()["reply"])
+        self.smart_ask.assert_not_called()
+
+    def test_chat_correct_key_returns_reply(self):
+        self.smart_ask.return_value = ("云端回复", "☁️ 云端")
+        resp = self.chat("你好", key=xiaoju3.WEB_API_KEY)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"reply": "云端回复"})
+        # smart_ask(message, history, session_key) 调用口径
+        args, _ = self.smart_ask.call_args
+        self.assertEqual(args[0], "你好")
+        self.assertIsInstance(args[1], list)
+        self.assertEqual(kwargs_session_key(self.smart_ask), "web")
+
+    def test_chat_empty_message(self):
+        resp = self.chat("", key=xiaoju3.WEB_API_KEY)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["reply"], "请说点什么吧！")
+        self.smart_ask.assert_not_called()
+
+
+def kwargs_session_key(mock_obj):
+    """取 mock 最近一次调用的 session_key 关键字参数。"""
+    _, kwargs = mock_obj.call_args
+    return kwargs.get("session_key")
+
+
+class TestOnebotEntry(_MainCase):
+    """QQ 入口：私聊/群聊/触发词/@/戳一戳/图片收藏。"""
+
+    def test_private_message_responds(self):
+        resp = self.onebot({
+            "post_type": "message", "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "raw_message": "你好",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+        self.napcat.post.assert_called_once()
+        self.assertEqual(self.napcat.post.call_args[0][0], self.napcat_url("send_private_msg"))
+        payload = self.napcat_payload()
+        self.assertEqual(payload["user_id"], 123)
+        self.assertEqual(payload["message"], "测试回复")
+
+    def test_group_message_without_trigger_ignored(self):
+        resp = self.onebot({
+            "post_type": "message", "message_type": "group",
+            "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+            "raw_message": "今天天气不错",
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+        self.napcat.post.assert_not_called()
+
+    def test_group_message_with_trigger_word_responds(self):
+        resp = self.onebot({
+            "post_type": "message", "message_type": "group",
+            "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+            "raw_message": "小橘 帮我看看",
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+        self.assertEqual(self.napcat.post.call_args[0][0], self.napcat_url("send_group_msg"))
+        self.assertEqual(self.napcat_payload()["group_id"], 456)
+
+    def test_group_at_me_responds(self):
+        resp = self.onebot({
+            "post_type": "message", "message_type": "group",
+            "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+            "raw_message": "[CQ:at,qq=10000] 在吗",
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+
+    def test_group_at_other_user_ignored(self):
+        resp = self.onebot({
+            "post_type": "message", "message_type": "group",
+            "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+            "raw_message": "[CQ:at,qq=999] 你好",
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+        self.napcat.post.assert_not_called()
+
+    def test_group_at_without_self_id_lenient(self):
+        """未携带 self_id 时无法识别被@对象，退化为任意 CQ:at 均响应。"""
+        resp = self.onebot({
+            "post_type": "message", "message_type": "group",
+            "group_id": 456, "sender": {"user_id": 123},
+            "raw_message": "[CQ:at,qq=555] 你好",
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+
+    def test_poke_easter_egg_in_group(self):
+        resp = self.onebot({
+            "post_type": "notice", "notice_type": "poke",
+            "group_id": 456, "user_id": 123,
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.napcat.post.assert_called_once()
+        self.assertEqual(self.napcat.post.call_args[0][0], self.napcat_url("send_group_msg"))
+        self.assertEqual(self.napcat_payload()["message"], "别戳啦，好痒！😆")
+        self.smart_ask.assert_not_called()
+
+    def test_poke_easter_egg_in_private(self):
+        resp = self.onebot({
+            "post_type": "notice", "notice_type": "poke",
+            "user_id": 123,
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.assertEqual(self.napcat.post.call_args[0][0], self.napcat_url("send_private_msg"))
+        self.assertEqual(self.napcat_payload()["user_id"], 123)
+
+    def test_image_message_saved_to_emoji_store(self):
+        with patch("main.save_emoji_link", return_value=True) as save_mock:
+            resp = self.onebot({
+                "post_type": "message", "message_type": "private",
+                "self_id": "10000", "sender": {"user_id": 123},
+                "raw_message": "[CQ:image,file=https://gchat.qpic.cn/a.jpg]",
+            })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        save_mock.assert_called_once_with("https://gchat.qpic.cn/a.jpg")
+        self.smart_ask.assert_not_called()
+        self.assertEqual(self.napcat_payload()["message"], "收到你的表情啦！已经存进小仓库了😊")
+
+    def test_group_image_without_at_saved(self):
+        """群聊非 @ 的图片消息同样自动收藏（文档 §5 口径）。"""
+        with patch("main.save_emoji_link", return_value=True) as save_mock:
+            self.onebot({
+                "post_type": "message", "message_type": "group",
+                "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+                "raw_message": "[CQ:image,file=https://gchat.qpic.cn/b.jpg]",
+            })
+        save_mock.assert_called_once_with("https://gchat.qpic.cn/b.jpg")
+        self.smart_ask.assert_not_called()
+
+    def test_image_save_failure_reply(self):
+        with patch("main.save_emoji_link", return_value=False):
+            self.onebot({
+                "post_type": "message", "message_type": "private",
+                "self_id": "10000", "sender": {"user_id": 123},
+                "raw_message": "[CQ:image,file=https://gchat.qpic.cn/c.jpg]",
+            })
+        self.assertEqual(self.napcat_payload()["message"], "这个表情我没存下来，下次再试试！")
+
+    def test_meta_event_ignored(self):
+        resp = self.onebot({"post_type": "meta_event", "meta_event_type": "heartbeat"})
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+        self.napcat.post.assert_not_called()
+
+
+class TestHandleMessageRouting(_MainCase):
+    """handle_message 路由编排：清洗、内置指令。"""
+
+    def test_punctuation_cleaned_before_brain(self):
+        main.handle_message('web', 'u', None, "你好！今天，天气怎么样？")
+        args, _ = self.smart_ask.call_args
+        self.assertEqual(args[0], "你好今天天气怎么样")
+
+    def test_punctuation_only_message_rejected(self):
+        reply = main.handle_message('web', 'u', None, "！！！？？？。。。")
+        self.assertEqual(reply, "（你发了一条空消息）")
+        self.smart_ask.assert_not_called()
+
+    def test_help_uses_help_menu_plugin(self):
+        with patch("plugins.help_menu.get_help_menu", return_value="MENU") as menu_mock:
+            reply = main.handle_message('web', 'u', None, "/help")
+        self.assertEqual(reply, "MENU")
+        menu_mock.assert_called_once_with(self.pm.current_level)
+
+    def test_help_aliases(self):
+        for word in ["菜单", "帮助", "指令"]:
+            with patch("plugins.help_menu.get_help_menu", return_value="MENU"):
+                self.assertEqual(main.handle_message('web', 'u', None, word), "MENU")
+
+    def test_help_menu_contains_new_commands_and_lv4_section(self):
+        """help_menu 展示新指令与 Lv.4 菜单段（§7）。"""
+        from plugins.help_menu import get_help_menu
+        lv4_menu = get_help_menu("Lv.4")
+        for item in ["/register", "/sudo", "/lv4_auth", "/lv4_revoke",
+                     "/confirm", "/reset_fuse", "/gen_log", "/send_image",
+                     "主人级"]:
+            self.assertIn(item, lv4_menu)
+        # /coder_auth 升级指引对未达 Lv.3 的用户可见
+        self.assertIn("/coder_auth", get_help_menu("Lv.2"))
+        # 低等级看不到 Lv.4 段
+        self.assertNotIn("主人级", get_help_menu("Lv.2"))
+
+    # ---------- /register（Lv.2 注册，§7） ----------
+    def test_register_success_upgrades_and_persists(self):
+        identity = self.identity_path()
+        self.set_env(XIAOJU3_REGISTER_PASSWORD="reg-pass-123")
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('web', 'admin', None, "/register reg-pass-123")
+        self.assertTrue(reply.startswith("✅"))
+        self.assertIn("Lv.2", reply)
+        self.assertEqual(self.pm.current_level, "Lv.2")
+        # 等级持久化：identity.json 落盘，新实例读回 Lv.2（重启不回落）
+        self.assertTrue(os.path.exists(identity))
+        self.assertEqual(PermissionManager().current_level, "Lv.2")
+
+    def test_register_wrong_password_rejected_and_not_persisted(self):
+        identity = self.identity_path()
+        self.set_env(XIAOJU3_REGISTER_PASSWORD="reg-pass-123")
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('web', 'admin', None, "/register wrong-pass")
+        self.assertTrue(reply.startswith("❌ 注册密码错误"))
+        self.assertEqual(self.pm.current_level, "Lv.1")
+        self.assertFalse(os.path.exists(identity))
+
+    def test_register_degraded_without_env_password(self):
+        """未配置注册密码时透传降级提示（§7：注册密码走 env，不硬编码）。"""
+        self.identity_path()
+        self.set_env(XIAOJU3_REGISTER_PASSWORD="")
+        reply = main.handle_message('web', 'admin', None, "/register whatever")
+        self.assertIn("注册功能未开放", reply)
+        self.assertIn("XIAOJU3_REGISTER_PASSWORD", reply)
+
+    # ---------- /coder_auth（TOTP 激活 Lv.3，§7 新语义） ----------
+    def test_coder_auth_wrong_totp_rejected(self):
+        self.identity_path()
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret)
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('web', 'admin', None, "/coder_auth 000000")
+        self.assertTrue(reply.startswith("❌"))
+        self.assertEqual(self.pm.current_level, "Lv.1")
+
+    def test_coder_auth_totp_activates_and_persists(self):
+        """激活成功用例：TOTP 激活 Lv.3 并落盘（修复"重启回落"）。"""
+        identity = self.identity_path()
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret)
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('web', 'admin', None,
+                                    f"/coder_auth {self.totp_code()}")
+        self.assertTrue(reply.startswith("✅"))
+        self.assertEqual(self.pm.current_level, "Lv.3")
+        self.assertTrue(os.path.exists(identity))
+        self.assertEqual(PermissionManager().current_level, "Lv.3")
+
+    def test_coder_auth_degraded_without_totp_secret(self):
+        self.identity_path()
+        self.set_env(XIAOJU3_TOTP_SECRET="")
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('web', 'admin', None, "/coder_auth 123456")
+        self.assertIn("降级", reply)
+        self.assertEqual(self.pm.current_level, "Lv.1")
+
+    def test_lv3_write_file_needs_window_or_credential(self):
+        """窗口内写文件成功用例：激活后写文件仍需逐次动态密码/操作窗口。"""
+        self.identity_path()
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret)
+        ws = self.make_ws()
+        self.pm.current_level = "Lv.1"
+        with patch("tools.WORKSPACE", ws):
+            # 激活 Lv.3
+            reply = main.handle_message('web', 'admin', None,
+                                        f"/coder_auth {self.totp_code()}")
+            self.assertTrue(reply.startswith("✅"))
+            self.assertEqual(self.pm.current_level, "Lv.3")
+            # 激活后直接写文件：仍被"逐次动态密码"门禁拒绝
+            denied = execute_tool("write_file",
+                                  {"filename": "a.txt", "content": "hi"}, self.pm)
+            self.assertTrue(denied.startswith("❌"))
+            # /sudo 开启写操作窗口后：无需凭据即可写入
+            sudo_reply = main.handle_message('web', 'admin', None,
+                                             f"/sudo {self.totp_code()}")
+            self.assertTrue(sudo_reply.startswith("✅"))
+            ok = execute_tool("write_file",
+                              {"filename": "a.txt", "content": "hi"}, self.pm)
+            self.assertTrue(ok.startswith("✅"))
+
+    # ---------- /sudo（120s 写操作窗口，§7） ----------
+    def test_sudo_wrong_code_no_window(self):
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret)
+        reply = main.handle_message('web', 'admin', None, "/sudo 000000")
+        self.assertTrue(reply.startswith("❌"))
+        self.assertFalse(self.pm.operation_window_active(None))
+
+    def test_sudo_without_code_shows_usage(self):
+        reply = main.handle_message('web', 'admin', None, "/sudo")
+        self.assertIn("用法", reply)
+
+    # ---------- /lv4_auth 两步流与 /lv4_revoke（§7） ----------
+    def test_lv4_auth_step1_shows_root_warning(self):
+        self.fresh_lv4()
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret, XIAOJU3_BIOMETRIC_SIM="1")
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('web', 'admin', None, "/lv4_auth")
+        # 类 Root 警告：敏感操作清单 + 后果 + 撤销途径
+        self.assertIn("类 Root", reply)
+        self.assertIn("门锁", reply)
+        self.assertIn("revoke_lv4", reply)
+        self.assertIn("/lv4_auth confirm", reply)
+        self.smart_ask.assert_not_called()
+        self.assertNotEqual(self.pm.current_level, "Lv.4")
+
+    def test_lv4_auth_confirm_grants_and_records_mfa_session(self):
+        self.fresh_lv4()
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret, XIAOJU3_BIOMETRIC_SIM="1")
+        main.handle_message('web', 'admin', None, "/lv4_auth")   # 第一步：阅读警告
+        reply = main.handle_message('web', 'admin', None,
+                                    f"/lv4_auth confirm {self.totp_code()}")
+        self.assertTrue(reply.startswith("✅"))
+        self.assertEqual(self.pm.current_level, "Lv.4")
+        self.assertTrue(self.pm.is_owner())
+        self.assertIn("admin", main._mfa_sessions)   # 双因子会话已记录
+
+    def test_lv4_auth_confirm_without_biometric_fails_with_detail(self):
+        """生物认证器未接入时透传"生物认证器未接入"明细（lv4_mfa_check）。"""
+        self.fresh_lv4()
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret)   # 不开生物模拟
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('web', 'admin', None,
+                                    f"/lv4_auth confirm {self.totp_code()}")
+        self.assertTrue(reply.startswith("❌"))
+        self.assertIn("生物认证器未接入", reply)
+        self.assertEqual(self.pm.current_level, "Lv.1")
+
+    def test_lv4_revoke_immediately_downgrades(self):
+        self.fresh_lv4()
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret, XIAOJU3_BIOMETRIC_SIM="1")
+        main.handle_message('web', 'admin', None,
+                            f"/lv4_auth confirm {self.totp_code()}")
+        self.assertEqual(self.pm.current_level, "Lv.4")
+        reply = main.handle_message('web', 'admin', None, "/lv4_revoke")
+        self.assertTrue(reply.startswith("✅"))
+        self.assertEqual(self.pm.current_level, "Lv.3")
+        self.assertFalse(self.pm.is_owner())
+        self.assertNotIn("admin", main._mfa_sessions)   # 双因子会话一并失效
+
+    # ---------- /reset_fuse（Lv.2+ 熔断重置） ----------
+    def test_reset_fuse_requires_lv2(self):
+        self.pm.current_level = "Lv.1"
+        with patch("main.reset_tool_fuse") as reset_mock:
+            reply = main.handle_message('web', 'admin', None, "/reset_fuse")
+        self.assertTrue(reply.startswith("❌"))
+        reset_mock.assert_not_called()
+
+    def test_reset_fuse_resets_for_lv2(self):
+        self.pm.current_level = "Lv.2"
+        with patch("main.reset_tool_fuse") as reset_mock:
+            reply = main.handle_message('web', 'admin', None, "/reset_fuse")
+        self.assertTrue(reply.startswith("✅"))
+        reset_mock.assert_called_once_with()
+
+    def test_new_session_first_message_resets_channel_fuse(self):
+        """新会话首条消息（历史为空）自动重置该通道熔断计数。"""
+        with patch("main.reset_tool_fuse") as reset_mock:
+            main.handle_message('web', 'admin', None, "第一条")
+            reset_mock.assert_called_once_with("web")
+            reset_mock.reset_mock()
+            # 历史已非空：不再触发自动重置
+            main.handle_message('web', 'admin', None, "第二条")
+            reset_mock.assert_not_called()
+
+    # ---------- /send_image（等级 ≥ Lv.3，修复 Lv.4 主人被拒） ----------
+    def test_send_image_requires_lv3(self):
+        self.pm.current_level = "Lv.1"
+        ws = self.make_ws()
+        img = self.touch(os.path.join(ws, "pic.png"))
+        with patch("main.WORKSPACE", ws):
+            reply = main.handle_message('qq', 123, None, f"/send_image {img}")
+        self.assertTrue(reply.startswith("❌ 权限不足"))
+
+    def test_send_image_allows_lv4_owner(self):
+        self.pm.current_level = "Lv.4"
+        ws = self.make_ws()
+        img = self.touch(os.path.join(ws, "pic.png"))
+        with patch("main.WORKSPACE", ws):
+            reply = main.handle_message('qq', 123, None, f"/send_image {img}")
+        self.assertEqual(reply, f"[CQ:image,file=file://{img}]")
+        self.smart_ask.assert_not_called()
+
+    def test_send_image_outside_workspace_denied(self):
+        self.pm.current_level = "Lv.3"
+        ws = self.make_ws()
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside, exist_ok=True)
+        img = self.touch(os.path.join(outside, "evil.png"))
+        with patch("main.WORKSPACE", ws):
+            reply = main.handle_message('qq', 123, None, f"/send_image {img}")
+        self.assertEqual(reply, "❌ 只能发送项目工作区内的图片。")
+
+    def test_send_image_missing_file(self):
+        self.pm.current_level = "Lv.3"
+        ws = self.make_ws()
+        missing = os.path.join(ws, "nope.png")
+        with patch("main.WORKSPACE", ws):
+            reply = main.handle_message('qq', 123, None, f"/send_image {missing}")
+        self.assertTrue(reply.startswith("❌ 图片不存在"))
+
+    def test_send_image_in_workspace_returns_cq(self):
+        self.pm.current_level = "Lv.3"
+        ws = self.make_ws()
+        img = self.touch(os.path.join(ws, "pic.png"))
+        with patch("main.WORKSPACE", ws):
+            reply = main.handle_message('qq', 123, None, f"/send_image {img}")
+        self.assertEqual(reply, f"[CQ:image,file=file://{img}]")
+        self.smart_ask.assert_not_called()
+
+    # ---------- /gen_log（Lv.3+ 门槛） ----------
+    def test_gen_log_requires_lv3_and_skips_thread(self):
+        self.pm.current_level = "Lv.1"
+        with patch("main.threading.Thread") as thread_mock:
+            reply = main.handle_message('web', 'u', None,
+                                        "/gen_log https://chat.deepseek.com/share/abc")
+        self.assertTrue(reply.startswith("❌"))
+        self.assertIn("Lv.3", reply)
+        thread_mock.assert_not_called()   # 权限不足不执行后台线程
+
+    def test_gen_log_invalid_link(self):
+        self.pm.current_level = "Lv.3"
+        reply = main.handle_message('web', 'u', None, "/gen_log https://example.com/x")
+        self.assertTrue(reply.startswith("⚠️"))
+
+    def test_gen_log_valid_link_runs_background(self):
+        self.pm.current_level = "Lv.3"
+
+        class ImmediateThread:
+            """把 Thread 换成同步执行，便于离线断言后台任务被调度。"""
+
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+                if target:
+                    target(*args, **(kwargs or {}))
+
+            def start(self):
+                pass
+
+        with patch("main.threading.Thread", ImmediateThread), \
+                patch("run_link_log.run_link_log") as run_mock:
+            reply = main.handle_message('web', 'u', None,
+                                        "/gen_log https://chat.deepseek.com/share/abc123")
+        self.assertTrue(reply.startswith("🔄"))
+        run_mock.assert_called_once_with("https://chat.deepseek.com/share/abc123")
+
+
+class TestIntentRouting(_MainCase):
+    """意图路由接入（架构 §10 #4）：命中直达，None/失败透传 smart_ask。"""
+
+    @staticmethod
+    def _intent(name="accounting_add"):
+        return IntentResult(name=name, args={}, confidence=0.95,
+                            handler="plugins.accounting:add_record", source="rule")
+
+    def test_intent_hit_short_circuits(self):
+        intent = self._intent()
+        with patch("main.route", return_value=intent), \
+                patch("main.dispatch", return_value="已记账：-30.0 元（餐饮）") as d_mock:
+            reply = main.handle_message('web', 'admin', None, "午饭花了30元")
+        self.assertEqual(reply, "已记账：-30.0 元（餐饮）")
+        d_mock.assert_called_once_with(intent)
+        self.smart_ask.assert_not_called()
+
+    def test_intent_none_falls_through_to_smart_ask(self):
+        with patch("main.route", return_value=None):
+            main.handle_message('web', 'admin', None, "随便聊聊今天的心情")
+        self.smart_ask.assert_called_once()
+
+    def test_intent_dispatch_exception_falls_through(self):
+        """dispatch 抛错不吞消息：继续走原 smart_ask 链路。"""
+        with patch("main.route", return_value=self._intent()), \
+                patch("main.dispatch", side_effect=RuntimeError("boom")):
+            main.handle_message('web', 'admin', None, "记一下账")
+        self.smart_ask.assert_called_once()
+
+    def test_intent_dispatch_denied_falls_through(self):
+        """dispatch 返回 ❌ 失败串同样透传原链路，绝不吞消息。"""
+        with patch("main.route", return_value=self._intent()), \
+                patch("main.dispatch", return_value="❌ 意图执行失败：参数不全"):
+            main.handle_message('web', 'admin', None, "记一下账")
+        self.smart_ask.assert_called_once()
+
+    def test_export_ebook_gets_channel_history(self):
+        """export_ebook 意图：接线方把当前通道历史填进 args["history"]。"""
+        intent = self._intent("export_ebook")
+        with patch("main.route", return_value=intent), \
+                patch("main.dispatch", return_value="电子书已生成") as d_mock:
+            main.handle_message('web', 'admin', None, "把对话导出成电子书")
+        sent = d_mock.call_args[0][0]
+        self.assertEqual(sent.name, "export_ebook")
+        self.assertEqual(sent.args["history"],
+                         [{"role": "user", "content": "把对话导出成电子书"}])
+
+
+class TestMemoryAndCompression(_MainCase):
+    """双通道记忆 + 前情提要压缩（架构 §10 #2）+ 长期记忆（架构 §10 #3）。"""
+
+    def test_dual_channel_separated(self):
+        self.smart_ask.side_effect = [("QQ回复", "🏠 本地"), ("网页回复", "☁️ 云端")]
+        main.handle_message('qq', 1, None, "来自QQ的消息")
+        main.handle_message('web', 'admin', None, "来自网页的消息")
+
+        with open(self.mem_qq, encoding="utf-8") as f:
+            qq_hist = json.load(f)
+        with open(self.mem_web, encoding="utf-8") as f:
+            web_hist = json.load(f)
+
+        self.assertEqual([m["content"] for m in qq_hist], ["来自QQ的消息", "QQ回复"])
+        self.assertEqual([m["content"] for m in web_hist], ["来自网页的消息", "网页回复"])
+
+        # state_manager.save_conversation 独立落盘
+        self.assertTrue(os.path.exists(os.path.join(self.state_dir, "conversations", "qq_history.json")))
+        self.assertTrue(os.path.exists(os.path.join(self.state_dir, "conversations", "web_history.json")))
+
+    def test_smart_ask_receives_channel_history(self):
+        main.handle_message('web', 'admin', None, "第一条")
+        args, _ = self.smart_ask.call_args
+        # 历史列表按引用传入（调用后 handle_message 会再追加 assistant 回复），
+        # 这里断言调用时包含置顶 system 提示词与本条用户消息
+        history = args[1]
+        self.assertEqual(args[0], "第一条")
+        self.assertEqual(history[0]["role"], "system")
+        self.assertIn({"role": "user", "content": "第一条"}, history)
+
+    # ---------- 前情提要压缩（架构 §10 #2） ----------
+    def _prefill_web(self, count):
+        prefilled = [{"role": "user", "content": f"旧消息{i}"} for i in range(count)]
+        p = patch("main.messages_web", [main.SYSTEM_PROMPT] + prefilled)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_compression_adds_summary_to_history_head(self):
+        """超过 20 条：旧消息浓缩为前情提要并入历史头部（QQ/网页同路径）。"""
+        self._prefill_web(25)
+        with patch("brain.ask_local", return_value="测试前情提要摘要"):
+            main.handle_message('web', 'admin', None, "新消息")
+
+        # 内存通道历史含前情提要（置顶提示词之后）
+        self.assertTrue(any("【前情提要】" in (m.get("content") or "")
+                            and "测试前情提要摘要" in (m.get("content") or "")
+                            for m in main.messages_web))
+        self.assertEqual(main.messages_web[0], main.SYSTEM_PROMPT)
+        # 落盘历史同样携带前情提要（重启不丢）
+        with open(self.mem_web, encoding="utf-8") as f:
+            hist = json.load(f)
+        self.assertTrue(any("【前情提要】" in (m.get("content") or "") for m in hist))
+        # 压缩后体量收敛（系统提示 + 前情提要 + 最近 10 条）
+        self.assertLessEqual(len(main.messages_web), 13)
+
+    def test_compression_failure_falls_back_to_pure_truncation(self):
+        """压缩失败（双脑不可用）：回退纯截断，50 条硬上限仍生效。"""
+        self._prefill_web(60)
+        with patch("brain.ask_local", side_effect=RuntimeError("local down")), \
+                patch("brain.ask_cloud", return_value="⚠️ 云端连接异常: down"):
+            main.handle_message('web', 'admin', None, "新消息")
+
+        self.assertFalse(any("【前情提要】" in (m.get("content") or "")
+                             for m in main.messages_web))
+        with open(self.mem_web, encoding="utf-8") as f:
+            hist = json.load(f)
+        self.assertEqual(len(hist), 50)
+        # 60 旧 + 1 新 user + 1 assistant = 62 → 滚动截断保留最近 50 条（丢弃前 12 条）
+        self.assertEqual(hist[0]["content"], "旧消息12")
+        self.assertEqual(hist[-1], {"role": "assistant", "content": "测试回复"})
+
+    # ---------- 长期记忆（架构 §10 #3） ----------
+    def test_remember_saves_long_term_memory_and_confirms(self):
+        with patch.object(main.state_manager, "save_memory") as save_mock:
+            reply = main.handle_message('web', 'admin', None, "帮我记住我最爱的水果是苹果")
+        save_mock.assert_called_once_with("user", "我最爱的水果是苹果")
+        self.assertIn("苹果", reply)
+        self.assertIn("记住", reply)
+        self.smart_ask.assert_not_called()
+
+    def test_remember_plain_prefix_also_works(self):
+        with patch.object(main.state_manager, "save_memory") as save_mock:
+            main.handle_message('web', 'admin', None, "记住我的快递地址是幸福路1号")
+        save_mock.assert_called_once_with("user", "我的快递地址是幸福路1号")
+
+    def test_recent_memories_injected_into_smart_ask_context(self):
+        """进入 smart_ask 前取 get_recent_memories(3) 拼入系统上下文。"""
+        main.state_manager.save_memory("user", "用户喜欢蓝色")
+        main.state_manager.save_memory("user", "用户养了一只猫")
+        with patch.object(main.state_manager, "get_recent_memories",
+                          return_value=[("user", "用户喜欢蓝色"),
+                                        ("user", "用户养了一只猫")]) as mem_mock:
+            main.handle_message('web', 'admin', None, "今天穿什么好")
+        mem_mock.assert_called_once_with(3)
+        args, _ = self.smart_ask.call_args
+        blocks = [m for m in args[1]
+                  if m.get("role") == "system" and "长期记忆" in (m.get("content") or "")]
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("以下是关于用户的长期记忆", blocks[0]["content"])
+        self.assertIn("用户喜欢蓝色", blocks[0]["content"])
+        self.assertIn("用户养了一只猫", blocks[0]["content"])
+
+    def test_no_memory_no_injection(self):
+        """长期记忆为空则不拼注入块。"""
+        with patch.object(main.state_manager, "get_recent_memories", return_value=[]):
+            main.handle_message('web', 'admin', None, "你好")
+        args, _ = self.smart_ask.call_args
+        self.assertEqual(len([m for m in args[1] if m.get("role") == "system"]), 1)
+
+
+class TestDangerConfirmFlow(_MainCase):
+    """高危设备二次确认令牌流（§7 + 架构 §6/§10 #8）：全流程 / 过期 / 一次性。"""
+
+    def _grant_lv4_via_command(self):
+        """经真实指令流完成 Lv.4 授权（同时建立双因子会话）。"""
+        self.fresh_lv4()
+        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret, XIAOJU3_BIOMETRIC_SIM="1")
+        reply = main.handle_message('web', 'admin', None,
+                                    f"/lv4_auth confirm {self.totp_code()}")
+        self.assertTrue(reply.startswith("✅"))
+
+    @staticmethod
+    def _denying_smart_ask():
+        """模拟 brain 工具链路：execute_tool 对高危实体（门锁）返回拒绝。"""
+        def fake_smart_ask(msg, hist, session_key="default"):
+            brain.execute_tool("control_ha_device",
+                               {"entity_id": "lock.front_door", "action": "unlock"},
+                               main.permission_manager)
+            return ("❌ 安全拒绝：该操作需 Lv.4 双因子认证（动态密码 + 生物认证）"
+                    "全部通过，当前认证未通过。")
+        return fake_smart_ask
+
+    def test_full_flow_token_issued_confirmed_and_burned(self):
+        self._grant_lv4_via_command()
+        with patch("brain.execute_tool",
+                   return_value="❌ 安全拒绝：该操作需 Lv.4 双因子认证全部通过。"), \
+                patch("main.smart_ask", side_effect=self._denying_smart_ask()):
+            reply = main.handle_message('web', 'admin', None, "帮我开一下前门锁")
+        # 回复确认引导 + 6 位令牌已挂起
+        self.assertIn("/confirm", reply)
+        match = re.search(r"/confirm (\d{6})", reply)
+        self.assertIsNotNone(match)
+        token = match.group(1)
+        self.assertIn(token, main._pending_confirms)
+        self.assertEqual(main._pending_confirms[token]["args"]["entity_id"],
+                         "lock.front_door")
+
+        # /confirm 核销：携二次确认凭据重新执行工具
+        with patch("tools.control_ha_device", return_value="✅ 前门锁已打开") as ctrl:
+            reply2 = main.handle_message('web', 'admin', None, f"/confirm {token}")
+        self.assertEqual(reply2, "✅ 前门锁已打开")
+        # 重执行的是挂起的原操作参数
+        args_, _kw = ctrl.call_args
+        self.assertEqual(args_, ("lock.front_door", "unlock"))
+
+        # 一次性：令牌用后即焚，二次核销无效
+        self.assertNotIn(token, main._pending_confirms)
+        with patch("tools.control_ha_device", return_value="✅ x"):
+            reply3 = main.handle_message('web', 'admin', None, f"/confirm {token}")
+        self.assertTrue(reply3.startswith("❌"))
+
+    def test_danger_rejection_without_lv4_issues_no_token(self):
+        """非 Lv.4 用户：拒绝文案原样返回，不发放令牌（无绕过路径）。"""
+        self.pm.current_level = "Lv.1"
+        with patch("brain.execute_tool",
+                   return_value="❌ 安全拒绝：该操作需 Lv.4 双因子认证全部通过。"), \
+                patch("main.smart_ask", side_effect=self._denying_smart_ask()):
+            reply = main.handle_message('web', 'admin', None, "帮我开一下前门锁")
+        self.assertTrue(reply.startswith("❌"))
+        self.assertNotIn("/confirm", reply)
+        self.assertEqual(len(main._pending_confirms), 0)
+
+    def test_danger_rejection_lv4_without_mfa_session_no_token(self):
+        """有 Lv.4 等级但无双因子会话：同样不发放令牌。"""
+        self.pm.current_level = "Lv.4"
+        with patch("brain.execute_tool",
+                   return_value="❌ 安全拒绝：该操作需 Lv.4 双因子认证全部通过。"), \
+                patch("main.smart_ask", side_effect=self._denying_smart_ask()):
+            reply = main.handle_message('web', 'admin', None, "帮我开一下前门锁")
+        self.assertTrue(reply.startswith("❌"))
+        self.assertEqual(len(main._pending_confirms), 0)
+
+    def test_confirm_token_expired(self):
+        main._pending_confirms["123456"] = {
+            "user_id": "admin", "tool_name": "control_ha_device",
+            "args": {"entity_id": "lock.a", "action": "unlock"},
+            "expires": time.time() - 5,
+        }
+        reply = main.handle_message('web', 'admin', None, "/confirm 123456")
+        self.assertIn("过期", reply)
+        self.assertNotIn("123456", main._pending_confirms)   # 过期令牌同样焚毁
+
+    def test_confirm_rejects_other_user_token(self):
+        main._pending_confirms["654321"] = {
+            "user_id": "someone-else", "tool_name": "control_ha_device",
+            "args": {"entity_id": "lock.a", "action": "unlock"},
+            "expires": time.time() + 60,
+        }
+        reply = main.handle_message('web', 'admin', None, "/confirm 654321")
+        self.assertTrue(reply.startswith("❌"))
+        # 他人误触不焚毁令牌：真实主人的合法确认仍可用（防冒名核销/DoS）
+        self.assertIn("654321", main._pending_confirms)
+
+    def test_confirm_invalid_format(self):
+        reply = main.handle_message('web', 'admin', None, "/confirm abc")
+        self.assertIn("用法", reply)
+        reply2 = main.handle_message('web', 'admin', None, "/confirm 999999")
+        self.assertTrue(reply2.startswith("❌"))
+
+
+class TestMigrationWiring(_MainCase):
+    """迁移守望接入（架构 §8）：health_bp 注册 + PeerWatch 默认不开。"""
+
+    def test_health_endpoint_registered(self):
+        resp = self.client.get("/api/health")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(data["status"], "ok")
+        self.assertTrue(data["device"])
+        self.assertIsInstance(data["ts"], float)
+
+    def test_peer_watch_gate_default_off(self):
+        """守望开关默认关闭：未配置对端或未开 XIAOJU3_WATCH 都不启动。"""
+        self.set_env(XIAOJU3_PEERS="", XIAOJU3_WATCH="")
+        self.assertFalse(main._peer_watch_enabled())
+        self.set_env(XIAOJU3_PEERS="http://peer.example.com:5002", XIAOJU3_WATCH="")
+        self.assertFalse(main._peer_watch_enabled())
+
+    def test_peer_watch_gate_on(self):
+        """XIAOJU3_PEERS 非空且 XIAOJU3_WATCH=1 时开启。"""
+        self.set_env(XIAOJU3_PEERS="http://peer.example.com:5002", XIAOJU3_WATCH="1")
+        self.assertTrue(main._peer_watch_enabled())
+
+
+if __name__ == "__main__":
+    unittest.main()

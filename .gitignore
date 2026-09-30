@@ -1,0 +1,31 @@
+# 密钥与隐私（push.sh 四道扫描同样覆盖）
+.env
+agent_state/identity.json
+agent_state/history_qq.json
+agent_state/history_web.json
+agent_state/history_cli.json
+agent_state/history_*.json
+agent_state/emoji_links.json
+agent_state/conversations/
+agent_state/long_term.db
+agent_state/*.bak
+
+# 工作区与运行数据
+workspace/
+dev_logs/
+*.log
+dev_log_*.md
+ALL_LOGS.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 版本备份与迁移产物
+backups/
+xiaoju3_soul_*.zip
+agent_state/account_book.json
+agent_state/account_book.json.tmp
+agent_state/exports/
+agent_state/lv4_snapshot.json

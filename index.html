@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <!-- 移动端适配（界面文档 §7 规划落地）：无 viewport meta 为文档已知缺失 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小橘3号控制台</title>
+    <style>
+        /* ==================== 设计令牌表（界面文档 §1.3 重构为 CSS 变量） ==================== */
+        /* 默认深蓝主题（保持文档"默认深蓝"现状不变） */
+        :root {
+            --color-primary: #203170;          /* 主色：面板标题、用户气泡底色、发送按钮 */
+            --color-primary-hover: #2f4488;    /* 主色悬停 */
+            --color-bg: #f4f6f9;               /* 页面底色 */
+            --color-bg-chat: #f9fbfe;          /* 聊天区分层背景 */
+            --color-card: #ffffff;             /* 卡片底色 */
+            --color-border: #e0e4ec;           /* 分隔线 */
+            --color-text-secondary: #536ba9;   /* 次级文字 */
+            --color-text-hint: #9fb0d9;        /* 占位/提示文字 */
+            --color-progress-track: #eef2fb;   /* 进度底槽 */
+            --color-success: #2fa24c;          /* 进度条正常态 */
+            --color-danger: #e0433f;           /* 警示色：CPU/内存 > 80% 变红 */
+            --color-like: #ef4444;             /* 点赞激活 */
+            --color-like-bg: #fef2f2;
+            --color-dislike: #3b82f6;          /* 点踩激活 */
+            --color-dislike-bg: #eff6ff;
+            --radius-control: 8px;             /* 输入框/按钮圆角 */
+            --radius-bubble: 10px;             /* 消息气泡圆角 */
+            --radius-tool: 6px;                /* 工具按钮圆角 */
+            --radius-card: 12px;               /* MAA 风格卡片圆角 */
+            --shadow-sidebar: 2px 0 10px rgba(0,0,0,0.02);  /* 侧栏单向阴影（文档令牌） */
+            --shadow-card: 0 2px 8px rgba(0,0,0,0.06);      /* MAA 卡片轻阴影（克制） */
+        }
+        /* 橘色主题（界面文档 §10.1 皮肤系统基础）：与狐狸娘形象同源暖橙色系，
+           主色/悬停/底色/卡片/次级文字/进度/警示全套成体系；右上角按钮切换，
+           localStorage 记忆，默认仍为深蓝主题。 */
+        [data-theme="orange"] {
+            --color-primary: #d96f2b;          /* 主色·暖橘（狐毛同源） */
+            --color-primary-hover: #e8853f;    /* 悬停·亮橘 */
+            --color-bg: #fdf6ee;               /* 页面底色·奶油橘白 */
+            --color-bg-chat: #fffaf3;          /* 聊天区分层背景 */
+            --color-card: #fffdf9;             /* 卡片底色 */
+            --color-border: #f0e0cb;           /* 分隔线·浅棕 */
+            --color-text-secondary: #a9683a;   /* 次级文字·棕橘 */
+            --color-text-hint: #d3ae87;        /* 提示文字·浅棕 */
+            --color-progress-track: #f7ebdb;   /* 进度底槽 */
+            --color-success: #3f9e63;          /* 成功色（适配暖底微调） */
+            --color-danger: #e0433f;           /* 警示色保持通用红 */
+            --color-like: #e0433f;             /* 点赞激活·暖红 */
+            --color-like-bg: #fdeeea;
+            --color-dislike: #b07a4a;          /* 点踩激活·棕橘（替代冷蓝） */
+            --color-dislike-bg: #faf0e2;
+            --shadow-sidebar: 2px 0 10px rgba(217, 111, 43, 0.08);
+            --shadow-card: 0 2px 8px rgba(217, 111, 43, 0.10);
+        }
+
+        /* ==================== 基础重置 ==================== */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            background-color: var(--color-bg);
+        }
+
+        /* ==================== 左侧监控面板（MAA 卡片化） ==================== */
+        .sidebar {
+            width: 33.33%;
+            min-width: 300px;
+            background-color: var(--color-card);
+            border-right: 1px solid var(--color-border);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            box-shadow: var(--shadow-sidebar);
+            z-index: 10;
+            /* 卡片化：卡片圆角 + 轻阴影（令牌化，克制不过度重绘） */
+            border-radius: var(--radius-card);
+            margin: 12px;
+        }
+        .panel-header {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--color-primary);
+            border-bottom: 2px solid var(--color-progress-track);
+            padding-bottom: 10px;
+        }
+        .stat-item { display: flex; flex-direction: column; gap: 8px; }
+        .stat-label { font-size: 14px; color: var(--color-text-secondary); display: flex; justify-content: space-between; }
+        .stat-bar-bg { width: 100%; height: 8px; background-color: var(--color-progress-track); border-radius: 4px; overflow: hidden; }
+        .stat-bar-fill { height: 100%; background-color: var(--color-success); border-radius: 4px; transition: width 0.3s ease, background-color 0.3s ease; }
+        .stat-value { font-size: 24px; font-weight: bold; color: var(--color-primary); }
+
+        /* ==================== 右侧聊天区域 ==================== */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--color-bg-chat);
+            position: relative;
+            min-width: 0;
+        }
+        .chat-header {
+            padding: 10px 20px;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--color-primary);
+            background-color: var(--color-card);
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .header-title { flex: 1; }
+        .header-actions { display: flex; align-items: center; gap: 4px; }
+        .header-btn {
+            background: none;
+            border: 1px solid transparent;
+            border-radius: var(--radius-tool);
+            font-size: 16px;
+            line-height: 1;
+            padding: 6px 8px;
+            cursor: pointer;
+            color: var(--color-text-secondary);
+            transition: background 0.2s;
+        }
+        .header-btn:hover { background: var(--color-progress-track); }
+        /* 桌面端隐藏抽屉开关（仅移动端媒体查询中显示） */
+        #sidebar-toggle { display: none; }
+
+        .chat-history {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .message {
+            max-width: 70%;
+            padding: 10px 15px;
+            border-radius: var(--radius-bubble);
+            font-size: 14px;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+        /* 气泡卡片化：轻阴影（令牌化） */
+        .bot-message {
+            align-self: flex-start;
+            background-color: var(--color-card);
+            color: var(--color-primary);
+            border: 1px solid var(--color-border);
+            box-shadow: var(--shadow-card);
+        }
+        .user-message { align-self: flex-end; background-color: var(--color-primary); color: #ffffff; }
+
+        /* ==================== 输入框区域 ==================== */
+        .chat-input-area {
+            padding: 15px 20px;
+            background-color: var(--color-card);
+            border-top: 1px solid var(--color-border);
+            display: flex;
+            gap: 10px;
+        }
+        .chat-input-area input {
+            flex: 1;
+            min-width: 0;
+            padding: 10px 15px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-control);
+            outline: none;
+            font-size: 14px;
+        }
+        .chat-input-area button {
+            padding: 10px 20px;
+            background-color: var(--color-primary);
+            color: #ffffff;
+            border: none;
+            border-radius: var(--radius-control);
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+            flex-shrink: 0;
+        }
+        .chat-input-area button:hover { background-color: var(--color-primary-hover); }
+
+        /* ==================== AI 消息工具栏按钮样式 ==================== */
+        .msg-tools {
+            display: flex;
+            gap: 10px;
+            margin-top: 8px;
+            opacity: 0.5;
+            transition: 0.2s;
+        }
+        .msg-tools:hover { opacity: 1; }
+        .tool-btn {
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: var(--radius-tool);
+            transition: all 0.2s;
+            color: var(--color-text-secondary);
+            border: 1px solid transparent;
+        }
+        .tool-btn:hover {
+            background: rgba(0, 0, 0, 0.05);
+            color: var(--color-primary);
+            border-color: rgba(0, 0, 0, 0.05);
+        }
+        /* 点赞、踩的激活状态颜色 */
+        .tool-btn.active-like { color: var(--color-like); background: var(--color-like-bg); }
+        .tool-btn.active-dislike { color: var(--color-dislike); background: var(--color-dislike-bg); }
+
+        /* 大脑来源徽标（消费 /api/chat 返回的 source 字段） */
+        .source-badge {
+            display: inline-block;
+            align-self: flex-start;
+            font-size: 12px;
+            line-height: 1;
+            padding: 3px 8px;
+            border-radius: var(--radius-tool);
+            color: var(--color-text-secondary);
+            background-color: var(--color-progress-track);
+        }
+
+        /* ==================== 轻提示 toast（替代 alert 占位） ==================== */
+        #xiaoju3-toast {
+            position: fixed;
+            left: 50%;
+            bottom: 90px;
+            transform: translateX(-50%) translateY(10px);
+            background: var(--color-primary);
+            color: #ffffff;
+            padding: 8px 16px;
+            border-radius: var(--radius-control);
+            font-size: 13px;
+            box-shadow: var(--shadow-card);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            z-index: 100000;
+            max-width: 80vw;
+        }
+        #xiaoju3-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        /* ==================== 移动端响应式（界面文档 §7 规划落地） ==================== */
+        /* ≤768px 双栏折叠为单栏。方案：监控侧栏收为可展开抽屉——fixed 定位 +
+           translateX 滑入滑出，由聊天头部 ☰ 按钮切换（console.js 给 .sidebar
+           加/去 .open 类），聊天区独占整行，输入区保持全宽可用。 */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: 0;
+                top: 0;
+                bottom: 0;
+                width: min(80vw, 300px);
+                min-width: 0;
+                margin: 0;
+                border-radius: 0;
+                border-right: 1px solid var(--color-border);
+                transform: translateX(-105%);
+                transition: transform 0.25s ease;
+                z-index: 100;
+                box-shadow: var(--shadow-card);
+            }
+            .sidebar.open { transform: translateX(0); }
+            #sidebar-toggle { display: inline-flex; }
+            .chat-history { padding: 12px; gap: 10px; }
+            .message { max-width: 85%; }
+            .chat-input-area { padding: 10px 12px; }
+            .chat-input-area input { font-size: 16px; }  /* 16px 防 iOS 聚焦自动放大 */
+        }
+    </style>
+    <link rel="icon" href="data:,">
+</head>
+<body>
+    <!-- 左侧监控面板（移动端收为可展开抽屉） -->
+    <div class="sidebar">
+        <div class="panel-header">小橘3号 · 系统状态</div>
+        <div class="stat-item">
+            <div class="stat-label">CPU 占用 <span id="cpu-text">--%</span></div>
+            <div class="stat-bar-bg"><div class="stat-bar-fill" id="cpu-bar" style="width: 0%;"></div></div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">内存占用 <span id="mem-text">--%</span></div>
+            <div class="stat-bar-bg"><div class="stat-bar-fill" id="mem-bar" style="width: 0%;"></div></div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">系统温度</div>
+            <div class="stat-value" id="temp-text">-- °C</div>
+        </div>
+        <div class="stat-item" style="margin-top: auto; font-size: 12px; color: var(--color-text-hint); text-align: center;">
+            © 2026 小橘3号 Agent
+        </div>
+    </div>
+
+    <!-- 右侧聊天窗口 -->
+    <div class="chat-area">
+        <div class="chat-header">
+            <!-- 移动端抽屉开关（≤768px 显示） -->
+            <button id="sidebar-toggle" class="header-btn" title="监控面板">☰</button>
+            <span class="header-title">对话窗口</span>
+            <span class="header-actions">
+                <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
+                <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
+                <button id="theme-toggle" class="header-btn" title="切换橘色主题">🦊</button>
+            </span>
+        </div>
+        <div class="chat-history" id="chat-history">
+            <div class="message bot-message">你好！我是小橘3号，很高兴为你服务喵~</div>
+        </div>
+        <div class="chat-input-area">
+            <input type="text" id="chat-input" placeholder="输入消息，按回车发送..." onkeypress="if(event.key === 'Enter') sendMessage()">
+            <button onclick="sendMessage()">发送</button>
+        </div>
+    </div>
+
+    <!-- 挂件容器（桌宠注入点） -->
+    <div id="xiaoju3-root"></div>
+
+    <script src="/console/desktop-pet.js"></script>
+    <script src="/console/console.js"></script>
+</body>
+</html>
