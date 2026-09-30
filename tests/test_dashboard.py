@@ -14,6 +14,11 @@
   清空、POST /api/chat 后 50 条滚动截断、大脑异常不落盘；
 - GET / 旧版页与 GET /console 新版控制台托管（含关键令牌）；
 - 素材可达：/assets/DSniang1.jpg 200（修复界面文档 §5.1 的 404 已知问题）；
+- Web 出口 CQ 码净化（纵深防御）：web_sanitize.sanitize_for_web 纯函数
+  （face→Emoji、image→[表情]、其余剥除、本机路径不外泄）；/api/chat 返回与
+  落盘前净化（mock smart_ask 注入 QQ 专用 CQ 回复）；
+- 静态路由缓存失效：/console*、/assets* 统一 Cache-Control: no-store（接口不套用）；
+- prompts 表情规则改版：回复一律普通 Emoji、禁止模型输出 [CQ:...] 码；
 - 前端三件套静态断言：index.html 无外部 CDN、viewport meta、:root 令牌
   （默认深蓝 #203170 不变）+ data-theme="orange" 橘色主题、移动端断点与
   抽屉；console.js 2s 轮询与 >80% 变红、历史加载渲染、刷新/转发实装
@@ -30,6 +35,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -40,6 +46,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+import prompts  # noqa: E402
+import web_sanitize  # noqa: E402
 import xiaoju3  # noqa: E402
 import xiaoju3_dashboard as dashboard  # noqa: E402
 
@@ -656,7 +664,7 @@ class FrontendStaticTests(unittest.TestCase):
 
 
 class CQFaceRenderTests(unittest.TestCase):
-    """console.js 的 [CQ:face,id=XX] Emoji 渲染（静态断言）。"""
+    """console.js 的 [CQ:face,id=XX] Emoji 渲染与 CQ 码兜底（静态断言）。"""
 
     def setUp(self):
         with open("console.js", "r", encoding="utf-8") as f:
@@ -669,8 +677,180 @@ class CQFaceRenderTests(unittest.TestCase):
     def test_render_rich_applies_cq_mapping(self):
         self.assertIn("renderCQFace(escapeHtml(text))", self.content)
 
-    def test_unknown_face_kept_verbatim(self):
-        self.assertIn("hasOwnProperty", self.content)
+    def test_all_bot_paths_go_through_render_rich(self):
+        """实时回复 / /api/history 历史加载 / 刷新重生成：三条机器人渲染
+        路径全部经 appendBotMessage→renderRich→renderCQFace（历史回放与
+        实时发送共用同一个气泡入口）。"""
+        self.assertIn("renderRich(reply)", self.content)            # appendBotMessage 气泡
+        self.assertIn("renderRich(res.data.reply)", self.content)   # 刷新重新生成
+        self.assertIn("appendBotMessage(m.content, m.source || '', lastUser)",
+                      self.content)                                 # 历史回放同入口
+
+    def test_face_mapping_covers_full_classic_range(self):
+        """经典表情 id 0-103 全量收录 + 既有扩展 id（109/124/129/144/146），
+        常用 20 偷笑 / 34 晕 / 49 委屈等不再漏出方括号原文。"""
+        start = self.content.index("const CQ_FACE_EMOJI")
+        block = self.content[start:self.content.index("};", start)]
+        ids = {int(m) for m in re.findall(r"(\d+):\s*'[^']*'", block)}
+        missing = sorted(set(range(104)) - ids)
+        self.assertEqual(missing, [], msg="经典 0-103 存在缺号")
+        for extra in (109, 124, 129, 144, 146):
+            self.assertIn(extra, ids)
+
+    def test_unknown_face_falls_back_not_verbatim(self):
+        """未收录 id 兜底通用表情 😊，不再原样保留方括号原文
+        （旧'未收录原样保留'断言口径随本次修复废止）。"""
+        self.assertIn("CQ_FACE_FALLBACK", self.content)
+        self.assertNotIn(": m;", self.content)      # 旧实现未命中 return m
+
+    def test_non_face_cq_codes_sanitized(self):
+        """非 face CQ 码前端同样兜底：image→[表情] 占位，其余剥除
+        （与后端 web_sanitize 同口径，双保险）。"""
+        self.assertIn("[表情]", self.content)
+        self.assertIn(r"/\[CQ:image,[^\]]*\]/g", self.content)
+        self.assertIn(r"/\[CQ:[^\]]*\]/g", self.content)
+
+
+# ---------------------------------------------------------------------------
+# Web 出口 CQ 码净化（纵深防御：web_sanitize + /api/chat 接线）
+# ---------------------------------------------------------------------------
+
+class WebSanitizeTests(unittest.TestCase):
+    """web_sanitize.sanitize_for_web 纯函数：face→Emoji、image→[表情]、其余剥除。"""
+
+    def test_mapped_face_to_emoji(self):
+        self.assertEqual(web_sanitize.sanitize_for_web("[CQ:face,id=4] 得意"),
+                         "😎 得意")
+
+    def test_unknown_face_falls_back_to_generic(self):
+        """未收录 id 不留方括号原文，兜底通用微笑。"""
+        self.assertEqual(web_sanitize.sanitize_for_web("[CQ:face,id=999]"), "😊")
+
+    def test_image_replaced_and_path_not_leaked(self):
+        """[CQ:image] → [表情] 占位：本机绝对路径不外泄给网页用户。"""
+        out = web_sanitize.sanitize_for_web(
+            "看这个 [CQ:image,file=file:///home/orangepi/workspace/emoji_library/开心_1234.jpg]")
+        self.assertEqual(out, "看这个 [表情]")
+        self.assertNotIn("file://", out)
+        self.assertNotIn("CQ", out)
+
+    def test_other_cq_codes_stripped(self):
+        """[CQ:at]/[CQ:record] 等其余类型剥除，不留方括号。"""
+        out = web_sanitize.sanitize_for_web("[CQ:at,qq=123] 在吗 [CQ:record,file=x.amr]")
+        self.assertEqual(out, "在吗")
+        self.assertNotIn("[", out)
+
+    def test_plain_text_untouched(self):
+        """普通文本（含普通 Emoji）原样返回，无副作用。"""
+        self.assertEqual(web_sanitize.sanitize_for_web("普通回复 😊，没有专用码。"),
+                         "普通回复 😊，没有专用码。")
+
+    def test_mixed_codes_all_resolved(self):
+        """face + image + at 混合：一次净化全部消化。"""
+        out = web_sanitize.sanitize_for_web(
+            "好[CQ:face,id=20]看图[CQ:image,file=file:///ws/a.jpg][CQ:at,qq=1]完[CQ:face,id=999]")
+        self.assertEqual(out, "好🤭看图[表情]完😊")
+
+    def test_face_mapping_matches_frontend_table(self):
+        """前后端映射同源：web_sanitize 与 console.js 的 CQ_FACE_EMOJI 键集一致。"""
+        with open("console.js", "r", encoding="utf-8") as f:
+            js = f.read()
+        start = js.index("const CQ_FACE_EMOJI")
+        block = js[start:js.index("};", start)]
+        js_ids = {m for m in re.findall(r"(\d+):\s*'[^']*'", block)}
+        self.assertEqual(js_ids, set(web_sanitize.CQ_FACE_EMOJI))
+
+
+class ChatCqSanitizeTests(HistoryApiTestsBase):
+    """纵深防御接线：/api/chat 返回与落盘前净化（mock smart_ask 注入 QQ 专用回复）。"""
+
+    def test_chat_face_code_converted_to_emoji(self):
+        """face 码在返回与落盘前转 Emoji：/api/history 回放不再有方括号原文。"""
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("得意[CQ:face,id=4]流泪[CQ:face,id=5]", "🏠 本地")
+            resp = self.client.post("/api/chat", json={"message": "嗨"})
+
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"]["reply"], "得意😎流泪😢")
+        self.assertNotIn("CQ", payload["data"]["reply"])
+        stored = _read_json_file(self.history_file)
+        self.assertEqual(stored[-1]["content"], "得意😎流泪😢")
+
+    def test_chat_image_code_replaced_without_path_leak(self):
+        """translate_emoji 注入的 [CQ:image] 表情包码：换 [表情] 占位，
+        服务器本机绝对路径不进响应也不落盘。"""
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = (
+                "看这个[CQ:image,file=file:///home/orangepi/workspace/emoji_library/开心_1234.jpg]",
+                "🏠 本地")
+            payload = self.client.post("/api/chat", json={"message": "表情"}).get_json()
+
+        self.assertEqual(payload["data"]["reply"], "看这个[表情]")
+        self.assertNotIn("file://", payload["data"]["reply"])
+        stored = _read_json_file(self.history_file)
+        self.assertEqual(stored[-1]["content"], "看这个[表情]")
+
+    def test_chat_unknown_face_and_other_cq_codes(self):
+        """未收录 face id 兜底 😊；at/record 等其余 CQ 码剥除。"""
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("嗯[CQ:face,id=999]好[CQ:at,qq=123]呀[CQ:record,file=x.amr]",
+                               "☁️ 云端")
+            payload = self.client.post("/api/chat", json={"message": "在吗"}).get_json()
+
+        self.assertEqual(payload["data"]["reply"], "嗯😊好呀")
+
+
+# ---------------------------------------------------------------------------
+# 静态资源缓存失效（浏览器刷新即取最新 JS）
+# ---------------------------------------------------------------------------
+
+class StaticCacheHeaderTests(unittest.TestCase):
+    """静态路由统一 Cache-Control: no-store：跨 Werkzeug 版本/反代行为确定。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_console_and_assets_no_store(self):
+        """/console* 与 /assets* 全部 no-store，正常刷新即拿到新版 JS。"""
+        for path in ("/console", "/console/console.js",
+                     "/console/desktop-pet.js", "/assets/DSniang1.jpg"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", ResourceWarning)  # werkzeug 读文件句柄告警
+                resp = self.client.get(path)
+            self.assertEqual(resp.status_code, 200, path)
+            self.assertEqual(resp.headers.get("Cache-Control"), "no-store", path)
+
+    def test_api_routes_keep_default_cache_policy(self):
+        """no-store 只套静态路由，/api/* 接口响应不显式改缓存策略。"""
+        resp = self.client.get("/api/history")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotEqual(resp.headers.get("Cache-Control"), "no-store")
+
+
+# ---------------------------------------------------------------------------
+# prompts 表情规则改版（回复一律普通 Emoji、禁止输出 CQ 码）
+# ---------------------------------------------------------------------------
+
+class PromptEmojiRuleTests(unittest.TestCase):
+    """系统提示词表情规则（静态断言，与前端/后端净化口径配套）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.content = prompts.SYSTEM_PROMPT["content"]
+
+    def test_reply_uses_plain_emoji(self):
+        """回复文本一律普通 Emoji；旧'禁止使用任何Emoji'口径废止。"""
+        self.assertIn("一律使用普通 Emoji", self.content)
+        self.assertNotIn("禁止使用任何Emoji", self.content)
+
+    def test_cq_codes_forbidden_for_model_output(self):
+        """禁止模型输出任何以 [CQ: 开头的代码；CQ 码仅限系统内部场景。
+        提示词不再举 CQ 具体示例，防止模型模仿输出。"""
+        self.assertIn("禁止输出任何以 [CQ:", self.content)
+        self.assertIn("系统内部", self.content)
+        self.assertNotIn("[CQ:face", self.content)
+        self.assertNotIn("[CQ:image", self.content)
 
 
 if __name__ == "__main__":

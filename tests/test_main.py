@@ -180,6 +180,37 @@ def kwargs_session_key(mock_obj):
     return kwargs.get("session_key")
 
 
+class TestWebCqSanitize(_MainCase):
+    """Web 出口净化纵深防御：/chat 净化 CQ 码，QQ /onebot 链路保持原样。"""
+
+    def test_chat_reply_cq_sanitized_for_web(self):
+        """face 码→Emoji、image 码→[表情]：网页永不显示方括号 CQ 原文。"""
+        self.smart_ask.return_value = (
+            "得意[CQ:face,id=4]看这个[CQ:image,file=file:///home/u/workspace/emoji_library/开心_1.jpg]",
+            "🏠 本地")
+        resp = self.chat("你好", key=xiaoju3.WEB_API_KEY)
+
+        self.assertEqual(resp.status_code, 200)
+        reply = resp.get_json()["reply"]
+        self.assertEqual(reply, "得意😎看这个[表情]")
+        self.assertNotIn("CQ", reply)
+        self.assertNotIn("file://", reply)   # 表情包本机绝对路径不泄露给网页
+
+    def test_qq_channel_keeps_cq_verbatim(self):
+        """QQ 链路不受净化影响：/onebot 回复原样 POST 给 NapCat
+        （[CQ:...] 发图/发表情能力保持，web_sanitize 只挂 Web 出口）。"""
+        cq_reply = "[CQ:image,file=file:///ws/表情包.jpg]"
+        self.smart_ask.return_value = (cq_reply, "🏠 本地")
+        resp = self.onebot({
+            "post_type": "message", "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "raw_message": "来个表情",
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self.napcat_payload()["message"], cq_reply)  # 原样透传，零净化
+
+
 class TestOnebotEntry(_MainCase):
     """QQ 入口：私聊/群聊/触发词/@/戳一戳/图片收藏。"""
 

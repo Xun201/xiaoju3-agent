@@ -31,3 +31,10 @@ agent_state/account_book.json
 agent_state/account_book.json.tmp
 agent_state/exports/
 agent_state/lv4_snapshot.json
+
+# 本地 ADB 工具（二进制，仅本机使用，不入仓库）
+platform-tools/
+adb.exe
+AdbWinApi.dll
+AdbWinUsbApi.dll
+nul

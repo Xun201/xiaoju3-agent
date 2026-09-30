@@ -19,9 +19,15 @@
                  {code, data:{reply, source}}；成功问答追加落盘控制台会话
                  历史 history_console.json（与 QQ/网页双通道同口径，
                  50 条滚动截断——功能文档 §12 安全增强 / 界面文档 §10.4 近期项）。
+                 回复在返回与落盘前统一经 web_sanitize.sanitize_for_web 净化
+                 （face 码→Emoji、image 码→[表情]、其余 CQ 码剥除）——共享
+                 大脑链路带回的 QQ 专用 CQ 码不再漏进网页；QQ 通道
+                 （main.py /onebot → NapCat）不经此处，发图能力不受影响。
 - GET /api/history  {code, data:{messages:[...]}}：控制台聊天历史（role/content，
                  assistant 条目附 source 来源标签），供前端页面加载时渲染。
 - DELETE /api/history 清空控制台聊天历史（确认语义由前端 confirm 承担）。
+- 静态路由（/console*、/assets*）统一 Cache-Control: no-store——浏览器每次
+  刷新都拉取最新 HTML/JS，避免发版后命中旧版 console.js 导致前端修复不生效。
 
 三接口按文档 §9.1 口径均无鉴权（X-API-Key 门禁为规划项 🔜）。
 """
@@ -33,6 +39,7 @@ import requests
 from flask import Flask, jsonify, render_template_string, request, send_from_directory
 
 from brain import load_memory, save_memory, smart_ask  # 直连大脑（架构设计文档 §2：仪表盘 /api/chat 绕过路由层）
+from web_sanitize import sanitize_for_web  # Web 出口 CQ 码净化（QQ 通道不经此处）
 from xiaoju3 import (AGENT_STATE_DIR, CLOUD_BALANCE_URL, CLOUD_KEY,
                      DASHBOARD_PORT, MAX_MESSAGES)
 
@@ -40,6 +47,19 @@ app = Flask(__name__)
 
 # 项目根目录（新版控制台前端文件与 assets 的静态托管基准）
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+@app.after_request
+def _no_store_static(resp):
+    """静态路由统一 no-store：刷新页面即取最新 JS，行为跨 Werkzeug 版本/代理确定。
+
+    send_from_directory 的默认缓存头随版本/反代而变（可能回落启发式缓存），
+    这里对 /console*（控制台页与前端脚本）与 /assets*（吉祥物素材）显式覆盖；
+    /api/* 接口响应不套用。
+    """
+    if request.path.startswith("/console") or request.path.startswith("/assets/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 # 仪表盘进程启动时间（psutil.boot_time 不可用时"运行时长"兜底基准）
 PROCESS_START = int(time.time())
@@ -379,6 +399,11 @@ def api_chat():
         print(f"[香橙派收到消息] {user_msg}")
         reply, source = smart_ask(user_msg, history)
         print(f"[香橙派生成回复] 来源: {source}")
+        # 🛡️ Web 出口净化（纵深防御）：smart_ask 共享链路可能带回 QQ 专用 CQ 码
+        # （face 表情码 / [CQ:image] 表情包等），网页无法解析——返回与落盘前统一
+        # 转换（face→Emoji、image→[表情]、其余剥除），网页永不显示方括号原文；
+        # QQ 通道（main.py /onebot → NapCat）不经此处，CQ 发图能力不受影响。
+        reply = sanitize_for_web(reply)
         # 历史持久化失败不影响问答返回（尽力落盘）
         try:
             _append_console_history(user_msg, reply, source)
