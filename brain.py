@@ -30,8 +30,10 @@ import socket
 import requests
 import requests.packages.urllib3.util.connection as urllib3_cn
 
+import xiaoju3
 from xiaoju3 import (CLOUD_KEY, CLOUD_URL, CLOUD_MODEL, MAX_MESSAGES,
-                     LOCAL_URL, LOCAL_MODEL, LOCAL_PROBE_URL, LOCAL_TIMEOUT)
+                     LOCAL_URL, LOCAL_MODEL, LOCAL_MODEL_SMALL, LOCAL_PROBE_URL,
+                     LOCAL_TIMEOUT)
 from permission import permission_manager
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool
@@ -183,9 +185,13 @@ def save_memory(history, filepath):
 
 # ============================ 双脑推理（§3） ============================
 
-def ask_local(msgs):
-    """本地 Ollama 推理（/api/chat）。异常向上抛，由 smart_ask 热切换云端。"""
-    payload = {"model": LOCAL_MODEL, "messages": msgs, "stream": False}
+def ask_local(msgs, model=None):
+    """本地 Ollama 推理（/api/chat）。异常向上抛，由 smart_ask 热切换云端。
+
+    model 缺省用 LOCAL_MODEL（high 档大模型）；medium 档传 LOCAL_MODEL_SMALL
+    （硬件自适应路由，qwen2.5:0.5b 一类小模型）。
+    """
+    payload = {"model": model or LOCAL_MODEL, "messages": msgs, "stream": False}
     return requests.post(LOCAL_URL, json=payload,
                          timeout=LOCAL_GENERATE_TIMEOUT).json()['message']['content']
 
@@ -225,6 +231,42 @@ def probe_local():
         return True
     except Exception:
         return False
+
+
+# ==================== 硬件自适应路由（high / medium / low） ====================
+
+_VALID_TIERS = ("high", "medium", "low")
+_TIER_CACHE = None  # DEVICE_TIER=auto 时的进程内探测缓存（只探一次）
+
+
+def _resolve_tier():
+    """解析硬件档位：显式值优先，auto（默认）经 hardware_profiler 探测并缓存。
+
+    - xiaoju3.DEVICE_TIER 每次动态读取（便于测试与运行期覆盖）；
+    - 非法值按 auto 处理；探测异常降级 medium（混合模式最稳妥）。
+    """
+    tier = (getattr(xiaoju3, "DEVICE_TIER", "auto") or "auto").strip().lower()
+    if tier in _VALID_TIERS:
+        return tier
+    global _TIER_CACHE
+    if _TIER_CACHE is None:
+        try:
+            import hardware_profiler
+            _TIER_CACHE = hardware_profiler.detect_tier()
+        except Exception:
+            _TIER_CACHE = "medium"
+    return _TIER_CACHE if _TIER_CACHE in _VALID_TIERS else "medium"
+
+
+def _reset_tier_cache():
+    """重置 auto 档探测缓存（供测试与运行期硬件变化后重新探测）。"""
+    global _TIER_CACHE
+    _TIER_CACHE = None
+
+
+def _local_model_for(tier):
+    """档位 → 本地模型：high 用大模型，medium 用小模型，low 不会走本地。"""
+    return LOCAL_MODEL if tier == "high" else LOCAL_MODEL_SMALL
 
 
 def _build_messages(message, history):
@@ -288,19 +330,29 @@ def smart_ask(message, history=None, session_key="default"):
     if fused:
         messages.append({"role": "system", "content": TOOL_FUSE_SYSTEM_NOTE})
 
-    # 🛡️ 自动探测本地大脑是否在线，不用再去改 True/False
-    local_online = probe_local()
-    if local_online:
-        print("🏠 本地大脑在线，优先使用本地算力！")
+    # 🧭 硬件自适应路由：按 DEVICE_TIER 决定本地/云端优先级与模型档位
+    tier = _resolve_tier()
+    if tier == "low":
+        # low：跳过本地探测（省 1 秒等待），直接依赖云端
+        local_online = False
+        print("📱 低配模式（low）：跳过本地探测，直接使用云端大脑。")
     else:
-        print("📡 本地大脑不在线，直接使用云端大脑...")
+        # 🛡️ 自动探测本地大脑是否在线，不用再去改 True/False
+        local_online = probe_local()
+        if local_online:
+            if tier == "medium":
+                print(f"🧩 混合模式（medium）：本地大脑在线，优先使用小模型 {LOCAL_MODEL_SMALL}。")
+            else:
+                print("🏠 本地大脑在线，优先使用本地算力！")
+        else:
+            print("📡 本地大脑不在线，直接使用云端大脑...")
 
     raw_reply = ""
     used_local = False
     try:
         if local_online:
             try:
-                raw_reply = ask_local(messages)
+                raw_reply = ask_local(messages, model=_local_model_for(tier))
                 used_local = True
             except Exception as e:
                 print(f"⚠️ 本地大脑连接不稳定（{e}），自动切换云端大脑...")
@@ -362,13 +414,13 @@ def smart_ask(message, history=None, session_key="default"):
                 messages.append({"role": "system",
                                  "content": f"工具执行结果：{tool_result}\n\n请根据这个结果，用自然语言回答用户，绝对不要再输出 JSON！"})
 
-                # 🏠 汇总轮本地优先（§10 #14）：先试 ask_local，异常/不可用
-                # 自动转 ask_cloud，来源标签如实标注
+                # 🏠 汇总轮（§10 #14 + 硬件自适应）：high 档本地优先，
+                # medium/low 档固定走云端，来源标签如实标注
                 tool_source = "☁️ 云端 (工具)"
                 final_reply = ""
-                if local_online:
+                if tier == "high" and local_online:
                     try:
-                        final_reply = ask_local(messages)
+                        final_reply = ask_local(messages, model=_local_model_for(tier))
                     except Exception as e:
                         print(f"⚠️ 本地汇总失败（{e}），自动转云端汇总...")
                 if isinstance(final_reply, str) and final_reply.strip():
