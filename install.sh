@@ -115,10 +115,31 @@ else
 fi
 mark_done "虚拟环境 .venv"
 
-echo "📦 安装第三方依赖（requirements.txt，增量安装）..."
-python -m pip install -r requirements.txt \
-    || fail_exit "依赖安装失败（python -m pip install -r requirements.txt）。请检查网络后重试。"
-mark_done "依赖安装（requirements.txt）"
+# 依赖降级说明（依赖版本 × Python 版本自适应）：
+#   Python ≥3.10 → 按 requirements.txt 安装（PC/最新版口径）。
+#   Python 3.8（香橙派等目标平台系统自带 Python）→ 按 requirements-py38.txt 安装：
+#     Flask==3.0.3（3.1 起要求 ≥3.9）、requests==2.32.3（2.33 起要求 ≥3.9）、
+#     playwright==1.48.0（1.49 起要求 ≥3.9；1.48 是最后支持 3.8 的版本，
+#     仍提供 linux-arm64 的 Chromium，Ubuntu 20.04/22.04 官方支持）、
+#     psutil==7.2.2（≥3.6，无需降级）。flask-cors 全仓代码未 import，不安装。
+#   降级组合与最新钉版 API 完全兼容（仅用 Flask/requests/psutil 核心 API），
+#   /gen_log 抓取链路在 playwright 1.48 上行为一致。
+PY_MAIN=$(python3 -c 'import sys; print(sys.version_info[0])')
+PY_MINOR_V=$(python3 -c 'import sys; print(sys.version_info[1])')
+if [ "$PY_MAIN" -eq 3 ] && [ "$PY_MINOR_V" -lt 10 ]; then
+    echo "ℹ️ 检测到 Python ${PYVER}（3.8）：按 requirements-py38.txt 安装降级依赖组合。"
+    if [ ! -f "requirements-py38.txt" ]; then
+        fail_exit "缺少 requirements-py38.txt（3.8 降级依赖清单），请确认仓库完整。"
+    fi
+    python -m pip install -r requirements-py38.txt \
+        || fail_exit "依赖安装失败（python -m pip install -r requirements-py38.txt）。请检查网络后重试。"
+    mark_done "依赖安装（requirements-py38.txt，3.8 降级组合）"
+else
+    echo "📦 安装第三方依赖（requirements.txt，增量安装）..."
+    python -m pip install -r requirements.txt \
+        || fail_exit "依赖安装失败（python -m pip install -r requirements.txt）。请检查网络后重试。"
+    mark_done "依赖安装（requirements.txt）"
+fi
 
 echo "🌐 安装 Playwright Chromium 浏览器内核（首次下载较慢，请耐心等待）..."
 if python -m playwright install chromium; then

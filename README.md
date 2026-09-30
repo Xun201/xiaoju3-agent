@@ -86,3 +86,44 @@ bash backup.sh 权限体系调整     # 生成 backups/backup_YYYYMMDD_HHMMSS_�
 - **存放与保留**：`backups/`（已在 `.gitignore` 中）；只保留最近 **10** 个，超出自动删除最旧。
 - **输出**：成功打印 `✅ 已备份至 backups/backup_...tar.gz（当前共 N 个备份）`；失败打印原因并退出码 1，**不中断主流程**。
 - 脚本本身不含任何敏感信息；备份包内文件以项目根为相对路径，解压即还原目录结构。
+
+## 运行环境要求
+
+项目分为两个版本分支，代码完全同源，仅依赖组合不同（install.sh 按 Python 版本自动选择）：
+
+### 版本一：PC/最新版（`main` 分支）
+
+- **目标**：面向 Windows/Linux 开发者，使用最新版依赖。
+- **最低运行要求**：
+
+| 项 | 要求 |
+| --- | --- |
+| 硬件 | 普通 PC 或笔记本（建议 8GB 内存以上，跑本地模型建议 16GB） |
+| 操作系统 | Windows 10 / Ubuntu 20.04 / macOS 11 及以上 |
+| Python | 3.10 及以上 |
+| 存储 | 2GB 可用空间（不含本地模型文件） |
+| 依赖 | playwright 1.63+、Flask 3.1.3+、requests 2.34.2+、psutil 7.2.2+（见 `requirements.txt`） |
+
+### 版本二：香橙派适配版（`release/arm64-py38` 分支）
+
+- **目标**：面向 Orange Pi 3B（ARM64，Ubuntu 22.04，Python 3.8），低功耗常驻运行。
+- **最低运行要求**：
+
+| 项 | 要求 |
+| --- | --- |
+| 硬件 | Orange Pi 3B（RK3566，4GB 内存以上） |
+| 操作系统 | Ubuntu 20.04 / 22.04 ARM64 |
+| Python | 3.8（系统自带，无需升级） |
+| 存储 | 16GB TF 卡（含系统） |
+| 依赖 | playwright 1.48.0、Flask 3.0.3、requests 2.32.3、psutil 7.2.2（见 `requirements-py38.txt`，不含 flask-cors） |
+
+- 香橙派安装步骤与注意事项详见 **[docs/DEPLOY_ARM64.md](./docs/DEPLOY_ARM64.md)**。
+
+### 安装与版本自动检测
+
+```bash
+bash install.sh    # 自动检测 Python 版本：3.8 → requirements-py38.txt；≥3.10 → requirements.txt
+```
+
+- 降级组合与最新钉版 API 完全兼容（仅用核心 API），**无需改代码**；/gen_log 抓取在 playwright 1.48 上行为一致。
+- 代码全仓通过 Python 3.8 语法与运行时注解审计（52 个文件 0 处不兼容），路径处理统一 `os.path`/`pathlib`，无 Windows 专属依赖。
