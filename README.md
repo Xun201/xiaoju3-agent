@@ -119,6 +119,22 @@ bash backup.sh 权限体系调整     # 生成 backups/backup_YYYYMMDD_HHMMSS_�
 
 - 香橙派安装步骤与注意事项详见 **[docs/DEPLOY_ARM64.md](./docs/DEPLOY_ARM64.md)**。
 
+### 硬件自适应配置（DEVICE_TIER）
+
+同一份代码可按部署终端的算力自动调整本地/云端优先级。在 `.env` 或环境变量中设置 `DEVICE_TIER`：
+
+| 档位 | 适用终端 | 行为 | 工具汇总 |
+| --- | --- | --- | --- |
+| `high` | 游戏本/带独显（满血） | 优先探测本地 Ollama，跑大模型（`LOCAL_MODEL`，如 qwen2.5:7b 或 14b），失败自动切云端 | 走本地 |
+| `medium` | 普通本/混合 | 优先探测本地 Ollama，用小模型（`LOCAL_MODEL_SMALL`，默认 qwen2.5:0.5b），失败自动切云端 | 走云端 |
+| `low` | 轻薄本/开发板 | **跳过本地探测**（省去每次约 1 秒等待），直接调用云端 | 走云端 |
+| `auto`（默认） | 不确定时 | 启动后首次对话自动探测硬件（独显/内存/架构）并缓存档位 | 按探测结果 |
+
+- 不确定选哪档：运行 `python hardware_profiler.py`，会打印内存/独显/架构探测报告并给出推荐值。
+- 显式设置优先于自动探测；`auto` 的探测结果进程内缓存，可用 `brain._reset_tier_cache()` 重置。
+- medium 档小模型可用 `LOCAL_MODEL_SMALL` 环境变量覆盖（默认 `qwen2.5:0.5b`）。
+- 三档均保留完整安全门禁：权限分级、工作区沙箱、高危工具二次确认不受档位影响。
+
 ### 安装与版本自动检测
 
 ```bash

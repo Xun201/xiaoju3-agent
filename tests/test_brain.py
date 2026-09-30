@@ -228,6 +228,13 @@ class ProbeLocalTests(unittest.TestCase):
 class SmartAskRoutingTests(unittest.TestCase):
     """本地优先 / 热切换 / 双脑全挂 / 消息组装 / 来源标签。"""
 
+    def setUp(self):
+        # 硬件自适应路由默认档位固定为 high，保证既有用例确定性（档位专项见
+        # HardwareAdaptiveRoutingTests）
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
+
     def test_probe_ok_uses_local_and_label(self):
         with mock.patch.object(brain, "requests") as mr, \
                 mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
@@ -349,6 +356,9 @@ class SmartAskToolTests(unittest.TestCase):
     def setUp(self):
         # 工具流程会写熔断计数，用例间互不串扰
         brain.tool_fuse.reset()
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
 
     def tearDown(self):
         brain.tool_fuse.reset()
@@ -542,6 +552,9 @@ class ToolLoopFuseTests(unittest.TestCase):
 
     def setUp(self):
         brain.tool_fuse.reset()
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
 
     def tearDown(self):
         brain.tool_fuse.reset()
@@ -688,6 +701,11 @@ class SmartAskUrlTests(unittest.TestCase):
             "<div>第二段正文</div></body></html>")
     URL = "https://example.com/page"
 
+    def setUp(self):
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
+
     def _run(self, probe_ok, page=None, get_error=None, cloud_reply="这是网页总结"):
         """probe_ok 决定探测结果；page 为抓取到的 HTML（get_error 时直接抛错）。
 
@@ -767,6 +785,115 @@ class SmartAskUrlTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # 会话记忆：MAX_MESSAGES=50 截断
 # ---------------------------------------------------------------------------
+
+class HardwareAdaptiveRoutingTests(unittest.TestCase):
+    """硬件自适应路由：high/medium/low 三档的本地/云端优先级与模型选择。"""
+
+    SMALL = xiaoju3.LOCAL_MODEL_SMALL
+
+    def _tier(self, value):
+        tp = mock.patch.object(brain, "_resolve_tier", return_value=value)
+        tp.start()
+        self.addCleanup(tp.stop)
+
+    def test_low_skips_probe_and_goes_cloud(self):
+        """low 档：不探测本地（省 1 秒），直接云端，标签 ☁️。"""
+        self._tier("low")
+        with mock.patch.object(brain, "probe_local") as mprobe,                 mock.patch.object(brain, "ask_local") as mlocal,                 mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.post.return_value = _cloud_resp("云端回答")
+            result = brain.smart_ask("你好", [])
+        mprobe.assert_not_called()
+        mlocal.assert_not_called()
+        self.assertEqual(result, ("云端回答", "☁️ 云端"))
+        args, _kwargs = mr.post.call_args
+        self.assertEqual(args[0], xiaoju3.CLOUD_URL)
+
+    def test_medium_uses_small_model(self):
+        """medium 档：探测本地并用小模型（LOCAL_MODEL_SMALL）。"""
+        self._tier("medium")
+        with mock.patch.object(brain, "requests") as mr,                 mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("小模型回答")
+            result = brain.smart_ask("你好", [])
+        self.assertEqual(result, ("小模型回答", "🏠 本地"))
+        args, kwargs = mr.post.call_args
+        self.assertEqual(args[0], xiaoju3.LOCAL_URL)
+        self.assertEqual(kwargs["json"]["model"], self.SMALL)
+        mcloud.assert_not_called()
+
+    def test_medium_summary_round_goes_cloud(self):
+        """medium 档：工具成功后汇总轮固定走云端（不试本地）。"""
+        self._tier("medium")
+        raw = '{"tool": "list_files", "args": {}}'
+        with mock.patch.object(brain, "requests") as mr,                 mock.patch.object(brain, "probe_local", return_value=True),                 mock.patch.object(brain, "execute_tool", return_value="✅ 文件列表"),                 mock.patch.object(brain, "ask_local") as mlocal, _quiet():
+            mlocal.return_value = _local_resp(raw).json()["message"]["content"]
+            mr.post.return_value = _cloud_resp("汇总：工作区有 3 个文件")
+            result = brain.smart_ask("看看工作区", [])
+        self.assertEqual(mlocal.call_count, 1)      # 只有主轮用了本地
+        mlocal.assert_called_once_with(mock.ANY, model=self.SMALL)
+        self.assertEqual(result, ("汇总：工作区有 3 个文件", "☁️ 云端 (工具)"))
+
+    def test_high_summary_round_keeps_local_first(self):
+        """high 档：汇总轮本地优先（既有 §10 #14 行为）。"""
+        self._tier("high")
+        raw = '{"tool": "list_files", "args": {}}'
+        with mock.patch.object(brain, "requests") as mr,                 mock.patch.object(brain, "probe_local", return_value=True),                 mock.patch.object(brain, "execute_tool", return_value="✅ 文件列表"),                 mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+            mr.post.side_effect = [_local_resp(raw), _local_resp("汇总：3 个文件")]
+            result = brain.smart_ask("看看工作区", [])
+        self.assertEqual(result, ("汇总：3 个文件", "🏠 本地 (工具)"))
+        mcloud.assert_not_called()
+        models = [c.kwargs["json"]["model"] for c in mr.post.call_args_list]
+        self.assertEqual(models, [xiaoju3.LOCAL_MODEL, xiaoju3.LOCAL_MODEL])
+
+    def test_medium_local_down_falls_back_cloud(self):
+        """medium 档：本地探测在线但小模型调用异常 → 热切换云端。"""
+        with mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.side_effect = [OSError("小模型崩了"), _cloud_resp("云端回答")]
+            result = brain.smart_ask("你好", [])
+        self.assertEqual(result, ("云端回答", "☁️ 云端"))
+
+    def test_explicit_tier_overrides_auto(self):
+        """显式 DEVICE_TIER 优先于 auto 探测；探测缓存可重置。"""
+        brain._reset_tier_cache()
+        with mock.patch.object(xiaoju3, "DEVICE_TIER", "low"),                 mock.patch("hardware_profiler.detect_tier", return_value="high") as mdet,                 mock.patch.object(brain, "probe_local") as mprobe,                 mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.post.return_value = _cloud_resp("云端回答")
+            brain.smart_ask("你好", [])
+        mdet.assert_not_called()
+        mprobe.assert_not_called()
+        brain._reset_tier_cache()
+
+    def test_auto_resolves_via_profiler(self):
+        """auto：经 hardware_profiler 探测并缓存；非法值同样按 auto 处理。"""
+        brain._reset_tier_cache()
+        with mock.patch.object(xiaoju3, "DEVICE_TIER", "auto"),                 mock.patch("hardware_profiler.detect_tier", return_value="low") as mdet,                 mock.patch.object(brain, "probe_local") as mprobe,                 mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.post.return_value = _cloud_resp("云端回答")
+            brain.smart_ask("你好", [])
+            brain.smart_ask("再问一句", [])
+        mdet.assert_called_once()                    # 进程内只探一次
+        self.assertEqual(mprobe.call_count, 0)
+        brain._reset_tier_cache()
+
+    def test_invalid_tier_falls_back_to_auto_detection(self):
+        brain._reset_tier_cache()
+        with mock.patch.object(xiaoju3, "DEVICE_TIER", "bogus"),                 mock.patch("hardware_profiler.detect_tier", return_value="medium"),                 mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()        # medium：探测在线 → 本地小模型
+            mr.post.return_value = _local_resp("小模型回答")
+            result = brain.smart_ask("你好", [])
+        self.assertEqual(result, ("小模型回答", "🏠 本地"))
+        brain._reset_tier_cache()
+
+    def test_ask_local_model_parameter(self):
+        """ask_local 支持按档位传模型；缺省仍用 LOCAL_MODEL。"""
+        with mock.patch.object(brain, "requests") as mr:
+            mr.post.return_value = _local_resp("ok")
+            brain.ask_local([{"role": "user", "content": "hi"}])
+            args, kwargs = mr.post.call_args
+            self.assertEqual(kwargs["json"]["model"], xiaoju3.LOCAL_MODEL)
+            brain.ask_local([{"role": "user", "content": "hi"}], model=self.SMALL)
+            args, kwargs = mr.post.call_args
+            self.assertEqual(kwargs["json"]["model"], self.SMALL)
+
 
 class MemoryTests(unittest.TestCase):
     """load_memory / save_memory：滚动保留最近 50 条。"""

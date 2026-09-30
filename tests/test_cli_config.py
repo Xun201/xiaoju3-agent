@@ -327,5 +327,30 @@ class CliMemoryTest(unittest.TestCase):
         self.assertEqual(saved[-1]["content"], f"m{xiaoju3.MAX_MESSAGES + 9}")
 
 
+class HardwareAdaptiveConfigTests(unittest.TestCase):
+    """硬件自适应路由配置键（DEVICE_TIER / LOCAL_MODEL_SMALL）。"""
+
+    def test_config_keys_exist(self):
+        import importlib
+        cfg = importlib.import_module("xiaoju3")
+        self.assertEqual(cfg.DEVICE_TIER, "auto")
+        self.assertEqual(cfg.LOCAL_MODEL_SMALL, "qwen2.5:0.5b")
+
+    def test_env_override(self):
+        import subprocess
+        code = (
+            "import xiaoju3 as c;"
+            "print(c.DEVICE_TIER, c.LOCAL_MODEL_SMALL)"
+        )
+        import os
+        env = dict(os.environ)
+        env["DEVICE_TIER"] = "low"
+        env["LOCAL_MODEL_SMALL"] = "tiny-model"
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, env=env,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.assertEqual(out.stdout.strip(), "low tiny-model")
+
+
 if __name__ == "__main__":
     unittest.main()
