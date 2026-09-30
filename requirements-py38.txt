@@ -1,0 +1,23 @@
+# 小橘3号（xiaoju3-agent）· Python 3.8 降级依赖（香橙派适配版用）
+# 适用：Orange Pi 3B（ARM64）/ Ubuntu 20.04 / 22.04，系统自带 Python 3.8（无需升级）。
+# 由 install.sh 自动检测 Python 版本后选择本文件；也可手动安装：
+#   python -m pip install -r requirements-py38.txt && python -m playwright install chromium
+#
+# 与最新版（requirements.txt）的版本差异均已核实各包 requires_python，
+# 项目代码仅使用核心 API，行为一致，无需改代码。
+
+# Web 后端（Flask 3.1 起要求 >=3.9，降级到 3.0.3）
+Flask==3.0.3
+
+# 系统监控（仪表盘 /api/status；>=3.6，无需降级）
+psutil==7.2.2
+
+# HTTP 客户端（Ollama / DeepSeek / Home Assistant / 联网搜索；2.33 起要求 >=3.9）
+requests==2.32.3
+
+# 无头浏览器（/gen_log 深度分享页抓取）
+# playwright 1.49 起要求 >=3.9；1.48.0 为最后支持 Python 3.8 的版本，
+# 提供 linux-arm64 Chromium 构建，官方支持 Ubuntu 20.04 / 22.04。
+playwright==1.48.0
+
+# 说明：flask-cors 在最新版依赖中存在，但全仓代码未 import，3.8 环境不安装。

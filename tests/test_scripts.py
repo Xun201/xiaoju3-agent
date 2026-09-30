@@ -544,14 +544,23 @@ class InstallerLegacyDepsTests(unittest.TestCase):
         self.assertIn('PY_MINOR_V', self.content)
         self.assertIn('-lt 10', self.content)
 
-    def test_legacy_pins_present(self):
+    def test_legacy_pins_in_requirements_py38(self):
+        with open("requirements-py38.txt", "r", encoding="utf-8") as f:
+            req38 = f.read()
         for pin in ('Flask==3.0.3', 'requests==2.32.3', 'playwright==1.48.0', 'psutil==7.2.2'):
-            self.assertIn(pin, self.content, f"缺少 3.8 兼容钉版 {pin}")
+            self.assertIn(pin, req38, f"requirements-py38.txt 缺少 3.8 兼容钉版 {pin}")
+        self.assertNotIn("flask-cors==", req38, "3.8 依赖不应包含 flask-cors")
 
-    def test_legacy_note_documents_playwright_boundary(self):
-        self.assertIn('1.48', self.content)
-        self.assertIn('linux-arm64', self.content)
-        self.assertIn('flask-cors', self.content)
+    def test_installer_reads_py38_file_on_old_python(self):
+        self.assertIn("requirements-py38.txt", self.content)
+        self.assertIn("-lt 10", self.content)
+        self.assertIn("linux-arm64", self.content)
+
+    def test_latest_pins_unchanged(self):
+        with open("requirements.txt", "r", encoding="utf-8") as f:
+            req = f.read()
+        for pin in ('Flask==3.1.3', 'requests==2.34.2', 'playwright==1.63.0', 'psutil==7.2.2'):
+            self.assertIn(pin, req, f"requirements.txt 缺少最新钉版 {pin}")
 
 
 if __name__ == "__main__":
