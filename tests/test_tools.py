@@ -138,15 +138,15 @@ class ToolsTestBase(unittest.TestCase):
 class WhitelistTests(ToolsTestBase):
     """白名单 12 项与 DANGER_TOOLS 集合语义。"""
 
-    def test_whitelist_has_twelve_tools(self):
-        # §7：11 项 + 新增 system_manage = 12 项
-        self.assertEqual(len(tools.TOOL_WHITELIST), 12)
+    def test_whitelist_has_thirteen_tools(self):
+        # §7：12 项 + 新增 read_core_memory = 13 项
+        self.assertEqual(len(tools.TOOL_WHITELIST), 13)
         self.assertEqual(
             sorted(tools.TOOL_WHITELIST),
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
                     "vision_tap_element", "ui_tap_element", "web_search",
-                    "system_manage"]))
+                    "system_manage", "read_core_memory"]))
 
     def test_danger_tools_constant(self):
         # 旧集合成员不变，门禁语义升级为 §7 新表（见各专项测试）
@@ -789,6 +789,71 @@ class SearchToolsUnitTests(unittest.TestCase):
             out = search_tools.web_search("q")
         self.assertIn("1. 小橘3号 官网", out)
         self.assertIn("2. 直链结果", out)
+
+
+
+
+class PrivateDataGateTests(unittest.TestCase):
+    """私有数据纵深门：agent_state 路径仅 Lv.4 可访问；read_core_memory Lv.4 独家。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xiaoju3_tools_priv_")
+        ws = os.path.join(self.tmp, "ws")
+        state = os.path.join(ws, "agent_state")
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "identity.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        self._old = tools.WORKSPACE, tools.AGENT_STATE_DIR
+        tools.WORKSPACE = ws
+        tools.AGENT_STATE_DIR = state
+
+    def tearDown(self):
+        tools.WORKSPACE, tools.AGENT_STATE_DIR = self._old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_lv2_cannot_read_private_state(self):
+        pm = PermissionManager()
+        pm.current_level = "Lv.2"
+        result = tools.execute_tool("read_file", {"filename": "agent_state/identity.json"}, pm)
+        self.assertIn("❌", result)
+        self.assertIn("Lv.4", result)
+
+    def test_lv3_cannot_read_private_state(self):
+        pm = PermissionManager()
+        pm.current_level = "Lv.3"
+        result = tools.execute_tool("read_file", {"filename": "agent_state/identity.json"}, pm)
+        self.assertIn("❌", result)
+
+    def test_lv4_can_read_private_state(self):
+        pm = PermissionManager()
+        pm.current_level = "Lv.4"
+        result = tools.execute_tool("read_file", {"filename": "agent_state/identity.json"}, pm)
+        self.assertNotIn("❌ 安全拒绝", result)
+
+    def test_list_files_private_workspace_denied_below_lv4(self):
+        pm = PermissionManager()
+        pm.current_level = "Lv.3"
+        old_ws = tools.WORKSPACE
+        tools.WORKSPACE = tools.AGENT_STATE_DIR   # 工作区被误配到状态目录：门兜底
+        try:
+            result = tools.execute_tool("list_files", {}, pm)
+            self.assertIn("❌", result)
+        finally:
+            tools.WORKSPACE = old_ws
+
+    def test_read_core_memory_lv4_only(self):
+        pm_low = PermissionManager()
+        pm_low.current_level = "Lv.3"
+        result = tools.execute_tool("read_core_memory", {}, pm_low)
+        self.assertIn("❌", result)
+        self.assertIn("Lv.4", result)
+
+    def test_read_core_memory_lv4_reads_recent(self):
+        pm = PermissionManager()
+        pm.current_level = "Lv.4"
+        result = tools.execute_tool("read_core_memory", {"limit": 3}, pm)
+        # state_manager 全局单例在真实 AGENT_STATE_DIR 上建库；能取到格式化文本即可
+        self.assertTrue(result.startswith("🧠 核心记忆") or "暂无记录" in result)
 
 
 if __name__ == "__main__":

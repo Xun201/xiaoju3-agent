@@ -64,6 +64,7 @@ TOOL_WHITELIST = [
     "list_files", "read_file", "write_file", "get_ha_devices",
     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
     "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
+    "read_core_memory",
 ]
 
 
@@ -191,7 +192,9 @@ def ask_local(msgs, model=None):
     model 缺省用 LOCAL_MODEL（high 档大模型）；medium 档传 LOCAL_MODEL_SMALL
     （硬件自适应路由，qwen2.5:0.5b 一类小模型）。
     """
-    payload = {"model": model or LOCAL_MODEL, "messages": msgs, "stream": False}
+    # keep_alive=-1：模型常驻显存/内存，避免每次请求重新加载导致 5-8 秒卡顿
+    payload = {"model": model or LOCAL_MODEL, "messages": msgs,
+               "stream": False, "keep_alive": -1}
     return requests.post(LOCAL_URL, json=payload,
                          timeout=LOCAL_GENERATE_TIMEOUT).json()['message']['content']
 

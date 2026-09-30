@@ -653,5 +653,25 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("--pet-scale", js)                      # 复用 --pet-scale 机制
 
 
+
+
+class CQFaceRenderTests(unittest.TestCase):
+    """console.js 的 [CQ:face,id=XX] Emoji 渲染（静态断言）。"""
+
+    def setUp(self):
+        with open("console.js", "r", encoding="utf-8") as f:
+            self.content = f.read()
+
+    def test_cq_face_mapper_present(self):
+        self.assertIn("CQ_FACE_EMOJI", self.content)
+        self.assertIn("[CQ:face,id=", self.content)
+
+    def test_render_rich_applies_cq_mapping(self):
+        self.assertIn("renderCQFace(escapeHtml(text))", self.content)
+
+    def test_unknown_face_kept_verbatim(self):
+        self.assertIn("hasOwnProperty", self.content)
+
+
 if __name__ == "__main__":
     unittest.main()

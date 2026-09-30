@@ -144,7 +144,8 @@ class AskLocalTests(unittest.TestCase):
             args, kwargs = mr.post.call_args
             self.assertEqual(args[0], xiaoju3.LOCAL_URL)
             self.assertEqual(kwargs["json"], {"model": xiaoju3.LOCAL_MODEL,
-                                              "messages": msgs, "stream": False})
+                                              "messages": msgs, "stream": False,
+                                              "keep_alive": -1})
             self.assertEqual(kwargs["timeout"], brain.LOCAL_GENERATE_TIMEOUT)
 
     def test_exception_propagates(self):
@@ -363,12 +364,13 @@ class SmartAskToolTests(unittest.TestCase):
     def tearDown(self):
         brain.tool_fuse.reset()
 
-    def test_whitelist_matches_twelve_tools(self):
+    def test_whitelist_matches_thirteen_tools(self):
         self.assertEqual(
             sorted(brain.TOOL_WHITELIST),
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
-                    "vision_tap_element", "ui_tap_element", "web_search", "system_manage"]))
+                    "vision_tap_element", "ui_tap_element", "web_search",
+                    "system_manage", "read_core_memory"]))
 
     def test_build_messages_keeps_wired_system_entries(self):
         """前情提要/长期记忆注入的 system 条目应保留，其余 system 剔除（§10 #2/#3 接线）。"""
@@ -847,6 +849,7 @@ class HardwareAdaptiveRoutingTests(unittest.TestCase):
 
     def test_medium_local_down_falls_back_cloud(self):
         """medium 档：本地探测在线但小模型调用异常 → 热切换云端。"""
+        self._tier("medium")
         with mock.patch.object(brain, "requests") as mr, _quiet():
             mr.get.return_value = mock.Mock()
             mr.post.side_effect = [OSError("小模型崩了"), _cloud_resp("云端回答")]
@@ -1000,6 +1003,15 @@ class TranslateEmojiTests(unittest.TestCase):
         self.assertEqual(result,
                          ("哈哈[CQ:image,file=file:///emoji/lib/kaixin.png]",
                           "🏠 本地"))
+
+    def setUp(self):
+        # 与机器状态/本地 .env 档位解耦：固定 high + 探测在线
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
+        pp = mock.patch.object(brain, "probe_local", return_value=True)
+        pp.start()
+        self.addCleanup(pp.stop)
 
     def test_emoji_missing_library_degrades_gracefully(self):
         # emoji_manager 缺席 → [EMOJI:] 原样保留，不阻断回复链

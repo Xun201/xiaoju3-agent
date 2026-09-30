@@ -79,7 +79,8 @@ class ConfigContractTest(unittest.TestCase):
         for key in CONFIG_KEYS:
             self.assertTrue(hasattr(xiaoju3, key), f"缺少配置键: {key}")
 
-    @unittest.skipIf(os.path.exists(os.path.join(PROJECT_ROOT, ".env")),
+    @unittest.skipIf(os.path.exists(os.path.join(PROJECT_ROOT, ".env"))
+                     or os.path.exists(os.path.join(PROJECT_ROOT, "xiaoju3_data", ".env")),
                      "项目存在本地 .env，默认值可能被其覆盖")
     def test_default_values(self):
         cfg = probe_config()
@@ -330,6 +331,9 @@ class CliMemoryTest(unittest.TestCase):
 class HardwareAdaptiveConfigTests(unittest.TestCase):
     """硬件自适应路由配置键（DEVICE_TIER / LOCAL_MODEL_SMALL）。"""
 
+    @unittest.skipIf(os.path.exists(os.path.join(PROJECT_ROOT, ".env"))
+                     or os.path.exists(os.path.join(PROJECT_ROOT, "xiaoju3_data", ".env")),
+                     "项目存在本地 .env，DEVICE_TIER 可能被其覆盖")
     def test_config_keys_exist(self):
         import importlib
         cfg = importlib.import_module("xiaoju3")

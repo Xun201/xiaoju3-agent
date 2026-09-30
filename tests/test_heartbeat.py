@@ -477,5 +477,81 @@ class DecisionPromptTests(HeartbeatBase):
         self.assertIn("无需干预", prompt)
 
 
+
+
+class EmergencyExemptionTests(unittest.TestCase):
+    """紧急豁免：危险传感器报警 → 绕过权限强制 turn_off + 日志 + QQ 推送。"""
+
+    def setUp(self):
+        self._old_snapshot = dict(heartbeat.last_states) if heartbeat.last_states else None
+        heartbeat.reset_snapshot()
+
+    def tearDown(self):
+        heartbeat.reset_snapshot()
+        if self._old_snapshot is not None:
+            heartbeat.last_states = self._old_snapshot
+
+    @staticmethod
+    def _states(gas="on"):
+        return [
+            {"entity_id": "binary_sensor.kitchen_gas", "state": gas},
+            {"entity_id": "lock.front_door", "state": "locked"},
+            {"entity_id": "switch.kitchen_gas_valve", "state": "on"},
+            {"entity_id": "light.living", "state": "off"},
+        ]
+
+    def test_no_alarm_returns_none(self):
+        self.assertIsNone(heartbeat.emergency_check(self._states(gas="off")))
+
+    def test_gas_alarm_forces_turn_off_on_associated_device(self):
+        with mock.patch.object(heartbeat, "notify_master") as mnotify,                 mock.patch("home_tools.control_ha_device") as mctl:
+            mctl.return_value = "✅ 已关闭"
+            result = heartbeat.emergency_check(self._states())
+        self.assertIsNotNone(result)
+        entity = mctl.call_args.args[0]
+        action = mctl.call_args.args[1]
+        self.assertEqual(action, "turn_off")          # 只准关不准开
+        self.assertIn("gas_valve", entity)            # 关联词元优先
+        mnotify.assert_called_once()                  # 必推送通知
+
+    def test_alarm_never_turns_on(self):
+        with mock.patch.object(heartbeat, "notify_master"),                 mock.patch("home_tools.control_ha_device") as mctl:
+            mctl.return_value = "✅"
+            heartbeat.emergency_check(self._states())
+        for c in mctl.call_args_list:
+            self.assertEqual(c.args[1], "turn_off")
+
+    def test_no_association_shuts_all_dangerous(self):
+        states = [{"entity_id": "binary_sensor.gas_leak", "state": "on"},
+                  {"entity_id": "lock.front_door", "state": "locked"},
+                  {"entity_id": "light.living", "state": "off"}]
+        with mock.patch.object(heartbeat, "notify_master"),                 mock.patch("home_tools.control_ha_device") as mctl:
+            mctl.return_value = "✅"
+            heartbeat.emergency_check(states)
+        targets = [c.args[0] for c in mctl.call_args_list]
+        self.assertEqual(targets, ["lock.front_door"])   # 无词元交集→全部危险设备；灯不涉及
+
+    def test_heartbeat_once_priority_over_rules(self):
+        """心跳单轮：紧急豁免优先于场景规则与大模型决策。"""
+        states = self._states()
+        with mock.patch.object(heartbeat, "notify_master"), \
+                mock.patch("home_tools.control_ha_device") as mctl, \
+                mock.patch.object(heartbeat, "apply_scene_rules") as mrules, \
+                mock.patch.object(heartbeat, "_default_ask", return_value="无需干预"), \
+                mock.patch.object(heartbeat, "_default_sense_states", return_value=states):
+            mctl.return_value = "✅ 已关闭"
+            mrules.return_value = []
+            result = heartbeat.heartbeat_once(verbose=False)
+        self.assertIsNotNone(result)
+        self.assertIn("紧急豁免", result)
+        mctl.assert_called()                           # 豁免动作已执行
+
+    def test_notify_master_without_owner_qq_skips(self):
+        with mock.patch.dict(os.environ, {"XIAOJU3_OWNER_QQ": ""}),                 mock.patch("requests.post") as mpost:
+            ok = heartbeat.notify_master("测试")
+        self.assertFalse(ok)
+        mpost.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

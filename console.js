@@ -109,8 +109,24 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
     }
+    // QQ 表情渲染：[CQ:face,id=XX] → 对应 Emoji（常用码映射；未收录的原样保留）
+    const CQ_FACE_EMOJI = {
+        0: '😊', 1: '😒', 2: '😍', 3: '😔', 4: '😎', 5: '😢', 6: '😊', 7: '🤫',
+        8: '😴', 9: '😭', 10: '😅', 11: '😠', 12: '😜', 13: '😁', 14: '😄',
+        15: '😰', 16: '😝', 17: '🤔', 18: '😪', 21: '😘', 22: '😤', 23: '😖',
+        24: '😨', 26: '😵', 27: '🤐', 28: '😆', 29: '🙃', 32: '🙈',
+        37: '🤗', 38: '😱', 39: '🥺', 40: '😤', 46: '🐱', 63: '👍', 64: '👎',
+        66: '❤️', 76: '🌹', 78: '🍀', 85: '⚡', 89: '🍺', 97: '🤝', 101: '🙏',
+        109: '🐱', 124: '💀', 129: '🙏', 144: '🍺', 146: '🐱',
+    };
+    function renderCQFace(text) {
+        return String(text).replace(/\[CQ:face,id=(\d+)\]/g, function (m, id) {
+            return Object.prototype.hasOwnProperty.call(CQ_FACE_EMOJI, Number(id))
+                ? CQ_FACE_EMOJI[Number(id)] : m;
+        });
+    }
     function renderRich(text) {
-        return escapeHtml(text).replace(/\n/g, '<br>');
+        return renderCQFace(escapeHtml(text)).replace(/\n/g, '<br>');
     }
 
     function appendUserMessage(text) {

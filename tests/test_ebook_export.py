@@ -237,14 +237,14 @@ class FromHistoryTest(ExportTestBase):
         chapters = export_from_history(history)
         self.assertEqual(len(chapters), 1)
         self.assertEqual(chapters[0]["content"].splitlines(),
-                         ["XUN：你好", "XUN：在吗"])
+                         ["用户：你好", "用户：在吗"])
 
     def test_roles_rendered_as_names(self):
         chapters = export_from_history([
             {"role": "user", "content": "谁在说话"},
             {"role": "assistant", "content": "我是小橘3号"}])
         self.assertEqual(chapters[0]["content"],
-                         "XUN：谁在说话\n小橘3号：我是小橘3号")
+                         "用户：谁在说话\n小橘3号：我是小橘3号")
 
     def test_empty_history_gives_no_chapters(self):
         self.assertEqual(export_from_history([]), [])

@@ -26,7 +26,7 @@ import re
 import sys
 import subprocess
 
-from xiaoju3 import WORKSPACE
+from xiaoju3 import WORKSPACE, AGENT_STATE_DIR
 import home_tools
 from home_tools import get_ha_devices, control_ha_device
 from adb_tools import adb_screenshot, adb_tap, adb_swipe
@@ -41,6 +41,7 @@ TOOL_WHITELIST = [
     "list_files", "read_file", "write_file", "get_ha_devices",
     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
     "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
+    "read_core_memory",
 ]
 
 # 高危工具集合（语义更新为 §7 新门禁，逐工具门禁见模块 docstring 与
@@ -81,6 +82,19 @@ def _is_in_workspace(filepath):
     base = os.path.realpath(WORKSPACE)
     target = os.path.realpath(filepath)
     return target.startswith(base + os.sep)
+
+
+def _is_private_state_path(filepath):
+    """纵深防御：目标落在隔离状态目录（agent_state/，记忆/身份/对话）之内
+    即属私有数据，仅 Lv.4（read_private_memory）可访问——即便工作区被误配置
+    到状态目录附近，该门也兜底生效。"""
+    base = os.path.realpath(AGENT_STATE_DIR)
+    target = os.path.realpath(filepath)
+    return target == base or target.startswith(base + os.sep)
+
+
+def _deny_private():
+    return "❌ 安全拒绝：记忆、身份与对话等私有数据仅主人级（Lv.4）可访问。"
 
 
 def _is_valid_component(component):
@@ -135,6 +149,9 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
             return _DENY_LV3_OPERATION
 
         if tool_name == "list_files":
+            if _is_private_state_path(WORKSPACE) and \
+                    not permission_manager.has_permission("read_private_memory"):
+                return _deny_private()
             try:
                 names = sorted(os.listdir(WORKSPACE))
             except OSError:
@@ -151,10 +168,28 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
             filepath = os.path.join(WORKSPACE, args["filename"])
             if not _is_in_workspace(filepath):
                 return _DENY_OUTSIDE
+            if _is_private_state_path(filepath) and \
+                    not permission_manager.has_permission("read_private_memory"):
+                return _deny_private()
             if os.path.exists(filepath):
                 with open(filepath, "r", encoding="utf-8") as f:
                     return f.read()[:1000]
             return f"文件 {args['filename']} 不存在。"
+
+        elif tool_name == "read_core_memory":
+            # 核心记忆库读取：Lv.4 主人独家（定稿权限表）
+            if not permission_manager.has_permission("read_private_memory"):
+                return "❌ 安全拒绝：核心记忆库仅主人级（Lv.4）可读取。"
+            try:
+                limit = max(1, min(20, int(args.get("limit", 5))))
+            except (TypeError, ValueError):
+                limit = 5
+            from agent_state.state_manager import state_manager
+            rows = state_manager.get_recent_memories(limit) or []
+            if not rows:
+                return "（核心记忆库暂无记录）"
+            lines = [f"- [{cat}] {content}" for cat, content in rows]
+            return f"🧠 核心记忆（最近 {len(lines)} 条）：\n" + "\n".join(lines)
 
         elif tool_name == "write_file":
             filepath = os.path.join(WORKSPACE, args["filename"])

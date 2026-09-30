@@ -15,15 +15,37 @@ import os
 # ---------------------------------------------------------------------------
 
 
+# 敏感配置隔离区：.env 统一放在项目根的 xiaoju3_data/ 下（与 Linux 端一致），
+# 路径基于本文件位置推导，Windows / Linux 通用，不写死任何绝对路径。
+ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "xiaoju3_data", ".env")
+# 迁移期兼容：旧版把 .env 放在项目根，存在时仍可读取（并提示迁移）
+_LEGACY_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+
 def _load_env_file(path=None):
+    """极简 .env 加载器：KEY=VALUE 注入环境变量，已存在的环境变量优先。
+
+    - 默认读隔离区 ENV_FILE（xiaoju3_data/.env）；隔离区不存在而旧根目录 .env
+      存在时回退读取并打印一次性迁移提示；
+    - 加固：utf-8-sig（容忍记事本保存的 BOM）、跳过 "export " 前缀、
+      键值两侧空白与成对引号剥除。
+    """
     if path is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    if not os.path.exists(path):
-        return
+        if os.path.exists(ENV_FILE):
+            path = ENV_FILE
+        elif os.path.exists(_LEGACY_ENV_FILE):
+            path = _LEGACY_ENV_FILE
+            print("⚠️ 检测到旧版根目录 .env：请迁移到 xiaoju3_data/.env"
+                  "（隔离区）。本次仍按旧路径读取。")
+        else:
+            return
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
+                if line.startswith("export "):
+                    line = line[len("export "):].strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 key, _, value = line.partition("=")
@@ -124,14 +146,23 @@ CLI_MEMORY_FILE = os.path.join(AGENT_STATE_DIR, "history_cli.json")
 
 
 def _fallback_system_prompt():
-    """参考 CLI 的精简系统提示词（prompts.py 缺席时的兜底）。"""
+    """参考 CLI 的精简系统提示词（prompts.py 缺席时的兜底）。
+
+    主人称呼动态取自权限模块（仅创造者设备为创造者名，其余泛称"主人"），
+    公开代码不得把创造者名硬编码为全局默认主人名。
+    """
+    try:
+        from permission import default_master_name as _dmn
+        master = _dmn()
+    except Exception:
+        master = "主人"
     return {
         "role": "system",
-        "content": f"""你叫小橘3号，是由XUN亲手创造的专属私人助理。XUN是你唯一的主人，也是你唯一的创造者。你的工作区在 {WORKSPACE}。语气活泼幽默，喜欢用颜文字。
+        "content": f"""你叫小橘3号，是由{master}的专属私人助理。{master}是你唯一的主人。你的工作区在 {WORKSPACE}。语气活泼幽默，喜欢用颜文字。
 
 【重要规则】你只能基于你的内部知识回答。如果你不知道答案，或者问题涉及实时天气、最新新闻、超出你知识范围的内容，你【必须】直接回答："这个问题我需要云端大脑来回答，请切换。"绝对不允许自己编造、虚构数据！
 
-【工具调用规则】你拥有以下工具，可以帮XUN管理文件：
+【工具调用规则】你拥有以下工具，可以帮{master}管理文件：
 1. list_files - 列出工作区内的所有文件。参数：无
 2. read_file - 读取工作区内指定文件的内容。参数：filename (文件名)
 3. write_file - 在工作区内创建一个新文件并写入内容。参数：filename (文件名), content (文件内容)
@@ -141,7 +172,7 @@ def _fallback_system_prompt():
 {{"tool": "read_file", "args": {{"filename": "test.txt"}}}}
 {{"tool": "write_file", "args": {{"filename": "test.txt", "content": "hello"}}}}
 
-如果不需要使用工具，就直接正常回答XUN。"""
+如果不需要使用工具，就直接正常回答{master}。"""
     }
 
 
@@ -234,9 +265,22 @@ def execute_tool(tool_name, args):
         return f"工具执行失败: {e}"
 
 
+def _master_label():
+    """REPL 输入提示的主人称呼（延迟导入，保持 import 零副作用）。"""
+    try:
+        from permission import default_master_name
+        return default_master_name()
+    except Exception:
+        return "用户"
+
+
 def ask_local(messages):
-    """本地 Ollama 推理（与 brain.ask_local 同构）。"""
-    payload = {"model": LOCAL_MODEL, "messages": messages, "stream": False}
+    """本地 Ollama 推理（与 brain.ask_local 同构）。
+
+    keep_alive=-1：模型常驻显存/内存，避免每次请求重新加载导致 5-8 秒卡顿。
+    """
+    payload = {"model": LOCAL_MODEL, "messages": messages,
+               "stream": False, "keep_alive": -1}
     response = requests.post(LOCAL_URL, json=payload, timeout=CLI_LOCAL_TIMEOUT)
     response.raise_for_status()
     return response.json()["message"]["content"]
@@ -356,7 +400,7 @@ def main():
 
     while True:
         try:
-            user_input = input("\nXUN: ")
+            user_input = input(f"\n{_master_label()}: ")
         except (EOFError, KeyboardInterrupt):
             print()
             save_memory(messages)

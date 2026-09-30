@@ -29,7 +29,7 @@ REGISTER_PASSWORD_ENV = permission.REGISTER_PASSWORD_ENV
 LV1_ACTIONS = ("chat", "web_search")
 LV2_ACTIONS = ("read_file", "list_files", "control_normal_devices")
 LV3_ACTIONS = ("write_file", "modify_code", "manage_plugins")
-LV4_ACTIONS = ("control_dangerous_devices", "system_manage")
+LV4_ACTIONS = ("control_dangerous_devices", "system_manage", "read_private_memory")
 ALL_ACTIONS = LV1_ACTIONS + LV2_ACTIONS + LV3_ACTIONS + LV4_ACTIONS
 
 
@@ -547,6 +547,86 @@ class ModuleMountTests(unittest.TestCase):
     def test_new_env_key_registered(self):
         # 新配置键名登记（报主控补 .env.example）
         self.assertEqual(REGISTER_PASSWORD_ENV, "XIAOJU3_REGISTER_PASSWORD")
+
+
+
+
+class CreatorNameTests(unittest.TestCase):
+    """专属称呼与命名防重：保留名拦截、设备相关默认称呼、称呼落盘。"""
+
+    def test_reserved_name_rejected_case_insensitive(self):
+        for bad in ("XUN", "xun", "Xun", " XUN "):
+            ok, msg = permission.validate_claim_name(bad)
+            self.assertFalse(ok, bad)
+            self.assertIn("保留名", msg)
+
+    def test_empty_name_rejected(self):
+        ok, msg = permission.validate_claim_name("  ")
+        self.assertFalse(ok)
+
+    def test_normal_name_accepted(self):
+        ok, result = permission.validate_claim_name("小橘的主人")
+        self.assertTrue(ok)
+        self.assertEqual(result, "小橘的主人")
+
+    def test_default_master_name_depends_on_device_flag(self):
+        with mock.patch.dict(os.environ, {"XIAOJU3_CREATOR_DEVICE": "1"}):
+            self.assertEqual(permission.default_master_name(), "XUN")
+        with mock.patch.dict(os.environ, {"XIAOJU3_CREATOR_DEVICE": ""}):
+            self.assertEqual(permission.default_master_name(), "主人")
+
+    def test_claim_name_persists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pm = self._pm(tmp)
+            msg = pm.claim_name("u1", "阿橙")
+            self.assertIn("阿橙", msg)
+            pm2 = self._pm(tmp)
+            pm2.load_identity()          # 实例路径覆盖后显式重读 tmp 身份文件
+            self.assertEqual(pm2.display_name, "阿橙")
+
+    def test_claim_name_reserved_blocked_and_not_saved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pm = self._pm(tmp)
+            msg = pm.claim_name("u1", "xun")
+            self.assertIn("❌", msg)
+            self.assertEqual(pm.display_name, "")
+            pm2 = self._pm(tmp)
+            pm2.load_identity()
+            self.assertEqual(pm2.display_name, "")
+
+    def test_register_with_name_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {REGISTER_PASSWORD_ENV: "pw123"}):
+                pm = self._pm(tmp)
+                msg = pm.register_user("u1", "pw123", name="客人甲")
+                self.assertIn("Lv.2", msg)
+                self.assertEqual(pm.display_name, "客人甲")
+                pm2 = self._pm(tmp)
+                pm2.load_identity()
+            self.assertEqual(pm2.display_name, "客人甲")
+            self.assertEqual(pm2.current_level, "Lv.2")
+
+    def test_register_with_reserved_name_aborts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {REGISTER_PASSWORD_ENV: "pw123"}):
+                pm = self._pm(tmp)
+                msg = pm.register_user("u1", "pw123", name="XUN")
+                self.assertIn("❌", msg)
+                self.assertIn("保留名", msg)              # 命中保留名拦截而非密码错误
+                self.assertEqual(pm.current_level, "Lv.1")   # 注册整体中止
+                self.assertEqual(pm.display_name, "")
+
+    @staticmethod
+    def _pm(tmp, extra_env=None):
+        env = {"AGENT_STATE_DIR": tmp}
+        if extra_env:
+            env.update(extra_env)
+        with mock.patch.dict(os.environ, env):
+            pm = permission.PermissionManager()
+        # 实例属性覆盖身份文件路径：save/load 都走 tmp（load 在 __init__ 已跑，
+        # 需要读 tmp 时显式再调一次 load_identity）
+        pm.IDENTITY_PATH = os.path.join(tmp, "identity.json")
+        return pm
 
 
 if __name__ == "__main__":
