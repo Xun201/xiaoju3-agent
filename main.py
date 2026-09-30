@@ -7,6 +7,8 @@
   才理人，防刷屏；戳一戳彩蛋回应；非 @ 图片消息自动收藏表情链接（emoji_manager）。
 - POST /chat：网页控制台入口，校验 X-API-Key 头（统一配置 xiaoju3.WEB_API_KEY，
   经渲染注入页面，不在源码/前端硬编码真实密钥——修复文档 §9 已知风险）。
+  回复返回前经 web_sanitize.sanitize_for_web 净化 QQ 专用 CQ 码（网页不显示
+  方括号原文）；QQ 链路（/onebot → NapCat、/send_image）保持原样不受影响。
 - GET /：内联深色聊天页（参考实现形态）；GET /api/health：迁移守望探测端点
   （migration.health_bp 一行接入，架构 §8）。
 
@@ -57,6 +59,7 @@ from permission import permission_manager
 from plugins.context_manager import compress_context
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool
+from web_sanitize import sanitize_for_web
 from xiaoju3 import AGENT_STATE_DIR, TRIGGER_WORDS, WEB_API_KEY, WORKSPACE
 
 app = Flask(__name__)
@@ -579,7 +582,9 @@ def chat():
     if not user_msg:
         return {"reply": "请说点什么吧！"}
     reply = handle_message('web', 'admin', None, user_msg)
-    return {"reply": reply}
+    # 🛡️ Web 出口净化：CQ 码转 Emoji / [表情] / 剥除（旧版网页同样不显示方括号
+    # 原文，且不泄露表情包本机路径）；QQ 链路（/onebot → NapCat）保持原样。
+    return {"reply": sanitize_for_web(reply)}
 
 # ================= QQ大门 =================
 @app.route('/onebot', methods=['POST'])
