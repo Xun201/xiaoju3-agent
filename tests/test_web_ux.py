@@ -475,6 +475,8 @@ class TerminalTabTests(unittest.TestCase):
         self.assertIn("setInterval(loadTerminalHistory, TERMINAL_REFRESH_MS)",
                       section)
         self.assertIn("clearInterval(terminalRefreshTimer)", section)
+        # 轮询降频（2026-10-02 用户口径）：5s → 15s
+        self.assertIn("const TERMINAL_REFRESH_MS = 15000", section)
 
     def test_think_card_readonly_render(self):
         """终端 AI 消息：沿用 splitThinkBlock 切分 + 折叠卡片（不打字、直接

@@ -51,8 +51,8 @@
 - 💓 心跳 / 多设备守望：dashboard 直接运行（__main__）时经
                  main.start_background_services() 拉起（原 main.py 启动点）。
 - 访问日志刷屏抑制：werkzeug logger 挂 _PollAccessFilter（/api/status、
-  /api/balance 轮询）与 _HeartbeatAccessFilter（/onebot meta_event 心跳，
-  原 main.py 过滤器迁入），各自拦截，其余照常输出。
+  /api/balance、/api/history 轮询）与 _HeartbeatAccessFilter（/onebot
+  meta_event 心跳，原 main.py 过滤器迁入），各自拦截，其余照常输出。
 
 三接口按文档 §9.1 口径均无鉴权（X-API-Key 门禁为规划项 🔜）。
 """
@@ -100,19 +100,22 @@ PROCESS_START = int(time.time())
 
 
 # ============================ 访问日志刷屏抑制 ============================
-# 用户口径：/api/status（前端 2s 轮询）与 /api/balance（余额 60s 轮询）的
-# werkzeug 访问日志高频刷屏，予以屏蔽；/api/chat、/console 等其余照常输出。
+# 用户口径：/api/status（前端 2s 轮询）、/api/balance（余额 60s 轮询）与
+# /api/history（终端记录标签页轮询，GET 带 ?source= 等任意参数）的 werkzeug
+# 访问日志高频刷屏，予以屏蔽；/api/chat、/onebot、/api/tts、/console 等
+# 其余照常输出。
 # 实现取舍（对任务建议"降为 DEBUG"的修正）：werkzeug 3.x 首次打日志时会
 # 给 logger 自挂 NOTSET 级 StreamHandler（见 werkzeug/_internal._log），
 # 而 logger 级别只在 emit 入口把关、不约束 handler——被降级的 DEBUG 记录
 # 仍会经 handler 输出。故本过滤器对轮询路径的记录直接返回 False（拦截，
 # 等效"任何日志级别下不可见"）；setLevel(INFO) 保底：确保非拦截访问日志
 # 在无宿主日志配置时仍按 INFO 正常输出。
-_QUIET_LOG_PREFIXES = ("/api/status", "/api/balance")
+_QUIET_LOG_PREFIXES = ("/api/status", "/api/balance", "/api/history")
 
 
 class _PollAccessFilter(logging.Filter):
-    """高频轮询路径（/api/status、/api/balance）的 werkzeug 访问日志拦截器。"""
+    """高频轮询路径（/api/status、/api/balance、/api/history）的 werkzeug
+    访问日志拦截器。"""
 
     # 访问日志行形如：'127.0.0.1 - - [01/Oct/2026 12:00:00] "GET /api/status HTTP/1.1" 200 -'
     _REQUEST_LINE_RE = re.compile(r'"[A-Z]+ (\S+)(?: HTTP/[^"]*)?"')

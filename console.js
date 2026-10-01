@@ -1195,10 +1195,11 @@
     // 缺失恒 200 空列表，消息为纯 [{role, content}]），只读展示——无输入框、
     // 清空按钮禁用、消息不带操作工具栏；思考块沿用 splitThinkBlock 收敛为
     // 折叠卡片（历史回放口径：不打字、直接折叠展示全文）。切入即拉最新，
-    // 停留期间每 5 秒自动刷新（终端 CLI 每轮落盘，页面跟随），⟳ 手动刷新；
+    // 停留期间每 15 秒自动刷新（降频口径：终端 CLI 每轮落盘，页面跟随，
+    // 5s 轮询曾致 /api/history 后端日志量偏高），⟳ 手动刷新随时可用；
     // 竞态守卫（请求序号）丢弃慢响应，慢网不回写旧数据。
     const TERMINAL_HISTORY_URL = '/api/history?source=terminal';
-    const TERMINAL_REFRESH_MS = 5000;
+    const TERMINAL_REFRESH_MS = 15000;
     const tabConsoleBtn = document.getElementById('tab-console');
     const tabTerminalBtn = document.getElementById('tab-terminal');
     const terminalPaneEl = document.getElementById('terminal-pane');
