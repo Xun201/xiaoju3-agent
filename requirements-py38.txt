@@ -27,3 +27,7 @@ openai==2.6.0
 # 说明：flask-cors 在最新版依赖中存在，但全仓代码未 import，3.8 环境不安装。
 # 说明：wmi（Windows 温度读取，见 requirements.txt）不加入本清单——香橙派
 # Linux 温度走 /sys/class/thermal/thermal_zone* 系统文件，无需 wmi。
+
+# 说明：pywebview 桌面套壳与 edge-tts 为 Windows 桌面控制台专用；
+# 香橙派 Linux 端经浏览器访问 :5003/console 即可，无需以下两包
+# （如需尝试：edge-tts 支持 >=3.7；pywebview Linux 需系统级 GTK/QT 库）

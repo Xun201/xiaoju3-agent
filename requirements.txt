@@ -35,3 +35,9 @@ openai==3.22.1
 # Linux/香橙派温度走 /sys/class/thermal/thermal_zone*，无需本包
 # （requirements-py38.txt 对应说明）。
 wmi==1.5.1
+
+# 离线桌面控制台（pywebview 原生窗口套壳，Windows 优先）
+pywebview==6.2.1
+
+# Edge-TTS 人类少女音（免费无 Key；前端 /api/tts 后端合成）
+edge-tts==7.2.8
