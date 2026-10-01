@@ -16,7 +16,23 @@
   等价参数被拒"连续计数，达到 TOOL_FUSE_LIMIT（默认 3，环境变量可配）次
   → 强制打断：剥夺工具调用权（不再解析/执行工具 JSON），退回纯文本回复，
   并提示用户如何继续；reset 接口供换话题/管理员指令重置。
+- 思维链展示（<think> 包装，DeepSeek 式推理卡片契约，前端并行组同口径）：
+  提示词要求模型工具调用按"[思考] → [计划] → [行动]"结构输出；smart_ask
+  对首轮回复用正则分别捕获 [思考] 与 [计划] 文本（到下一个标记 / "{" /
+  串尾为止，DOTALL，可只捕获其一）；凡本轮解析出工具 JSON 且执行
+  （含 ❌ 切断与熔断通知），最终 reply 最前面一律包装 <think>...</think>
+  （内容为捕获文本拼接；模型没输出任何思考时按实际解析出的工具名动态
+  生成占位符"[思考] 准备调用 {工具名} 尝试完成操作."，解析不出工具名时
+  回退 TOOL_THINKING_PLACEHOLDER 固定占位符）；无工具调用的普通聊天回复
+  绝不包装。注入兜底占位符 / 捕获到原生思考时各打印一条 [CoT] 终端日志，
+  供部署侧确认思维链来源。JSON 提取先按原贪婪
+  正则整体匹配，失败时回退逐 "{" 起点 raw_decode 扫描——CoT 文本里混入
+  的花括号内容绝不干扰工具 JSON 提取，且全程不抛异常。
 - 输入含 URL：先抓网页正文（剔除 script/style 标签）再按"总结网页"并入提问。
+- 采样温度 LLM_TEMPERATURE（默认 0.7，env LLM_TEMPERATURE 可覆盖）统一注入
+  两个后端，让回复语气更自然拟人；两家 schema 不同，落点也不同：
+  Ollama /api/chat 必须放 options.temperature（顶层无效），DeepSeek
+  /chat/completions 用顶层 temperature。
 - MAX_MESSAGES=50 滚动截断在保存侧 save_memory 生效（§4）。
 - translate_emoji（[EMOJI:标签] → CQ 码图片）已接入回复链（§5 闭环口径）：
   smart_ask 的正常文本回复（普通/总结/工具汇总）返回前统一转换；
@@ -58,6 +74,15 @@ CLOUD_TIMEOUT = 30
 FETCH_TIMEOUT = 15
 FETCH_MAX_CHARS = 2000
 
+# 拟人化采样温度（用户指令 temperature=0.7：略高的发散度让回复更自然口语化）。
+# env LLM_TEMPERATURE 可覆盖；解析失败（非数字）回退默认值。
+DEFAULT_TEMPERATURE = 0.7
+
+try:
+    LLM_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", DEFAULT_TEMPERATURE))
+except (TypeError, ValueError):
+    LLM_TEMPERATURE = DEFAULT_TEMPERATURE
+
 # 工具白名单：与 tools.py 的 12 项分发、prompts.py 的工具协议一致
 # （文档 §5；第二阶段 §10 #5 新增 web_search、§7 权限调整新增 system_manage）
 TOOL_WHITELIST = [
@@ -66,6 +91,83 @@ TOOL_WHITELIST = [
     "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
     "read_core_memory",
 ]
+
+
+# ==================== CoT 思考提取（<think> 包装，前端推理卡片契约） ====================
+
+# 模型没输出任何 [思考]/[计划] 时的固定思考占位符（解析不出工具名时的兜底，
+# 与前端契约字面量一致）
+TOOL_THINKING_PLACEHOLDER = "[思考] 已按计划执行工具调用。"
+
+
+def _tool_thinking_placeholder(tool_name):
+    """无 CoT 时的 [思考] 占位符：按本轮实际解析出的工具名动态生成。
+
+    让推理卡片至少向主人展示"准备调用什么工具"（如 ui_tap_element /
+    adb_tap），而不是一句与操作无关的空话；解析不出工具名（空值等）时
+    回退 TOOL_THINKING_PLACEHOLDER 固定占位符。<think> 包装机制本身零改动。
+    """
+    name = str(tool_name).strip() if tool_name else ""
+    if name:
+        return f"[思考] 准备调用 {name} 尝试完成操作。"
+    return TOOL_THINKING_PLACEHOLDER
+
+# [思考]/[计划] 段捕获：内容到下一个标记（[计划]/[行动]）、"{" 或串尾为止
+# （DOTALL 跨行；兼容全角【】变体与"标记："写法）。"{" 终止符保证思考文本
+# 绝不会把工具 JSON 吞进推理展示。
+_THINK_RE = re.compile(
+    r'[\[【]思考[\]】][:：]?\s*(.*?)(?=[\[【]计划[\]】]|[\[【]行动[\]】]|\{|$)',
+    re.DOTALL)
+_PLAN_RE = re.compile(
+    r'[\[【]计划[\]】][:：]?\s*(.*?)(?=[\[【]行动[\]】]|\{|$)',
+    re.DOTALL)
+
+
+def _capture_thinking(raw_reply):
+    """捕获模型首轮回复中的 [思考] / [计划] 推理文本（保留标记字面量）。
+
+    两个都捕获或捕获其一均可；都没有（或只有空白）返回空串，由调用方
+    回退 TOOL_THINKING_PLACEHOLDER 默认占位符。捕获按标记切分、与 JSON
+    提取互不耦合（终止符含 "{"，思考文本不会吞进工具 JSON）。
+    """
+    parts = []
+    think = _THINK_RE.search(raw_reply)
+    if think and think.group(1).strip():
+        parts.append("[思考] " + think.group(1).strip())
+    plan = _PLAN_RE.search(raw_reply)
+    if plan and plan.group(1).strip():
+        parts.append("[计划] " + plan.group(1).strip())
+    return "\n".join(parts)
+
+
+def _extract_tool_json(raw_reply):
+    """从模型回复中提取工具 JSON 原文（不含 CoT 思考文本），取不到返回 None。
+
+    先按历史贪婪正则整体匹配并验证可解析（既有行为完全不变）；验证失败时
+    （例如 [思考] 文本里混入花括号内容，贪婪匹配把两段拼在一起导致解析
+    失败）回退到逐个 "{" 起点 raw_decode 扫描，返回第一个含 "tool" 键的
+    可解析 JSON 对象原文。全程 try/except 兜底，绝不抛异常。
+    """
+    match = re.search(r'\{.*"tool".*\}', raw_reply, re.DOTALL)
+    if match:
+        try:
+            json.loads(match.group(0))
+            return match.group(0)
+        except Exception:
+            pass
+    try:
+        decoder = json.JSONDecoder()
+        for brace in re.finditer(r'\{', raw_reply):
+            start = brace.start()
+            try:
+                obj, end = decoder.raw_decode(raw_reply[start:])
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and "tool" in obj:
+                return raw_reply[start:start + end]
+    except Exception:
+        pass
+    return None
 
 
 # ==================== 防死循环熔断（§10 #1 / 开发日志第四章） ====================
@@ -193,8 +295,11 @@ def ask_local(msgs, model=None):
     （硬件自适应路由，qwen2.5:0.5b 一类小模型）。
     """
     # keep_alive=-1：模型常驻显存/内存，避免每次请求重新加载导致 5-8 秒卡顿
+    # temperature 放 options 内：Ollama /api/chat 的 schema 要求采样参数
+    # 全部收在 options 里，放顶层不生效
     payload = {"model": model or LOCAL_MODEL, "messages": msgs,
-               "stream": False, "keep_alive": -1}
+               "stream": False, "keep_alive": -1,
+               "options": {"temperature": LLM_TEMPERATURE}}
     return requests.post(LOCAL_URL, json=payload,
                          timeout=LOCAL_GENERATE_TIMEOUT).json()['message']['content']
 
@@ -203,7 +308,9 @@ def ask_cloud(messages):
     """云端 DeepSeek 兜底。API 报错 / 连接异常时返回 ⚠️ 文案而非抛异常
     （参考实现口径），由 smart_ask 统一判定"双脑全挂"的失败口径。"""
     headers = {"Authorization": f"Bearer {CLOUD_KEY}", "Content-Type": "application/json"}
-    payload = {"model": CLOUD_MODEL, "messages": messages, "stream": False}
+    # temperature 顶层字段：DeepSeek /chat/completions 的 schema（与 Ollama 不同）
+    payload = {"model": CLOUD_MODEL, "messages": messages, "stream": False,
+               "temperature": LLM_TEMPERATURE}
 
     try:
         response = requests.post(CLOUD_URL, headers=headers, json=payload,
@@ -276,8 +383,8 @@ def _build_messages(message, history):
     """组装模型消息：system 提示词置顶 + 历史 + 本条用户消息。
 
     - history 中的 system 消息一律剔除，保证全列表只有置顶这一条系统提示词；
-      例外：主链路注入的【前情提要】与长期记忆上下文（架构 §10 #2/#3 接线）
-      以特定前缀标识，允许通过并在去掉前缀后保留；
+      例外：主链路注入的【前情提要】、长期记忆与最近设备操作记录上下文
+      （架构 §10 #2/#3 接线）以特定前缀标识，允许通过并在去掉前缀后保留；
     - 兼容参考实现口径：调用方可能已把本条用户消息追加进 history 再调用
       （参考 main.py 先 append 再调 smart_ask），此时去重，避免重复；
     - 返回新列表，不修改调用方传入的 history。
@@ -288,7 +395,8 @@ def _build_messages(message, history):
             continue
         role, content = m.get("role"), m.get("content") or ""
         if role == "system":
-            for prefix in ("【前情提要】", "以下是关于用户的长期记忆"):
+            for prefix in ("【前情提要】", "以下是关于用户的长期记忆",
+                           "以下是最近的设备操作记录"):
                 if content.startswith(prefix):
                     messages.append({"role": "system", "content": content})
                     break
@@ -387,15 +495,25 @@ def smart_ask(message, history=None, session_key="default"):
         # ⛔ 熔断生效中：工具调用权已被剥夺，不再解析/执行工具 JSON，退回纯文本
         return translate_emoji(raw_reply), label
 
-    match = re.search(r'\{.*"tool".*\}', raw_reply, re.DOTALL)
-    if match:
-        json_str = match.group(0)
+    json_str = _extract_tool_json(raw_reply)
+    if json_str:
         try:
             tool_call = json.loads(json_str)
             tool_name = tool_call.get("tool")
             tool_args = tool_call.get("args", {})
 
             if tool_name in TOOL_WHITELIST:
+                # 🧠 思维链捕获：本轮有工具调用，最终 reply 统一在最前面包装
+                # <think>推理文本</think>；模型没输出思考时按实际工具名动态
+                # 生成占位符（解析不出工具名回退固定占位符）。
+                # [CoT] 终端日志（各一处、简短）：便于部署侧一眼确认思维链
+                # 到底走了"模型原生输出"还是"兜底占位符"注入。
+                thinking = _capture_thinking(raw_reply)
+                if thinking:
+                    print("[CoT] 模型原生输出思考内容")
+                else:
+                    thinking = _tool_thinking_placeholder(tool_name)
+                    print("[CoT] 已注入兜底占位符")
                 tool_result = execute_tool(tool_name, tool_args, permission_manager)
                 print(f"📄 结果: {tool_result[:200]}...")
 
@@ -406,8 +524,8 @@ def smart_ask(message, history=None, session_key="default"):
                     tool_fuse.record_rejection(session_key, tool_name, tool_args)
                     if tool_fuse.is_tripped(session_key):
                         print("⛔ 防死循环熔断触发：连续多次同一操作被拒，已暂停工具使用。")
-                        return TOOL_FUSE_NOTICE, "⛔ 熔断"
-                    return tool_result, "☁️ 云端 (工具)"
+                        return f"<think>{thinking}</think>{TOOL_FUSE_NOTICE}", "⛔ 熔断"
+                    return f"<think>{thinking}</think>{tool_result}", "☁️ 云端 (工具)"
 
                 # ✅ 成功执行会打断"连续被拒"计数
                 tool_fuse.record_success(session_key)
@@ -432,8 +550,10 @@ def smart_ask(message, history=None, session_key="default"):
                     try:
                         final_reply = ask_cloud(messages)
                     except Exception as e:
-                        return f"❌ 工具执行后汇总失败: {e}", "❌ 失败"
-                return translate_emoji(final_reply), tool_source
+                        return f"<think>{thinking}</think>❌ 工具执行后汇总失败: {e}", "❌ 失败"
+                # 🧠 <think> 包装：先转表情再包推理块（新前端解析渲染折叠卡片；
+                # QQ 与旧版网页出口由 main.py 剥除）
+                return f"<think>{thinking}</think>{translate_emoji(final_reply)}", tool_source
             else:
                 print(f"⚠️ 工具 {tool_name} 不在白名单内，已拒绝执行。")
         except Exception as e:

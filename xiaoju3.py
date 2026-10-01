@@ -83,6 +83,29 @@ CLOUD_BALANCE_URL = os.environ.get(
 # 视觉模型（安卓视觉点击用）
 VISION_MODEL = os.environ.get("VISION_MODEL", "")
 VISION_KEY = os.environ.get("VISION_KEY", "")
+# 视觉模型 API Base URL：阿里云新版百炼业务空间 Key 需填专属域名
+# （如 https://<空间ID>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1），
+# 未配置时回退 DashScope 旧通用地址。
+# 前缀自动容错（2026-09-30 用户指令）：值 strip 后不以 http:// 或 https://
+# 开头（大小写不敏感）则自动补 https:// 前缀，防裸域名/漏写前缀导致
+# SDK base_url 解析失败；空值（含纯空白）仍走缺省 DashScope 地址。
+_VISION_API_URL_RAW = os.environ.get("VISION_API_URL", "").strip()
+if _VISION_API_URL_RAW.lower().startswith(("http://", "https://")):
+    VISION_API_URL = _VISION_API_URL_RAW
+elif _VISION_API_URL_RAW:
+    VISION_API_URL = "https://" + _VISION_API_URL_RAW
+else:
+    VISION_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# OneBot 11 HTTP API（QQ 接入层 webhook 回发消息用；2026-10-01 迁移至
+# LLOneBot，标准正向 HTTP 端口 3001，NapCat 用户改回 3000 即可）。
+# env 优先读 ONEBOT_API_URL / ONEBOT_TOKEN，兼容回退旧 NAPCAT_* 键；
+# 令牌未配置时为空（与参考口径一致，Bearer 头传空）。
+ONEBOT_API_URL = (os.environ.get("ONEBOT_API_URL", "").strip()
+                  or os.environ.get("NAPCAT_API_URL", "").strip()
+                  or "http://127.0.0.1:3001")
+ONEBOT_TOKEN = (os.environ.get("ONEBOT_TOKEN", "").strip()
+                or os.environ.get("NAPCAT_TOKEN", "").strip())
 
 # 工作区（文件读写沙箱根目录，惰性创建）
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))

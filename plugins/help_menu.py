@@ -39,10 +39,10 @@ def get_help_menu(current_level):
     # 3. Lv.3 代码编写者
     if level_value >= 3:
         menu += "\n**【代码编写者 · Lv.3+】**\n"
-        menu += "· `/sudo <6位动态密码>`：开启 120 秒写操作窗口\n"
+        menu += "· `/sudo <6位动态密码>`：开启 120 秒写操作窗口（兼容可选）\n"
         menu += "· `/gen_log <DeepSeek分享链接>`：后台提取开发日志\n"
         menu += "· `/send_image <图片路径>`：发送工作区内图片\n"
-        menu += "· 写文件 / 写代码（需逐次动态密码或窗口内）\n"
+        menu += "· 写文件 / 写代码（Lv.3 直接可用，无需 /sudo）\n"
     elif level_value >= 2:
         menu += "\n**【升级指引】**\n"
         menu += "· `/coder_auth <6位动态密码>`：TOTP 激活 Lv.3（代码编写者，持久生效）\n"

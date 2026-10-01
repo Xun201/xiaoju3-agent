@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
-"""tools 单元测试：§7 权限新表门禁（write_file 逐次 TOTP、control_ha_device
-普通/危险动态分类、system_manage 三重门禁、read_file/list_files Lv.2 门槛、
-adb 维持 Lv.3、web_search Lv.1 不设限）、沙箱逃逸、参数校验、白名单 12 项。
+"""tools 单元测试：§7 权限新表门禁（write_file 免逐次动态密码——2026-09-30
+用户指令取消逐次 /sudo，Lv.3 等级门禁保留、control_ha_device 普通/危险动态
+分类、system_manage 三重门禁、read_file/list_files Lv.2 门槛、adb 维持 Lv.3、
+web_search Lv.1 不设限）、沙箱逃逸、参数校验、白名单 12 项；
+ui_tap_element 解析失败 → 代码级强制回退 vision_tap_element（用户指令，
+见 VisionFallbackTests：ui 失败必回退、双失败补配置指引、ui 成功不调
+vision、Lv.3 门禁先于回退、回退只发生一次）+ 未配置短路检查（见
+VisionShortCircuitTests：VISION_MODEL / VISION_KEY 任一为空/None → 直接
+返回"❌ 未配置视觉模型，无法执行点击"，vision 绝不被调用）。
 
 【用户指定四用例（必须显式覆盖）】见 UserMandatedGateTests：
   ① Lv.2 无法写入文件（write_file 拒绝文案）
-  ② Lv.3 能写入文件，但需正确 TOTP（错码拒绝/正确码+窗口内成功）
+  ② Lv.3 能写入文件，无需 TOTP 直接成功（2026-09-30 用户指令取消逐次
+    动态密码要求，原"需正确 TOTP"口径作废；等级门禁保留）
   ③ Lv.2 无法控制危险设备（is_dangerous_entity=True 实体被拒）
   ④ Lv.4 能控制危险设备，但需动态密码+生物认证模拟（缺任一因子拒绝）
 
@@ -16,6 +23,9 @@ search_tools 为本阶段新增的真实模块（仅依赖 requests），网络�
 TOTP 用 auth_lv4 RFC 参考密钥（真实时间生成/校验同窗，确定通过）；
 env 键 XIAOJU3_TOTP_SECRET 经 mock.patch.dict 注入，用后自动还原。
 """
+import contextlib
+import io
+import json
 import os
 import sys
 import types
@@ -37,7 +47,15 @@ def _is_dangerous(entity_id):
 
 
 def _install_mock_modules():
+    """注入 tools.py 的外围依赖 mock（必须在 import tools 之前）。
+
+    返回注入前的 sys.modules 快照：import tools 并显式重绑后由调用方还原，
+    避免污染同一进程中随后加载、需要真实模块的其它测试
+    （如 test_main → heartbeat 需要真实 home_tools.get_ha_states）。
+    """
+    saved = {}
     for name in ("home_tools", "adb_tools", "vision_tools", "android_ui_tools"):
+        saved[name] = sys.modules.get(name, _MISSING)
         sys.modules.pop(name, None)
 
     home_tools = types.ModuleType("home_tools")
@@ -63,8 +81,11 @@ def _install_mock_modules():
     android_ui_tools.ui_tap_element = lambda name: f"【mock】UI 点击 {name}"
     sys.modules["android_ui_tools"] = android_ui_tools
 
+    return saved
 
-_install_mock_modules()
+
+_MISSING = object()
+_SAVED_MODULES = _install_mock_modules()
 
 import tools
 import auth_lv4
@@ -88,6 +109,15 @@ tools.adb_swipe = _mock_at.adb_swipe
 tools.vision_tap_element = _mock_vt.vision_tap_element
 tools.ui_tap_element = _mock_ut.ui_tap_element
 
+# tools 已完成导入且各入口显式重绑到 mock：还原 sys.modules，避免污染随后
+# 加载的其它测试模块（test_main → heartbeat 需要真实 home_tools）；
+# 本文件的测试统一走 tools.* 重绑属性，行为不受还原影响。
+for _name, _old in _SAVED_MODULES.items():
+    if _old is _MISSING:
+        sys.modules.pop(_name, None)
+    else:
+        sys.modules[_name] = _old
+
 # RFC 6238 附录 B SHA1 参考密钥（Base32），与 tests/test_auth_lv4.py 同源
 RFC_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 TOTP_ENV = {auth_lv4.TOTP_SECRET_ENV: RFC_SECRET}
@@ -105,9 +135,14 @@ class ToolsTestBase(unittest.TestCase):
         self.ws = tempfile.mkdtemp(prefix="xiaoju3_ws_")
         self._old_ws = tools.WORKSPACE
         tools.WORKSPACE = self.ws
+        # 最近设备操作记录同样注入 tmp：设备操作类测试不会写真实 agent_state
+        self.actions_file = os.path.join(self.ws, "recent_actions.json")
+        self._old_actions_file = tools.RECENT_ACTIONS_FILE
+        tools.RECENT_ACTIONS_FILE = self.actions_file
 
     def tearDown(self):
         tools.WORKSPACE = self._old_ws
+        tools.RECENT_ACTIONS_FILE = self._old_actions_file
         shutil.rmtree(self.ws, ignore_errors=True)
 
     def _pm(self, level):
@@ -157,7 +192,10 @@ class WhitelistTests(ToolsTestBase):
 
 
 class UserMandatedGateTests(ToolsTestBase):
-    """【用户指定四用例】权限新表下 write_file / 危险家居的门禁行为。"""
+    """【用户指定四用例】权限新表下 write_file / 危险家居的门禁行为。
+
+    用例②口径（2026-09-30 用户指令）：Lv.3 免逐次动态密码，直接写入。
+    """
 
     # ------------------------------------------------------------------ ①
     def test_case1_lv2_cannot_write_file(self):
@@ -172,31 +210,36 @@ class UserMandatedGateTests(ToolsTestBase):
         self.assertFalse(os.path.exists(os.path.join(self.ws, "a.txt")))
 
     # ------------------------------------------------------------------ ②
-    def test_case2_lv3_write_needs_correct_totp(self):
-        # ② Lv.3 能写入文件，但需正确 TOTP：错码拒绝
+    def test_case2_lv3_write_file_without_totp_succeeds(self):
+        # ② Lv.3 能写入文件，无需 TOTP 直接成功。
+        #    【口径变更 2026-09-30 用户指令】write_file 的逐次动态密码门禁
+        #    取消（免逐次 /sudo），原"Lv.3 需正确 TOTP 才能写入"口径作废；
+        #    Lv.3 等级门禁本身保留（< Lv.3 仍拒，见用例①）。
         pm = self._pm("Lv.3")
-        with mock.patch.dict(os.environ, TOTP_ENV):
-            r = tools.execute_tool(
-                "write_file", {"filename": "a.txt", "content": "hi"}, pm,
-                {"totp": "000000"})
-        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("逐次动态密码", r)
-        self.assertIn("/sudo", r)          # 引导用 /sudo <动态密码> 开窗口
-        self.assertFalse(os.path.exists(os.path.join(self.ws, "a.txt")))
+        r = tools.execute_tool(
+            "write_file", {"filename": "a.txt", "content": "hi"}, pm)
+        self.assertEqual(r, "✅ 文件 a.txt 写入成功！")
+        with open(os.path.join(self.ws, "a.txt"), "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "hi")
 
-    def test_case2_lv3_write_with_correct_totp_credential(self):
-        # ② 正确码（凭据通道）→ 写入成功
+    def test_case2_lv3_write_wrong_totp_credential_still_succeeds(self):
+        # ② 口径变更回归锁：错码凭据也不再阻断写入（tools 层已不校验操作
+        #    凭据；旧口径本用例返回"❌ 逐次动态密码"拒绝）。permission 层
+        #    lv3_operation_ok / open_operation_window API 保留未删，仅不再
+        #    被 tools 强制。
         pm = self._pm("Lv.3")
         with mock.patch.dict(os.environ, TOTP_ENV):
             r = tools.execute_tool(
                 "write_file", {"filename": "a.txt", "content": "数据"}, pm,
-                {"totp": _totp_now()})
+                {"totp": "000000"})
         self.assertEqual(r, "✅ 文件 a.txt 写入成功！")
         with open(os.path.join(self.ws, "a.txt"), "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), "数据")
 
-    def test_case2_lv3_write_within_open_window(self):
-        # ② 正确码（/sudo 窗口通道）→ 窗口内写入成功
+    def test_case2_lv3_write_within_open_window_still_succeeds(self):
+        # ② 兼容路径（原"/sudo 窗口通道"用例）：窗口 API 保留，用户仍可
+        #    主动 /sudo 开窗，窗口内写入照常成功；窗口不再是被强制的门禁，
+        #    而是可选通道（无凭据无窗口亦成功，见上）。
         # （按当前真实时间开窗：TOTP 生成/校验同窗确定通过，过期线为真实时刻+TTL）
         pm = self._pm("Lv.3")
         with mock.patch.dict(os.environ, TOTP_ENV):
@@ -262,6 +305,106 @@ class UserMandatedGateTests(ToolsTestBase):
                 {"totp": "000000", "biometric": "face-id-ok"})
         self.assertTrue(r.startswith("❌ 安全拒绝"), r)
         self.assertIn("双因子", r)
+
+
+class Lv3SudoFreeGateTests(ToolsTestBase):
+    """【根治回归锁】Lv.3 免 /sudo（2026-09-30 用户指令）。
+
+    - adb_tap / ui_tap_element / write_file 在 Lv.3 时：等级数值 >= 3 即直接
+      放行——无 /sudo 窗口、无凭据、无任何动态密码校验（lv3_operation_ok
+      零调用，用"被调用即失败"的绊线 mock 锁定）；
+    - 门禁按等级数值判定，权限表缺键 fail-closed 也不会把 Lv.3 拦下
+      （与 control_ha_device 普通设备门禁同口径的病灶免疫）；
+    - Lv.2 三者全部拒绝，且拒绝文案不含任何 /sudo 字样、只引导
+      /coder_auth 升级（文案口径锁定：不给模型复读旧口径的机会）。
+    """
+
+    def _no_lv3_operation_check(self):
+        """绊线打桩：lv3_operation_ok 一旦被 execute_tool 调用即抛错
+        （经 execute_tool 异常包装表现为"工具执行失败: ..."，后续断言必败）。"""
+        return mock.patch.object(
+            PermissionManager, "lv3_operation_ok",
+            side_effect=AssertionError("Lv.3 不应校验动态密码"))
+
+    def test_lv3_adb_tap_direct_success(self):
+        # Lv.3 + 无窗口 + 无凭据 → adb_tap 直接成功
+        pm = self._pm("Lv.3")
+        self.assertFalse(pm.operation_window_active())
+        with self._no_lv3_operation_check():
+            r = tools.execute_tool("adb_tap", {"x": 3, "y": 9}, pm)
+        self.assertIn("点击 3,9", r)
+
+    def test_lv3_ui_tap_element_direct_success(self):
+        # Lv.3 + 无窗口 + 无凭据 → ui_tap_element 直接成功（回退链可达）
+        pm = self._pm("Lv.3")
+        self.assertFalse(pm.operation_window_active())
+        with self._no_lv3_operation_check(), \
+                mock.patch.object(tools, "ui_tap_element",
+                                  return_value="✅ 已点击【设置】"):
+            r = tools.execute_tool(
+                "ui_tap_element", {"element_name": "设置"}, pm)
+        self.assertEqual(r, "✅ 已点击【设置】")
+
+    def test_lv3_write_file_direct_success(self):
+        # Lv.3 + 无窗口 + 无凭据 → write_file 直接成功（既有口径的绊线版）
+        pm = self._pm("Lv.3")
+        self.assertFalse(pm.operation_window_active())
+        with self._no_lv3_operation_check():
+            r = tools.execute_tool(
+                "write_file", {"filename": "c.txt", "content": "免sudo写入"}, pm)
+        self.assertEqual(r, "✅ 文件 c.txt 写入成功！")
+        with open(os.path.join(self.ws, "c.txt"), "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "免sudo写入")
+
+    def test_lv3_gate_is_numeric_level_semantics(self):
+        # 病灶免疫回归：门禁按等级数值判定（>= 3 即通过），权限表缺键/
+        # has_permission fail-closed 也不会把 Lv.3 拦下
+        class _BrokenTablePM:
+            _ORDER = {"Lv.1": 1, "Lv.2": 2, "Lv.3": 3, "Lv.4": 4}
+
+            def __init__(self, level):
+                self.current_level = level
+
+            def level_value(self, level=None):
+                return self._ORDER.get(level or self.current_level, 0)
+
+            def has_permission(self, action):
+                return False   # 旧表缺键 → 一律 False（fail-closed）
+
+        pm = _BrokenTablePM("Lv.3")
+        self.assertIn("点击 7,7",
+                      tools.execute_tool("adb_tap", {"x": 7, "y": 7}, pm))
+        r = tools.execute_tool(
+            "write_file", {"filename": "n.txt", "content": "x"}, pm)
+        self.assertTrue(r.startswith("✅"), r)
+        with mock.patch.object(tools, "ui_tap_element",
+                               return_value="✅ UI 点击"):
+            r2 = tools.execute_tool(
+                "ui_tap_element", {"element_name": "设置"}, pm)
+        self.assertEqual(r2, "✅ UI 点击")
+        # 数值不达门槛（Lv.1）仍拒绝
+        r3 = tools.execute_tool(
+            "adb_tap", {"x": 1, "y": 1}, _BrokenTablePM("Lv.1"))
+        self.assertTrue(r3.startswith("❌ 安全拒绝"), r3)
+
+    def test_lv2_rejections_carry_no_sudo_wording(self):
+        # Lv.2 三者全部拒绝；文案口径锁定：只引导 /coder_auth 升级，
+        # 拒绝文案不含任何 /sudo 字样
+        pm = self._pm("Lv.2")
+        with mock.patch.object(tools, "ui_tap_element") as mui:
+            results = [
+                tools.execute_tool(
+                    "write_file", {"filename": "a.txt", "content": "x"}, pm),
+                tools.execute_tool("adb_tap", {"x": 1, "y": 2}, pm),
+                tools.execute_tool(
+                    "ui_tap_element", {"element_name": "设置"}, pm),
+            ]
+        mui.assert_not_called()   # 门禁先于 UI 解析
+        for r in results:
+            self.assertTrue(r.startswith("❌ 安全拒绝"), r)
+            self.assertIn("Lv.3", r)
+            self.assertIn("/coder_auth", r)
+            self.assertNotIn("/sudo", r)
 
 
 class LevelGateTests(ToolsTestBase):
@@ -334,6 +477,88 @@ class DeviceControlGateTests(ToolsTestBase):
             "control_ha_device",
             {"entity_id": "light.test", "action": "turn_on"}, self._pm("Lv.2"))
         self.assertIn("已对 light.test 执行 turn_on", r2)
+
+    def test_normal_device_lv2_lv3_lv4_all_allowed(self):
+        # §7 继承语义回归：普通实体 Lv.2/Lv.3/Lv.4 全放行（语义等价
+        # "if level < 2: reject"）——用户报告的 "Lv.3 控制普通设备被拒" 用例
+        for level in ("Lv.2", "Lv.3", "Lv.4"):
+            r = tools.execute_tool(
+                "control_ha_device",
+                {"entity_id": "light.test", "action": "turn_on"},
+                self._pm(level))
+            self.assertIn("已对 light.test 执行 turn_on", r, level)
+
+    def test_normal_device_gate_is_numeric_level_semantics(self):
+        # 病灶回归：has_permission 对未知能力键 fail-closed（permission.py
+        # ACTION_LEVELS 缺键/旧表时返回 False），曾把 Lv.3/Lv.4 一并拦在
+        # 普通设备门外。门禁改为按等级数值判定后不受表键缺失影响。
+        class _BrokenTablePM:
+            """模拟 ACTION_LEVELS 缺 control_normal_devices 键的 manager。"""
+            _ORDER = {"Lv.1": 1, "Lv.2": 2, "Lv.3": 3, "Lv.4": 4}
+
+            def __init__(self, level):
+                self.current_level = level
+
+            def level_value(self, level=None):
+                return self._ORDER.get(level or self.current_level, 0)
+
+            def has_permission(self, action):
+                return False   # 旧表无该能力键 → 一律 False（fail-closed）
+
+        for level in ("Lv.2", "Lv.3", "Lv.4"):
+            r = tools.execute_tool(
+                "control_ha_device",
+                {"entity_id": "light.test", "action": "turn_on"},
+                _BrokenTablePM(level))
+            self.assertIn("已对 light.test 执行 turn_on", r, level)
+        # Lv.1 仍拒绝（数值门槛未放松）
+        r = tools.execute_tool(
+            "control_ha_device",
+            {"entity_id": "light.test", "action": "turn_on"},
+            _BrokenTablePM("Lv.1"))
+        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
+
+    def test_normal_device_gate_falls_back_to_capability(self):
+        # 向后兼容：仅暴露 has_permission 的旧式 manager（无 level_value）
+        # 回退能力键判定——键在则 Lv.2+ 语义放行，键缺则 fail-closed 拒绝
+        class _CapOnlyPM:
+            def __init__(self, table):
+                self._table = table
+
+            def has_permission(self, action):
+                return self._table.get(action, False)
+
+        healthy = tools.execute_tool(
+            "control_ha_device",
+            {"entity_id": "light.test", "action": "turn_on"},
+            _CapOnlyPM({"control_normal_devices": True}))
+        self.assertIn("已对 light.test 执行 turn_on", healthy)
+        broken = tools.execute_tool(
+            "control_ha_device",
+            {"entity_id": "light.test", "action": "turn_on"}, _CapOnlyPM({}))
+        self.assertTrue(broken.startswith("❌ 安全拒绝"), broken)
+
+    def test_dangerous_gate_untouched_by_normal_fix(self):
+        # 危险实体门禁原样（一丝不放松）：即使普通分支改为数值判定，
+        # 危险分支仍走能力键 + 双因子——表键缺失时 fail-closed（安全方向）
+        class _BrokenTablePM:
+            _ORDER = {"Lv.1": 1, "Lv.2": 2, "Lv.3": 3, "Lv.4": 4}
+
+            def __init__(self, level):
+                self.current_level = level
+
+            def level_value(self, level=None):
+                return self._ORDER.get(level or self.current_level, 0)
+
+            def has_permission(self, action):
+                return False
+
+        r = tools.execute_tool(
+            "control_ha_device",
+            {"entity_id": "lock.front_door", "action": "turn_on"},
+            _BrokenTablePM("Lv.4"))
+        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
+        self.assertIn("高危", r)
 
     def test_dangerous_device_classification_via_home_tools(self):
         # 分类走 home_tools.is_dangerous_entity（lock./gas/燃气 → True）
@@ -515,23 +740,22 @@ class SandboxTests(ToolsTestBase):
                 r, "❌ 安全拒绝：不允许访问工作区以外的文件！", name)
 
     def test_write_file_dotdot_escape_rejected(self):
-        # 写路径沙箱：凭据通道内仍拒绝越界（TOTP 已过 → 沙箱把关）
+        # 写路径沙箱：Lv.3 免逐次密码后沙箱把关不放松，越界一律拒绝
         pm = self._pm("Lv.3")
-        with mock.patch.dict(os.environ, TOTP_ENV):
-            r = tools.execute_tool(
-                "write_file", {"filename": "../evil.txt", "content": "x"}, pm,
-                {"totp": _totp_now()})
+        r = tools.execute_tool(
+            "write_file", {"filename": "../evil.txt", "content": "x"}, pm)
         self.assertEqual(r, "❌ 安全拒绝：不允许访问工作区以外的文件！")
         self.assertFalse(os.path.exists(
             os.path.join(self.ws, "..", "evil.txt")))
 
-    def test_write_operation_gate_precedes_sandbox(self):
-        # 凭据先于路径校验：未携逐次动态密码时，越界路径也不泄露沙箱判定
-        pm = self._pm("Lv.3")
+    def test_level_gate_precedes_sandbox(self):
+        # 等级门先于路径校验：Lv.2 未过 write_file 等级门时，越界路径也不
+        # 泄露沙箱判定（逐次动态密码门禁已由用户指令取消，等级门保留）
+        pm = self._pm("Lv.2")
         r = tools.execute_tool(
             "write_file", {"filename": "../evil.txt", "content": "x"}, pm)
-        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("逐次动态密码", r)
+        self.assertTrue(r.startswith("❌ 安全拒绝：当前权限不足"), r)
+        self.assertIn("/coder_auth", r)
 
     def test_absolute_path_outside_rejected(self):
         outside = tempfile.mkdtemp(prefix="xiaoju3_out_")
@@ -664,10 +888,166 @@ class ToolBehaviorTests(ToolsTestBase):
         self.assertTrue(r.startswith("工具执行失败: "))
 
     def test_execute_tool_backward_compatible_three_args(self):
-        # 向后兼容：旧三参调用（无 credentials）不报错，门禁按无凭据处理
+        # 向后兼容：旧三参调用（无 credentials）不报错；Lv.3 免逐次动态
+        # 密码后直接写入成功（credentials 仅 Lv.4 双因子路径继续消费）
         r = tools.execute_tool(
             "write_file", {"filename": "a.txt", "content": "x"}, self._pm("Lv.3"))
-        self.assertTrue(r.startswith("❌"), r)  # 缺逐次动态密码 → 拒绝
+        self.assertEqual(r, "✅ 文件 a.txt 写入成功！")
+
+
+class VisionFallbackTests(ToolsTestBase):
+    """ui_tap_element 解析失败 → 代码级强制回退 vision_tap_element（用户指令）。
+
+    回退对模型透明：模型只拿到最终结果，无需多轮决策；回退前有未配置
+    短路检查（见 VisionShortCircuitTests），故本类 _run 统一注入非空
+    VISION_MODEL / VISION_KEY——tools.py 于 import 时绑定配置值，env 补丁
+    不影响已绑定值，须经 mock.patch.object 注入（自动还原）；vision 失败
+    时原样返回 vision_tools 的极简错误串，不再追加任何配置指引（2026-09-30
+    用户指令：聊天框一字不多，指引只存在于控制台日志）；回退只发生
+    一次（vision 失败不再触发任何重试）；Lv.3 门禁先于回退。
+    打桩只替换 tools 模块上的 ui/vision 入口（mock.patch.object 自动还原），
+    不触碰 vision_tools / android_ui_tools 内部实现（并行子代理所有）。
+    """
+
+    UI_FAIL = "❌ UI 层级中未找到【设置】，请确认它目前在屏幕上可见。"
+    UI_OK = "✅ 已点击【设置】"
+    VISION_OK = "✅ 已通过视觉识别点击【设置】"
+    VISION_FAIL = "❌ 视觉模型调用失败: 403 Forbidden"
+
+    def _run(self, ui_return, vision_return, level="Lv.3", args=None):
+        """打桩 ui/vision 后执行 ui_tap_element，返回 (结果, ui mock, vision mock)。
+
+        同时注入非空 VISION_MODEL / VISION_KEY，避免被未配置短路拦住。
+        """
+        pm = self._pm(level)
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(tools, "ui_tap_element",
+                                  return_value=ui_return) as mui, \
+                mock.patch.object(tools, "vision_tap_element",
+                                  return_value=vision_return) as mvis, \
+                mock.patch.object(tools, "VISION_MODEL",
+                                  "qwen-vl-max-latest"), \
+                mock.patch.object(tools, "VISION_KEY", "sk-test-ok"):
+            r = tools.execute_tool("ui_tap_element",
+                                   args if args is not None
+                                   else {"element_name": "设置"}, pm)
+        return r, mui, mvis
+
+    def test_ui_failure_falls_back_to_vision(self):
+        # UI 解析失败 → 直接调 vision（同 element_name），vision 结果原样返回
+        r, mui, mvis = self._run(self.UI_FAIL, self.VISION_OK)
+        self.assertEqual(r, self.VISION_OK)
+        self.assertNotIn("未找到", r)
+        mui.assert_called_once_with("设置")
+        mvis.assert_called_once_with("设置")   # 防循环：回退恰好一次
+
+    def test_ui_and_vision_both_failure_returns_vision_string_verbatim(self):
+        # 视觉也失败（❌ 开头错误串）→ 原样返回 vision 极简错误串，
+        # 不再追加"如持续失败，请检查 .env ..."指引（2026-09-30 用户指令）
+        r, _, _ = self._run(self.UI_FAIL, self.VISION_FAIL)
+        self.assertEqual(r, self.VISION_FAIL)
+        self.assertNotIn("如持续失败", r)
+        self.assertNotIn("请检查", r)
+        self.assertNotIn("VISION_API_URL", r)
+        self.assertNotIn("VISION_KEY", r)
+
+    def test_ui_success_never_calls_vision(self):
+        # UI 解析成功 → 原样返回，vision 绝不被调用
+        r, mui, mvis = self._run(self.UI_OK, self.VISION_OK)
+        self.assertEqual(r, self.UI_OK)
+        self.assertNotIn("VISION_API_URL", r)
+        mvis.assert_not_called()
+
+    def test_lv3_gate_precedes_fallback(self):
+        # Lv.2 直接拒（门禁先于回退），ui 与 vision 都不被调用
+        r, mui, mvis = self._run(self.UI_FAIL, self.VISION_OK, level="Lv.2")
+        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
+        self.assertIn("Lv.3", r)
+        self.assertIn("/coder_auth", r)
+        mui.assert_not_called()
+        mvis.assert_not_called()
+
+    def test_vision_non_cross_error_string_returned_verbatim(self):
+        # vision 透传截图链路错误（非 ❌ 开头但含"失败"）→ 原样返回，不补指引
+        r, _, _ = self._run(self.UI_FAIL, "截图失败：设备未连接")
+        self.assertEqual(r, "截图失败：设备未连接")
+        self.assertNotIn("如持续失败", r)
+        self.assertNotIn("VISION_API_URL", r)
+
+    def test_missing_param_does_not_fallback(self):
+        # 缺 element_name 属调用方错误，直接拒绝、不触发视觉回退
+        r, _, mvis = self._run(self.UI_FAIL, self.VISION_OK, args={})
+        self.assertEqual(
+            r, "❌ 缺少参数：需要提供 element_name (要点击的按钮或图标名称)")
+        mvis.assert_not_called()
+
+
+class VisionShortCircuitTests(ToolsTestBase):
+    """视觉回退短路检查（用户指令 2026-09-30）：VISION_MODEL / VISION_KEY
+    任一未配置（None 或空串均按 falsy 判定）→ ui_tap_element 失败后直接
+    返回"❌ 未配置视觉模型，无法执行点击"，绝不调用 vision_tap_element——
+    ADB 截图、云端请求与等待全部避免，不空跑。
+
+    tools.py 于 import 时绑定配置值（from xiaoju3 import VISION_MODEL,
+    VISION_KEY），故经 mock.patch.object(tools, ...) 注入空值/None（自动
+    还原）；vision 入口打桩为 Mock，断言零调用即证明零网络请求。
+    """
+
+    UI_FAIL = "❌ UI 层级中未找到【设置】，请确认它目前在屏幕上可见。"
+    SHORT_CIRCUIT = "❌ 未配置视觉模型，无法执行点击"
+
+    def _run(self, vision_model="", vision_key=""):
+        """UI 必失败 + vision 打桩 + 注入空/None 视觉配置后执行 ui_tap_element。"""
+        pm = self._pm("Lv.3")
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(tools, "ui_tap_element",
+                                  return_value=self.UI_FAIL) as mui, \
+                mock.patch.object(tools, "vision_tap_element") as mvis, \
+                mock.patch.object(tools, "VISION_MODEL", vision_model), \
+                mock.patch.object(tools, "VISION_KEY", vision_key):
+            r = tools.execute_tool("ui_tap_element",
+                                   {"element_name": "设置"}, pm)
+        return r, mui, mvis
+
+    def test_vision_model_empty_short_circuits_before_vision_call(self):
+        # VISION_MODEL 为空串 → 立即短路返回，vision 绝不被调用
+        r, mui, mvis = self._run(vision_model="", vision_key="sk-test-ok")
+        self.assertEqual(r, self.SHORT_CIRCUIT)
+        mui.assert_called_once_with("设置")   # UI 解析先发生并失败
+        mvis.assert_not_called()              # 短路：零视觉调用、零网络请求
+
+    def test_vision_key_empty_short_circuits_before_vision_call(self):
+        # 仅 VISION_KEY 为空 → 同样短路（任一未配置即拦）
+        r, _, mvis = self._run(vision_model="qwen-vl-max-latest", vision_key="")
+        self.assertEqual(r, self.SHORT_CIRCUIT)
+        mvis.assert_not_called()
+
+    def test_none_config_values_also_short_circuit(self):
+        # config 值可能为 None：truthy 判定下 None 同样拦截
+        r, _, mvis = self._run(vision_model=None, vision_key=None)
+        self.assertEqual(r, self.SHORT_CIRCUIT)
+        mvis.assert_not_called()
+
+    def test_short_circuit_message_is_exact_without_extra_hint(self):
+        # 短路文案固定，不追加 VISION_API_URL 配置指引（未走视觉链路）
+        r, _, _ = self._run()
+        self.assertEqual(r, self.SHORT_CIRCUIT)
+
+    def test_configured_vision_still_falls_back(self):
+        # 对照：配置齐全时不会被短路拦住，照常走视觉回退
+        pm = self._pm("Lv.3")
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(tools, "ui_tap_element",
+                                  return_value=self.UI_FAIL), \
+                mock.patch.object(tools, "vision_tap_element",
+                                  return_value="✅ 已通过视觉识别点击【设置】") as mvis, \
+                mock.patch.object(tools, "VISION_MODEL",
+                                  "qwen-vl-max-latest"), \
+                mock.patch.object(tools, "VISION_KEY", "sk-test-ok"):
+            r = tools.execute_tool("ui_tap_element",
+                                   {"element_name": "设置"}, pm)
+        self.assertEqual(r, "✅ 已通过视觉识别点击【设置】")
+        mvis.assert_called_once_with("设置")
 
 
 class WebSearchDispatchTests(ToolsTestBase):
@@ -854,6 +1234,116 @@ class PrivateDataGateTests(unittest.TestCase):
         result = tools.execute_tool("read_core_memory", {"limit": 3}, pm)
         # state_manager 全局单例在真实 AGENT_STATE_DIR 上建库；能取到格式化文本即可
         self.assertTrue(result.startswith("🧠 核心记忆") or "暂无记录" in result)
+
+
+class RecentActionRecorderTests(ToolsTestBase):
+    """最近设备操作记录（上下文记忆/指代消解基座）：成功写入并裁到 5 条、
+    失败操作不写、记录器异常不影响工具返回值、损坏文件自愈重建、
+    读取类工具（adb_screenshot）不记录。"""
+
+    def _read_entries(self):
+        with open(self.actions_file, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _seed(self, count):
+        """预置 count 条旧记录（detail 带序号，验证裁剪方向）。"""
+        entries = [{"ts": f"2026-01-01 00:00:{i:02d}", "tool": "adb_tap",
+                    "detail": f"adb_tap: 旧记录{i}"} for i in range(count)]
+        with open(self.actions_file, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False)
+        return entries
+
+    def test_successful_control_ha_device_recorded(self):
+        pm = self._pm("Lv.2")
+        result = tools.execute_tool(
+            "control_ha_device", {"entity_id": "light.living", "action": "turn_on"}, pm)
+        self.assertIn("turn_on", result)
+        entries = self._read_entries()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(set(entries[0]), {"ts", "tool", "detail"})
+        self.assertEqual(entries[0]["tool"], "control_ha_device")
+        self.assertEqual(entries[0]["detail"],
+                         "control_ha_device: light.living → turn_on")
+        self.assertTrue(entries[0]["ts"])
+
+    def test_successful_adb_tap_and_swipe_recorded(self):
+        pm = self._pm("Lv.3")
+        tools.execute_tool("adb_tap", {"x": 100, "y": 200}, pm)
+        tools.execute_tool("adb_swipe", {"x1": 1, "y1": 2, "x2": 3, "y2": 4}, pm)
+        entries = self._read_entries()
+        self.assertEqual([e["tool"] for e in entries], ["adb_tap", "adb_swipe"])
+        self.assertEqual(entries[0]["detail"], "adb_tap: 点击 (100, 200)")
+        self.assertEqual(entries[1]["detail"],
+                         "adb_swipe: 从 (1,2) 滑到 (3,4)")
+
+    def test_keeps_only_latest_five(self):
+        self._seed(5)
+        tools.execute_tool("adb_tap", {"x": 9, "y": 9}, self._pm("Lv.3"))
+        entries = self._read_entries()
+        self.assertEqual(len(entries), 5)
+        # 超出裁掉最旧：旧记录0 被裁，旧记录1 成为最旧
+        self.assertEqual(entries[0]["detail"], "adb_tap: 旧记录1")
+        # 新事件追加在最后
+        self.assertEqual(entries[-1]["tool"], "adb_tap")
+        self.assertEqual(entries[-1]["detail"], "adb_tap: 点击 (9, 9)")
+
+    def test_failed_operation_not_recorded(self):
+        # Lv.1 被 adb 门禁拒绝：连记录文件都不产生
+        result = tools.execute_tool("adb_tap", {"x": 1, "y": 2}, self._pm("Lv.1"))
+        self.assertIn("❌", result)
+        self.assertFalse(os.path.exists(self.actions_file))
+        # 已有记录时，失败操作不追加
+        self._seed(2)
+        denied = tools.execute_tool(
+            "control_ha_device", {"entity_id": "lock.door", "action": "unlock"},
+            self._pm("Lv.1"))
+        self.assertIn("❌", denied)
+        self.assertEqual(len(self._read_entries()), 2)
+
+    def test_recorder_failure_does_not_affect_tool_result(self):
+        # 记录器内部磁盘异常（os.replace 原子替换失败）必须被吞掉：
+        # 工具返回值与不装记录器时完全一致
+        with mock.patch.object(tools.os, "replace",
+                               side_effect=OSError("disk full")):
+            result = tools.execute_tool("adb_tap", {"x": 5, "y": 6}, self._pm("Lv.3"))
+        self.assertEqual(result, "【mock】点击 5,6")
+
+    def test_corrupted_file_self_heals(self):
+        with open(self.actions_file, "w", encoding="utf-8") as f:
+            f.write("{这不是JSON")
+        result = tools.execute_tool("adb_tap", {"x": 7, "y": 8}, self._pm("Lv.3"))
+        self.assertEqual(result, "【mock】点击 7,8")   # 工具照常成功
+        entries = self._read_entries()
+        self.assertEqual(len(entries), 1)              # 损坏表重置重建
+        self.assertEqual(entries[0]["detail"], "adb_tap: 点击 (7, 8)")
+
+    def test_screenshot_read_only_not_recorded(self):
+        tools.execute_tool("adb_screenshot", {}, self._pm("Lv.1"))
+        self.assertFalse(os.path.exists(self.actions_file))
+
+    def test_atomic_write_leaves_no_tmp_file(self):
+        tools.execute_tool("adb_tap", {"x": 1, "y": 1}, self._pm("Lv.3"))
+        self.assertTrue(os.path.exists(self.actions_file))
+        self.assertFalse(os.path.exists(self.actions_file + ".tmp"))
+
+    def test_record_creates_parent_dirs(self):
+        path = os.path.join(self.ws, "deep", "dir", "recent_actions.json")
+        tools.record_recent_action("adb_tap", {"x": 1, "y": 2}, filepath=path)
+        with open(path, encoding="utf-8") as f:
+            entries = json.load(f)
+        self.assertEqual(entries[0]["detail"], "adb_tap: 点击 (1, 2)")
+
+    def test_get_recent_actions_reader(self):
+        # 缺失 → 空列表；损坏 → 空列表不抛异常
+        self.assertEqual(tools.get_recent_actions(), [])
+        with open(self.actions_file, "w", encoding="utf-8") as f:
+            f.write("broken")
+        self.assertEqual(tools.get_recent_actions(), [])
+        # 只回最近 5 条（最新在最后）
+        self._seed(7)
+        actions = tools.get_recent_actions()
+        self.assertEqual(len(actions), 5)
+        self.assertEqual(actions[-1]["detail"], "adb_tap: 旧记录6")
 
 
 if __name__ == "__main__":

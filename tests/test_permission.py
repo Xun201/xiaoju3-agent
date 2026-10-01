@@ -286,6 +286,22 @@ class ActivateLv3Tests(PermissionTestBase):
         self.assertTrue(os.path.exists(PermissionManager.IDENTITY_PATH))
         self.assertEqual(PermissionManager().current_level, "Lv.3")
 
+    def test_activate_success_message_sudo_free_wording(self):
+        # 【口径锁定 2026-09-30 用户指令】激活成功消息不得再暗示"写文件还需
+        # 逐次动态密码 /sudo 开窗"——旧文案随回复进入对话历史，会被模型复读。
+        with mock.patch.dict(os.environ, self._env_totp()):
+            with mock.patch.object(auth_lv4.time, "time", return_value=1000):
+                code = auth_lv4.generate_totp(RFC_SECRET, 1000)
+                msg = self._pm().activate_lv3("u42", code)
+        self.assertIn("已激活代码编写者权限（Lv.3）", msg)
+        self.assertIn("权限已落盘", msg)
+        self.assertIn("无需 /sudo", msg)
+        self.assertIn("ADB", msg)
+        # 旧口径残留锁定：不再出现逐次动态密码/操作窗口要求字样
+        self.assertNotIn("逐次动态密码", msg)
+        self.assertNotIn("操作窗口", msg)
+        self.assertNotIn("执行时还需", msg)
+
     def test_activate_does_not_downgrade_lv4(self):
         with mock.patch.dict(os.environ, self._env_totp()):
             with mock.patch.object(auth_lv4.time, "time", return_value=1000):
@@ -577,44 +593,56 @@ class CreatorNameTests(unittest.TestCase):
 
     def test_claim_name_persists(self):
         with tempfile.TemporaryDirectory() as tmp:
-            pm = self._pm(tmp)
-            msg = pm.claim_name("u1", "阿橙")
-            self.assertIn("阿橙", msg)
-            pm2 = self._pm(tmp)
-            pm2.load_identity()          # 实例路径覆盖后显式重读 tmp 身份文件
-            self.assertEqual(pm2.display_name, "阿橙")
+            with self._isolated(tmp):
+                pm = self._pm(tmp)
+                msg = pm.claim_name("u1", "阿橙")
+                self.assertIn("阿橙", msg)
+                self.assertEqual(pm.current_level, "Lv.1")
+                pm2 = self._pm(tmp)
+                self.assertEqual(pm2.display_name, "阿橙")
 
     def test_claim_name_reserved_blocked_and_not_saved(self):
         with tempfile.TemporaryDirectory() as tmp:
-            pm = self._pm(tmp)
-            msg = pm.claim_name("u1", "xun")
-            self.assertIn("❌", msg)
-            self.assertEqual(pm.display_name, "")
-            pm2 = self._pm(tmp)
-            pm2.load_identity()
-            self.assertEqual(pm2.display_name, "")
+            with self._isolated(tmp):
+                pm = self._pm(tmp)
+                msg = pm.claim_name("u1", "xun")
+                self.assertIn("❌", msg)
+                self.assertEqual(pm.display_name, "")
+                pm2 = self._pm(tmp)
+                self.assertEqual(pm2.display_name, "")
 
     def test_register_with_name_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.dict(os.environ, {REGISTER_PASSWORD_ENV: "pw123"}):
+            with self._isolated(tmp), \
+                    mock.patch.dict(os.environ, {REGISTER_PASSWORD_ENV: "pw123"}):
                 pm = self._pm(tmp)
+                self.assertEqual(pm.current_level, "Lv.1")   # 与真实身份状态隔离
                 msg = pm.register_user("u1", "pw123", name="客人甲")
                 self.assertIn("Lv.2", msg)
                 self.assertEqual(pm.display_name, "客人甲")
+                self.assertEqual(pm.current_level, "Lv.2")
                 pm2 = self._pm(tmp)
-                pm2.load_identity()
-            self.assertEqual(pm2.display_name, "客人甲")
-            self.assertEqual(pm2.current_level, "Lv.2")
+                self.assertEqual(pm2.display_name, "客人甲")
+                self.assertEqual(pm2.current_level, "Lv.2")
 
     def test_register_with_reserved_name_aborts(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.dict(os.environ, {REGISTER_PASSWORD_ENV: "pw123"}):
+            with self._isolated(tmp), \
+                    mock.patch.dict(os.environ, {REGISTER_PASSWORD_ENV: "pw123"}):
                 pm = self._pm(tmp)
                 msg = pm.register_user("u1", "pw123", name="XUN")
                 self.assertIn("❌", msg)
                 self.assertIn("保留名", msg)              # 命中保留名拦截而非密码错误
                 self.assertEqual(pm.current_level, "Lv.1")   # 注册整体中止
                 self.assertEqual(pm.display_name, "")
+
+    @staticmethod
+    def _isolated(tmp):
+        """整个测试生命周期内把身份文件路径隔离到 tmp：屏蔽真实
+        agent_state/identity.json（用户实测可能处于任意等级），保证用例
+        从全新 Lv.1 状态开始、落盘也只发生在 tmp。"""
+        return mock.patch.object(permission.PermissionManager, "IDENTITY_PATH",
+                                 os.path.join(tmp, "identity.json"))
 
     @staticmethod
     def _pm(tmp, extra_env=None):

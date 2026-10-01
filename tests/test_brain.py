@@ -3,6 +3,7 @@
 
 覆盖（任务口径）：
 - ask_local / ask_cloud 请求结构与超时、异常传播与错误文案；
+  LLM_TEMPERATURE 采样温度（默认 0.7、env 覆盖、两后端 payload 落点）；
 - 本地探测成功 → ask_local；探测失败 / ask_local 异常 → 热切换 ask_cloud；
   双脑全挂的报错文案；
 - 工具 JSON 正则提取（正常 / 夹在文字中 / 多行 / 非 JSON）、白名单外工具
@@ -10,9 +11,18 @@
   ask_cloud）、每轮最多一次工具调用、❌ 开头结果切断重试；
 - 防死循环熔断：同一工具 + 等价参数连续被拒达阈值 → 强制打断、剥夺工具
   调用权退回纯文本；换参数/成功执行归零；reset 接口；阈值可配；
+- 思维链 <think> 包装（前端推理卡片契约）：工具调用发生（解析出 JSON 且
+  执行）时最终 reply 最前面包装捕获的 [思考]/[计划] 文本，模型没输出时按
+  实际解析出的工具名动态生成占位符"[思考] 准备调用 {工具名} 尝试完成
+  操作."（解析不出工具名回退固定占位符）；❌ 切断/熔断通知同属工具流程
+  同样包装；普通聊天/URL 总结/熔断剥夺路径不包装；CoT 花括号内容不干扰
+  JSON 提取（贪婪正则失败回退逐 { raw_decode 扫描）；[CoT] 终端日志
+  （兜底占位符注入 / 模型原生思考输出各一条，redirect_stdout 捕获）；
 - URL 输入触发网页抓取（script/style 被剔除）；
 - MAX_MESSAGES=50 截断；translate_emoji 转换正确且已接入 smart_ask 回复链；
-- smart_ask 返回二元组与来源标签（🏠 本地 / ☁️ 云端 / (工具) / ⛔ 熔断）正确。
+- smart_ask 返回二元组与来源标签（🏠 本地 / ☁️ 云端 / (工具) / ⛔ 熔断）正确；
+- _build_messages 前缀白名单：最近设备操作记录 system 条目保留注入，
+  既有【前情提要】/长期记忆前缀不回退。
 
 外部模块（home_tools / adb_tools / vision_tools / android_ui_tools）由并行
 开发负责，与 tests/test_tools.py 相同：在 import brain（→ tools）之前向
@@ -51,6 +61,14 @@ def _install_mock_modules():
     home_tools = types.ModuleType("home_tools")
     home_tools.get_ha_devices = lambda: "【mock】设备列表：light.test=on"
     home_tools.control_ha_device = lambda entity_id, action: f"【mock】已对 {entity_id} 执行 {action}"
+    # 高危实体分类（与真实 home_tools.is_dangerous_entity 同语义：lock.*/gas/燃气）。
+    # 必须与真实模块同步：tools.py 在本测试进程内 import 的 home_tools 是这里的
+    # mock，若缺该属性，test_main 的 /confirm 链路（真实 tools.execute_tool）会
+    # 因 AttributeError 误报失败（组合运行顺序：test_brain 先于 test_main）。
+    home_tools.is_dangerous_entity = lambda entity_id: (
+        str(entity_id or "").lower().split(".", 1)[0] == "lock"
+        or "gas" in str(entity_id or "").lower()
+        or "燃气" in str(entity_id or ""))
     sys.modules["home_tools"] = home_tools
 
     adb_tools = types.ModuleType("adb_tools")
@@ -145,7 +163,9 @@ class AskLocalTests(unittest.TestCase):
             self.assertEqual(args[0], xiaoju3.LOCAL_URL)
             self.assertEqual(kwargs["json"], {"model": xiaoju3.LOCAL_MODEL,
                                               "messages": msgs, "stream": False,
-                                              "keep_alive": -1})
+                                              "keep_alive": -1,
+                                              "options": {"temperature":
+                                                          brain.LLM_TEMPERATURE}})
             self.assertEqual(kwargs["timeout"], brain.LOCAL_GENERATE_TIMEOUT)
 
     def test_exception_propagates(self):
@@ -171,7 +191,8 @@ class AskCloudTests(unittest.TestCase):
                              f"Bearer {brain.CLOUD_KEY}")
             self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
             self.assertEqual(kwargs["json"], {"model": xiaoju3.CLOUD_MODEL,
-                                              "messages": msgs, "stream": False})
+                                              "messages": msgs, "stream": False,
+                                              "temperature": brain.LLM_TEMPERATURE})
             self.assertEqual(kwargs["timeout"], brain.CLOUD_TIMEOUT)
             mr.post.return_value.raise_for_status.assert_called_once()
 
@@ -203,6 +224,53 @@ class AskCloudTests(unittest.TestCase):
             mr.post.return_value = resp
             self.assertEqual(brain.ask_cloud([]),
                              "⚠️ 云端连接异常: 500 Server Error")
+
+
+class TemperatureConfigTests(unittest.TestCase):
+    """LLM_TEMPERATURE：默认 0.7；env LLM_TEMPERATURE 可覆盖（float 容错）；
+    两个后端的 payload 落点不同（Ollama 嵌套 options / DeepSeek 顶层）。"""
+
+    def test_module_constant_is_float_default_0_7(self):
+        self.assertIsInstance(brain.LLM_TEMPERATURE, float)
+        self.assertAlmostEqual(brain.LLM_TEMPERATURE, 0.7)
+
+    def _read_const_in_subprocess(self, env_value=None):
+        """子进程读取 brain.LLM_TEMPERATURE（env 覆盖手法参照
+        test_cli_config.HardwareAdaptiveConfigTests.test_env_override）。"""
+        import subprocess
+        env = dict(os.environ)
+        env.pop("LLM_TEMPERATURE", None)
+        if env_value is not None:
+            env["LLM_TEMPERATURE"] = env_value
+        code = "import brain; print(brain.LLM_TEMPERATURE)"
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                             text=True, env=env,
+                             cwd=os.path.dirname(os.path.dirname(
+                                 os.path.abspath(__file__))))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout.strip()
+
+    def test_env_override_via_subprocess(self):
+        self.assertEqual(self._read_const_in_subprocess("0.2"), "0.2")
+
+    def test_invalid_env_falls_back_to_default(self):
+        # float 解析容错：非数字回退 0.7，不让 import 崩溃
+        self.assertEqual(self._read_const_in_subprocess("not-a-number"), "0.7")
+
+    def test_payload_placement_both_backends(self):
+        # Ollama /api/chat：嵌套 options.temperature；DeepSeek：顶层 temperature
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "LLM_TEMPERATURE", 0.35):
+            mr.post.return_value = _local_resp("本地回答")
+            brain.ask_local([{"role": "user", "content": "hi"}])
+            local_json = mr.post.call_args.kwargs["json"]
+            self.assertEqual(local_json["options"], {"temperature": 0.35})
+
+            mr.post.return_value = _cloud_resp("云端回答")
+            brain.ask_cloud([{"role": "user", "content": "hi"}])
+            cloud_json = mr.post.call_args.kwargs["json"]
+            self.assertEqual(cloud_json["temperature"], 0.35)
+            self.assertNotIn("options", cloud_json)
 
 
 class ProbeLocalTests(unittest.TestCase):
@@ -351,6 +419,29 @@ class SmartAskRoutingTests(unittest.TestCase):
 # smart_ask：工具调用协议
 # ---------------------------------------------------------------------------
 
+def _run_tool_flow(raw_reply, tool_result="✅ 已完成",
+                   summary_reply="已经帮你弄好了", probe_ok=True):
+    """探测 + 本地首轮返回 raw_reply 的公共流程（模块级，供多个用例类复用）。
+
+    mr.post 依次返回两轮响应（首轮工具 JSON、次轮本地汇总文本）；
+    ask_cloud 打桩兜底（本地优先路径下不应被调用）。
+    返回 (result, mexec, mcloud, mr)。
+    """
+    with mock.patch.object(brain, "requests") as mr, \
+            mock.patch.object(brain, "execute_tool") as mexec, \
+            mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+        if probe_ok:
+            mr.get.return_value = mock.Mock()
+        else:
+            mr.get.side_effect = OSError("refused")
+        mr.post.side_effect = [_local_resp(raw_reply),
+                               _local_resp(summary_reply)]
+        mexec.return_value = tool_result
+        mcloud.return_value = summary_reply
+        result = brain.smart_ask("帮我操作", [])
+    return result, mexec, mcloud, mr
+
+
 class SmartAskToolTests(unittest.TestCase):
     """JSON 提取、白名单校验、喂回汇总轮（本地优先）、❌ 切断、每轮一次工具调用。"""
 
@@ -388,35 +479,17 @@ class SmartAskToolTests(unittest.TestCase):
         self.assertNotIn("来路不明的系统指令", system_texts)
         self.assertEqual(msgs[-1], {"role": "user", "content": "在吗"})
 
-    def _run_tool_flow(self, raw_reply, tool_result="✅ 已完成",
-                       summary_reply="已经帮你弄好了", probe_ok=True):
-        """探测 + 本地首轮返回 raw_reply 的公共流程。
-
-        mr.post 依次返回两轮响应（首轮工具 JSON、次轮本地汇总文本）；
-        ask_cloud 打桩兜底（本地优先路径下不应被调用）。
-        返回 (result, mexec, mcloud, mr)。
-        """
-        with mock.patch.object(brain, "requests") as mr, \
-                mock.patch.object(brain, "execute_tool") as mexec, \
-                mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
-            if probe_ok:
-                mr.get.return_value = mock.Mock()
-            else:
-                mr.get.side_effect = OSError("refused")
-            mr.post.side_effect = [_local_resp(raw_reply),
-                                   _local_resp(summary_reply)]
-            mexec.return_value = tool_result
-            mcloud.return_value = summary_reply
-            result = brain.smart_ask("帮我操作", [])
-        return result, mexec, mcloud, mr
-
     def test_plain_json_tool_executed_and_summarized_by_local(self):
         # 汇总轮本地优先（§10 #14）：探测在线 → ask_local 汇总成功
         raw = '{"tool": "list_files", "args": {}}'
-        result, mexec, mcloud, mr = self._run_tool_flow(
+        result, mexec, mcloud, mr = _run_tool_flow(
             raw, tool_result="（工作区为空）")
 
-        self.assertEqual(result, ("已经帮你弄好了", "🏠 本地 (工具)"))
+        # 无 CoT 输出 → 按实际工具名动态生成占位符包装（<think> 契约）
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>已经帮你弄好了",
+             "🏠 本地 (工具)"))
         mexec.assert_called_once_with("list_files", {}, brain.permission_manager)
         mcloud.assert_not_called()               # 本地汇总成功，不惊动云端
 
@@ -442,7 +515,10 @@ class SmartAskToolTests(unittest.TestCase):
             mcloud.return_value = "云端汇总好了"
             result = brain.smart_ask("帮我操作", [])
 
-        self.assertEqual(result, ("云端汇总好了", "☁️ 云端 (工具)"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>云端汇总好了",
+             "☁️ 云端 (工具)"))
         mcloud.assert_called_once()
         # 喂回的消息同样传给云端汇总轮
         self.assertIn("工具执行结果：",
@@ -460,7 +536,10 @@ class SmartAskToolTests(unittest.TestCase):
             mcloud.return_value = "云端汇总好了"
             result = brain.smart_ask("帮我操作", [])
 
-        self.assertEqual(result, ("云端汇总好了", "☁️ 云端 (工具)"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>云端汇总好了",
+             "☁️ 云端 (工具)"))
         mcloud.assert_called_once()
 
     def test_summary_goes_straight_to_cloud_when_local_offline(self):
@@ -474,19 +553,22 @@ class SmartAskToolTests(unittest.TestCase):
             mcloud.side_effect = [raw, "云端汇总好了"]
             result = brain.smart_ask("帮我操作", [])
 
-        self.assertEqual(result, ("云端汇总好了", "☁️ 云端 (工具)"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>云端汇总好了",
+             "☁️ 云端 (工具)"))
         self.assertEqual(mcloud.call_count, 2)
 
     def test_tool_json_sandwiched_in_text(self):
         raw = '好的，我来看看！{"tool": "list_files", "args": {}} 马上就好'
-        result, mexec, _, _ = self._run_tool_flow(raw)
+        result, mexec, _, _ = _run_tool_flow(raw)
         self.assertEqual(result[1], "🏠 本地 (工具)")
         mexec.assert_called_once_with("list_files", {}, brain.permission_manager)
 
     def test_tool_json_multiline(self):
         raw = ('好的，马上为你操作：\n{\n  "tool": "control_ha_device",\n'
                '  "args": {"entity_id": "light.room", "action": "turn_on"}\n}')
-        result, mexec, _, _ = self._run_tool_flow(raw, tool_result="✅ 已开灯")
+        result, mexec, _, _ = _run_tool_flow(raw, tool_result="✅ 已开灯")
         self.assertEqual(result[1], "🏠 本地 (工具)")
         mexec.assert_called_once_with(
             "control_ha_device",
@@ -495,14 +577,14 @@ class SmartAskToolTests(unittest.TestCase):
 
     def test_invalid_json_treated_as_plain_reply(self):
         raw = '{"tool": list_files}'  # 非 JSON（值没加引号）
-        result, mexec, mcloud, _ = self._run_tool_flow(raw)
+        result, mexec, mcloud, _ = _run_tool_flow(raw)
         self.assertEqual(result, (raw, "🏠 本地"))
         mexec.assert_not_called()
         mcloud.assert_not_called()
 
     def test_tool_outside_whitelist_rejected(self):
         raw = '{"tool": "format_disk", "args": {}}'
-        result, mexec, mcloud, _ = self._run_tool_flow(raw)
+        result, mexec, mcloud, _ = _run_tool_flow(raw)
         # 白名单外：不执行工具，按普通文本回复处理
         mexec.assert_not_called()
         mcloud.assert_not_called()
@@ -512,9 +594,13 @@ class SmartAskToolTests(unittest.TestCase):
         # 防死循环硬拦截（单轮）：被拒结果不再喂回模型重试，直接返回拒绝文案
         raw = '{"tool": "write_file", "args": {"filename": "a.txt", "content": "x"}}'
         deny = "❌ 安全拒绝：当前权限不足，无法执行此物理控制操作！"
-        result, mexec, mcloud, _ = self._run_tool_flow(raw, tool_result=deny)
+        result, mexec, mcloud, _ = _run_tool_flow(raw, tool_result=deny)
 
-        self.assertEqual(result, (deny, "☁️ 云端 (工具)"))
+        # ❌ 切断路径同样属于工具调用流程：拒绝文案前同样有 <think> 包装
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('write_file')}</think>{deny}",
+             "☁️ 云端 (工具)"))
         mexec.assert_called_once()
         mcloud.assert_not_called()
 
@@ -528,7 +614,8 @@ class SmartAskToolTests(unittest.TestCase):
             mr.post.return_value = _local_resp(raw)
             reply, source = brain.smart_ask("帮我写文件", [])
 
-        self.assertTrue(reply.startswith("❌ 安全拒绝：当前权限不足"), reply)
+        self.assertTrue(reply.startswith("<think>"), reply)
+        self.assertIn("❌ 安全拒绝：当前权限不足", reply)
         self.assertEqual(source, "☁️ 云端 (工具)")
         mcloud.assert_not_called()
 
@@ -536,10 +623,286 @@ class SmartAskToolTests(unittest.TestCase):
         # 汇总轮即使再吐工具 JSON，也不再执行（每轮最多一次工具调用）
         raw = '{"tool": "list_files", "args": {}}'
         again = '{"tool": "read_file", "args": {"filename": "x"}}'
-        result, mexec, _, _ = self._run_tool_flow(raw, summary_reply=again)
+        result, mexec, _, _ = _run_tool_flow(raw, summary_reply=again)
 
-        self.assertEqual(result, (again, "🏠 本地 (工具)"))
+        # 汇总轮的回复也属于工具调用流程：同样有按工具名动态生成的占位符 <think> 包装
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>{again}",
+             "🏠 本地 (工具)"))
         mexec.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 思维链 <think> 包装（前端推理卡片契约，并行前端组同口径）
+# ---------------------------------------------------------------------------
+
+class ThinkWrapTests(unittest.TestCase):
+    """CoT <think> 包装契约：
+    - 工具调用发生（解析出 JSON 且执行）→ 最终 reply 最前面包装
+      <think>捕获的[思考]/[计划]文本</think>（❌ 切断/熔断通知同属工具流程）；
+    - 模型没输出任何 [思考]/[计划] → 按实际工具名动态生成占位符包装
+      （"[思考] 准备调用 {工具名} 尝试完成操作."，解析不出工具名回退固定
+      占位符）；
+    - 无工具调用（普通聊天/解析失败/白名单外/URL 总结/熔断剥夺）→ 不包装；
+    - CoT 文本里混入花括号内容不得干扰工具 JSON 提取（先提取 JSON 再裁思考）。
+    """
+
+    COT_RAW = ('[思考] 主人要开灯，先确认设备在线。\n'
+               '[计划] 1. 查设备 2. 开灯\n'
+               '[行动] {"tool": "control_ha_device", '
+               '"args": {"entity_id": "light.room", "action": "turn_on"}}')
+    COT_THINKING = "[思考] 主人要开灯，先确认设备在线。\n[计划] 1. 查设备 2. 开灯"
+
+    def setUp(self):
+        brain.tool_fuse.reset()
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
+
+    def tearDown(self):
+        brain.tool_fuse.reset()
+
+    def test_capture_thinking_both_markers(self):
+        # [思考]/[计划] 分别捕获到 [计划]/[行动]/{ 或串尾为止（DOTALL 跨行）
+        self.assertEqual(brain._capture_thinking(self.COT_RAW), self.COT_THINKING)
+
+    def test_capture_thinking_single_marker(self):
+        # 捕获其一即可：只输出 [思考] / 只输出 [计划]
+        self.assertEqual(brain._capture_thinking("[思考] 只想了这一步"),
+                         "[思考] 只想了这一步")
+        self.assertEqual(brain._capture_thinking("好的 [计划] 1. 开灯"),
+                         "[计划] 1. 开灯")
+
+    def test_capture_thinking_fullwidth_variant_and_none(self):
+        # 全角【】变体同样兼容；都没有（或只有空白）→ 空串，调用方回退占位符
+        self.assertEqual(brain._capture_thinking("【思考】全角变体"),
+                         "[思考] 全角变体")
+        self.assertEqual(brain._capture_thinking('{"tool": "list_files", "args": {}}'), "")
+        self.assertEqual(brain._capture_thinking("[思考]   [计划]  "), "")
+
+    def test_capture_thinking_stops_at_brace(self):
+        # 思考文本在第一个 { 处截断，绝不把工具 JSON 吞进推理展示
+        raw = '[思考] 先看 {"path": "a.json"} 的配置。\n[计划] 1. 读文件'
+        self.assertEqual(brain._capture_thinking(raw),
+                         "[思考] 先看\n[计划] 1. 读文件")
+
+    def test_tool_flow_wraps_captured_thinking(self):
+        result, mexec, _, _ = _run_tool_flow(self.COT_RAW, tool_result="✅ 已开灯")
+        self.assertEqual(
+            result,
+            (f"<think>{self.COT_THINKING}</think>已经帮你弄好了", "🏠 本地 (工具)"))
+        mexec.assert_called_once_with(
+            "control_ha_device",
+            {"entity_id": "light.room", "action": "turn_on"},
+            brain.permission_manager)
+
+    def test_tool_flow_default_placeholder_without_cot(self):
+        result, mexec, _, _ = _run_tool_flow('{"tool": "list_files", "args": {}}')
+        # 契约字面量锁定：固定兜底占位符与前端约定一致；无 CoT 时优先按
+        # 实际工具名动态生成含工具名的 [思考] 行，<think> 包装机制零改动
+        self.assertEqual(brain.TOOL_THINKING_PLACEHOLDER,
+                         "[思考] 已按计划执行工具调用。")
+        self.assertEqual(
+            result,
+            ("<think>[思考] 准备调用 list_files 尝试完成操作。</think>已经帮你弄好了",
+             "🏠 本地 (工具)"))
+        mexec.assert_called_once_with("list_files", {}, brain.permission_manager)
+
+    def test_tool_flow_dynamic_placeholder_names_tap_tool(self):
+        # 用户口径：ui_tap_element 等点击工具在占位符里也要点名（无 CoT 时）
+        raw = '{"tool": "ui_tap_element", "args": {"element_name": "设置"}}'
+        result, mexec, _, _ = _run_tool_flow(raw, tool_result="【mock】UI 点击 设置")
+        self.assertEqual(
+            result,
+            ("<think>[思考] 准备调用 ui_tap_element 尝试完成操作。</think>已经帮你弄好了",
+             "🏠 本地 (工具)"))
+        mexec.assert_called_once_with(
+            "ui_tap_element", {"element_name": "设置"}, brain.permission_manager)
+
+    def test_workspace_listing_scenario_wraps_placeholder(self):
+        # 用户实测场景："帮我看看工作区有什么文件"（本地 Ollama 不在线 → 云端，
+        # 真实部署口径）；模型只吐一行 JSON：注入含实际工具名的兜底占位符包装
+        raw = '{"tool": "list_files", "args": {}}'
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+            mr.get.side_effect = OSError("refused")   # 探测失败 → 全程云端
+            mcloud.side_effect = [raw, "主人，工作区里有 a.txt 和 b.txt"]
+            mexec.return_value = "a.txt\nb.txt"
+            reply, source = brain.smart_ask("帮我看看工作区有什么文件", [])
+
+        self.assertEqual(source, "☁️ 云端 (工具)")
+        self.assertTrue(reply.startswith("<think>"), reply)
+        # 契约字面量：<think>[思考] 准备调用 list_files 尝试完成操作。</think>在最前
+        self.assertTrue(
+            reply.startswith("<think>[思考] 准备调用 list_files 尝试完成操作。</think>"),
+            reply)
+        self.assertTrue(reply.endswith("主人，工作区里有 a.txt 和 b.txt"))
+        mexec.assert_called_once_with("list_files", {}, brain.permission_manager)
+
+    def test_cot_terminal_logs_placeholder_and_native(self):
+        # [CoT] 终端日志契约（redirect_stdout 捕获）：
+        # 模型没输出思考 → 打印"[CoT] 已注入兜底占位符"，不打印原生思考日志；
+        # 模型原生输出 [思考]/[计划] → 打印"[CoT] 模型原生输出思考内容"
+        raw = '{"tool": "list_files", "args": {}}'
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud:
+            mr.get.side_effect = OSError("refused")
+            mcloud.side_effect = [raw, "弄好了"]
+            mexec.return_value = "（工作区为空）"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                brain.smart_ask("帮我看看工作区有什么文件", [])
+        self.assertIn("[CoT] 已注入兜底占位符", buf.getvalue())
+        self.assertNotIn("[CoT] 模型原生输出思考内容", buf.getvalue())
+
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud:
+            mr.get.side_effect = OSError("refused")
+            mcloud.side_effect = [self.COT_RAW, "已开灯"]
+            mexec.return_value = "✅ 已开灯"
+            buf2 = io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                brain.smart_ask("开灯", [])
+        self.assertIn("[CoT] 模型原生输出思考内容", buf2.getvalue())
+        self.assertNotIn("[CoT] 已注入兜底占位符", buf2.getvalue())
+
+    def test_tool_thinking_placeholder_fallback_without_tool_name(self):
+        # 解析不出工具名（空值/纯空白）→ 回退固定占位符；
+        # 有工具名 → 动态生成含实际工具名的 [思考] 占位符
+        self.assertEqual(brain._tool_thinking_placeholder(None),
+                         brain.TOOL_THINKING_PLACEHOLDER)
+        self.assertEqual(brain._tool_thinking_placeholder(""),
+                         brain.TOOL_THINKING_PLACEHOLDER)
+        self.assertEqual(brain._tool_thinking_placeholder("   "),
+                         brain.TOOL_THINKING_PLACEHOLDER)
+        self.assertEqual(brain._tool_thinking_placeholder("adb_tap"),
+                         "[思考] 准备调用 adb_tap 尝试完成操作。")
+        self.assertEqual(brain._tool_thinking_placeholder("vision_tap_element"),
+                         "[思考] 准备调用 vision_tap_element 尝试完成操作。")
+        self.assertTrue(
+            brain._tool_thinking_placeholder("ui_tap_element").startswith("[思考] "))
+
+    def test_plain_chat_reply_never_wrapped(self):
+        # 普通聊天零影响：无工具调用绝不加包装
+        with mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("今天天气不错哦～")
+            result = brain.smart_ask("你好", [])
+        self.assertEqual(result, ("今天天气不错哦～", "🏠 本地"))
+        self.assertNotIn("<think>", result[0])
+
+    def test_cot_braces_do_not_break_json_extraction(self):
+        # CoT 里混入花括号内容：贪婪正则整体解析失败 → 回退逐 { 扫描提取，
+        # 真正的工具 JSON 不受干扰，思考文本按 { 边界裁剪
+        raw = ('[思考] 先看 {"path": "a.json"} 的配置。\n'
+               '[计划] 1. 读文件\n'
+               '[行动] {"tool": "read_file", "args": {"filename": "a.json"}}')
+        result, mexec, _, _ = _run_tool_flow(raw, tool_result="文件内容...")
+        mexec.assert_called_once_with("read_file", {"filename": "a.json"},
+                                      brain.permission_manager)
+        self.assertEqual(
+            result,
+            ("<think>[思考] 先看\n[计划] 1. 读文件</think>已经帮你弄好了",
+             "🏠 本地 (工具)"))
+
+    def test_braces_in_cot_without_tool_json_stays_plain(self):
+        # 有思考、有花括号，但没有合法工具 JSON → 按普通回复处理，不加包装
+        raw = '[思考] 我先想想 {看看} 再说。'
+        result, mexec, mcloud, _ = _run_tool_flow(raw)
+        self.assertEqual(result, (raw, "🏠 本地"))
+        mexec.assert_not_called()
+        mcloud.assert_not_called()
+
+    def test_extract_tool_json_multiline_still_works(self):
+        # 既有能力不回退：多行 JSON 与夹在文字中的 JSON 照常提取
+        multiline = ('好的，马上为你操作：\n{\n  "tool": "control_ha_device",\n'
+                     '  "args": {"entity_id": "light.room", "action": "turn_on"}\n}')
+        self.assertEqual(
+            brain._extract_tool_json(multiline),
+            '{\n  "tool": "control_ha_device",\n'
+            '  "args": {"entity_id": "light.room", "action": "turn_on"}\n}')
+        self.assertEqual(brain._extract_tool_json(
+            '好的 {"tool": "list_files", "args": {}} 马上就好'),
+            '{"tool": "list_files", "args": {}}')
+        # 非 JSON / 无 tool 键 → None（绝不抛异常）
+        self.assertIsNone(brain._extract_tool_json('{"tool": list_files}'))
+        self.assertIsNone(brain._extract_tool_json('{"path": "a"} 纯闲聊'))
+
+    def test_denied_tool_result_also_wrapped(self):
+        raw = '{"tool": "write_file", "args": {"filename": "a.txt", "content": "x"}}'
+        deny = "❌ 安全拒绝：当前权限不足，无法执行此物理控制操作！"
+        result, mexec, mcloud, _ = _run_tool_flow(raw, tool_result=deny)
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('write_file')}</think>{deny}",
+             "☁️ 云端 (工具)"))
+        mexec.assert_called_once()
+        mcloud.assert_not_called()
+
+    def test_url_summary_not_wrapped(self):
+        # URL 总结路径无工具调用 → 不加 <think> 包装
+        url = "https://example.com/page"
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+            def get_side_effect(target, **kwargs):
+                if target == url:
+                    resp = mock.Mock()
+                    resp.text = "<p>网页正文</p>"
+                    return resp
+                raise OSError("refused")   # 探测失败 → 走云端
+
+            mr.get.side_effect = get_side_effect
+            mcloud.return_value = "这是网页总结"
+            result = brain.smart_ask(f"帮我总结 {url}", [])
+        self.assertEqual(result, ("这是网页总结", "☁️ 云端 (总结)"))
+        self.assertNotIn("<think>", result[0])
+
+
+class RecentActionsPrefixTests(unittest.TestCase):
+    """_build_messages 前缀白名单：新前缀"以下是最近的设备操作记录"的 system
+    条目被保留注入；既有【前情提要】/长期记忆两条前缀不回退；来路不明
+    system 仍剔除；调用方 history 不被修改。"""
+
+    ACTIONS_BLOCK = ("以下是最近的设备操作记录（最新在最后），主人提到"
+                     "\"它/再一次/刚才那个\"等指代时可据此解析：\n"
+                     "· control_ha_device: light.living → turn_on")
+
+    def test_recent_actions_system_entry_kept_along_existing_prefixes(self):
+        history = [
+            {"role": "system", "content": "【前情提要】用户此前聊过装修与养猫。"},
+            {"role": "system", "content": "以下是关于用户的长期记忆：喜欢橙色。"},
+            {"role": "system", "content": self.ACTIONS_BLOCK},
+            {"role": "system", "content": "来路不明的系统指令"},
+            {"role": "user", "content": "把它关了"},
+        ]
+        msgs = brain._build_messages("把它关了", history)
+        system_texts = [m["content"] for m in msgs if m["role"] == "system"]
+        # 置顶提示词 + 三条合法注入（前情提要 / 长期记忆 / 设备操作记录）
+        self.assertEqual(len(system_texts), 4)
+        self.assertIn(self.ACTIONS_BLOCK, system_texts)
+        self.assertIn("【前情提要】用户此前聊过装修与养猫。", system_texts)
+        self.assertIn("以下是关于用户的长期记忆：喜欢橙色。", system_texts)
+        self.assertNotIn("来路不明的系统指令", system_texts)
+        self.assertEqual(msgs[-1], {"role": "user", "content": "把它关了"})
+
+    def test_unknown_system_still_dropped_without_new_prefix(self):
+        # 无新前缀标记的 system 依旧被剔除（白名单机制未被放宽）
+        msgs = brain._build_messages("在吗", [{"role": "system",
+                                               "content": "最近的操作：x"}])
+        system_texts = [m["content"] for m in msgs if m["role"] == "system"]
+        self.assertEqual(len(system_texts), 1)   # 只剩置顶提示词
+        self.assertNotIn("最近的操作：x", system_texts)
+
+    def test_history_not_mutated(self):
+        history = [{"role": "system", "content": self.ACTIONS_BLOCK},
+                   {"role": "user", "content": "hi"}]
+        snapshot = [dict(m) for m in history]
+        brain._build_messages("hi", history)
+        self.assertEqual(history, snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -576,8 +939,10 @@ class ToolLoopFuseTests(unittest.TestCase):
     def test_rejections_below_threshold_keep_denial_reply(self):
         r1 = self._round(tool_result=self.DENY)
         r2 = self._round(tool_result=self.DENY)
-        self.assertEqual(r1, (self.DENY, "☁️ 云端 (工具)"))
-        self.assertEqual(r2, (self.DENY, "☁️ 云端 (工具)"))
+        # ❌ 切断文案前有 <think> 动态占位符包装（工具调用流程统一契约）
+        wrapped = f"<think>{brain._tool_thinking_placeholder('write_file')}</think>{self.DENY}"
+        self.assertEqual(r1, (wrapped, "☁️ 云端 (工具)"))
+        self.assertEqual(r2, (wrapped, "☁️ 云端 (工具)"))
         self.assertFalse(brain.tool_fuse.is_tripped("default"))
 
     def test_third_identical_rejection_trips_fuse(self):
@@ -585,7 +950,11 @@ class ToolLoopFuseTests(unittest.TestCase):
         for _ in range(2):
             self._round(tool_result=self.DENY)
         r3 = self._round(tool_result=self.DENY)
-        self.assertEqual(r3, (brain.TOOL_FUSE_NOTICE, "⛔ 熔断"))
+        # 熔断通知同属工具调用流程返回：同样带 <think> 包装
+        self.assertEqual(
+            r3,
+            (f"<think>{brain._tool_thinking_placeholder('write_file')}</think>{brain.TOOL_FUSE_NOTICE}",
+             "⛔ 熔断"))
         self.assertTrue(brain.tool_fuse.is_tripped("default"))
         # 提示语说明"已暂停工具使用"及"如何继续"
         self.assertIn("工具", brain.TOOL_FUSE_NOTICE)
@@ -668,7 +1037,10 @@ class ToolLoopFuseTests(unittest.TestCase):
             result = brain.smart_ask("帮我操作", [], session_key="qq")
 
         mexec.assert_called_once()
-        self.assertEqual(result, ("弄好了", "🏠 本地 (工具)"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('write_file')}</think>弄好了",
+             "🏠 本地 (工具)"))
 
     def test_reset_all_sessions(self):
         brain.tool_fuse.record_rejection("a", "t", {})
@@ -833,7 +1205,10 @@ class HardwareAdaptiveRoutingTests(unittest.TestCase):
             result = brain.smart_ask("看看工作区", [])
         self.assertEqual(mlocal.call_count, 1)      # 只有主轮用了本地
         mlocal.assert_called_once_with(mock.ANY, model=self.SMALL)
-        self.assertEqual(result, ("汇总：工作区有 3 个文件", "☁️ 云端 (工具)"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>汇总：工作区有 3 个文件",
+             "☁️ 云端 (工具)"))
 
     def test_high_summary_round_keeps_local_first(self):
         """high 档：汇总轮本地优先（既有 §10 #14 行为）。"""
@@ -842,7 +1217,10 @@ class HardwareAdaptiveRoutingTests(unittest.TestCase):
         with mock.patch.object(brain, "requests") as mr,                 mock.patch.object(brain, "probe_local", return_value=True),                 mock.patch.object(brain, "execute_tool", return_value="✅ 文件列表"),                 mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
             mr.post.side_effect = [_local_resp(raw), _local_resp("汇总：3 个文件")]
             result = brain.smart_ask("看看工作区", [])
-        self.assertEqual(result, ("汇总：3 个文件", "🏠 本地 (工具)"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>汇总：3 个文件",
+             "🏠 本地 (工具)"))
         mcloud.assert_not_called()
         models = [c.kwargs["json"]["model"] for c in mr.post.call_args_list]
         self.assertEqual(models, [xiaoju3.LOCAL_MODEL, xiaoju3.LOCAL_MODEL])
@@ -1037,7 +1415,11 @@ class TranslateEmojiTests(unittest.TestCase):
             mexec.return_value = "（工作区为空）"
             result = brain.smart_ask("帮我看看", [])
 
-        self.assertEqual(result, ("弄好啦[图]", "🏠 本地 (工具)"))
+        # 表情先转换，再包 <think> 推理块（转换函数只见原文本，不见包装）
+        self.assertEqual(
+            result,
+            (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>弄好啦[图]",
+             "🏠 本地 (工具)"))
         mtrans.assert_called_once_with("弄好啦[EMOJI:开心]")
 
 

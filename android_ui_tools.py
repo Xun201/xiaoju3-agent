@@ -2,10 +2,14 @@
 """小橘3号 · uiautomator 界面元素精准点击。
 
 按《架构设计文档》§5 安卓接管三件套之二：uiautomator dump 导出当前屏幕
-UI 层级 → adb pull 拉取 XML → xml.etree 解析，按 text / content-desc 精确
-匹配 → 计算 bounds 中心点 → 调 adb_tap 点击。
-找不到元素时返回明确失败串，供模型按点击优先级（prompts.py 规则）回退
-vision_tap_element。
+UI 层级 → xml.etree 解析，按 text / content-desc 精确匹配 → 计算 bounds
+中心点 → 调 adb_tap 点击。
+
+导出优先 `adb exec-out uiautomator dump /dev/tty` 单次往返（dump 直吐
+stdout，省去 pull 的第二次 adb 通信延迟）；exec-out 失败（返回码非 0 /
+stdout 无 XML）时自动回退旧版「dump 到设备文件 + adb pull 拉取」两步法，
+功能不退化。找不到元素时返回明确失败串，供模型按点击优先级（prompts.py
+规则）回退 vision_tap_element。
 """
 import os
 import re
@@ -15,7 +19,9 @@ import xml.etree.ElementTree as ET
 
 from adb_tools import adb_tap
 
-# uiautomator 导出路径（设备侧 / 本地侧）
+# exec-out 单次往返命令：dump 到 /dev/tty 使 XML 直吐 stdout
+EXEC_OUT_DUMP_CMD = "adb exec-out uiautomator dump /dev/tty"
+# 回退路径（旧两步法）的 uiautomator 导出路径（设备侧 / 本地侧）
 REMOTE_DUMP_PATH = "/sdcard/window_dump.xml"
 LOCAL_DUMP_PATH = os.path.join(tempfile.gettempdir(), "window_dump.xml")
 
@@ -54,8 +60,39 @@ def find_element_center(xml_content, element_name):
     return None
 
 
-def _dump_ui_xml():
-    """导出并拉取当前屏幕 UI 层级，返回 XML 文本（失败抛异常，由上层兜底）。"""
+def strip_xml_noise(text):
+    """剥离 exec-out 输出中首个 XML 声明（'<?xml' / '<?'）之前的噪声。
+
+    部分设备 dump 到 /dev/tty 时会在 XML 前夹带日志行（如
+    "UI hierchary dumped to: ..."）或编码前缀，定位到声明处截断。
+    无声明或声明已在开头时原样返回。
+    """
+    if not text:
+        return text
+    idx = text.find("<?xml")
+    if idx < 0:
+        idx = text.find("<?")
+    return text[idx:] if idx > 0 else text
+
+
+def _dump_ui_xml_exec_out():
+    """exec-out 单次往返导出 UI 层级（失败抛异常 / 无 XML 返回 None）。
+
+    返回码非 0 由 check=True 抛 CalledProcessError；返回码为 0 但 stdout
+    无 XML（如部分设备只打 "ERROR: could not get idle state."）同样视为
+    失败，返回 None 由上层回退两步法。
+    """
+    proc = subprocess.run(EXEC_OUT_DUMP_CMD,
+                          shell=True, check=True, capture_output=True)
+    # exec-out 输出为字节流，errors="replace" 容忍设备端编码噪声
+    text = strip_xml_noise(proc.stdout.decode("utf-8", errors="replace"))
+    if "<?xml" not in text and "<hierarchy" not in text:
+        return None
+    return text
+
+
+def _dump_ui_xml_dump_pull():
+    """旧两步法回退路径：dump 到设备文件 → adb pull 拉回本地再读取。"""
     # 1. 导出当前屏幕的 UI 层级 XML
     subprocess.run(f"adb shell uiautomator dump {REMOTE_DUMP_PATH}",
                    shell=True, check=True, capture_output=True)
@@ -64,6 +101,21 @@ def _dump_ui_xml():
                    shell=True, check=True, capture_output=True)
     with open(LOCAL_DUMP_PATH, "r", encoding="utf-8") as f:
         return f.read()
+
+
+def _dump_ui_xml():
+    """导出当前屏幕 UI 层级 XML 文本（失败抛异常，由上层兜底）。
+
+    优先 exec-out 单次往返（减少一次 adb 通信延迟）；exec-out 失败
+    （返回码非 0 / 无 XML 输出）时自动回退旧版 dump+pull 两步法。
+    """
+    try:
+        xml = _dump_ui_xml_exec_out()
+        if xml:
+            return xml
+    except Exception:
+        pass  # 设备不支持 exec-out dump 等 → 回退两步法
+    return _dump_ui_xml_dump_pull()
 
 
 def ui_tap_element(element_name):

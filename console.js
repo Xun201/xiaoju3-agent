@@ -144,6 +144,89 @@
         return renderCQFace(escapeHtml(text)).replace(/\n/g, '<br>');
     }
 
+    // ==================== 2.5 思维链（<think> 块）解析与折叠卡片 ====================
+    // 契约：brain.smart_ask 在工具调用流程中把 [思考]/[计划] 包装成 reply 的
+    // <think>...</think> 块；普通聊天回复没有该块——此时不渲染思考卡片（零干扰）。
+    // 非锚定匹配（串内任意位置，非贪婪到第一个闭合标签）：即使净化/表情转换
+    // 等环节日后在块前插入了任何字符，只要 reply 含 <think> 块就必定渲染卡片，
+    // 不因锚定串首而静默漏卡。
+    const THINK_BLOCK_RE = /<think>([\s\S]*?)<\/think>/;
+
+    // 渲染入口先判 thinkMatch：把原始 reply 切分为 { think, body }，
+    // 调用方再各自走 textContent / renderRich（先切分后转义，顺序不可反）
+    function splitThinkBlock(rawReply) {
+        const raw = String(rawReply == null ? '' : rawReply);
+        const thinkMatch = raw.match(THINK_BLOCK_RE);
+        if (!thinkMatch) return { think: null, body: raw };
+        return {
+            think: thinkMatch[1].trim(),
+            // 按命中位置剔除块本体；块前若有杂散字符保留进正文，不丢内容
+            body: (raw.slice(0, thinkMatch.index) +
+                   raw.slice(thinkMatch.index + thinkMatch[0].length)).trim(),
+        };
+    }
+
+    // 构建折叠卡片骨架（纯静态结构，不拼任何用户数据；
+    // 思考正文一律 textContent 注入，天然免 XSS）。初始为折叠态。
+    function buildThinkCardEl() {
+        const card = document.createElement('div');
+        card.className = 'think-card think-collapsed';
+        card.innerHTML =
+            '<div class="think-card-header" onclick="toggleThinkCard(this)" title="展开/收起思考过程">' +
+                '<span>🧠</span>' +
+                '<span class="think-card-title">思考过程</span>' +
+                '<span class="think-card-arrow">▼</span>' +
+            '</div>' +
+            '<div class="think-card-body"></div>';
+        return card;
+    }
+
+    // 思考正文打字机：约 15ms/字（规格 12-20ms 区间），逐字 textContent 注入。
+    // animate=false（历史回放共用入口）不打字，直接完整填充并保持折叠。
+    // 注：textContent 注入无需 escapeHtml（转义反而会显示 HTML 实体），
+    // CQ 码仍走 renderCQFace 与正文同口径净化。
+    const THINK_TYPE_MS = 15;
+    function startThinkTypewriter(msgEl, thinkText, animate) {
+        const card = msgEl.querySelector('.think-card');
+        const body = card && card.querySelector('.think-card-body');
+        if (!card || !body) return;
+        const text = renderCQFace(thinkText);
+        if (!animate || !text) {
+            body.textContent = text;
+            return;
+        }
+        card.classList.remove('think-collapsed');   // 打字期间展开
+        let shown = 0;
+        const timer = setInterval(() => {
+            if (!card.isConnected) { clearInterval(timer); return; }   // 卡片被移除即停
+            shown += 1;
+            body.textContent = text.slice(0, shown);
+            const history = document.getElementById('chat-history');
+            if (history) history.scrollTop = history.scrollHeight;     // 跟随滚动
+            if (shown >= text.length) {
+                clearInterval(timer);
+                card.classList.add('think-collapsed');   // 打完自动折叠（点击标题可再展开）
+            }
+        }, THINK_TYPE_MS);
+    }
+
+    // 点击标题展开/收起（折叠用 display 切换，样式见 index.html .think-collapsed）
+    window.toggleThinkCard = function(headerEl) {
+        const card = headerEl.closest('.think-card');
+        if (card) card.classList.toggle('think-collapsed');
+    };
+
+    // 刷新重生成后同步思考卡片：有 <think> 则重建并打字，无则移除旧卡片
+    function syncThinkCard(msgEl, thinkText) {
+        const bubble = msgEl.querySelector('.bubble-content');
+        if (!bubble) return;
+        const old = msgEl.querySelector('.think-card');
+        if (old) old.remove();
+        if (thinkText === null) return;   // 新回复没有 think 块：不插卡片
+        bubble.before(buildThinkCardEl());
+        startThinkTypewriter(msgEl, thinkText, true);
+    }
+
     function appendUserMessage(text) {
         const history = document.getElementById('chat-history');
         const userMsg = document.createElement('div');
@@ -156,11 +239,17 @@
 
     // 大脑来源徽标（§4.3：消费 /api/chat 返回的 source 字段）
     // dataset.prompt 记录触发本回复的原消息，供"刷新"按钮重新生成
-    function appendBotMessage(reply, source, prompt) {
+    // opts.animateThink=false（历史回放）时思考卡片不打字、直接折叠展示全文
+    function appendBotMessage(rawReply, source, prompt, opts) {
+        const options = opts || {};
         const history = document.getElementById('chat-history');
         const botMsg = document.createElement('div');
         botMsg.className = 'message bot-message';
         botMsg.dataset.prompt = prompt || '';
+        // XSS 顺序：先在原始 reply 上切分出 <think> 块，think 与正文再各自
+        // 走 textContent / renderRich 转义（不可先转义后切分）
+        const thinkParts = splitThinkBlock(rawReply);
+        const reply = thinkParts.body;   // 剥离 think 后的正文
         const sourceBadge = source
             ? `<div class="source-badge">大脑来源：${escapeHtml(source)}</div>`
             : '';
@@ -190,6 +279,12 @@
                 </div>
             </div>
         `;
+        // 渲染入口先判 thinkMatch：仅当 reply 含 <think> 块才插思考卡片
+        // （普通聊天零干扰），卡片位于消息气泡正文上方
+        if (thinkParts.think !== null) {
+            botMsg.querySelector('.bubble-content').before(buildThinkCardEl());
+            startThinkTypewriter(botMsg, thinkParts.think, options.animateThink !== false);
+        }
         history.appendChild(botMsg);
         history.scrollTop = history.scrollHeight;
         return botMsg;
@@ -209,7 +304,8 @@
                         lastUser = m.content;
                         appendUserMessage(m.content);
                     } else if (m.role === 'assistant') {
-                        appendBotMessage(m.content, m.source || '', lastUser);
+                        // 历史回放共用入口：思考卡片不打字，直接折叠展示
+                        appendBotMessage(m.content, m.source || '', lastUser, { animateThink: false });
                     }
                 });
             })
@@ -218,6 +314,16 @@
     loadHistory();
 
     // ==================== 4. 聊天发送逻辑 ====================
+    // 等待期轮换状态：占位气泡初始"小橘3号正在思考... 🧠"，此后每 900ms
+    // 依次轮换下列状态文案（数组循环），收到回复/出错即停止轮换
+    const THINKING_STATUS = [
+        '🧠 正在思考执行方案…',
+        '👁️ 正在分析屏幕…',
+        '📁 正在读取文件…',
+        '⚙️ 正在执行操作…',
+    ];
+    const THINKING_ROTATE_MS = 900;
+
     window.sendMessage = function() {
         const input = document.getElementById('chat-input');
         if (!input) return;
@@ -236,6 +342,13 @@
         history.appendChild(loadingMsg);
         history.scrollTop = history.scrollHeight;
 
+        // 动态轮换：每 900ms 换一条状态文案（初始文案先展示一个周期再轮换）
+        let statusIdx = 0;
+        const rotateTimer = setInterval(() => {
+            loadingMsg.textContent = THINKING_STATUS[statusIdx % THINKING_STATUS.length];
+            statusIdx += 1;
+        }, THINKING_ROTATE_MS);
+
         fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -243,6 +356,7 @@
         })
         .then(res => res.json())
         .then(res => {
+            clearInterval(rotateTimer);   // 收到回复：停止轮换并替换为正常气泡
             history.removeChild(loadingMsg);
             if (res.code === 200) {
                 appendBotMessage(res.data.reply, res.data.source, text);
@@ -254,6 +368,7 @@
             }
         })
         .catch(err => {
+            clearInterval(rotateTimer);   // 出错同样停止轮换
             if (history.contains(loadingMsg)) history.removeChild(loadingMsg);
             const errMsg = document.createElement('div');
             errMsg.className = 'message bot-message';
@@ -293,7 +408,12 @@
         .then(res => res.json())
         .then(res => {
             if (res.code !== 200) throw new Error(res.error || '未知错误');
-            bubble.innerHTML = renderRich(res.data.reply);
+            // 重新生成结果同样可能带 <think> 块：先切分（与 appendBotMessage
+            // 同口径），思考卡片同步更新，正文剥离后再渲染
+            const thinkParts = splitThinkBlock(res.data.reply);
+            const reply = thinkParts.body;
+            syncThinkCard(msgEl, thinkParts.think);
+            bubble.innerHTML = renderRich(reply);
             // 来源徽标同步更新
             let badge = msgEl.querySelector('.source-badge');
             if (res.data.source) {

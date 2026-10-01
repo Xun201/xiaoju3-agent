@@ -20,4 +20,8 @@ requests==2.32.3
 # 提供 linux-arm64 Chromium 构建，官方支持 Ubuntu 20.04 / 22.04。
 playwright==1.48.0
 
+# 阿里云百炼视觉模型官方兼容 SDK（2.6.0 经 PyPI 核实 requires_python >=3.8；
+# 最新 3.x 要求 >=3.10，香橙派 Python 3.8 用本钉版）
+openai==2.6.0
+
 # 说明：flask-cors 在最新版依赖中存在，但全仓代码未 import，3.8 环境不安装。

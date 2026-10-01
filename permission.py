@@ -7,8 +7,10 @@
   （密码注册 /register，注册密码走 env XIAOJU3_REGISTER_PASSWORD，不得硬编码；
   旧口径"LV1 可读文件"已由用户调整为 Lv.2 起可读）
 - Lv.3 代码编写者：+ write_file / modify_code / manage_plugins（TOTP 动态密码
-  激活 /coder_auth）；写文件/写代码属敏感操作，执行时还需**逐次动态密码**
-  （lv3_operation_ok：/sudo <code> 开短 TTL 操作窗口 或 凭据携带 totp 两通道）
+  激活 /coder_auth）；激活后写文件/写代码/ADB 接管手机**直接放行，免逐次
+  动态密码**（2026-09-30 用户指令取消逐次 /sudo；旧逐次门禁 API
+  lv3_operation_ok / open_operation_window 保留兼容，/sudo 仍可主动开窗，
+  但 tools 层不再强制）
 - Lv.4 主人级：+ control_dangerous_devices / system_manage（动态密码 TOTP +
   生物认证模拟双因子激活）；"无边界"= 包含全部低级能力；owner 标记写入
   identity.json，可 revoke 撤销（立即生效）
@@ -29,9 +31,9 @@ TOTP 密钥读环境变量 XIAOJU3_TOTP_SECRET（Base32，与 Lv.3 动态密码�
 - register_user(user_id, password) -> str                  # /register <密码>
 - activate_lv3(user_id, totp_code) -> str                  # /coder_auth <TOTP> 新语义
 - coder_auth(user_id, totp_code) -> str                    # 旧名兼容包装 = activate_lv3
-- verify_lv3_operation(user_id, totp_code) -> bool         # 逐次 TOTP 单次校验
-- open_operation_window(user_id=None, ttl_seconds=120, totp_code=None) -> str   # /sudo 通道
-- lv3_operation_ok(user_id=None, credentials=None) -> bool # 写文件统一门禁入口
+- verify_lv3_operation(user_id, totp_code) -> bool         # TOTP 单次校验（兼容保留）
+- open_operation_window(user_id=None, ttl_seconds=120, totp_code=None) -> str   # /sudo 兼容通道
+- lv3_operation_ok(user_id=None, credentials=None) -> bool # 兼容保留（tools 层不再强制）
 - lv4_mfa_ok(user_id=None, credentials=None) -> bool       # TOTP+生物 双因子 bool 入口
 - lv4_mfa_check(user_id=None, credentials=None) -> (bool, str)  # 带明细文案
 - grant_lv4(user_id=None, credentials=None) -> str         # confirmed + 双因子 → owner 落盘
@@ -106,7 +108,8 @@ def validate_claim_name(name):
 
 
 class PermissionManager:
-    """公开版本：支持 Lv.1 - Lv.4（含 Lv.3 逐次动态密码与 Lv.4 双因子/owner）。"""
+    """公开版本：支持 Lv.1 - Lv.4（Lv.3 免逐次动态密码、逐次门禁 API 兼容保留；
+    Lv.4 双因子/owner）。"""
 
     IDENTITY_PATH = os.path.join(AGENT_STATE_DIR, "identity.json")
 
@@ -204,7 +207,7 @@ class PermissionManager:
         return (f"✅ 用户 {user_id} 注册成功{name_note}，已升级 Lv.2（普通用户）："
                 "可读文件、列目录、控制普通家居设备。权限已落盘。")
 
-    # ==================== Lv.3 TOTP 激活与逐次动态密码 ====================
+    # ============ Lv.3 TOTP 激活（免逐次动态密码）与兼容窗口 API ============
 
     def _totp_secret(self):
         """动态密码共享密钥（Base32）：与 auth_lv4 同源（XIAOJU3_TOTP_SECRET）。"""
@@ -226,9 +229,9 @@ class PermissionManager:
             self.current_level = "Lv.3"
         self.save_identity()
         return (f"✅ 用户 {user_id} 已激活代码编写者权限（Lv.3），权限已落盘。"
-                "注意：写文件/写代码属敏感操作，执行时还需逐次动态密码"
-                f"（/sudo <动态密码> 开启 {LV3_WINDOW_DEFAULT_TTL} 秒操作窗口，"
-                "或工具凭据携带 totp）。")
+                "现在可以直接写文件、写代码、ADB 接管手机，无需 /sudo。"
+                "如需控制门锁/燃气等高危设备或装卸系统组件，"
+                "可升级 Lv.4（主人级，/lv4_auth 双因子授权）。")
 
     def coder_auth(self, user_id, totp_code):
         """旧指令名 /coder_auth 的兼容包装：新语义 = activate_lv3（TOTP 激活+落盘）。
@@ -248,6 +251,8 @@ class PermissionManager:
                               totp_code=None):
         """/sudo 通道：开启短 TTL 写操作窗口（默认 120 秒，仅内存不落盘）。
 
+        兼容保留（2026-09-30 用户指令）：Lv.3 写文件/写代码/ADB 已免逐次
+        动态密码，本窗口不再是强制门禁，仅作用户主动开窗的可选通道。
         totp_code 提供时先校验（失败不开窗，返回 ❌ 文案）；返回中文消息，
         ✅ 开头表示窗口已开启。
         """
@@ -258,7 +263,8 @@ class PermissionManager:
         except (TypeError, ValueError):
             ttl = LV3_WINDOW_DEFAULT_TTL
         self._op_windows[user_id or self.user_id] = time.time() + ttl
-        return f"✅ 写操作窗口已开启，{ttl} 秒内写文件/写代码无需再次输入动态密码。"
+        return (f"✅ 写操作窗口已开启（兼容通道），{ttl} 秒内有效。"
+                "提示：Lv.3 写文件/写代码本就无需 /sudo，可直接执行。")
 
     def operation_window_active(self, user_id=None):
         """写操作窗口是否仍有效（仅内存状态）。"""
@@ -270,9 +276,12 @@ class PermissionManager:
         self._op_windows.pop(user_id or self.user_id, None)
 
     def lv3_operation_ok(self, user_id=None, credentials=None):
-        """Lv.3 敏感操作统一门禁入口：凭据携带有效 totp 或操作窗口有效均通过。
+        """Lv.3 敏感操作统一门禁入口（兼容保留）：凭据携带有效 totp 或
+        操作窗口有效均通过。
 
-        等级门槛（Lv.3）由调用方（tools.py 门禁）另行校验，本方法只判操作凭据。
+        2026-09-30 用户指令后 tools.py 各工具分支不再强制调用本方法
+        （Lv.3 等级通过即放行）；API 保留供私有扩展/外部调用兼容。
+        等级门槛（Lv.3）由调用方另行校验，本方法只判操作凭据。
         """
         credentials = credentials or {}
         code = credentials.get("totp") or credentials.get("code")
