@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 小橘3号 · 守护启动脚本（架构设计文档 §8）
-# 职责：主进程异常退出 2 秒后自动拉起；stop.flag 文件为安全退出标记；
+# 职责：只拉起两个进程——main.py（主程序 5002）与 xiaoju3_dashboard.py（控制台 5003/console）；
+#       主程序异常退出 2 秒后自动拉起；stop.flag 文件为安全退出标记；
 #       可选加载隔离区私有 ADB 无线连接脚本（存在才执行，不存在就跳过，绝不报错）。
 trap '' SIGINT
 
@@ -23,7 +24,19 @@ while true; do
         bash "$PRIVATE_ADB"
     fi
 
-    python3 main.py
+    # 先后台拉起主程序，再拉起控制台（口径：5002 主程序 → 5003/console 控制台）
+    python3 main.py &
+    MAIN_PID=$!
+    # 控制台仅在未运行时拉起（nohup 脱离终端，日志落 dashboard.log），
+    # 守护循环重启主程序时不会重复拉起
+    if ! pgrep -f "xiaoju3_dashboard\.py" > /dev/null 2>&1; then
+        nohup python3 xiaoju3_dashboard.py > dashboard.log 2>&1 &
+    fi
+    echo "✅ 主程序已启动 (5002)"
+    echo "✅ 控制台已启动 (5003/console)"
+
+    # 守护等待：主程序退出后由循环决定重启或安全退出（控制台进程不受影响）
+    wait "$MAIN_PID"
 
     # 如果刚才异常退出，再次检查标志（防止退出瞬间错过检查）
     if [ -f "stop.flag" ]; then

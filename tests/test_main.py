@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """接入层 main.py 离线单测（Flask test client，大脑与 OneBot 网络全 mock）。
 
-- /chat：无/错 X-API-Key 拒绝；正确 key 走 mock brain.smart_ask 返回回复。
+- GET /：302 跳转 http://127.0.0.1:5003/console（5002 旧版网页已废弃，
+  深色聊天页与 POST /chat API 由 :5003 新版控制台取代）；POST /chat 旧版
+  路由断言已下线（404）。
 - /onebot：私聊响应；群聊触发词 / @（CQ 码）/ 戳一戳彩蛋；图片收藏。
 - /onebot LLOneBot 兼容容错：raw_message 缺失时从 OneBot 11 消息段数组重建
   （text 拼接、at/image 段按 CQ 码惯例还原）、post_type 缺失按 message 宽容
@@ -15,7 +17,7 @@
 - 第二阶段架构接线：意图路由命中/透传、前情提要压缩与失败回退、长期记忆
   存取注入、熔断重置、高危设备二次确认令牌流、/api/health 迁移守望端点。
 - <think> 思维链剥离（brain 工具流程 <think> 包装契约的出口侧）：QQ /onebot
-  发送与 /chat 旧版网页出口都剥除 <think> 块，CQ 发图能力不受影响。
+  发送前剥除 <think> 块，CQ 发图能力不受影响。
 - 记忆与状态目录一律注入临时目录，不触碰真实 agent_state（identity.json /
   long_term.db 均经 patch 隔离）；TOTP 用固定测试密钥现场生成；mock 全部经
   unittest.mock.patch + addCleanup 自动还原，不向 sys.modules 注入任何伪模块。
@@ -31,7 +33,6 @@ from unittest.mock import MagicMock, patch
 import auth_lv4
 import brain
 import main
-import xiaoju3
 from agent_state.state_manager import StateManager
 from intent_router import IntentResult
 from permission import PermissionManager
@@ -97,12 +98,6 @@ class _MainCase(unittest.TestCase):
     def onebot(self, payload):
         return self.client.post("/onebot", json=payload)
 
-    def chat(self, message, key=None):
-        headers = {}
-        if key is not None:
-            headers["X-API-Key"] = key
-        return self.client.post("/chat", json={"message": message}, headers=headers)
-
     def napcat_url(self, endpoint):
         return f"{main.ONEBOT_API_URL}/{endpoint}"
 
@@ -142,73 +137,30 @@ class _MainCase(unittest.TestCase):
         return auth_lv4.generate_totp(self.totp_secret)
 
 
-class TestWebEntry(_MainCase):
-    """网页入口：GET / 深色聊天页 + POST /chat 的 X-API-Key 鉴权。"""
+class TestRootRedirect(_MainCase):
+    """根路径 302：5002 旧版网页（深色聊天页 + POST /chat API）已废弃，
+    网页统一到 :5003 新版控制台——防止误在 5002 旧页测试造成误判。"""
 
-    def test_index_renders_dark_page_with_injected_key(self):
+    def test_root_redirects_to_5003_console(self):
         resp = self.client.get("/")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.get_data(as_text=True)
-        self.assertIn("小橘3号", html)
-        # Key 经统一配置渲染注入，而非前端源码硬编码
-        self.assertIn(xiaoju3.WEB_API_KEY, html)
-        self.assertNotIn("{{ api_key }}", html)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.headers.get("Location"),
+                         "http://127.0.0.1:5003/console")
 
-    def test_chat_without_key_rejected(self):
-        resp = self.chat("你好")
-        self.assertEqual(resp.status_code, 401)
-        self.assertIn("未授权", resp.get_json()["reply"])
-        self.smart_ask.assert_not_called()
-
-    def test_chat_wrong_key_rejected(self):
-        resp = self.chat("你好", key="wrong-key")
-        self.assertEqual(resp.status_code, 401)
-        self.assertIn("未授权", resp.get_json()["reply"])
-        self.smart_ask.assert_not_called()
-
-    def test_chat_correct_key_returns_reply(self):
-        self.smart_ask.return_value = ("云端回复", "☁️ 云端")
-        resp = self.chat("你好", key=xiaoju3.WEB_API_KEY)
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.get_json(), {"reply": "云端回复"})
-        # smart_ask(message, history, session_key) 调用口径
-        args, _ = self.smart_ask.call_args
-        self.assertEqual(args[0], "你好")
-        self.assertIsInstance(args[1], list)
-        self.assertEqual(kwargs_session_key(self.smart_ask), "web")
-
-    def test_chat_empty_message(self):
-        resp = self.chat("", key=xiaoju3.WEB_API_KEY)
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.get_json()["reply"], "请说点什么吧！")
-        self.smart_ask.assert_not_called()
+    def test_chat_route_removed(self):
+        """POST /chat 旧版网页 API 已随旧页一并下线：返回 404。"""
+        resp = self.client.post("/chat", json={"message": "你好"})
+        self.assertEqual(resp.status_code, 404)
 
 
-def kwargs_session_key(mock_obj):
-    """取 mock 最近一次调用的 session_key 关键字参数。"""
-    _, kwargs = mock_obj.call_args
-    return kwargs.get("session_key")
+class TestQqChannelKeepsCq(_MainCase):
+    """QQ 出口保持 CQ 原文：/onebot 回复原样 POST 给 NapCat。
 
-
-class TestWebCqSanitize(_MainCase):
-    """Web 出口净化纵深防御：/chat 净化 CQ 码，QQ /onebot 链路保持原样。"""
-
-    def test_chat_reply_cq_sanitized_for_web(self):
-        """face 码→Emoji、image 码→[表情]：网页永不显示方括号 CQ 原文。"""
-        self.smart_ask.return_value = (
-            "得意[CQ:face,id=4]看这个[CQ:image,file=file:///home/u/workspace/emoji_library/开心_1.jpg]",
-            "🏠 本地")
-        resp = self.chat("你好", key=xiaoju3.WEB_API_KEY)
-
-        self.assertEqual(resp.status_code, 200)
-        reply = resp.get_json()["reply"]
-        self.assertEqual(reply, "得意😎看这个[表情]")
-        self.assertNotIn("CQ", reply)
-        self.assertNotIn("file://", reply)   # 表情包本机绝对路径不泄露给网页
+    （旧版 /chat 出口的 web_sanitize CQ 净化已随旧页一并下线，净化职责
+    归 :5003 新版控制台自身；QQ 发图/发表情能力不受影响。）
+    """
 
     def test_qq_channel_keeps_cq_verbatim(self):
-        """QQ 链路不受净化影响：/onebot 回复原样 POST 给 NapCat
-        （[CQ:...] 发图/发表情能力保持，web_sanitize 只挂 Web 出口）。"""
         cq_reply = "[CQ:image,file=file:///ws/表情包.jpg]"
         self.smart_ask.return_value = (cq_reply, "🏠 本地")
         resp = self.onebot({
@@ -223,8 +175,8 @@ class TestWebCqSanitize(_MainCase):
 
 class TestThinkStrip(_MainCase):
     """<think> 思维链包装剥离（brain 工具流程 <think> 包装契约的出口侧）：
-    QQ /onebot 发送与 /chat 旧版网页出口都在发送前剥除 <think> 块
-    （QQ 消息保持干净、旧页无推理卡片渲染器），CQ 码发图能力不受影响。"""
+    QQ /onebot 发送前剥除 <think> 块（推理展示只属于 :5003 新前端），
+    CQ 码发图能力不受影响。"""
 
     WRAPPED = "<think>[思考] 先查设备再开灯。</think>已为你打开卧室灯💡"
 
@@ -264,20 +216,6 @@ class TestThinkStrip(_MainCase):
         })
         self.assertEqual(self.napcat_payload()["message"],
                          "[CQ:image,file=file:///ws/表情包.jpg]")
-
-    def test_chat_reply_strips_think_block(self):
-        # 旧版网页 /chat 出口同样剥除（旧页无卡片渲染器）
-        self.smart_ask.return_value = (self.WRAPPED, "🏠 本地 (工具)")
-        resp = self.chat("开灯", key=xiaoju3.WEB_API_KEY)
-        self.assertEqual(resp.status_code, 200)
-        self.assertNotIn("<think>", resp.get_json()["reply"])
-        self.assertEqual(resp.get_json()["reply"], "已为你打开卧室灯💡")
-
-    def test_chat_plain_reply_untouched_by_think_strip(self):
-        # 无 think 包装的回复：CQ 净化逻辑照常（face 码仍转 Emoji）
-        self.smart_ask.return_value = ("得意[CQ:face,id=4]你好", "🏠 本地")
-        resp = self.chat("你好", key=xiaoju3.WEB_API_KEY)
-        self.assertEqual(resp.get_json()["reply"], "得意😎你好")
 
     def test_strip_think_helper(self):
         self.assertEqual(main._strip_think("<think>a</think>回复"), "回复")

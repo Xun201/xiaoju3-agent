@@ -31,6 +31,11 @@
 - GET /api/history  {code, data:{messages:[...]}}：控制台聊天历史（role/content，
                  assistant 条目附 source 来源标签），供前端页面加载时渲染。
 - DELETE /api/history 清空控制台聊天历史（确认语义由前端 confirm 承担）。
+- POST /api/tts     Edge-TTS 语音合成（用户口径：人类少女音、免费无 Key）：
+                 JSON {text, voice?} → audio/mpeg 音频流；edge_tts 延迟导入，
+                 服务端未安装 → 501 JSON 中文提示（不让 import 崩溃）；
+                 默认音色 zh-CN-XiaoxiaoNeural（晓晓·温柔女声）。
+- GET /api/tts      Edge-TTS 自然女声音色表（EDGE_VOICES 常量，前端参考）。
 - 静态路由（/console*、/assets*）统一 Cache-Control: no-store——浏览器每次
   刷新都拉取最新 HTML/JS，避免发版后命中旧版 console.js 导致前端修复不生效。
 - 访问日志刷屏抑制：werkzeug logger 挂 _PollAccessFilter，/api/status（前端
@@ -46,7 +51,7 @@ import time
 
 import psutil
 import requests
-from flask import Flask, jsonify, render_template_string, request, send_from_directory
+from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
 
 from brain import load_memory, save_memory, smart_ask  # 直连大脑（架构设计文档 §2：仪表盘 /api/chat 绕过路由层）
 from web_sanitize import sanitize_for_web  # Web 出口 CQ 码净化（QQ 通道不经此处）
@@ -545,6 +550,83 @@ def api_chat():
         import traceback
         print(traceback.format_exc())
         return jsonify({"code": 500, "error": str(e)}), 500
+
+
+# ============================ Edge-TTS 语音合成（/api/tts） ============================
+# 用户口径：人类少女音、免费无 Key——edge-tts 走微软 Edge 在线朗读接口，
+# 免注册、免费、无 API Key。依赖策略沿用红线"延迟导入 + 优雅降级"：服务端
+# 未安装时接口返回 501 + 清晰中文提示，绝不让模块 import 崩溃。
+DEFAULT_TTS_VOICE = "zh-CN-XiaoxiaoNeural"   # 晓晓：自然温柔的少女音（默认）
+
+# 前端音色参考表（自然女声，GET /api/tts 下发，前端下拉渲染用；
+# 互不重复，首个为默认音色）
+EDGE_VOICES = [
+    {"voice": "zh-CN-XiaoxiaoNeural", "name": "晓晓 · 温柔女声（默认）"},
+    {"voice": "zh-CN-XiaoyiNeural",   "name": "晓伊 · 活泼少女音"},
+    {"voice": "zh-CN-XiaomoNeural",   "name": "晓墨 · 阳光女声"},
+    {"voice": "zh-CN-XiaoqiuNeural",  "name": "晓秋 · 知性女声"},
+]
+
+
+def _edge_tts_synthesize(text, voice):
+    """同步封装 edge-tts 合成：asyncio.run 包一层（Flask 同步上下文直接可用），
+    收集 Communicate.stream() 的 audio 分片拼接为完整 MP3 bytes 返回。
+
+    stream() 产出 {"type": "audio"|"WordBoundary", ...} 混合分片，只收集
+    audio；连接/读取超时由 edge-tts 自身默认值兜底（连接 10s / 读取 60s），
+    断网等异常向上抛出、由 /api/tts 统一转 500 JSON。
+    """
+    import asyncio
+
+    import edge_tts   # 延迟导入：未安装时上层已先行 501，此处正常可用
+
+    async def _collect():
+        chunks = []
+        async for part in edge_tts.Communicate(text, voice).stream():
+            if part.get("type") == "audio":
+                chunks.append(part["data"])
+        return b"".join(chunks)
+
+    return asyncio.run(_collect())
+
+
+@app.route("/api/tts", methods=["GET"])
+def api_tts_voices():
+    """Edge-TTS 音色表：{code, data:{default, voices:[{voice, name}]}}。"""
+    return jsonify({
+        "code": 200,
+        "data": {"default": DEFAULT_TTS_VOICE, "voices": EDGE_VOICES},
+    })
+
+
+@app.route("/api/tts", methods=["POST"])
+def api_tts():
+    """语音合成 API：JSON {text, voice?} → audio/mpeg 字节流（前端 <audio> 直播）。
+
+    - text 空 → 400 JSON {code, error}；
+    - 服务端未安装 edge-tts → 501 JSON {error:"服务端未安装 edge-tts"}；
+    - 合成异常（断网/音色非法等）→ 500 JSON {error}（附简短中文原因）。
+    """
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text") or "").strip()
+    if not text:
+        return jsonify({"code": 400, "error": "文本不能为空"}), 400
+    voice = str(data.get("voice") or DEFAULT_TTS_VOICE)
+
+    try:
+        import edge_tts   # noqa: F401  延迟导入探测：sys.modules 缺失/置 None 即 ImportError
+    except Exception:
+        return jsonify({"code": 501, "error": "服务端未安装 edge-tts"}), 501
+
+    try:
+        audio = _edge_tts_synthesize(text, voice)
+    except Exception as e:
+        return jsonify({"code": 500, "error": f"语音合成失败: {e}"}), 500
+
+    if not audio:
+        # 服务端在线但未产出任何音频分片：按失败口径处理，不给前端空音频
+        return jsonify({"code": 500, "error": "语音合成失败: 未返回音频数据"}), 500
+    return Response(audio, mimetype="audio/mpeg")
 
 
 if __name__ == "__main__":
