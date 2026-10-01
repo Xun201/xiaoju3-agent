@@ -36,7 +36,13 @@
   语言或占位符都出卡，无块仍不插卡——前端行为零改动）、思考
   卡片逐字打字（textContent 注入防注入）+ 打完自动折叠/点击展开、历史
   回放不打字、刷新重生成同步卡片、等待期 900ms 轮换状态；index.html
-  .think-card / .think-card-header / .think-card-body 浅灰折叠样式。
+  .think-card / .think-card-header / .think-card-body 浅灰折叠样式；
+- T4a 诊断与强制兜底（2026-10-01）：RAW_REPLY / PARSED_THINK+PARSED_BODY /
+  RENDERING_THINK_CARD 三处常驻诊断日志落点；插卡尝试后 querySelector
+  实测校验 .think-card 真实存在，缺失且 think 非空时 createElement +
+  classList.add('think-card') 手工构建（🧠 图标 + ▼ 折叠箭头 + 思考文本
+  textContent 注入）并 prepend 强制补插，二次校验仍失败最终降级深色纯
+  文本块；index.html .think-card 显式 display: block。
 
 mock 注意：所有 patch 均走 context manager / start+addCleanup（结束即还原），
 不污染 sys.modules；历史文件一律注入 tmp 目录，可与其它测试文件在同一
@@ -1389,6 +1395,123 @@ class ThinkCardFrontendTests(unittest.TestCase):
         # 聊天记录容器（本任务核对主体）双向锁定
         self.assertIn("chat-history", html_ids)
         self.assertIn("chat-history", js_ids)
+
+
+# ---------------------------------------------------------------------------
+# T4a：CoT 前端诊断日志（三处常驻埋点）+ 卡片强制渲染兜底
+# ---------------------------------------------------------------------------
+
+class CoTDiagnosticAndForcedFallbackTests(unittest.TestCase):
+    """T4a（2026-10-01 用户口径）：思维链卡片"渲染代码没被执行/执行了但
+    插入失败被静默吞掉"问题的前端诊断与强制渲染兜底。
+
+    ① 三处常驻诊断日志（用户指定文案，保留在代码中）：
+       sendMessage 收到后端响应处 RAW_REPLY、appendBotMessage 切分后
+       PARSED_THINK/PARSED_BODY、卡片渲染分支入口 RENDERING_THINK_CARD；
+    ② 强制卡片渲染兜底：插卡尝试后实测校验 botMsg.querySelector('.think-card')
+       真实存在，缺失且 think 非空时用 createElement + classList.add 手工
+       构建卡片（🧠 图标 + ▼ 折叠箭头 + 可展开思考文本 textContent 注入）
+       并 prepend 强制补插（不依赖 before()），兜底后再校验一次，仍失败
+       最终降级为深色纯文本块（F4 既有 buildThinkFallbackBlock）；
+    ③ index.html .think-card 显式 display: block（整卡永不被隐藏，
+       .think-collapsed 只藏正文）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        def _read(name):
+            with open(os.path.join(PROJECT_ROOT, name), "r", encoding="utf-8") as f:
+                return f.read()
+        cls.console_js = _read("console.js")
+        cls.index_html = _read("index.html")
+
+    def _bot_body(self):
+        """提取 console.js 中 appendBotMessage 函数体（到下一节标记为止）。"""
+        start = self.console_js.index("function appendBotMessage")
+        end = self.console_js.index("==================== 3.", start)
+        return self.console_js[start:end]
+
+    def _forced_fallback_region(self, body):
+        """提取强制兜底区段（首次 .think-card 实测校验 → 打字机启动之前）。"""
+        start = body.index("botMsg.querySelector('.think-card')")
+        end = body.index("startThinkTypewriter(botMsg, thinkParts.think")
+        return body[start:end]
+
+    # ---------- ① 三处常驻诊断日志 ----------
+
+    def test_diagnostic_log_raw_reply_in_send_message(self):
+        """诊断埋点①：sendMessage 收到后端响应处打印完整原始 reply，
+        位于成功分支内（res.data.reply 必存在）且先于卡片渲染入口。"""
+        start = self.console_js.index("window.sendMessage")
+        end = self.console_js.index("==================== 5.", start)
+        body = self.console_js[start:end]
+        self.assertIn('console.log("RAW_REPLY:", res.data.reply)', body)
+        self.assertLess(body.index('console.log("RAW_REPLY:"'),
+                        body.index("appendBotMessage(res.data.reply"))
+
+    def test_diagnostic_log_parsed_think_in_append_bot(self):
+        """诊断埋点②：appendBotMessage 调 splitThinkBlock 之后打印切分
+        结果（PARSED_THINK + PARSED_BODY）——RAW_REPLY 含 <think> 而本行
+        think 为 null 即切分环节异常。"""
+        body = self._bot_body()
+        self.assertIn('console.log("PARSED_THINK:", thinkParts.think, '
+                      '"PARSED_BODY:", thinkParts.body)', body)
+        self.assertLess(body.index("splitThinkBlock(rawReply)"),
+                        body.index('console.log("PARSED_THINK:"'))
+
+    def test_diagnostic_log_rendering_entry(self):
+        """诊断埋点③：卡片渲染分支入口打印 RENDERING_THINK_CARD——位于
+        think 守卫之后、插卡动作之前（分支入口处）。"""
+        body = self._bot_body()
+        guard = body.index("if (thinkParts.think !== null)")
+        entry = body.index('console.log("RENDERING_THINK_CARD...")')
+        self.assertLess(guard, entry)
+        self.assertLess(entry, body.index("buildThinkCardEl()"))
+
+    # ---------- ② 强制卡片渲染兜底 ----------
+
+    def test_forced_card_fallback_after_insert(self):
+        """强制兜底：插卡尝试（F4 insertBefore 通道）之后实测校验
+        .think-card 真实存在；兜底区段含 createElement 手工构建 +
+        classList.add('think-card') + prepend 补插 + 二次校验。"""
+        body = self._bot_body()
+        guard = body.index("if (thinkParts.think !== null)")
+        # 实测校验在渲染守卫之内、主插卡通道之后
+        forced_start = body.index("botMsg.querySelector('.think-card')")
+        self.assertLess(guard, forced_start)
+        self.assertLess(body.index("parentEl.insertBefore(thinkCard, bubbleEl)"),
+                        forced_start)
+        forced = self._forced_fallback_region(body)
+        # 校验 + 兜底插入后再校验一次：恰为两处实测
+        self.assertEqual(forced.count("botMsg.querySelector('.think-card')"), 2)
+        self.assertIn("document.createElement('div')", forced)   # 手工构建
+        self.assertIn("classList.add('think-card')", forced)     # 类名注入
+        self.assertIn("botMsg.prepend(", forced)                 # prepend 补插通道
+        # 兜底位于打字机启动之前（打字机按类名找到补插的卡片照常填充）
+        self.assertLess(body.index("botMsg.prepend("),
+                        body.index("startThinkTypewriter(botMsg, thinkParts.think"))
+
+    def test_forced_fallback_card_content_and_final_degrade(self):
+        """手工兜底卡片必含 🧠 图标、▼ 折叠箭头、思考文本 textContent 注入
+        （可展开）；二次校验仍失败最终降级复用 F4 深色纯文本块。"""
+        forced = self._forced_fallback_region(self._bot_body())
+        self.assertIn("🧠", forced)
+        self.assertIn("▼", forced)
+        self.assertIn("textContent =", forced)              # 思考文本纯文本注入
+        self.assertIn("classList.add('think-collapsed')", forced)  # 初始折叠态
+        self.assertIn("buildThinkFallbackBlock(thinkParts.think)", forced)  # 最终降级
+
+    # ---------- ③ index.html .think-card 显式 display: block ----------
+
+    def test_think_card_display_block_style(self):
+        """index.html .think-card 样式含显式 display: block——整卡永远可见，
+        .think-collapsed 只藏正文（display:none 只作用于 .think-card-body）。"""
+        html = self.index_html
+        start = html.index(".think-card {")
+        block = html[start:html.index("}", start)]
+        self.assertIn("display: block", block)
+        # 折叠只藏正文：display:none 不在 .think-card 本体块内
+        self.assertNotIn("display: none", block)
 
 
 # ---------------------------------------------------------------------------

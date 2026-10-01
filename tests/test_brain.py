@@ -18,7 +18,9 @@
   同样包装；全对话强制包装（2026-10-01 用户指令，废止旧"普通聊天零包装"
   口径）：_seal_bare_cot 对 smart_ask 全部自然语言回复出口封口——旁路普通
   回复/URL 总结/熔断剥夺路径捕获到原生思考用原生，残缺形态回退工具占位符
-  （正文剥空用"（操作已执行）"占位；正文已以 <think> 开头防重入不二次
+  （正文剥空由 _wrap_think 正文回补——真实回复从思考卡提升回正文——回补
+  不了以"操作已完成。"兜底，"（操作已执行）"绝不作为正文出现；正文已以
+  <think> 开头防重入不二次
   包）；无任何标记的普通闲聊注入 CHAT_THINKING_PLACEHOLDER 默认占位符
   （"[思考] 正在理解你的意图..."）；抓取失败/双脑全挂/空回复等固定文案
   同样注入默认占位符；CoT 花括号内容
@@ -29,7 +31,10 @@
   成对保证（ThinkPairGuaranteeTests，2026-10-01 修复"你好"网页直出纯文本
   <think>）：空思考注入默认占位符、模型自吐无闭合开标签的防重入透传
   先做成对校验（残缺修复/完整透传）、用户指定 re.search 最终门禁 +
-  重拼/纯文本两级兜底；
+  重拼/纯文本两级兜底；WRAPPED_TEXT 输出诊断日志（_wrap_think 最终
+  return 前、每条一行、300 字符截断，与返回 reply 逐字对账）；
+  下发通道实测（WebExitThinkTagContractTests）：仪表盘 sanitize_for_web
+  标签完好存活、QQ/旧页 _strip_think 设计性整块剥标；
 - 裸 CoT 泄漏扫描总测试（BareCotLeakSweepTests，P2 "穷举封死"）：smart_ask
   全部 11 条 return 路径参数化扫描——ui_tap→vision 回退分支汇总轮复读裸
   CoT（用户实测"帮我点击蓝牙"漏点，_seal_tool_summary 修复）、[行动] 残缺
@@ -689,7 +694,8 @@ class ThinkWrapTests(unittest.TestCase):
     - 全对话强制包装（_seal_bare_cot，2026-10-01 用户指令，显式废止旧
       "普通聊天零包装零干扰"）：模型输出了 [思考]/[计划] 但 JSON 解析失败/
       工具不在白名单等旁路普通回复、URL 总结、熔断剥夺路径 → 捕获到原生
-      思考用原生（正文剥空用"（操作已执行）"占位；正文已以 <think> 开头
+      思考用原生（正文剥空由 _wrap_think 正文回补——真实回复回到正文——
+      回补不了以"操作已完成。"兜底；正文已以 <think> 开头
       防重入不再二次包）；无任何标记的普通闲聊 → 注入 CHAT_THINKING_
       PLACEHOLDER 默认占位符"[思考] 正在理解你的意图..."（正文原样保留，
       提到"思考"二字不误触发剥标）；抓取失败/双脑全挂/空回复等固定文案
@@ -957,8 +963,9 @@ class ThinkWrapTests(unittest.TestCase):
     def test_cot_with_unparseable_json_sealed_with_placeholder(self):
         # 用户实测场景封口（"帮我点击手机屏幕上的蓝牙"）：模型按协议输出
         # [思考]/[计划]/[行动]+JSON 但 JSON 残缺（缺逗号）解析不出 → 普通
-        # 回复路径同样包装 <think>；正文剥空用"（操作已执行）"占位，
-        # [行动] 行与 JSON 载荷绝不裸漏
+        # 回复路径同样包装 <think>；正文剥空 → [计划] 等裸标记不借回补漏进
+        # 正文，以"操作已完成。"兜底（2026-10-01 T5 新口径，废止旧
+        # "（操作已执行）"占位），[行动] 行与 JSON 载荷绝不裸漏
         raw = ('[思考] 主人要点击蓝牙，先定位设置入口。\n'
                '[计划] 1. UI解析找蓝牙 2. 失败转视觉\n'
                '[行动] {"tool": "ui_tap_element" "args": {}}')
@@ -967,15 +974,17 @@ class ThinkWrapTests(unittest.TestCase):
         self.assertEqual(source, "🏠 本地")
         self.assertTrue(reply.startswith("<think>[思考] 主人要点击蓝牙"), reply)
         self.assertIn("[计划] 1. UI解析找蓝牙", reply)
-        self.assertTrue(reply.endswith("</think>（操作已执行）"), reply)
+        self.assertTrue(reply.endswith("</think>操作已完成。"), reply)
         body_part = reply.split("</think>", 1)[1]
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, reply)
         self.assertNotIn("[行动]", body_part)
         self.assertNotIn('"tool"', body_part)
         mexec.assert_not_called()
         mcloud.assert_not_called()
 
     def test_cot_with_whitelist_rejected_tool_still_sealed(self):
-        # 旁路封口：JSON 合法但工具不在白名单 → 不执行，普通回复路径同样包装
+        # 旁路封口：JSON 合法但工具不在白名单 → 不执行，普通回复路径同样包装；
+        # 正文剥空以"操作已完成。"兜底（T5 新口径）
         raw = ('[思考] 试试危险的工具。\n'
                '[计划] 调用未知工具\n'
                '[行动] {"tool": "format_disk", "args": {}}')
@@ -983,7 +992,8 @@ class ThinkWrapTests(unittest.TestCase):
         reply, source = result
         self.assertEqual(source, "🏠 本地")
         self.assertTrue(reply.startswith("<think>[思考] 试试危险的工具。"), reply)
-        self.assertTrue(reply.endswith("</think>（操作已执行）"), reply)
+        self.assertTrue(reply.endswith("</think>操作已完成。"), reply)
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, reply)
         mexec.assert_not_called()
         mcloud.assert_not_called()
 
@@ -1110,30 +1120,36 @@ class ThinkWrapTests(unittest.TestCase):
     def test_wrap_think_strips_stray_tags_from_dirty_input(self):
         # 纯函数单测：脏输入直接喂 _wrap_think —— thinking/body 两侧的
         # <think>/</think> 字面量一律剥除（文本内容保留），产出恰一对标签
-        out = brain._wrap_think("[思考] 先想想</think>再想想",
-                                "好的<think>嗯</think>")
+        #（_quiet：吞掉 _wrap_think 末尾的 WRAPPED_TEXT 诊断日志，下同）
+        with _quiet():
+            out = brain._wrap_think("[思考] 先想想</think>再想想",
+                                    "好的<think>嗯</think>")
         self.assertEqual(out, "<think>[思考] 先想想再想想</think>好的嗯")
         self._assert_single_think_pair(out)
         # 大小写/带属性变体同样剥除；None/空白思考注入默认占位符——
-        # 成对保证（2026-10-01 用户口径）：绝不允许空 <think>（3.8 兼容纯函数）
-        out2 = brain._wrap_think("<THINK >x</THINK>y", None)
-        self.assertEqual(out2, "<think>xy</think>")
-        self._assert_single_think_pair(out2)
-        self.assertEqual(brain._wrap_think(None, "正文"),
-                         f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>正文")
-        self.assertEqual(brain._wrap_think("[思考] x", None),
-                         "<think>[思考] x</think>")
+        # 成对保证（2026-10-01 用户口径）：绝不允许空 <think>（3.8 兼容纯函数）。
+        # body 为 None（剥空）而 thinking 含真实内容 → 正文回补（T5 新口径：
+        # 剥除 [思考] 前缀后的内容提升为正文，思考卡同时保留）
+        with _quiet():
+            out2 = brain._wrap_think("<THINK >x</THINK>y", None)
+            self.assertEqual(out2, "<think>xy</think>xy")
+            self._assert_single_think_pair(out2)
+            self.assertEqual(brain._wrap_think(None, "正文"),
+                             f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>正文")
+            self.assertEqual(brain._wrap_think("[思考] x", None),
+                             "<think>[思考] x</think>x")
 
     def test_wrap_think_clean_input_format_unchanged(self):
         # 干净输入（正常 CoT / 动态占位符）产出与旧手写拼接逐字一致，零回退
-        self.assertEqual(
-            brain._wrap_think(self.COT_THINKING, "已经帮你弄好了"),
-            f"<think>{self.COT_THINKING}</think>已经帮你弄好了")
-        self.assertEqual(
-            brain._wrap_think(brain._tool_thinking_placeholder("list_files"),
-                              "主人，工作区里有 a.txt"),
-            f"<think>{brain._tool_thinking_placeholder('list_files')}"
-            f"</think>主人，工作区里有 a.txt")
+        with _quiet():
+            self.assertEqual(
+                brain._wrap_think(self.COT_THINKING, "已经帮你弄好了"),
+                f"<think>{self.COT_THINKING}</think>已经帮你弄好了")
+            self.assertEqual(
+                brain._wrap_think(brain._tool_thinking_placeholder("list_files"),
+                                  "主人，工作区里有 a.txt"),
+                f"<think>{brain._tool_thinking_placeholder('list_files')}"
+                f"</think>主人，工作区里有 a.txt")
 
     def test_model_stray_close_tag_in_cot_reply_stays_paired(self):
         # 模型首轮 CoT 自带 </think> 字面量（被 _capture_thinking 捕获进
@@ -1202,6 +1218,13 @@ class ThinkPairGuaranteeTests(unittest.TestCase):
     - 包装完成后按用户指定正则 re.search(r'<think>.*?</think>', final_text,
       re.DOTALL) 校验：不匹配强制从干净两侧重拼一次，重拼仍不匹配退化为
       剥离全部 think 标签的纯文本（宁可无标签也不出畸形）。
+    T5 增补（2026-10-01 用户实测缺陷"真实回复被占位符顶替"修复固化）：
+    终端实测 WRAPPED_TEXT: <think>[思考] ...嘿...有什么可以帮到你的？</think>
+    （操作已执行）——模型自吐 </think> 后的真实回复被上游剥空、以占位符顶替
+    正文。现 _wrap_think 四条新口径：两侧彻底剥除标签字面量与"（操作已执行）"
+    占位符；正文剥空而 thinking 含真实内容 → 回补为正文（真实回复回到正文，
+    思考卡同时保留）；双空才注入默认占位（思考=CHAT 占位、正文="操作已完成。
+    "）；成对门禁与 WRAPPED_TEXT 日志打印清洗回补后的最终产出。
     """
 
     def _assert_paired(self, text):
@@ -1280,13 +1303,15 @@ class ThinkPairGuaranteeTests(unittest.TestCase):
     def test_wrap_think_blank_thinking_injects_placeholder(self):
         # None/空串/纯空白一律注入默认占位符，绝无空 <think></think>
         for blank in (None, "", "   ", "\n\t "):
-            self.assertEqual(
-                brain._wrap_think(blank, "正文"),
-                f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>正文")
+            with _quiet():
+                self.assertEqual(
+                    brain._wrap_think(blank, "正文"),
+                    f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>正文")
 
     def test_wrap_think_self_emitted_close_literal_cleaned_paired(self):
         # thinking 含自吐 </think> 字面量 → 两侧清洗后恰一对标签（用户口径用例）
-        out = brain._wrap_think("[思考] 想到一半</think>继续想", "正文<think>嗯</think>")
+        with _quiet():
+            out = brain._wrap_think("[思考] 想到一半</think>继续想", "正文<think>嗯</think>")
         self.assertEqual(out, "<think>[思考] 想到一半继续想</think>正文嗯")
         self._assert_paired(out)
         self.assertEqual(out.count("<think>"), 1, out)
@@ -1304,7 +1329,8 @@ class ThinkPairGuaranteeTests(unittest.TestCase):
             ("", "  "),
         ]
         for t, b in dirty:
-            out = brain._wrap_think(t, b)
+            with _quiet():
+                out = brain._wrap_think(t, b)
             self._assert_paired(out)
             self.assertTrue(out.startswith("<think>"), repr(out))
             self.assertEqual(out.count("<think>"), 1, repr(out))
@@ -1315,7 +1341,7 @@ class ThinkPairGuaranteeTests(unittest.TestCase):
         # 退化为剥离全部 think 标签的纯文本（patch 门禁正则为永不匹配，
         # 模拟清洗/拼装被未来改动破坏的极端态，验证兜底真实可达）
         never = re.compile(r"(?!x)x")
-        with mock.patch.object(brain, "_THINK_HAS_PAIR_RE", never):
+        with mock.patch.object(brain, "_THINK_HAS_PAIR_RE", never), _quiet():
             out = brain._wrap_think("[思考] 想想", "正文")
         self.assertNotIn("<think>", out)
         self.assertNotIn("</think>", out)
@@ -1326,6 +1352,172 @@ class ThinkPairGuaranteeTests(unittest.TestCase):
         # 门禁正则常量与用户指定字面量一致（防未来静默改动）
         self.assertEqual(brain._THINK_HAS_PAIR_RE.pattern, r'<think>.*?</think>')
         self.assertEqual(brain._THINK_HAS_PAIR_RE.flags & re.DOTALL, re.DOTALL)
+
+    # ---- 正文回补（T5，2026-10-01 用户实测"（操作已执行）"顶替真实回复）----
+
+    # 用户终端实测畸形态的输入侧：[思考] 真实内容 + "（操作已执行）"占位 body
+    DEFECT_THINKING = "[思考] ...嘿...有什么可以帮到你的？"
+    DEFECT_FIXED = ("<think>[思考] ...嘿...有什么可以帮到你的？</think>"
+                    "...嘿...有什么可以帮到你的？")
+
+    def test_user_defect_placeholder_body_backfilled_from_thinking(self):
+        # 纯函数复现：喂入会产生旧畸形态 <think>[思考] ...</think>（操作已执行）
+        # 的输入（[思考] 内容 + 占位 body）→ 真实回复回到正文，思考卡同时保留
+        with _quiet():
+            out = brain._wrap_think(self.DEFECT_THINKING, "（操作已执行）")
+        self.assertEqual(out, self.DEFECT_FIXED)
+        self._assert_paired(out)
+        # 负例：占位符绝不作为正文出现（全文断言，卡内也不允许）
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, out)
+
+    def test_user_defect_e2e_real_reply_returns_to_body(self):
+        # 端到端复现（用户终端实测口径）：模型输出 [思考]+真实回复、上游剥空
+        # body 的旧畸形态 → smart_ask 新产出 = <think>[思考] ...</think>真实回复
+        reply, source = self._chat(self.DEFECT_THINKING)
+        self.assertEqual(source, "🏠 本地")
+        self.assertEqual(reply, self.DEFECT_FIXED)
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, reply)
+
+    def test_body_placeholder_literal_stripped_from_both_sides(self):
+        # 清洗加固（用户口径①）："（操作已执行）"（含前后空白变体）在
+        # thinking/body 两侧一律彻底剥除
+        with _quiet():
+            out = brain._wrap_think("（操作已执行） [思考] 想想",
+                                    "（操作已执行）正文（操作已执行）")
+        self.assertEqual(out, "<think>[思考] 想想</think>正文")
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, out)
+
+    def test_placeholder_thinking_never_promoted_to_body(self):
+        # 注入型占位思考不回补正文：闲聊占位保持"只有卡片"输出（孤标签修复
+        # 形态零回退）；工具占位思考剥空正文以"操作已完成。"兜底——
+        # 绝不允许正文成为"（操作已执行）"，也不把占位文案复制进正文
+        with _quiet():
+            self.assertEqual(
+                brain._wrap_think(brain.CHAT_THINKING_PLACEHOLDER,
+                                  "（操作已执行）"),
+                f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>")
+            self.assertEqual(
+                brain._wrap_think(brain.TOOL_THINKING_PLACEHOLDER, None),
+                f"<think>{brain.TOOL_THINKING_PLACEHOLDER}</think>"
+                f"{brain.DEFAULT_BODY_PLACEHOLDER}")
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER,
+                         brain.DEFAULT_BODY_PLACEHOLDER)
+
+    def test_double_blank_falls_back_to_default_body_placeholder(self):
+        # 双空兜底（用户口径③）：body 与 thinking 清洗后都为空 → 思考注入
+        # CHAT 默认占位符、正文注入简短"操作已完成。"；常量字面量锁定
+        self.assertEqual(brain.DEFAULT_BODY_PLACEHOLDER, "操作已完成。")
+        for blank_body in (None, "", "   ", "（操作已执行）"):
+            with _quiet():
+                out = brain._wrap_think(None, blank_body)
+            self.assertEqual(
+                out,
+                f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>"
+                f"{brain.DEFAULT_BODY_PLACEHOLDER}")
+            self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, out)
+
+    def test_backfill_skipped_when_marker_would_leak_body(self):
+        # 多段思考（[思考]+[计划]）不可整段提升——裸标记绝不借回补漏进正文，
+        # 以"操作已完成。"兜底（正文回补只服务单段纯文本的真实回复）
+        with _quiet():
+            out = brain._wrap_think("[思考] 先定位入口。\n[计划] 点击蓝牙图标",
+                                    "（操作已执行）")
+        self.assertEqual(
+            out,
+            "<think>[思考] 先定位入口。\n[计划] 点击蓝牙图标</think>操作已完成。")
+        self.assertNotIn("[计划]", out.split("</think>", 1)[1])
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, out)
+
+    # ---- 输出诊断日志（2026-10-01 用户口径）：_wrap_think 最终 return 前 ----
+
+    def test_wrap_think_prints_wrapped_text_log_of_final_output(self):
+        # WRAPPED_TEXT 日志 = 最终产出本体：含成对 <think> 且紧贴正文，
+        # 日志行逐字等于函数返回值（部署侧据此与网页形态对账）
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            out = brain._wrap_think("[思考] 想想", "正文")
+        self.assertIn(f"WRAPPED_TEXT: {out}", buf.getvalue())
+        self.assertIn("WRAPPED_TEXT: <think>", buf.getvalue())
+
+    def test_wrap_think_wrapped_text_log_truncated_at_300_chars(self):
+        # 防刷屏截断：超 300 字符截断加 "..."（载荷恰为 300+3 字符），
+        # 开头 <think> 成对标签仍保留在行首
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            brain._wrap_think("[思考] 想想", "字" * 400)
+        payload = buf.getvalue().split("WRAPPED_TEXT: ", 1)[1].rstrip("\n")
+        self.assertTrue(payload.endswith("..."), repr(payload[-10:]))
+        self.assertEqual(len(payload), 303)
+        self.assertTrue(payload.startswith("<think>[思考] 想想</think>"), payload)
+
+    def test_wrap_think_degraded_plain_text_log_has_no_tags(self):
+        # 兜底退化路径（门禁永不匹配）打印的最终产出同样逐字对账：
+        # 纯文本无任何 think 标签（"宁可无标签"口径在日志里可见）
+        never = re.compile(r"(?!x)x")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with mock.patch.object(brain, "_THINK_HAS_PAIR_RE", never):
+                out = brain._wrap_think("[思考] 想想", "正文")
+        self.assertNotIn("<think>", buf.getvalue())
+        self.assertIn(f"WRAPPED_TEXT: {out}", buf.getvalue())
+
+    def test_smart_ask_hello_wrapped_text_log_matches_reply(self):
+        # 端到端对账（用户报障"你好"口径）：smart_ask 终端打印的 WRAPPED_TEXT
+        # 与返回给前端的 reply 逐字一致——后端下发的 <think> 包装完好，
+        # "网页只显示纯文本"嫌疑收敛到前端渲染分支或剥标出口（见
+        # WebExitThinkTagContractTests 的通道实测）
+        with mock.patch.object(brain, "requests") as mr:
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("你好呀，很高兴见到你！")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                reply, _source = brain.smart_ask("你好", [])
+        self.assertIn(f"WRAPPED_TEXT: {reply}", buf.getvalue())
+        self.assertTrue(
+            reply.startswith(f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>"),
+            reply)
+
+
+class WebExitThinkTagContractTests(unittest.TestCase):
+    """<think> 包装两条下发通道实测口径（2026-10-01 python 实测，排查"你好"
+    网页只显示纯文本无思维链卡片；结论固化进 brain._wrap_think docstring）：
+    - 仪表盘 /api/chat（直连 smart_ask，出口 web_sanitize.sanitize_for_web）：
+      sanitize 只净化 CQ 码（face→Emoji/image→[表情]/其余剥除），实测
+      <think>/</think> 标签原样存活（思考内混 CQ 码时标签同样完好成对）
+      ——后端下发的包装完好，前端拿到的文本可直接渲染卡片；
+    - QQ 与旧版网页（main.py _strip_think：re.sub(r'<think>.*?</think>',
+      '', DOTALL) 后 strip）：设计上整块剥除思维链（含标签本体），QQ/旧页
+      拿到纯文本正文——通道口径差异，不是标签丢失。
+    据此排除"后端输出标签被剥"这一嫌疑：网页只见纯正文时，应查前端
+    渲染分支（console.js，并行组维护）或确认该回复是否走了剥标出口。
+    """
+
+    WRAPPED = "<think>[思考] 正在理解你的意图...</think>你好呀，很高兴见到你！"
+    WRAPPED_CQ = ("<think>[思考] 表情[CQ:face,id=4]参考</think>"
+                  "正文[CQ:image,file=file:///x/a.jpg]")
+
+    def test_dashboard_sanitize_keeps_think_tags_intact(self):
+        # 仪表盘出口：干净包装逐字透传（恰一对标签）；思考内混 CQ 码时
+        # CQ 码被净化而 <think> 标签完好成对
+        from web_sanitize import sanitize_for_web
+        self.assertEqual(sanitize_for_web(self.WRAPPED), self.WRAPPED)
+        out = sanitize_for_web(self.WRAPPED_CQ)
+        self.assertTrue(out.startswith("<think>[思考] 表情😎参考</think>"), out)
+        self.assertEqual(out.count("<think>"), 1, out)
+        self.assertEqual(out.count("</think>"), 1, out)
+
+    def test_qq_strip_think_removes_block_by_design(self):
+        # QQ/旧版网页出口（main._strip_think 等价正则，与 main.py 同口径）：
+        # 整块剥除 <think>...</think>（含标签本体）只留纯文本正文——设计口径
+        stripped = re.sub(r'<think>.*?</think>', '', str(self.WRAPPED or ""),
+                          flags=re.DOTALL).strip()
+        self.assertEqual(stripped, "你好呀，很高兴见到你！")
+        self.assertNotIn("<think>", stripped)
+        self.assertNotIn("</think>", stripped)
+        # 汇总轮带 CQ 发图的回复同理：思维块剥净、正文与 CQ 码原样保留
+        stripped_cq = re.sub(r'<think>.*?</think>', '',
+                             str(self.WRAPPED_CQ or ""), flags=re.DOTALL).strip()
+        self.assertEqual(stripped_cq, "正文[CQ:image,file=file:///x/a.jpg]")
 
 
 class RecentActionsPrefixTests(unittest.TestCase):
@@ -1642,6 +1834,9 @@ class BareCotLeakSweepTests(unittest.TestCase):
 
     def _assert_sealed(self, reply):
         reply = "" if reply is None else str(reply)
+        # "（操作已执行）"绝不作为正文出现（T5 新口径负例：全文断言——
+        # _wrap_think 两侧清洗剥除后，最终产出里该占位符零出现）
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, reply, reply)
         match = re.match(r"^<think>(.*?)</think>", reply, re.DOTALL)
         if match:
             body = reply[match.end():]
@@ -1885,14 +2080,17 @@ class BareCotLeakSweepTests(unittest.TestCase):
     def test_action_only_bare_cot_sealed_with_placeholder_thinking(self):
         """残缺形态（路径 11c）封口细节：只有 [行动]+JSON、无思考文本——
         旧判定（捕获到思考才封口）整段裸漏（含工具 JSON 原文），现按任意
-        标记触发封口 + 占位思考 + 正文剥空占位。"""
+        标记触发封口 + 占位思考 + 正文剥空兜底（T5 新口径：注入型工具占位
+        思考不回补正文，以"操作已完成。"兜底，废止旧"（操作已执行）"占位）。"""
         result = self._tool_round(self.COT_ACTION_ONLY, "不会走到这",
                                   "不应被执行")
         reply, _source = result
         self._assert_sealed(reply)
         self.assertTrue(reply.startswith(
-            f"<think>{brain.TOOL_THINKING_PLACEHOLDER}</think>（操作已执行）"),
+            f"<think>{brain.TOOL_THINKING_PLACEHOLDER}</think>"
+            f"{brain.DEFAULT_BODY_PLACEHOLDER}"),
             reply)
+        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, reply)
         self.assertNotIn('"tool"', reply.split("</think>", 1)[1])
 
     def test_action_only_marker_with_whitelisted_tool_reaches_tool_path(self):

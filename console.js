@@ -370,6 +370,10 @@
         // XSS 顺序：先在原始 reply 上切分出 <think> 块，think 与正文再各自
         // 走 textContent / renderRich 转义（不可先转义后切分）
         const thinkParts = splitThinkBlock(rawReply);
+        // T4a 常驻诊断②（用户指定文案）：打印切分结果——只有 think 非 null
+        // 才会进入下方卡片渲染分支；RAW_REPLY 含 <think> 而本行 PARSED_THINK
+        // 为 null，即切分环节异常（此时正文会带出标签原文）
+        console.log("PARSED_THINK:", thinkParts.think, "PARSED_BODY:", thinkParts.body);
         const reply = thinkParts.body;   // 剥离 think 后的正文
         const sourceBadge = source
             ? `<div class="source-badge">大脑来源：${escapeHtml(source)}</div>`
@@ -405,6 +409,10 @@
         // 同样带默认占位符块，正文为自然语言或占位符都出卡；无块仍不插卡
         //（前端行为零改动），卡片位于消息气泡正文上方
         if (thinkParts.think !== null) {
+            // T4a 常驻诊断③（用户指定文案）：卡片渲染分支入口——本行出现
+            // 而 F12 Elements 里无 .think-card，即"执行了但插入/显示被静默
+            // 吞掉"，配合下方实测校验定位
+            console.log("RENDERING_THINK_CARD...");
             // F4 加固：手工插入（不依赖 before()/prepend() 系快捷方法）——
             // 显式父引用 + insertBefore，卡片位于消息气泡正文上方；先构建
             // 完整卡片元素、再插入 DOM（顺序不可反）；.bubble-content 意外
@@ -423,6 +431,51 @@
                                         botMsg.firstChild);
                 } catch (fbErr) {
                     console.error("CoT Render Error: ", fbErr);
+                }
+            }
+            // T4a 强制渲染兜底：插入调用零异常 ≠ 卡片真的挂上了——实测
+            // 校验 .think-card 是否真实存在（静默失败在此现形）；缺失且
+            // 思考文本非空时，用最裸的 DOM 原语（createElement + classList
+            // + prepend，不经任何可能被覆盖的快捷方法/构建函数）手工构建
+            // 卡片（🧠 图标 + ▼ 折叠箭头 + 可展开思考文本）强制补插
+            if (!botMsg.querySelector('.think-card') && thinkParts.think) {
+                try {
+                    const fbCard = document.createElement('div');
+                    fbCard.classList.add('think-card');
+                    fbCard.classList.add('think-collapsed');
+                    const fbHeader = document.createElement('div');
+                    fbHeader.classList.add('think-card-header');
+                    fbHeader.setAttribute('onclick', 'toggleThinkCard(this)');
+                    fbHeader.setAttribute('title', '展开/收起思考过程');
+                    const fbIcon = document.createElement('span');
+                    fbIcon.textContent = '🧠';
+                    const fbTitle = document.createElement('span');
+                    fbTitle.classList.add('think-card-title');
+                    fbTitle.textContent = '思考过程';
+                    const fbArrow = document.createElement('span');
+                    fbArrow.classList.add('think-card-arrow');
+                    fbArrow.textContent = '▼';
+                    const fbBody = document.createElement('div');
+                    fbBody.classList.add('think-card-body');
+                    // 思考文本 textContent 注入（可展开、免 XSS），与打字机同口径净化
+                    fbBody.textContent = renderCQFace(thinkParts.think);
+                    fbHeader.appendChild(fbIcon);
+                    fbHeader.appendChild(fbTitle);
+                    fbHeader.appendChild(fbArrow);
+                    fbCard.appendChild(fbHeader);
+                    fbCard.appendChild(fbBody);
+                    botMsg.prepend(fbCard);
+                } catch (mErr) {
+                    console.error("CoT Render Error: ", mErr);
+                }
+                // 兜底插入后再校验一次：卡片仍未挂上 → 最终降级为深色纯
+                // 文本块（复用 F4 既有 buildThinkFallbackBlock 实现）
+                if (!botMsg.querySelector('.think-card')) {
+                    try {
+                        botMsg.prepend(buildThinkFallbackBlock(thinkParts.think));
+                    } catch (fbErr) {
+                        console.error("CoT Render Error: ", fbErr);
+                    }
                 }
             }
             startThinkTypewriter(botMsg, thinkParts.think, options.animateThink !== false);
@@ -501,6 +554,10 @@
             clearInterval(rotateTimer);   // 收到回复：停止轮换并替换为正常气泡
             history.removeChild(loadingMsg);
             if (res.code === 200) {
+                // T4a 常驻诊断①（用户指定文案）：打印后端原始回复全文——
+                // <think> 包装块应在此可见；F12 若连本行都看不到，说明
+                // 浏览器加载的是旧版 console.js（缓存或部署未更新）
+                console.log("RAW_REPLY:", res.data.reply);
                 appendBotMessage(res.data.reply, res.data.source, text);
                 // 本地与远端同步：后端已将本轮问答落盘 /api/history
                 // 回复到达提示音（界面文档 §6.2 / §9.1，AudioContext 缺席时静默降级）
