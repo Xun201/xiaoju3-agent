@@ -26,6 +26,10 @@
   （兜底占位符注入 / 模型原生思考输出各一条，redirect_stdout 捕获）；
   游离标签防御：包装统一走 _wrap_think——thinking/body 两侧剥除模型自吐
   的 <think>/</think> 字面量 + 拼装后成对校验，恰一对标签且在最前；
+  成对保证（ThinkPairGuaranteeTests，2026-10-01 修复"你好"网页直出纯文本
+  <think>）：空思考注入默认占位符、模型自吐无闭合开标签的防重入透传
+  先做成对校验（残缺修复/完整透传）、用户指定 re.search 最终门禁 +
+  重拼/纯文本两级兜底；
 - 裸 CoT 泄漏扫描总测试（BareCotLeakSweepTests，P2 "穷举封死"）：smart_ask
   全部 11 条 return 路径参数化扫描——ui_tap→vision 回退分支汇总轮复读裸
   CoT（用户实测"帮我点击蓝牙"漏点，_seal_tool_summary 修复）、[行动] 残缺
@@ -1110,11 +1114,13 @@ class ThinkWrapTests(unittest.TestCase):
                                 "好的<think>嗯</think>")
         self.assertEqual(out, "<think>[思考] 先想想再想想</think>好的嗯")
         self._assert_single_think_pair(out)
-        # 大小写/带属性变体同样剥除；None 一侧按空串处理（3.8 兼容纯函数）
+        # 大小写/带属性变体同样剥除；None/空白思考注入默认占位符——
+        # 成对保证（2026-10-01 用户口径）：绝不允许空 <think>（3.8 兼容纯函数）
         out2 = brain._wrap_think("<THINK >x</THINK>y", None)
         self.assertEqual(out2, "<think>xy</think>")
         self._assert_single_think_pair(out2)
-        self.assertEqual(brain._wrap_think(None, "正文"), "<think></think>正文")
+        self.assertEqual(brain._wrap_think(None, "正文"),
+                         f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>正文")
         self.assertEqual(brain._wrap_think("[思考] x", None),
                          "<think>[思考] x</think>")
 
@@ -1175,6 +1181,151 @@ class ThinkWrapTests(unittest.TestCase):
             self.assertTrue(reply.endswith("主人，工作区里有 a.txt"), reply)
         # 只剥标签字面量、复读的文本内容按原位保留在正文
         self.assertIn("数一下主人，工作区里有 a.txt", reply)
+
+
+class ThinkPairGuaranteeTests(unittest.TestCase):
+    """_wrap_think 成对保证（2026-10-01 用户口径，修复"你好"网页直出纯文本
+    <think> 的实测固化）。
+
+    实测根因（修复前 python mock 网络复现证据）：
+    - 模型首轮自吐无闭合的开标签（截断输出 "<think>你好呀" / 孤立 "<think>"）
+      → _seal_bare_cot 防重入透传分支 startswith("<think>") 原样放行，
+      smart_ask 返回未闭合的 <think>，前端正则匹配不到成对标签，把标签
+      字面量当纯文本直出（无内容、无闭合）；
+    - "<think>你好\\n[计划] 再想"（打完 "[CoT] 模型原生输出思考内容" 日志后
+      仍透传残缺标签）——与用户报障"终端有 [CoT] 日志但输出不完整"吻合。
+    修复口径（用户指定三条）：
+    - thinking 为 None/空串/纯空白 → 注入 CHAT_THINKING_PLACEHOLDER 默认
+      占位符，绝不允许空 <think> 或只有开头的 <think>；
+    - thinking/body 两侧剥除模型自吐 <think>/</think> 字面量（既有逻辑
+      核实加固）；
+    - 包装完成后按用户指定正则 re.search(r'<think>.*?</think>', final_text,
+      re.DOTALL) 校验：不匹配强制从干净两侧重拼一次，重拼仍不匹配退化为
+      剥离全部 think 标签的纯文本（宁可无标签也不出畸形）。
+    """
+
+    def _assert_paired(self, text):
+        """用户指定门禁口径：文本中必须能搜到成对 <think>...</think>。"""
+        self.assertTrue(re.search(r'<think>.*?</think>', text, re.DOTALL),
+                        repr(text))
+
+    def _chat(self, model_reply):
+        """mock 本地大脑在线返回 model_reply 的"你好"闲聊一轮。"""
+        with mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()            # 探测在线 → 本地
+            mr.post.return_value = _local_resp(model_reply)
+            return brain.smart_ask("你好", [])
+
+    # ---- 根因回归：残缺原生 <think> 不再透传 ----
+
+    def test_hello_chat_unpaired_open_tag_repaired(self):
+        # 根因形态一：模型截断输出 "<think>你好呀…"（有内容无闭合）
+        reply, source = self._chat("<think>你好呀，我是小橘！")
+        self.assertEqual(source, "🏠 本地")
+        self._assert_paired(reply)
+        self.assertEqual(
+            reply,
+            f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>你好呀，我是小橘！")
+
+    def test_hello_chat_lone_open_tag_repaired(self):
+        # 根因形态二（用户报障原文）：模型只吐一个 <think>（无内容无闭合）
+        # → 修复前网页直出纯文本 <think>；现产出成对且思考非空的完整卡片
+        reply, _source = self._chat("<think>")
+        self._assert_paired(reply)
+        self.assertEqual(
+            reply, f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>")
+
+    def test_hello_chat_empty_native_pair_swapped_for_placeholder(self):
+        # 空原生对（qwen3 非思考形态 "<think>\\n\\n</think>"）→ 空卡片同样
+        # 不允许，注入非空默认占位符
+        reply, _source = self._chat("<think>\n\n</think>你好呀")
+        self._assert_paired(reply)
+        self.assertEqual(
+            reply, f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>你好呀")
+
+    def test_hello_chat_plain_baseline_unchanged(self):
+        # 用户口径基线："你好"闲聊 → <think>[思考] 正在理解你的意图...</think>正文
+        # （成对且非空思考；G2 反转的"普通聊天必包装"断言保持零回退）
+        reply, _source = self._chat("你好呀，很高兴见到你！")
+        m = re.match(r'^<think>(.*?)</think>(.*)$', reply, re.DOTALL)
+        self.assertIsNotNone(m, repr(reply))
+        self.assertEqual(m.group(1), brain.CHAT_THINKING_PLACEHOLDER)
+        self.assertTrue(m.group(1).strip())              # 思考非空
+        self.assertEqual(m.group(2), "你好呀，很高兴见到你！")
+
+    def test_seal_bare_cot_repair_and_passthrough_matrix(self):
+        # _seal_bare_cot 直接单测：残缺修复、成对透传（零回退）两不误
+        with _quiet():
+            self.assertEqual(
+                brain._seal_bare_cot("<think>你好呀"),
+                f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>你好呀")
+            self._assert_paired(brain._seal_bare_cot("<think>"))
+            # 完整原生卡片（思考非空）仍原样透传
+            self.assertEqual(brain._seal_bare_cot("<think>原生</think>直接聊"),
+                             "<think>原生</think>直接聊")
+
+    def test_marked_branch_unpaired_native_body_repaired(self):
+        # 根因形态三：残缺 <think> + 裸标记并存（打完 [CoT] 日志后透传的漏点）
+        # → 剥净标签字面量按捕获思考重新包装，正文保留、无裸标记直出
+        with _quiet():
+            sealed = brain._seal_bare_cot("<think>你好\n[计划] 再想")
+        self._assert_paired(sealed)
+        self.assertTrue(sealed.startswith("<think>"), repr(sealed))
+        self.assertIn("你好", sealed)
+        self.assertNotIn("[计划]", sealed.split("</think>", 1)[1])
+        self.assertNotIn("<think>", sealed.split("</think>", 1)[1])
+
+    # ---- _wrap_think 成对保证：空思考占位符 / 两侧清洗 / 最终门禁 ----
+
+    def test_wrap_think_blank_thinking_injects_placeholder(self):
+        # None/空串/纯空白一律注入默认占位符，绝无空 <think></think>
+        for blank in (None, "", "   ", "\n\t "):
+            self.assertEqual(
+                brain._wrap_think(blank, "正文"),
+                f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>正文")
+
+    def test_wrap_think_self_emitted_close_literal_cleaned_paired(self):
+        # thinking 含自吐 </think> 字面量 → 两侧清洗后恰一对标签（用户口径用例）
+        out = brain._wrap_think("[思考] 想到一半</think>继续想", "正文<think>嗯</think>")
+        self.assertEqual(out, "<think>[思考] 想到一半继续想</think>正文嗯")
+        self._assert_paired(out)
+        self.assertEqual(out.count("<think>"), 1, out)
+        self.assertEqual(out.count("</think>"), 1, out)
+        self.assertTrue(out.startswith("<think>"), out)
+
+    def test_wrap_think_dirty_inputs_always_pair(self):
+        # 门禁口径扫掠：任意脏输入 → 输出必匹配 r'<think>.*?</think>'（DOTALL）
+        dirty = [
+            ("[思考] a</think>b", "好的<think>嗯</think>x"),
+            ("<think>嵌套开标签", "body<think>y"),
+            ("</think></think>", "</think>正文"),
+            ("<THINK >大小写</THINK>", None),
+            (None, None),
+            ("", "  "),
+        ]
+        for t, b in dirty:
+            out = brain._wrap_think(t, b)
+            self._assert_paired(out)
+            self.assertTrue(out.startswith("<think>"), repr(out))
+            self.assertEqual(out.count("<think>"), 1, repr(out))
+            self.assertEqual(out.count("</think>"), 1, repr(out))
+
+    def test_wrap_think_final_gate_degrades_to_plain_text(self):
+        # 用户指定兜底链：门禁不匹配 → 从干净两侧重拼一次 → 仍不匹配 →
+        # 退化为剥离全部 think 标签的纯文本（patch 门禁正则为永不匹配，
+        # 模拟清洗/拼装被未来改动破坏的极端态，验证兜底真实可达）
+        never = re.compile(r"(?!x)x")
+        with mock.patch.object(brain, "_THINK_HAS_PAIR_RE", never):
+            out = brain._wrap_think("[思考] 想想", "正文")
+        self.assertNotIn("<think>", out)
+        self.assertNotIn("</think>", out)
+        self.assertIn("[思考] 想想", out)
+        self.assertIn("正文", out)
+
+    def test_final_gate_constant_matches_user_regex(self):
+        # 门禁正则常量与用户指定字面量一致（防未来静默改动）
+        self.assertEqual(brain._THINK_HAS_PAIR_RE.pattern, r'<think>.*?</think>')
+        self.assertEqual(brain._THINK_HAS_PAIR_RE.flags & re.DOTALL, re.DOTALL)
 
 
 class RecentActionsPrefixTests(unittest.TestCase):

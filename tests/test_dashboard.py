@@ -1017,9 +1017,11 @@ class ThinkCardFrontendTests(unittest.TestCase):
         between = body[guard:build]
         self.assertNotIn("（操作已执行）", between)
         self.assertNotIn("!reply", between)
-        # 先构建完整元素、再插入 DOM：buildThinkCardEl() 赋值给局部变量后才 before
+        # 先构建完整元素、再手工插入 DOM（F4 加固，不依赖 ChildNode.before()）：
+        # 赋值给局部变量后用显式父引用 insertBefore 插到气泡正文上方
         self.assertIn("= buildThinkCardEl()", body)
-        self.assertIn(".before(thinkCard)", body)
+        self.assertIn("parentEl.insertBefore(thinkCard, bubbleEl)", body)
+        self.assertNotIn(".before(", body)
         # ② Python 复跑："<think>块内容</think>（操作已执行）"→ think 非空 + 占位正文
         think, body_text = self._think_wrap_pipeline(
             "<think>块内容</think>（操作已执行）")
@@ -1128,6 +1130,155 @@ class ThinkCardFrontendTests(unittest.TestCase):
         self.assertEqual(out["phThink"], "[思考] 正在理解你的意图...")
         self.assertEqual(out["phBody"], "（操作已执行）")        # 占位符正文同样成立
 
+    # ---------- T3b 容错加固：未配对 <think>（无闭合）任何位置出现 → 剥离丢弃，不作正文 ----------
+
+    def _replay_split_pipeline(self, raw_reply):
+        """按 splitThinkBlock 全管线（成对剔块 → 孤儿闭合 → 未配对开头 →
+        裸标记扫描 → [行动] 剥离 → 游离标签安全网 → 剥空占位）用源码同一组
+        正则在 Python 侧复跑，返回（think, body）——node 实跑的离线等价
+        验证。JS String.replace 无 /g 标志只替换首处，对应 re.sub(count=1)。"""
+        block_re = self._extract_js_regex("THINK_BLOCK_RE")
+        bare_think = self._extract_js_regex("BARE_THINK_RE")
+        bare_plan = self._extract_js_regex("BARE_PLAN_RE")
+        bare_action = self._extract_js_regex("BARE_ACTION_RE")
+        think = None
+        body = raw_reply
+
+        def _append(cur, seg):
+            return (cur + "\n" if cur else "") + seg
+
+        m = block_re.search(body)
+        while m:
+            think = _append(think, m.group(1).strip())
+            body = body[m.end():]
+            m = block_re.search(body)
+        close = body.rfind("</think>")
+        if close != -1:
+            before = re.sub(r"</?think>", "", body[:close]).strip()
+            if before:
+                think = _append(think, before)
+            body = body[close + len("</think>"):]
+        open_idx = body.find("<think>")
+        if open_idx != -1:
+            head = body[:open_idx].strip()
+            orphan = re.sub(r"</?think>", "", body[open_idx:]).strip()
+            if orphan:
+                think = _append(think, orphan)
+            body = head
+        body = body.strip()
+        parts = []
+
+        def _collect(match):
+            seg = (match.group(1) or "").strip()
+            if seg:
+                parts.append(seg)
+            return ""
+
+        body = bare_think.sub(_collect, body, count=1)
+        body = bare_plan.sub(_collect, body, count=1)
+        if parts:
+            think = _append(think, "\n".join(parts))
+        had_action = bool(bare_action.search(body))
+        body = bare_action.sub("", body, count=1).strip()
+        body = re.sub(r"</?think>", "", body).strip()
+        if think is not None:
+            think = re.sub(r"</?think>", "", think).strip()
+        if not body and (think is not None or had_action):
+            body = "（操作已执行）"
+        return think, body
+
+    def test_unpaired_think_opener_handling_present(self):
+        """console.js 含未配对 <think> 的一般化剥离（indexOf 任意位置定位，
+        不再限于串首 trimStart().startsWith 旧口径）：标签及其后截断思考
+        整段并入思考卡、标签前正文保留，绝不作为正文上屏。"""
+        start = self.console_js.index("function splitThinkBlock")
+        end = self.console_js.index("function buildThinkCardEl", start)
+        body = self.console_js[start:end]
+        self.assertIn("const openIdx = body.indexOf('<think>')", body)
+        self.assertIn("body.slice(0, openIdx)", body)                # 标签前正文保留
+        self.assertNotIn('trimStart().startsWith("<think>")', body)  # 串首限定已废止
+
+    def test_unpaired_think_opener_anywhere_stripped(self):
+        """T3b 用户口径（Python 复跑全管线锁定）：未配对 <think>（其后无
+        </think>）出现在任何位置都剥离丢弃——截断思考并入思考卡、绝不
+        作为正文；标签前正文保留；剥离后正文剥空走既有占位口径。"""
+        # 正文中间出现（原盲区）：截断思考不漏进正文，标签前正文保留
+        think, body = self._replay_split_pipeline("你好 <think>这是被截断的思考")
+        self.assertEqual(think, "这是被截断的思考")
+        self.assertEqual(body, "你好")
+        # 标签后无内容：仅剥标签，标签前正文原样保留、不出卡
+        think, body = self._replay_split_pipeline("你好呀 <think>")
+        self.assertIsNone(think)
+        self.assertEqual(body, "你好呀")
+        # 裸标签独占全文：剥离丢弃，正文不残留任何标签
+        think, body = self._replay_split_pipeline("<think>")
+        self.assertIsNone(think)
+        self.assertEqual(body, "")
+        # 串首截断（既有行为保持）：整段进卡、正文剥空 → 占位
+        think, body = self._replay_split_pipeline("<think>只有开头的截断思考")
+        self.assertEqual(think, "只有开头的截断思考")
+        self.assertEqual(body, "（操作已执行）")
+        # 闭合在前、未配对开头在后：两处游离各自收敛
+        think, body = self._replay_split_pipeline("abc</think>def <think>ghi")
+        self.assertEqual(think, "abc\nghi")
+        self.assertEqual(body, "def")
+        # 配对块 + 尾部未配对：配对进卡不受影响，尾部截断并入卡
+        think, body = self._replay_split_pipeline("<think>a</think>中间<think>")
+        self.assertEqual(think, "a")
+        self.assertEqual(body, "中间")
+
+    def test_unpaired_think_opener_node_live_run(self):
+        """node 实跑（环境无 node 时跳过，上一测试的静态/复跑断言仍全量
+        生效）：提取 console.js 真实 splitThinkBlock 验证——"你好 <think>
+        这是被截断的思考" 正文只有"你好"、截断思考进卡不漏正文；"你好呀
+        <think>" 仅剥标签；配对/占位/裸标记场景零回退。纯计算子进程
+        （stdin 管道、无网络、无临时文件）。"""
+        if not shutil.which("node"):
+            self.skipTest("环境无 node，跳过 JS 实跑（静态断言已覆盖）")
+        script = (
+            "var document = { createElement: function (tag) "
+            "{ return { nodeName: tag, className: '', innerHTML: '' }; } };\n"
+            + self._extract_split_chunk() + "\n"
+            "var rMid = splitThinkBlock('你好 <think>这是被截断的思考');\n"
+            "var rTag = splitThinkBlock('你好呀 <think>');\n"
+            "var rPair = splitThinkBlock('<think>配对</think>正常正文');\n"
+            "var rMulti = splitThinkBlock('<think>a</think>中间<think>b</think>尾');\n"
+            "var rPh = splitThinkBlock('<think>块内容</think>（操作已执行）');\n"
+            "var rBare = splitThinkBlock('[思考] 裸思考\\n[计划] 裸计划\\n"
+            "[行动] {\"tool\": \"x\"}\\n最终回复');\n"
+            "console.log(JSON.stringify({\n"
+            "  midThink: rMid.think, midBody: rMid.body,\n"
+            "  tagThink: rTag.think, tagBody: rTag.body,\n"
+            "  pairThink: rPair.think, pairBody: rPair.body,\n"
+            "  multiThink: rMulti.think, multiBody: rMulti.body,\n"
+            "  phThink: rPh.think, phBody: rPh.body,\n"
+            "  bareThink: rBare.think, bareBody: rBare.body\n"
+            "}));\n")
+        proc = subprocess.run(["node"], input=script.encode("utf-8"),
+                              capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0,
+                         proc.stderr.decode("utf-8", "replace"))
+        out = json.loads(proc.stdout.decode("utf-8"))
+        # 盲区修复：中间未配对 <think> 的截断思考进卡，绝不作为正文
+        self.assertEqual(out["midThink"], "这是被截断的思考")
+        self.assertEqual(out["midBody"], "你好")
+        self.assertNotIn("<think>", out["midBody"])
+        self.assertNotIn("这是被截断的思考", out["midBody"])
+        # 标签后无内容：仅剥标签，正文保留，无卡片内容
+        self.assertIsNone(out["tagThink"])
+        self.assertEqual(out["tagBody"], "你好呀")
+        # 配对场景零回退
+        self.assertEqual(out["pairThink"], "配对")
+        self.assertEqual(out["pairBody"], "正常正文")
+        self.assertEqual(out["multiThink"], "a\nb")
+        self.assertEqual(out["multiBody"], "尾")
+        # 占位形态零回退
+        self.assertEqual(out["phThink"], "块内容")
+        self.assertEqual(out["phBody"], "（操作已执行）")
+        # 裸标记/[行动] 剥离零回退
+        self.assertIn("[思考] 裸思考", out["bareThink"])
+        self.assertEqual(out["bareBody"], "最终回复")
+
     def test_plain_chat_mentioning_thinking_not_stripped(self):
         """反例：普通聊天提到"思考"二字（无 [思考] 方括号标记）不触发
         剥离——正文原样保留、不产生思考卡内容、不误显示占位。"""
@@ -1165,6 +1316,79 @@ class ThinkCardFrontendTests(unittest.TestCase):
         self.assertIn("font-size: 13px", block)      # 13px 字号
         # 折叠实现：.think-collapsed 类 + 正文 display:none
         self.assertIn(".think-card.think-collapsed .think-card-body", html)
+
+    # ---------- F4 渲染加固：异常捕获 + 手工 DOM 插入 + 深色降级兜底 + 容器 ID ----------
+
+    def test_split_think_block_try_catch_guard(self):
+        """splitThinkBlock 函数体整体包 try/catch（F4 加固）：解析任何异常
+        都不影响后续消息渲染——catch 记录 "CoT Render Error" 日志并返回
+        安全降级值（think=已剥离出的部分或 null、body=原文）。"""
+        js = self.console_js
+        start = js.index("function splitThinkBlock")
+        end = js.index("function buildThinkCardEl", start)
+        body = js[start:end]
+        self.assertIn("try {", body)
+        self.assertIn("} catch (e) {", body)
+        self.assertLess(body.index("try {"), body.index("} catch (e) {"))
+        self.assertIn('console.error("CoT Render Error: ", e)', body)
+        # 正常返回与异常降级返回并存：降级正文回退原文（raw）
+        self.assertIn("return { think: think, body: body }", body)
+        self.assertIn("return { think: think, body: raw }", body)
+
+    def test_card_insert_manual_dom_and_fallback(self):
+        """卡片插入手工 DOM 化（F4 加固，不依赖 ChildNode.before()）：
+        appendBotMessage 与 syncThinkCard 均用显式父引用 + insertBefore 把
+        卡片插到气泡正文上方；插入处包 try/catch，失败时降级为深色纯文本块
+        （仍插在气泡上方），思考过程任何情况下可见。"""
+        js = self.console_js
+        self.assertNotIn(".before(", js)   # 全文件不再使用 before() 插卡
+        # 实时路径：appendBotMessage
+        start = js.index("function appendBotMessage")
+        end = js.index("==================== 3.", start)
+        bot_body = js[start:end]
+        self.assertIn("parentEl.insertBefore(thinkCard, bubbleEl)", bot_body)
+        self.assertIn('console.error("CoT Render Error: ", e)', bot_body)
+        self.assertIn("buildThinkFallbackBlock(thinkParts.think)", bot_body)
+        # 降级块仍插在气泡上方（消息容器首子节点之前）
+        self.assertIn("botMsg.insertBefore(", bot_body)
+        # 刷新重生成路径：syncThinkCard 同口径
+        start = js.index("function syncThinkCard")
+        end = js.index("function appendUserMessage", start)
+        sync_body = js[start:end]
+        self.assertIn("bubble.parentNode.insertBefore(card, bubble)", sync_body)
+        self.assertIn("buildThinkFallbackBlock(thinkText)", sync_body)
+
+    def test_think_fallback_dark_block(self):
+        """深色降级兜底块 buildThinkFallbackBlock（F4 加固）：纯 createElement
+        + 内联深色样式（#1f2937 底、白字、13px 字号），内容为思考文本前
+        200 字、textContent 注入免 XSS——卡片插入失败时思考过程仍然可见。"""
+        js = self.console_js
+        self.assertIn("function buildThinkFallbackBlock", js)
+        start = js.index("function buildThinkFallbackBlock")
+        end = js.index("const THINK_TYPE_MS", start)
+        body = js[start:end]
+        self.assertIn("document.createElement('div')", body)
+        self.assertIn("#1f2937", body)               # 深色背景（任务规格色）
+        self.assertIn("#ffffff", body)               # 白字
+        self.assertIn("13px", body)                  # 13px 字号
+        self.assertIn("slice(0, 200)", body)         # 思考文本前 200 字
+        self.assertIn("block.textContent =", body)   # 纯文本注入，免 XSS
+
+    def test_chat_container_id_consistency(self):
+        """容器 ID 逐一核对（双向互查，F4 加固）：console.js 所有
+        getElementById 参数（除运行时按需 createElement 的 toast 挂载点）
+        都必须在 index.html 有对应 id="..." 定义；聊天记录容器
+        chat-history 双向锁定。"""
+        html_ids = set(re.findall(r'id="([^"]+)"', self.index_html))
+        js_ids = set(re.findall(r"getElementById\('([^']+)'\)", self.console_js))
+        self.assertTrue(js_ids, msg="console.js 未发现 getElementById 调用")
+        dynamic_ids = {"xiaoju3-toast"}   # showToast 首次调用时 createElement 自建
+        missing = js_ids - dynamic_ids - html_ids
+        self.assertEqual(missing, set(),
+                         msg="console.js 引用了 index.html 不存在的 id: %s" % missing)
+        # 聊天记录容器（本任务核对主体）双向锁定
+        self.assertIn("chat-history", html_ids)
+        self.assertIn("chat-history", js_ids)
 
 
 # ---------------------------------------------------------------------------
