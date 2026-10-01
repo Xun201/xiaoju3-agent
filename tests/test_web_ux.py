@@ -18,7 +18,8 @@
   on #eff6ff）；无阶段标记的思考文本降级沿用原逐字打字机（THINK_TYPE_MS
   口径零回退，既有断言零回退）；历史回放（animateThink=false）不打字；
 - 任务 7 缩成加速球：聊天头部 ⌄ 最小化按钮，点击后整个控制台收成直径
-  60px 圆形小挂件（右下角悬浮、小橘头像 /assets/DSniang1.jpg、橘色 Q 版
+  60px 圆形小挂件（右下角悬浮、小橘半身像 /assets/pet/normal_half.png、
+  橘色 Q 版
   圆形边框）；点击小球展开回完整控制台；小球支持拖拽移动（拖拽阈值与桌宠
   同口径：位移平方>9），位置存 localStorage（xiaoju3_ball_pos）刷新保持、
   resize 重钳制；实现 = body 根容器 class 切换（.xiaoju3-minimized）+ CSS
@@ -314,13 +315,24 @@ class BallWidgetTests(unittest.TestCase):
         self.assertLess(btn_idx, section.index("setConsoleMinimized(true)"))
 
     def test_ball_markup_with_mascot(self):
-        """球体挂载点：index.html 静态节点 #xiaoju3-ball，小橘头像
-        /assets/DSniang1.jpg（与桌宠同一官方素材）。"""
+        """球体挂载点：index.html 静态节点 #xiaoju3-ball，小橘半身像
+        /assets/pet/normal_half.png（非桌宠 DSniang1 素材，用户口径）。"""
         html = self.index_html
         self.assertIn('id="xiaoju3-ball"', html)
         start = html.index('id="xiaoju3-ball"')
         block = html[start:html.index("</div>", start)]
-        self.assertIn('src="/assets/DSniang1.jpg"', block)
+        self.assertIn('src="/assets/pet/normal_half.png"', block)
+        self.assertNotIn("DSniang1", block)   # 球头像不再引用桌宠素材
+
+    def test_ball_avatar_fallback_chain(self):
+        """头像兜底链（用户口径：normal_half.png 不存在时退化为 🦊 emoji）：
+        console.js 对球内 img 挂 error 监听——裂图移除 img、球体文字退化
+        🦊（不改显隐类控制，最小化态永不出现空球/裂图图标）。"""
+        js = self.console_js
+        self.assertIn("bindBallImgFallback", js)
+        section = js[js.index("bindBallImgFallback"):]
+        self.assertIn("addEventListener('error'", section)
+        self.assertIn("🦊", section)
 
     def test_ball_css_round_60px_hidden_by_default(self):
         """球体样式：直径 60px 圆形（border-radius: 50%）、右下角悬浮
