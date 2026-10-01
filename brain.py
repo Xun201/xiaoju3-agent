@@ -23,7 +23,8 @@
   串尾为止，DOTALL，可只捕获其一）；凡本轮解析出工具 JSON 且执行
   （含 ❌ 切断与熔断通知），最终 reply 最前面一律包装 <think>...</think>
   ——统一经 _wrap_think 拼装：thinking/body 两侧先剥除模型自吐的
-  <think>/</think> 字面量（推理模型原生标签是游离标签唯一来源），拼装后
+  <think>/</think> 字面量（推理模型原生标签是游离标签唯一来源）与上游注入
+  的"（操作已执行）"占位符，拼装后
   再做成对校验（恰一对标签且在最前），杜绝 "</think>[思考]…" 直出网页
   （内容为捕获文本拼接；模型没输出任何思考时按实际解析出的工具名动态
   生成占位符"[思考] 准备调用 {工具名} 尝试完成操作."，解析不出工具名时
@@ -42,7 +43,9 @@
   回复、URL 总结与熔断退回纯文本路径统一经 _seal_bare_cot 出口——捕获到
   原生 [思考]/[计划] 用原生；出现任意一个裸协议标记（含全角变体）但无
   思考文本的残缺形态回退 TOOL_THINKING_PLACEHOLDER 占位思考（body 取剥离
-  裸标记后的剩余正文，剥空用"（操作已执行）"占位；body 已以 <think> 开头
+  裸标记后的剩余正文，剥空由 _wrap_think 正文回补——真实回复从思考卡提升
+  回正文——或以"操作已完成。"兜底，绝不允许正文成为"（操作已执行）"；
+  body 已以 <think> 开头
   则防重入不再二次包装，绝不裸漏 JSON 载荷）；无任何标记的普通闲聊注入
   CHAT_THINKING_PLACEHOLDER 默认占位符（"[思考] 正在理解你的意图..."，
   闲聊没调工具，文案不出现"调用工具"字样）；抓取失败/双脑全挂/空回复等
@@ -136,6 +139,17 @@ TOOL_THINKING_PLACEHOLDER = "[思考] 已按计划执行工具调用。"
 # 字样，与前端推理卡片契约字面量一致）
 CHAT_THINKING_PLACEHOLDER = "[思考] 正在理解你的意图..."
 
+# 裸 CoT 正文剥空占位（历史封口口径，与前端契约字面量一致）：_seal_bare_cot /
+# _seal_tool_summary 在 body 剥空时仍注入该占位，但 2026-10-01 用户口径起
+# _wrap_think 两侧清洗会把它彻底剥除——绝不允许它顶替真实正文出现在最终产出
+# （真实回复从思考卡回补回正文，或以 DEFAULT_BODY_PLACEHOLDER 兜底）。常量
+# 保留供其他处引用与跨端字面量锁定测试。
+BARE_COT_BODY_PLACEHOLDER = "（操作已执行）"
+
+# 正文双空兜底（2026-10-01 用户口径第三条）：body 与 thinking 清洗后都为空时
+# 的简短正文，取代"（操作已执行）"的正文兜底角色
+DEFAULT_BODY_PLACEHOLDER = "操作已完成。"
+
 
 def _tool_thinking_placeholder(tool_name):
     """无 CoT 时的 [思考] 占位符：按本轮实际解析出的工具名动态生成。
@@ -198,30 +212,105 @@ def _strip_think_tags(text):
     return _THINK_TAG_RE.sub("", text)
 
 
+# 上游封口占位符字面量（含前后空白变体）——_wrap_think 两侧清洗一并剥除
+# （2026-10-01 用户口径第一条：绝不允许"（操作已执行）"顶替真实正文直出）
+_BODY_PLACEHOLDER_RE = re.compile(
+    r'\s*' + re.escape(BARE_COT_BODY_PLACEHOLDER) + r'\s*')
+
+# [思考] 标记前缀（正文回补用）：与 _THINK_RE 头部同口径（含全角【】与
+# "思考："写法）
+_THINK_MARKER_PREFIX_RE = re.compile(r'^\s*[\[【]思考[\]】][:：]?\s*')
+
+# 动态工具占位思考形态（_tool_thinking_placeholder 生成）——注入型占位
+# 不参与正文回补
+_DYNAMIC_TOOL_THINKING_RE = re.compile(r'^\[思考\] 准备调用 .+? 尝试完成操作。$')
+
+
+def _strip_body_placeholder(text):
+    """剥除文本中全部"（操作已执行）"占位符（含前后空白）。"""
+    return _BODY_PLACEHOLDER_RE.sub("", text)
+
+
+def _is_placeholder_thinking(thinking_text):
+    """思考侧是否为注入型占位符（闲聊默认 / 工具固定 / 动态工具名）。
+
+    注入型占位不是模型的真实输出，正文剥空时不参与正文回补（否则占位文案
+    会被复制进正文，产生"正在理解你的意图..."正文之类的怪异输出）。
+    """
+    t = thinking_text.strip()
+    return (t == CHAT_THINKING_PLACEHOLDER
+            or t == TOOL_THINKING_PLACEHOLDER
+            or bool(_DYNAMIC_TOOL_THINKING_RE.match(t)))
+
+
 def _wrap_think(thinking, body):
     """统一 <think> 包装点：smart_ask 全部文本回复一律经此拼装（消灭手写拼接）。
 
-    产出 f"<think>{thinking}</think>{body}"，四重成对保证（2026-10-01
-    用户口径强化：绝不允许空 <think>、只有开头的残缺 <think> 或游离标签
-    直出网页）：
-    1. 空思考兜底：thinking 为 None/空串/纯空白 → 注入
+    产出 f"<think>{thinking}</think>{body}"，五重保证（2026-10-01 用户口径
+    两轮强化：绝不允许空 <think>、残缺/游离标签或"（操作已执行）"顶替真实
+    正文直出网页）：
+    1. 两侧彻底清洗：thinking/body 的 <think>/</think> 标签字面量与上游注入
+       的"（操作已执行）"占位符（含前后空白变体）一律剥除（文本内容保留）；
+    2. 双空兜底：两侧清洗后都为空 → thinking 注入 CHAT_THINKING_PLACEHOLDER、
+       body 注入"操作已完成。"（绝不允许正文成为"（操作已执行）"）；
+    3. 空思考兜底：仅 thinking 为 None/空串/纯空白 → 注入
        CHAT_THINKING_PLACEHOLDER 默认占位符，绝不产出空 <think></think>；
-    2. thinking/body 两侧清洗：模型自吐的 <think>/</think> 字面量先剥除
-       （防嵌套/防游离闭合标签混进推理卡片内容，文本内容保留）；
-    3. 成对规整：拼装结果只保留开头 <think> 与其第一个 </think>，
-       其余一切游离标签一律剥除；
-    4. 最终门禁（用户指定正则校验）：re.search(r'<think>.*?</think>',
-       final_text, re.DOTALL) 不匹配 → 从干净的 thinking + body 强制重拼
-       一次；重拼后仍不匹配 → 退化为剥离全部 think 标签的纯文本
-       （宁可无标签也不出畸形）。
+    4. 正文回补（实测缺陷修复："（操作已执行）"顶替真实回复）：仅 body 剥空
+       而 thinking 含真实内容时，把剥除 [思考] 前缀后的内容提升为正文——原
+       真实回复回到正文，思考卡同时保留（产出
+       "<think>[思考] ...真实回复...</think>真实回复"形态）。注入型占位思考
+       不回补：闲聊占位保持"只有卡片"输出（孤标签修复形态零回退），工具占位
+       与含裸标记的多段思考以"操作已完成。"兜底——[计划] 等裸标记绝不借回补
+       漏进正文；
+    5. 成对规整 + 最终门禁：拼装结果只保留开头 <think> 与其第一个 </think>，
+       其余一切游离标签一律剥除；再按用户指定正则
+       re.search(r'<think>.*?</think>', final_text, re.DOTALL) 校验，不匹配
+       → 从干净的 thinking + body 强制重拼一次；重拼后仍不匹配 → 退化为剥离
+       全部 think 标签的纯文本（宁可无标签也不出畸形）。
     纯函数：同等输入必有同等输出，可直接单测；None 输入按空串处理。
+
+    出口形态实测口径（2026-10-01，排查"你好"网页只显示纯文本无思维链卡片，
+    python 实测结论，固化在 tests/test_brain.py WebExitThinkTagContractTests）：
+    本函数最终产出中 <think> 标签完好成对且紧贴正文，两条下发通道各自表现——
+    - 仪表盘 /api/chat（直连 smart_ask，返回前过 web_sanitize.sanitize_for_web）：
+      sanitize_for_web 只净化 CQ 码（face→Emoji / image→[表情] / 其余剥除），
+      实测 <think>/</think> 标签原样存活（思考内混 CQ 码时标签同样完好），
+      前端拿到的文本可直接渲染推理卡片；
+    - QQ 与旧版网页（main.py _strip_think：
+      re.sub(r'<think>.*?</think>', '', DOTALL) 后 strip）：设计上即整块剥除
+      思维链（含标签本体），QQ/旧页拿到纯文本正文——这是通道口径差异，
+      不是标签丢失。
+    结论：若网页只见纯正文无卡片，可排除"后端输出标签被剥"（本函数日志
+    WRAPPED_TEXT 即可对账后端实际下发形态），嫌疑收敛在前端渲染分支
+    （console.js）或该回复走了剥标出口（QQ/旧页）。
     """
-    thinking_raw = "" if thinking is None else str(thinking)
-    if not thinking_raw.strip():
-        # 空思考兜底：复用闲聊默认占位符，前端必有非空推理卡片内容
-        thinking_raw = CHAT_THINKING_PLACEHOLDER
-    thinking_text = _strip_think_tags(thinking_raw)
-    body_text = _strip_think_tags("" if body is None else str(body))
+    # ① 两侧彻底清洗：标签字面量 + 上游注入的"（操作已执行）"占位符
+    thinking_text = _strip_body_placeholder(
+        _strip_think_tags("" if thinking is None else str(thinking)))
+    body_text = _strip_body_placeholder(
+        _strip_think_tags("" if body is None else str(body)))
+    thinking_blank = not thinking_text.strip()
+    body_blank = not body_text.strip()
+    if thinking_blank and body_blank:
+        # ② 双空兜底：默认占位思考 + 简短正文（绝不允许正文成为"（操作已执行）"）
+        thinking_text = CHAT_THINKING_PLACEHOLDER
+        body_text = DEFAULT_BODY_PLACEHOLDER
+    elif thinking_blank:
+        # ③ 空思考兜底：只补思考占位符，正文保持调用方原样
+        thinking_text = CHAT_THINKING_PLACEHOLDER
+    elif body_blank:
+        # ④ 正文回补：真实内容被埋进思考卡、正文剥空时提升回正文
+        promoted = ""
+        if not _is_placeholder_thinking(thinking_text):
+            candidate = _THINK_MARKER_PREFIX_RE.sub("", thinking_text)
+            if candidate.strip() and not _BARE_COT_MARK_RE.search(candidate):
+                promoted = candidate
+        if promoted:
+            body_text = promoted
+        elif thinking_text.strip() != CHAT_THINKING_PLACEHOLDER:
+            # 不可回补（工具占位思考 / 多段思考含裸标记）→ 简短正文兜底
+            body_text = DEFAULT_BODY_PLACEHOLDER
+        # thinking 恰为闲聊占位符（孤标签修复形态）→ 保持"只有卡片"输出
     reply = f"<think>{thinking_text}</think>{body_text}"
     pair = _THINK_PAIR_RE.match(reply)
     if pair is not None:
@@ -233,7 +322,12 @@ def _wrap_think(thinking, body):
         reply = f"<think>{thinking_text}</think>{body_text}"
     if not _THINK_HAS_PAIR_RE.search(reply):
         # 重拼仍不成对：退化为剥离全部 think 标签的纯文本（宁可无标签）
-        return _strip_think_tags(f"{thinking_text}\n{body_text}").strip()
+        reply = _strip_think_tags(f"{thinking_text}\n{body_text}").strip()
+    # 输出诊断日志（2026-10-01 用户口径）：放在所有清洗/校验/重拼之后、最终
+    # return 之前，打印的即后端实际下发给前端的最终产出（每条 reply 一行、
+    # 超 300 字符截断加 "..." 防刷屏）。部署侧据此直接确认 <think> 标签是否
+    # 成对出现且紧贴正文（排查"网页只显示纯文本无卡片"时与前端对账）。
+    print("WRAPPED_TEXT:", reply[:300] + ("..." if len(reply) > 300 else ""))
     return reply
 
 
@@ -271,10 +365,6 @@ def _extract_tool_json(raw_reply):
 # 标记一律剥离；其后若跟以 { 起头的单行 JSON 工具载荷（prompts 协议硬性
 # 口径"[行动] 行必须且只能是一行合法 JSON"），载荷一并剥离（[^\n] 不跨行）
 _BARE_ACTION_RE = re.compile(r'\s*[\[【]行动[\]】](?:[ \t]*\{[^\n]*)?')
-
-# 裸 CoT 正文剥空占位（与前端契约字面量一致）：剥离裸标记后无自然语言
-# 正文时使用，绝不把过程原文漏给用户
-BARE_COT_BODY_PLACEHOLDER = "（操作已执行）"
 
 # 裸 CoT 标记探测（含全角【】变体）：只要出现任意一个协议标记即触发封口。
 # 单独列出是因为 _capture_thinking 只认"有内容的 [思考]/[计划]"——模型只
@@ -321,8 +411,10 @@ def _seal_bare_cot(raw_reply):
     - 无任何标记（普通闲聊，含 URL 总结/熔断退回/旁路普通回复）→ 注入
       CHAT_THINKING_PLACEHOLDER 默认占位符（闲聊没调工具，占位文案不出现
       "调用工具"字样）；
-    - body 取 _strip_bare_cot 剥离裸标记后的剩余正文，剥空时用
-      BARE_COT_BODY_PLACEHOLDER 占位（"宁可隐藏"）；body 已以 <think> 开头
+    - body 取 _strip_bare_cot 剥离裸标记后的剩余正文，剥空时按历史口径注入
+      BARE_COT_BODY_PLACEHOLDER 占位（"宁可隐藏"）——该占位符随后的
+      _wrap_think 两侧清洗会剥除：真实回复从思考卡回补回正文，或以
+      "操作已完成。"兜底，绝不出现在最终产出；body 已以 <think> 开头
       （模型自包/上游已包）时防重入不再二次包装——但透传前必须成对校验
       （2026-10-01 实测修复：模型自吐无闭合的开标签 <think>，旧代码原样
       透传直出网页，表现为页面显示纯文本 <think>；现成对完整才透传，
@@ -356,6 +448,8 @@ def _seal_bare_cot(raw_reply):
             return translate_emoji(body)
         body = _strip_think_tags(body).lstrip()
     if not body:
+        # 历史口径剥空占位：占位符由 _wrap_think 清洗剥除（真实回复回补回
+        # 正文，或以"操作已完成。"兜底），绝不出现在最终产出
         body = BARE_COT_BODY_PLACEHOLDER
     return _wrap_think(thinking, translate_emoji(body))
 
@@ -372,7 +466,8 @@ def _seal_tool_summary(thinking, final_reply):
       仍由 _wrap_think 剥除）；
     - 有裸标记 → 汇总轮捕获的思考文本并入首轮推理卡片（两轮思考一张卡），
       body 取剥离裸标记后的剩余正文，剥空注入 BARE_COT_BODY_PLACEHOLDER
-      占位（"宁可隐藏"），并打印 [CoT] 终端日志与首轮口径一致。
+      占位（"宁可隐藏"；占位符由 _wrap_think 清洗剥除——真实回复回补回
+      正文或以"操作已完成。"兜底），并打印 [CoT] 终端日志与首轮口径一致。
     """
     reply_text = "" if final_reply is None else str(final_reply)
     body = _strip_bare_cot(reply_text)
@@ -384,6 +479,8 @@ def _seal_tool_summary(thinking, final_reply):
         thinking = ((thinking + "\n") if thinking else "") + extra
     print("[CoT] 模型原生输出思考内容")
     if not body:
+        # 历史口径剥空占位：占位符由 _wrap_think 清洗剥除（真实回复回补回
+        # 正文，或以"操作已完成。"兜底），绝不出现在最终产出
         body = BARE_COT_BODY_PLACEHOLDER
     return _wrap_think(thinking, translate_emoji(body))
 
