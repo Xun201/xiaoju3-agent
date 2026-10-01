@@ -27,7 +27,14 @@
   再做成对校验（恰一对标签且在最前），杜绝 "</think>[思考]…" 直出网页
   （内容为捕获文本拼接；模型没输出任何思考时按实际解析出的工具名动态
   生成占位符"[思考] 准备调用 {工具名} 尝试完成操作."，解析不出工具名时
-  回退 TOOL_THINKING_PLACEHOLDER 固定占位符）。全对话强制包装（2026-10-01
+  回退 TOOL_THINKING_PLACEHOLDER 固定占位符）。_wrap_think 成对保证
+  （2026-10-01 用户口径强化，修复"你好"网页直出纯文本 <think>）：空思考
+  （None/空串/纯空白）注入 CHAT_THINKING_PLACEHOLDER 默认占位符；包装
+  完成后按用户指定正则 re.search(r'<think>.*?</think>', final_text,
+  re.DOTALL) 做最终门禁——不匹配强制从干净两侧重拼一次，重拼仍不匹配
+  退化为剥离全部 think 标签的纯文本（宁可无标签也不出畸形）；模型自吐
+  原生 <think> 包装的防重入透传一律先做成对校验，无闭合的开标签（截断
+  输出）与空卡片剥净标签后重新包装。全对话强制包装（2026-10-01
   用户指令，显式废止旧"普通聊天零包装零干扰"口径）：系统指令（/clear、
   /coder_auth、/register 等）在 main.py 指令段先行处理并直接返回，不会
   进入 smart_ask——smart_ask 只接收自然语言对话，故凡经 smart_ask 的
@@ -180,6 +187,11 @@ _THINK_TAG_RE = re.compile(r'</?think(?:\s[^>]*)?>', re.IGNORECASE)
 # 成对校验：最终 reply 必须以 <think> 开头、至第一个 </think> 闭合（DOTALL）
 _THINK_PAIR_RE = re.compile(r'^<think>(.*?)</think>', re.DOTALL)
 
+# 最终成对门禁（2026-10-01 用户指定口径）：包装完成后对最终文本 re.search
+# 一对完整的 <think>...</think>（DOTALL、不锚定行首的"存在性"判定）——
+# 不匹配则强制重拼一次，重拼仍不匹配退化为纯文本（宁可无标签不出畸形）
+_THINK_HAS_PAIR_RE = re.compile(r'<think>.*?</think>', re.DOTALL)
+
 
 def _strip_think_tags(text):
     """剥除文本中全部 <think>/</think> 标签字面量（文本内容保留）。"""
@@ -187,28 +199,42 @@ def _strip_think_tags(text):
 
 
 def _wrap_think(thinking, body):
-    """统一 <think> 包装点：工具流程四处返回一律经此拼装（消灭手写拼接）。
+    """统一 <think> 包装点：smart_ask 全部文本回复一律经此拼装（消灭手写拼接）。
 
-    产出 f"<think>{thinking}</think>{body}"，带三重防游离标签保障：
-    1. thinking 侧清洗：模型自吐的 <think>/</think> 字面量先剥除
-       （防嵌套/防游离闭合标签混进推理卡片内容）；
-    2. body 侧清洗：模型复读进最终回复文本的标签字面量同样剥除
-       （文本内容保留，只去标签）；
-    3. 成对校验（后置保障）：拼装结果必须以 <think> 开头且全文恰一对
-       标签——清洗后仍游离的（清洗正则被未来改动遗漏时）直接剥除重建，
-       保证前端正则（成对 <think>...</think> 非贪婪匹配）总能命中。
+    产出 f"<think>{thinking}</think>{body}"，四重成对保证（2026-10-01
+    用户口径强化：绝不允许空 <think>、只有开头的残缺 <think> 或游离标签
+    直出网页）：
+    1. 空思考兜底：thinking 为 None/空串/纯空白 → 注入
+       CHAT_THINKING_PLACEHOLDER 默认占位符，绝不产出空 <think></think>；
+    2. thinking/body 两侧清洗：模型自吐的 <think>/</think> 字面量先剥除
+       （防嵌套/防游离闭合标签混进推理卡片内容，文本内容保留）；
+    3. 成对规整：拼装结果只保留开头 <think> 与其第一个 </think>，
+       其余一切游离标签一律剥除；
+    4. 最终门禁（用户指定正则校验）：re.search(r'<think>.*?</think>',
+       final_text, re.DOTALL) 不匹配 → 从干净的 thinking + body 强制重拼
+       一次；重拼后仍不匹配 → 退化为剥离全部 think 标签的纯文本
+       （宁可无标签也不出畸形）。
     纯函数：同等输入必有同等输出，可直接单测；None 输入按空串处理。
     """
-    thinking_text = _strip_think_tags("" if thinking is None else str(thinking))
+    thinking_raw = "" if thinking is None else str(thinking)
+    if not thinking_raw.strip():
+        # 空思考兜底：复用闲聊默认占位符，前端必有非空推理卡片内容
+        thinking_raw = CHAT_THINKING_PLACEHOLDER
+    thinking_text = _strip_think_tags(thinking_raw)
     body_text = _strip_think_tags("" if body is None else str(body))
     reply = f"<think>{thinking_text}</think>{body_text}"
     pair = _THINK_PAIR_RE.match(reply)
-    if pair is None:
-        # 完全不成对（理论不可达的兜底）：剥光全部标签字面量后按空思考重建
-        return "<think></think>" + _strip_think_tags(reply)
-    # 只保留开头 <think> 与其第一个 </think>，其余一切游离标签一律剥除
-    return ("<think>" + _strip_think_tags(pair.group(1)) + "</think>"
-            + _strip_think_tags(reply[pair.end():]))
+    if pair is not None:
+        # 只保留开头 <think> 与其第一个 </think>，其余一切游离标签一律剥除
+        reply = ("<think>" + _strip_think_tags(pair.group(1)) + "</think>"
+                 + _strip_think_tags(reply[pair.end():]))
+    # 最终门禁（用户指定校验）：搜不到成对标签 → 从干净两侧强制重拼一次
+    if not _THINK_HAS_PAIR_RE.search(reply):
+        reply = f"<think>{thinking_text}</think>{body_text}"
+    if not _THINK_HAS_PAIR_RE.search(reply):
+        # 重拼仍不成对：退化为剥离全部 think 标签的纯文本（宁可无标签）
+        return _strip_think_tags(f"{thinking_text}\n{body_text}").strip()
+    return reply
 
 
 def _extract_tool_json(raw_reply):
@@ -297,25 +323,38 @@ def _seal_bare_cot(raw_reply):
       "调用工具"字样）；
     - body 取 _strip_bare_cot 剥离裸标记后的剩余正文，剥空时用
       BARE_COT_BODY_PLACEHOLDER 占位（"宁可隐藏"）；body 已以 <think> 开头
-      （模型自包/上游已包）时防重入，只剥净裸标记不再二次包装（无标记的
-      普通闲聊同理：模型自吐 <think> 原生包装时原样透传）；
+      （模型自包/上游已包）时防重入不再二次包装——但透传前必须成对校验
+      （2026-10-01 实测修复：模型自吐无闭合的开标签 <think>，旧代码原样
+      透传直出网页，表现为页面显示纯文本 <think>；现成对完整才透传，
+      残缺形态剥净标签字面量后按占位思考重新包装，空 <think> 同样不允许）；
     - 封口/注入时各打印一条 [CoT] 终端日志，与工具路径日志口径一致。
     """
     if not _BARE_COT_MARK_RE.search(raw_reply):
         # 普通闲聊：强制注入默认占位符（模型自吐 <think> 原生包装时防重入
-        # 原样透传——前端照样渲染卡片，不二次包）
-        if raw_reply.lstrip().startswith("<think>"):
-            return translate_emoji(raw_reply)
-        return _force_chat_think(translate_emoji(raw_reply))
+        # ——成对且思考非空才原样透传，残缺/空卡片剥净标签后重新包装）
+        text = translate_emoji(raw_reply)
+        pair = _THINK_PAIR_RE.match(text.lstrip())
+        if pair and pair.group(1).strip():
+            return text
+        if pair:
+            # 成对但思考为空白（qwen3 非思考形态 <think>\n\n</think>）：
+            # 空卡片同样不允许——剥净标签并去掉标签间残留空白后重新包装
+            return _force_chat_think(_strip_think_tags(text).strip())
+        return _force_chat_think(_strip_think_tags(text))
     print("[CoT] 模型原生输出思考内容")
     thinking = _capture_thinking(raw_reply)
     body = _strip_bare_cot(raw_reply)
-    if body.startswith("<think>"):
-        # 防重入：正文已是 <think> 包装形态，剥净裸标记后原样返回
-        return translate_emoji(body)
     if not thinking:
         # 只有 [行动] 没有思考文本（残缺形态）：思考占位兜底，绝不裸漏
         thinking = TOOL_THINKING_PLACEHOLDER
+    if body.startswith("<think>"):
+        # 防重入：正文已是 <think> 包装形态——成对且思考非空（模型自包
+        # 完整）剥净裸标记后原样透传；残缺（无闭合标签，截断输出）剥掉
+        # 标签字面量按捕获思考重新包装，绝不直出畸形 <think>
+        pair = _THINK_PAIR_RE.match(body)
+        if pair and pair.group(1).strip():
+            return translate_emoji(body)
+        body = _strip_think_tags(body).lstrip()
     if not body:
         body = BARE_COT_BODY_PLACEHOLDER
     return _wrap_think(thinking, translate_emoji(body))
