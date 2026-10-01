@@ -75,8 +75,31 @@ def get_assets(filename):
 
 @app.route('/console')
 def console():
-    """新版控制台首页（index.html + console.js + desktop-pet.js）。"""
-    return send_from_directory(PROJECT_ROOT, 'index.html')
+    """新版控制台首页（index.html + console.js + desktop-pet.js）。
+
+    防缓存终极方案（2026-10-01 用户指令）：返回前给 index.html 中引用的
+    前端脚本自动追加时间戳版本参数（console.js?v=<文件mtime>）——文件每次
+    更新版本号随之变化，浏览器必然拉取最新 JS，无需手动改版本号；
+    叠加 after_request 的 no-store 头双保险。
+    """
+    html_path = os.path.join(PROJECT_ROOT, 'index.html')
+    try:
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html = f.read()
+    except OSError:
+        return send_from_directory(PROJECT_ROOT, 'index.html')
+
+    def _mtime_ver(name):
+        try:
+            return str(int(os.path.getmtime(os.path.join(PROJECT_ROOT, name))))
+        except OSError:
+            return '0'
+
+    html = html.replace('src="/console/desktop-pet.js"',
+                        f'src="/console/desktop-pet.js?v={_mtime_ver("desktop-pet.js")}"')
+    html = html.replace('src="/console/console.js"',
+                        f'src="/console/console.js?v={_mtime_ver("console.js")}"')
+    return html
 
 
 @app.route('/console/<path:filename>')
