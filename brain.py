@@ -68,11 +68,26 @@
   两个后端，让回复语气更自然拟人；两家 schema 不同，落点也不同：
   Ollama /api/chat 必须放 options.temperature（顶层无效），DeepSeek
   /chat/completions 用顶层 temperature。
-- MAX_MESSAGES=50 滚动截断在保存侧 save_memory 生效（§4）。
+- MAX_MESSAGES=50 滚动截断在保存侧 save_memory 生效（§4）；smart_ask 侧接线
+  前情提要压缩（§10 #2，plugins/context_manager.compress_context）：送模型前
+  历史 >20 条 → 旧消息浓缩为约 50 字前情提要（【前情提要】system 条目）+
+  最近 10 条明细，替换"长历史原样直送"的硬截断口径；压缩结果按（会话通道
+  session_key + 旧消息段指纹）持久化到 agent_state/context_summary.json，
+  命中直接复用、历史变化自动失效重压；compress_context 双脑不可用/异常/
+  降级摘要 → 回退既有硬截断口径绝不崩溃；缓存文件损坏按无缓存重压。
+- 长期记忆接线（§10 #3，agent_state/state_manager.py 的 SQLite long_term.db）：
+  smart_ask 入口按关键词规则（我喜欢/我讨厌/我偏好/请记住/记住…）提取关键句
+  → save_memory（preference/event）；构造消息时 get_recent_memories(limit=5)
+  非空 → 以"以下是关于用户的长期记忆…"系统上下文注入（与 main.py 先行注入
+  同前缀，历史已带该条目时不重复注入）；SQLite 损坏/读写异常静默跳过。
 - translate_emoji（[EMOJI:标签] → CQ 码图片）已接入回复链（§5 闭环口径）：
-  smart_ask 的正常文本回复（普通/总结/工具汇总）返回前统一转换；
-  emoji_manager 函数内延迟导入，缺席时优雅降级。
+  smart_ask 的正常文本回复（普通/总结/工具汇总）返回前统一转换；本地库命中
+  → CQ 图片码；未命中 → emoji_manager 用收藏链接兜底下载（assets/emoji/，
+  文件名=标签+URL 哈希、扩展名按 Content-Type 推断）；下载仍失败/模块缺席/
+  链路异常 → 统一降级纯文本"[表情: 标签]"，绝不崩溃、绝不再返回未转换的
+  [EMOJI: 原文；收图自动存链接链路保持不变。
 """
+import hashlib
 import json
 import os
 import re
@@ -82,9 +97,9 @@ import requests
 import requests.packages.urllib3.util.connection as urllib3_cn
 
 import xiaoju3
-from xiaoju3 import (CLOUD_KEY, CLOUD_URL, CLOUD_MODEL, MAX_MESSAGES,
-                     LOCAL_URL, LOCAL_MODEL, LOCAL_MODEL_SMALL, LOCAL_PROBE_URL,
-                     LOCAL_TIMEOUT)
+from xiaoju3 import (AGENT_STATE_DIR, CLOUD_KEY, CLOUD_URL, CLOUD_MODEL,
+                     MAX_MESSAGES, LOCAL_URL, LOCAL_MODEL, LOCAL_MODEL_SMALL,
+                     LOCAL_PROBE_URL, LOCAL_TIMEOUT)
 from permission import permission_manager
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool
@@ -601,6 +616,201 @@ def save_memory(history, filepath):
         pass
 
 
+# ==================== 前情提要压缩接线（§4 / plugins/context_manager） ====================
+
+# 压缩触发阈值 / 压缩时保留的最近明细条数（与 plugins.context_manager.
+# compress_context 的 max_messages / keep_recent 契约一致）
+COMPRESS_THRESHOLD = 20
+COMPRESS_KEEP_RECENT = 10
+
+# 压缩缓存落盘路径（agent_state 隔离区运行数据）：键 = 会话通道
+# （session_key），值 = {fingerprint: 旧消息段指纹, summary: 前情提要}。
+# 读取失败 / 文件损坏 → 视为无缓存重新压缩；写入失败静默跳过，绝不崩溃。
+CONTEXT_SUMMARY_FILE = os.path.join(AGENT_STATE_DIR, "context_summary.json")
+
+# 压缩降级判定标记（与 main._compress_and_save 同口径）：compress_context 在
+# 双脑不可用时不抛异常而是返回降级摘要——摘要含这些字样按"压缩失败"处理，
+# 回退既有硬截断口径（消息原样直送，保存侧 MAX_MESSAGES=50 截断继续兜底）
+_COMPRESS_FAILED_MARKS = ("由于系统原因", "⚠️")
+
+# 前情提要 system 条目固定前缀（与 compress_context / _build_messages 白名单
+# / main.py 落盘口径完全一致，保证随历史回灌时不被剔丢）
+_SUMMARY_PREFIX = "【前情提要】"
+
+
+def _history_fingerprint(old_messages):
+    """被压缩旧消息段的指纹：内容变化（新增/修改消息）→ 指纹变化 → 缓存失效。"""
+    text = "\n".join(f"{m.get('role', '')}:{m.get('content', '')}"
+                     for m in old_messages if isinstance(m, dict))
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
+def _load_summary_cache():
+    """读压缩缓存；文件缺失 / 损坏 / 读失败一律视为无缓存（返回空字典）。"""
+    try:
+        with open(CONTEXT_SUMMARY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_summary_cache(cache):
+    """压缩缓存落盘；写失败静默跳过（缓存缺失只影响效率，不影响正确性）。"""
+    try:
+        dirpath = os.path.dirname(CONTEXT_SUMMARY_FILE)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
+        with open(CONTEXT_SUMMARY_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _compress_history(messages, session_key="default"):
+    """前情提要压缩接线（§10 #2）：历史 >20 条 → 旧消息浓缩为约 50 字
+    前情提要（【前情提要】system 条目）+ 最近 10 条明细，替换"长历史原样
+    直送"的硬截断口径。
+
+    - 压缩结果按 (session_key, 旧消息段指纹) 持久化缓存：指纹相同直接复用
+      （避免每轮重复压缩），历史变化（新增消息使指纹变化）自动失效重压；
+    - compress_context 抛异常 / 返回降级摘要（双脑不可用）→ 回退既有硬截断
+      口径（消息原样直送），绝不崩溃；
+    - 历史不足阈值 / 插件缺席 → 原样返回，零额外开销。
+    """
+    if len(messages) <= COMPRESS_THRESHOLD:
+        return messages
+    old_segment = messages[1:-COMPRESS_KEEP_RECENT]
+    if not old_segment:
+        return messages
+    fingerprint = _history_fingerprint(old_segment)
+    cache = _load_summary_cache()
+    entry = cache.get(session_key)
+    if (isinstance(entry, dict) and entry.get("fingerprint") == fingerprint
+            and isinstance(entry.get("summary"), str)
+            and entry["summary"].strip()):
+        summary = entry["summary"]
+        print(f"🧠 命中前情提要缓存（{session_key}），跳过重复压缩")
+    else:
+        try:
+            from plugins.context_manager import compress_context
+            compressed = compress_context(list(messages),
+                                          max_messages=COMPRESS_THRESHOLD,
+                                          keep_recent=COMPRESS_KEEP_RECENT)
+        except Exception as e:
+            print(f"⚠️ 前情提要压缩失败，回退既有截断口径: {e}")
+            return messages
+        summary = ""
+        if isinstance(compressed, list):
+            for m in compressed:
+                if (isinstance(m, dict) and m.get("role") == "system"
+                        and str(m.get("content", "")).startswith(_SUMMARY_PREFIX)):
+                    summary = str(m["content"])
+                    break
+        if (not summary.strip()
+                or any(mark in summary for mark in _COMPRESS_FAILED_MARKS)):
+            # 双脑不可用的降级摘要按失败处理：回退既有硬截断口径，不落缓存
+            print("⚠️ 前情提要生成失败（双脑不可用），本轮回退既有截断口径。")
+            return messages
+        cache[session_key] = {"fingerprint": fingerprint, "summary": summary}
+        _save_summary_cache(cache)
+        print(f"🧠 前情提要已生成并缓存（{session_key}）：{summary[:60]}")
+    # 压缩形态：置顶系统提示词 + 前情提要 system 条目 + 最近明细
+    return ([messages[0], {"role": "system", "content": summary}]
+            + messages[-COMPRESS_KEEP_RECENT:])
+
+
+# ------------------------------ 长期记忆接线（§10 #3） ------------------------------
+
+# 关键词规则提取（最稳定口径，与 main.py 的"记住"指令分支互补——该分支在
+# 指令段先行拦截并直接回复，消息不会进入 smart_ask，故两侧不会重复落库）：
+# - 偏好声明（句首 我喜欢/我不喜欢/我讨厌/我偏好/我偏爱）→ category=preference
+# - 记忆嘱托（记住…/请记住…/帮我记住…，冒号标点可省、后面须有内容）→ event
+_MEMORY_PREFERENCE_RE = re.compile(
+    r'^\s*(?:小橘[3号，,]?\s*)?(我不?喜欢|我讨厌|我偏好|我偏爱)')
+_MEMORY_REMEMBER_RE = re.compile(r'(?:请|帮我|麻烦你|麻烦|你)?记住[:：,，、]?\s*\S')
+_MEMORY_SENTENCE_SPLIT_RE = re.compile(r'[。！？!?；;\n]+')
+
+# 回答前注入的记忆条数与系统上下文前缀（前缀与 _build_messages 白名单、
+# main._inject_long_term_memories 完全一致，保证随历史回灌时不被剔丢）
+MEMORY_CONTEXT_LIMIT = 5
+MEMORY_CONTEXT_PREFIX = "以下是关于用户的长期记忆"
+
+
+def _get_state_manager():
+    """延迟获取状态外置层单例；模块缺席（ImportError 等）返回 None 不崩溃。"""
+    try:
+        from agent_state.state_manager import state_manager
+        return state_manager
+    except Exception:
+        return None
+
+
+def _extract_memory_sentence(message):
+    """按句切分用户消息，返回首个命中关键词规则的句子；无命中返回 None。"""
+    for sentence in _MEMORY_SENTENCE_SPLIT_RE.split(message or ""):
+        text = sentence.strip()
+        if not text:
+            continue
+        if _MEMORY_PREFERENCE_RE.search(text) or _MEMORY_REMEMBER_RE.search(text):
+            return text
+    return None
+
+
+def _remember_user_facts(message):
+    """长期记忆关键词提取落库：命中规则 → state_manager.save_memory。
+
+    SQLite 损坏 / 读写异常一律静默跳过（不抛出、不崩溃、不阻断对话）；
+    状态外置层模块缺席同样静默跳过。
+    """
+    sentence = _extract_memory_sentence(message)
+    if not sentence:
+        return
+    manager = _get_state_manager()
+    if manager is None:
+        return
+    category = ("preference" if _MEMORY_PREFERENCE_RE.search(sentence)
+                else "event")
+    try:
+        manager.save_memory(category, sentence)
+    except Exception as e:
+        print(f"⚠️ 长期记忆保存失败（已静默跳过）: {e}")
+
+
+def _inject_memory_context(messages, limit=MEMORY_CONTEXT_LIMIT):
+    """回答前长期记忆注入（§10 #3）：get_recent_memories(limit) 非空 → 以
+    "以下是关于用户的长期记忆…"系统上下文插到置顶提示词（及其后的前情提要）
+    之后。
+
+    - 历史里已带同前缀条目（main 链路先行注入口径）时不重复注入；
+    - SQLite 损坏 / 读取异常 / 记忆为空 → 原样返回，静默跳过不崩溃。
+    """
+    for m in messages:
+        if (isinstance(m, dict) and m.get("role") == "system"
+                and str(m.get("content", "")).startswith(MEMORY_CONTEXT_PREFIX)):
+            return messages
+    manager = _get_state_manager()
+    if manager is None:
+        return messages
+    try:
+        rows = manager.get_recent_memories(limit=limit) or []
+        lines = "\n".join(f"· [{category}] {content}"
+                          for category, content in rows)
+    except Exception as e:
+        print(f"⚠️ 长期记忆读取失败（已静默跳过）: {e}")
+        return messages
+    if not lines.strip():
+        return messages
+    block = {"role": "system",
+             "content": MEMORY_CONTEXT_PREFIX + "，回答时可以参考：\n" + lines}
+    insert_at = 1
+    if (len(messages) > 1 and isinstance(messages[1], dict)
+            and str(messages[1].get("content", "")).startswith(_SUMMARY_PREFIX)):
+        insert_at = 2  # 前情提要在前，长期记忆紧随其后
+    messages.insert(insert_at, block)
+    return messages
+
+
 # ============================ 双脑推理（§3） ============================
 
 def ask_local(msgs, model=None):
@@ -732,9 +942,18 @@ def smart_ask(message, history=None, session_key="default"):
     """
     message = "" if message is None else str(message)
 
+    # 🧠 长期记忆关键词提取（§10 #3）：命中"我喜欢/请记住…"等规则先落库，
+    # SQLite 异常静默跳过，绝不影响本轮对话
+    _remember_user_facts(message)
+
     # === 第一步：如果用户输入里有 URL，先抓网页正文（剔除 script/style） ===
     url_match = re.search(r'(https?://[^\s]+)', message)
     messages = _build_messages(message, history)
+    # 🗜️ 前情提要压缩接线（§10 #2）：历史 >20 条 → 旧消息浓缩为约 50 字
+    # 前情提要 + 最近 10 条明细（结果持久化缓存；失败回退既有硬截断口径）
+    messages = _compress_history(messages, session_key)
+    # 🧠 长期记忆注入（§10 #3）：最近 5 条记忆以系统上下文形态并入模型消息
+    messages = _inject_memory_context(messages)
     if url_match:
         url = url_match.group(1)
         try:
@@ -902,22 +1121,36 @@ def smart_ask(message, history=None, session_key="default"):
 
 # ==================== 表情包（§5，已接入回复链） ====================
 
+# [EMOJI:标签] 占位符（translate_emoji 解析与安全封口共用）
+_EMOJI_TAG_RE = re.compile(r'\[EMOJI:(.*?)\]')
+
+
 def translate_emoji(reply):
-    """[EMOJI:标签] → CQ 码图片消息。
+    """[EMOJI:标签] → CQ 码图片消息（本地无图触发下载，仍无降级纯文本）。
 
     文档 §5 闭环口径：smart_ask 的正常文本回复（普通/总结/工具汇总）返回前
-    统一调用本函数，使表情库配图随回复真正发出。表情库模块 emoji_manager
-    由并行侧维护，这里函数内延迟导入，缺席时优雅降级（原样返回，
-    不阻断回复链）；标签未命中时移除占位符，不留痕迹。
+    统一调用本函数。emoji_manager 函数内延迟导入，缺席时优雅降级：
+    - 本地库命中标签 → [CQ:image,file=file://路径]；
+    - 未命中 → get_emoji_path 内部用收藏链接兜底下载（架构 §10 #6，落
+      assets/emoji/），下载成功即转换成功；
+    - 返回 None（库空/下载失败）或链路异常 → 降级纯文本"[表情: 标签]"；
+    - 末尾统一安全封口：任何残留 [EMOJI:xxx]（导入失败/异常等）一律转
+      "[表情: 标签]"——绝不崩溃、绝不再返回未转换的 [EMOJI: 原文。
     """
     try:
         from emoji_manager import get_emoji_path
     except Exception:
-        return reply
-    for tag in re.findall(r'\[EMOJI:(.*?)\]', reply):
-        emoji_path = get_emoji_path(tag)
-        if emoji_path:
-            reply = reply.replace(f"[EMOJI:{tag}]", f"[CQ:image,file=file://{emoji_path}]")
-        else:
-            reply = reply.replace(f"[EMOJI:{tag}]", "")
-    return reply
+        get_emoji_path = None
+    if get_emoji_path is not None:
+        try:
+            for tag in _EMOJI_TAG_RE.findall(reply):
+                emoji_path = get_emoji_path(tag)
+                if emoji_path:
+                    reply = reply.replace(
+                        f"[EMOJI:{tag}]", f"[CQ:image,file=file://{emoji_path}]")
+                else:
+                    reply = reply.replace(f"[EMOJI:{tag}]", f"[表情: {tag}]")
+        except Exception as e:
+            print(f"⚠️ 表情转换异常，降级纯文本: {e}")
+    # 安全封口：转换链路任何环节漏下的占位符一律转纯文本
+    return _EMOJI_TAG_RE.sub(r"[表情: \1]", reply)

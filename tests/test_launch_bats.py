@@ -124,24 +124,27 @@ class StartBatTest(unittest.TestCase):
         self.assertIn('if exist ".venv\\Scripts\\python.exe"', self.text)
 
     def test_precise_process_detect(self):
-        # 按命令行精准检测（排除检测进程自身），避免误判已在运行
+        # 按命令行精准检测桌面主入口（排除检测进程自身），避免误判已在运行
+        # （桌面软件化后启动 bat 只拉起 desktop_launcher.py，不再直接拉 main/dashboard）
         self.assertIn("CommandLine -match", self.text)
-        self.assertIn(r"main\.py", self.text)
-        self.assertIn(r"xiaoju3_dashboard\.py", self.text)
+        self.assertIn(r"desktop_launcher\.py", self.text)
         self.assertIn("ProcessId -ne $PID", self.text)
 
-    def test_launch_order_and_background(self):
-        main_i = find_start_line(self.lines, "main.py")
-        dash_i = find_start_line(self.lines, "xiaoju3_dashboard.py")
-        self.assertGreaterEqual(main_i, 0, "缺少 main.py 拉起命令")
-        self.assertGreaterEqual(dash_i, 0, "缺少控制台拉起命令")
-        self.assertLess(main_i, dash_i, "必须先拉起 main.py，再拉起控制台")
-        self.assertIn("/min cmd /c", self.lines[main_i])   # 独立最小化控制台：关启动窗口服务仍运行
-        self.assertIn("/min cmd /c", self.lines[dash_i])
+    def test_desktop_window_launch(self):
+        # 桌面软件化（S3）：启动 bat 只拉起 desktop_launcher.py（pythonw 纯桌面窗口），
+        # 后台三模块由桌面窗口经 xiaoju3_launcher.py 间接拉起，bat 不直接拉起
+        desk_i = find_start_line(self.lines, "desktop_launcher.py")
+        self.assertGreaterEqual(desk_i, 0, "缺少 desktop_launcher.py 拉起命令")
+        self.assertIn('"%PYTHONW%"', self.lines[desk_i])   # 无控制台形态
+        for leaked in ("main.py", "xiaoju3_dashboard.py", "xiaoju3_launcher.py"):
+            self.assertNotIn(leaked, self.lines[desk_i], f"启动 bat 不应直接拉起 {leaked}")
 
-    def test_open_console_in_browser(self):
-        self.assertIn("timeout /t 3", self.text)
-        self.assertIn("http://127.0.0.1:5003/console", self.text)
+    def test_no_browser_open(self):
+        # 桌面软件化：不再打开浏览器，控制台在 pywebview 独立窗口内打开；
+        # 旧 URL 仅存在于注释说明中
+        self.assertNotIn('start "" http://', self.text)
+        self.assertNotIn("timeout /t 3", self.text)
+        self.assertIn("5003/console", self.text)   # 注释口径保留
 
     def test_two_log_lines(self):
         self.assertIn(LOG_MAIN, self.text)

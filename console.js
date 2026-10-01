@@ -48,6 +48,37 @@
         refreshSoundBtn();
     }
 
+    // 自动朗读开关（任务 5，前端体验三件套）：与音效开关（🔔/🔕 提示音）
+    // 相互独立——音效是回复到达提示音，朗读是 AI 回复的语音播报，键名亦
+    // 区分（音效 xiaoju3_sound 在 desktop-pet.js，朗读 xiaoju3_autotts）。
+    // 开启后 AI 每次回复自动朗读（复用 playMsg 既有 Edge-TTS 链路：emoji
+    // 剔除 → Edge 优先 → 浏览器降级链，见下方 speakMessageEl）；关闭时仅
+    // 手动点播放朗读。状态 localStorage 记忆、刷新保持，默认关闭。
+    const AUTO_TTS_KEY = 'xiaoju3_autotts';
+    function autoTTSEnabled() {
+        try { return localStorage.getItem(AUTO_TTS_KEY) === '1'; }
+        catch (e) { return false; }
+    }
+    function setAutoTTS(on) {
+        try {
+            if (on) localStorage.setItem(AUTO_TTS_KEY, '1');
+            else localStorage.removeItem(AUTO_TTS_KEY);   // 默认关闭：清键即关
+        } catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
+    }
+    const autoTTSBtn = document.getElementById('auto-tts-toggle');
+    function refreshAutoTTSBtn() {
+        if (autoTTSBtn) autoTTSBtn.textContent = autoTTSEnabled() ? '🔊' : '🔇';
+    }
+    if (autoTTSBtn) {
+        autoTTSBtn.addEventListener('click', () => {
+            const on = !autoTTSEnabled();
+            setAutoTTS(on);
+            refreshAutoTTSBtn();
+            showToast(on ? '自动朗读已开启：AI 回复将自动播报' : '自动朗读已关闭');
+        });
+        refreshAutoTTSBtn();   // 载入即按 localStorage 回显（刷新保持）
+    }
+
     // ==================== 轻提示 toast（替代 alert 占位） ====================
     let toastTimer = null;
     function showToast(text) {
@@ -465,33 +496,103 @@
         return block;
     }
 
-    // 思考正文打字机：约 15ms/字（规格 12-20ms 区间），逐字 textContent 注入。
+    // 思考正文展示主链路（任务 6，DeepSeek 风格逐行淡入）+ 逐字打字机降级：
+    // 展开时 [思考]/[计划]/[行动] 每段单独成行、按顺序逐个淡入（每行间隔
+    // 约 200ms），不再整段一次性弹出；无阶段标记的思考文本降级沿用原逐字
+    // 打字机（约 15ms/字，规格 12-20ms 区间，口径零回退）。
     // animate=false（历史回放共用入口）不打字，直接完整填充并保持折叠。
-    // 注：textContent 注入无需 escapeHtml（转义反而会显示 HTML 实体），
+    // 注：全部 textContent 注入，无需 escapeHtml（转义反而会显示 HTML 实体），
     // CQ 码仍走 renderCQFace 与正文同口径净化。
     const THINK_TYPE_MS = 15;
+    // 逐行淡入间隔（任务 6：每行间隔约 200ms）
+    const THINK_LINE_STEP_MS = 200;
+    // 阶段标记行：[思考]/[计划]/[行动] 起始（半角方括号，与后端协议同口径）
+    const THINK_STAGE_RE = /^\[(思考|计划|行动)\]/;
+
+    // 把思考文本拆成逐行段：阶段标记行起新段（tag 取标记文字、text 去掉
+    // 标记前缀），其余行并入当前段（保留换行，由 pre-wrap 渲染）
+    function splitThinkStageLines(text) {
+        const segs = [];
+        let cur = null;
+        String(text == null ? '' : text).split('\n').forEach(function (raw) {
+            const line = String(raw).trim();
+            if (!line) return;
+            const m = line.match(THINK_STAGE_RE);
+            if (m) {
+                cur = { tag: m[1], text: line.slice(m[0].length).trim() };
+                segs.push(cur);
+            } else if (cur) {
+                cur.text = cur.text ? cur.text + '\n' + line : line;
+            } else {
+                cur = { tag: '', text: line };
+                segs.push(cur);
+            }
+        });
+        return segs;
+    }
+
+    // 构建单行段元素：淡蓝色阶段标签徽章（[思考]/[计划]/[行动]）+ 灰色正文
+    //（textContent 注入免 XSS；无标签段只有正文）
+    function buildThinkLineEl(seg) {
+        const line = document.createElement('div');
+        line.className = 'think-line';
+        if (seg.tag) {
+            const tag = document.createElement('span');
+            tag.className = 'think-line-tag';
+            tag.textContent = seg.tag;
+            line.appendChild(tag);
+        }
+        const text = document.createElement('span');
+        text.className = 'think-line-text';
+        text.textContent = seg.text;
+        line.appendChild(text);
+        return line;
+    }
+
     function startThinkTypewriter(msgEl, thinkText, animate) {
         const card = msgEl.querySelector('.think-card');
         const body = card && card.querySelector('.think-card-body');
         if (!card || !body) return;
         const text = renderCQFace(thinkText);
         if (!animate || !text) {
-            body.textContent = text;
+            body.textContent = text;   // 历史回放：完整填充、保持折叠、不打字
             return;
         }
-        card.classList.remove('think-collapsed');   // 打字期间展开
-        let shown = 0;
-        const timer = setInterval(() => {
-            if (!card.isConnected) { clearInterval(timer); return; }   // 卡片被移除即停
-            shown += 1;
-            body.textContent = text.slice(0, shown);
+        card.classList.remove('think-collapsed');   // 展示期间展开
+        const segs = splitThinkStageLines(text);
+        if (!segs.length || (segs.length === 1 && !segs[0].tag)) {
+            // 无阶段标记：降级沿用原逐字打字机（口径零回退）
+            let shown = 0;
+            const timer = setInterval(() => {
+                if (!card.isConnected) { clearInterval(timer); return; }   // 卡片被移除即停
+                shown += 1;
+                body.textContent = text.slice(0, shown);
+                const history = document.getElementById('chat-history');
+                if (history) history.scrollTop = history.scrollHeight;     // 跟随滚动
+                if (shown >= text.length) {
+                    clearInterval(timer);
+                    card.classList.add('think-collapsed');   // 打完自动折叠（点击标题可再展开）
+                }
+            }, THINK_TYPE_MS);
+            return;
+        }
+        // 逐行淡入（任务 6）：先清空正文（强制兜底卡片可能已预填全文），
+        // 每段单独成行，按顺序每 THINK_LINE_STEP_MS 淡入一行
+        body.textContent = '';
+        let idx = 0;
+        const revealNextLine = () => {
+            if (!card.isConnected) return;              // 卡片被移除即停
+            body.appendChild(buildThinkLineEl(segs[idx]));
+            idx += 1;
             const history = document.getElementById('chat-history');
             if (history) history.scrollTop = history.scrollHeight;     // 跟随滚动
-            if (shown >= text.length) {
-                clearInterval(timer);
-                card.classList.add('think-collapsed');   // 打完自动折叠（点击标题可再展开）
+            if (idx < segs.length) {
+                setTimeout(revealNextLine, THINK_LINE_STEP_MS);
+            } else {
+                card.classList.add('think-collapsed');  // 播完自动折叠（点击标题可再展开）
             }
-        }, THINK_TYPE_MS);
+        };
+        revealNextLine();
     }
 
     // 点击标题展开/收起（折叠用 display 切换，样式见 index.html .think-collapsed）
@@ -780,10 +881,12 @@
                 // <think> 包装块应在此可见；F12 若连本行都看不到，说明
                 // 浏览器加载的是旧版 console.js（缓存或部署未更新）
                 console.log("RAW_REPLY:", res.data.reply);
-                appendBotMessage(res.data.reply, res.data.source, text);
+                const botMsg = appendBotMessage(res.data.reply, res.data.source, text);
                 // 本地与远端同步：后端已将本轮问答落盘 /api/history
                 // 回复到达提示音（界面文档 §6.2 / §9.1，AudioContext 缺席时静默降级）
                 if (window.xiaoju3Sound) window.xiaoju3Sound.ding();
+                // 任务 5：自动朗读开启时，AI 回复到达即自动播报（与手动播放同链路）
+                if (autoTTSEnabled()) speakMessageEl(botMsg);
             } else {
                 throw new Error(res.error || '未知错误');
             }
@@ -850,6 +953,8 @@
                 badge.remove();
             }
             if (window.xiaoju3Sound) window.xiaoju3Sound.ding();
+            // 任务 5：重新生成的回复同样是 AI 回复，自动朗读开启时一并播报
+            if (autoTTSEnabled()) speakMessageEl(msgEl);
         })
         .catch(err => {
             bubble.innerHTML = original;   // 失败还原原回复
@@ -865,12 +970,19 @@
             .catch(() => showToast('复制失败，请手动选择文本'));
     };
 
-    // 播放（朗读）——Edge-TTS 优先：解析链路（协议见 0.55）→ Edge 音色时
-    // POST /api/tts（voice 参数带上）→ blob → Audio 播放；网络/4xx/5xx/超时
-    // /播放失败一律自动降级浏览器 speechSynthesis（清队列防连点、emoji 剔除
-    // 与音色回退链零回退）。emoji 剔除在入口统一做一次，两条链路共用同一份
-    // 净化文本（任务 7：引擎读不出 emoji，标点保留作自然停顿）。
+    // 播放（朗读）——任务 5：手动点播放与自动朗读共用同一条链路入口
+    // speakMessageEl（见下），本函数仅作转发。
     window.playMsg = function(el) {
+        speakMessageEl(el);
+    };
+
+    // 朗读链路共用入口（手动播放 / 自动朗读同一份逻辑）——Edge-TTS 优先：
+    // 解析链路（协议见 0.55）→ Edge 音色时 POST /api/tts（voice 参数带上）
+    // → blob → Audio 播放；网络/4xx/5xx/超时/播放失败一律自动降级浏览器
+    // speechSynthesis（清队列防连点、emoji 剔除与音色回退链零回退）。
+    // emoji 剔除在入口统一做一次，两条链路共用同一份净化文本（任务 7：
+    // 引擎读不出 emoji，标点保留作自然停顿）。
+    function speakMessageEl(el) {
         const text = el.closest('.message').querySelector('.bubble-content').innerText;
         const speakText = stripEmojiForTTS(text);
         if (!speakText) return;
@@ -882,7 +994,7 @@
         requestEdgeTTS(speakText, plan.voice)
             .then(playAudioBlob)
             .catch(() => speakWithBrowserTTS(speakText));   // 任何失败 → 自动降级
-    };
+    }
 
     // Edge-TTS 请求：POST /api/tts {text, voice} → 200 audio/mpeg → blob。
     // AbortController 超时 8s（超时按失败降级）；非 2xx（后端 4xx/5xx JSON
@@ -1005,5 +1117,125 @@
     if (sidebar && sidebarToggle) {
         sidebarToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
     }
+
+    // ==================== 8. 缩成加速球（任务 7：网页内缩略模式） ====================
+    // 与本地桌宠（desktop-pet.js）不同功能、两者共存：本节只切换 body 的
+    // 最小化类与球体显隐，不注入/不修改桌宠任何节点（desktop-pet.js 零改动）。
+    // 球体为 index.html 静态节点 #xiaoju3-ball（60px 圆形、橘色 Q 版边框、
+    // 小橘头像）；最小化时控制台主体（.sidebar + .chat-area）display:none，
+    // 球体 display:block（样式见 index.html）；位置存 localStorage
+    // （xiaoju3_ball_pos）刷新保持；互切幂等（重复最小化/展开不报错、不抖动），
+    // 球体挂载点缺失时全部静默跳过，无 JS 报错路径。
+    const MINIMIZE_CLASS = 'xiaoju3-minimized';
+    const BALL_POS_KEY = 'xiaoju3_ball_pos';
+    const BALL_SIZE = 60;   // 球体直径（px，与 index.html #xiaoju3-ball 一致）
+
+    function getBallEl() {
+        return document.getElementById('xiaoju3-ball');
+    }
+
+    // 球体位置钳制在视口内（拖拽中与 resize 重钳制共用）
+    function clampBallPos(x, y) {
+        const maxW = Math.max(0, document.documentElement.clientWidth - BALL_SIZE);
+        const maxH = Math.max(0, document.documentElement.clientHeight - BALL_SIZE);
+        return {
+            x: Math.min(Math.max(x, 0), maxW),
+            y: Math.min(Math.max(y, 0), maxH),
+        };
+    }
+
+    function applyBallPos(pos) {
+        const ball = getBallEl();
+        if (!ball) return;
+        const c = clampBallPos(pos.x, pos.y);
+        ball.style.left = c.x + 'px';
+        ball.style.top = c.y + 'px';
+        ball.style.right = 'auto';
+        ball.style.bottom = 'auto';
+    }
+
+    function loadBallPos() {
+        try {
+            const pos = JSON.parse(localStorage.getItem(BALL_POS_KEY) || 'null');
+            if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') return pos;
+        } catch (e) { /* 记忆损坏：回退 CSS 默认位（右下角） */ }
+        return null;
+    }
+
+    function saveBallPos(pos) {
+        try { localStorage.setItem(BALL_POS_KEY, JSON.stringify(pos)); }
+        catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
+    }
+
+    // 最小化/展开互切（幂等）：已是目标状态直接返回，不重复操作
+    function setConsoleMinimized(minimized) {
+        const ball = getBallEl();
+        if (!ball) return;   // 球体挂载点缺失：静默跳过，无 JS 报错路径
+        const isMin = document.body.classList.contains(MINIMIZE_CLASS);
+        if (isMin === minimized) return;
+        document.body.classList.toggle(MINIMIZE_CLASS, minimized);
+        if (minimized) {
+            const stored = loadBallPos();
+            if (stored) applyBallPos(stored);   // 恢复记忆位置；无记忆走 CSS 右下角默认
+        }
+    }
+
+    // 球体交互初始化：点击展开、指针拖拽移动（拖拽阈值口径与桌宠一致：
+    // 位移平方>9），松手超阈值存位置、未拖动视为点击展开；防重复绑定（幂等）
+    function initConsoleBall() {
+        const ball = getBallEl();
+        if (!ball || ball.dataset.ballBound === '1') return;
+        ball.dataset.ballBound = '1';
+        let dragging = false;
+        let moved = false;
+        let startX = 0, startY = 0, offX = 0, offY = 0;
+        ball.addEventListener('pointerdown', function (e) {
+            dragging = true;
+            moved = false;
+            startX = e.clientX;
+            startY = e.clientY;
+            const rect = ball.getBoundingClientRect();
+            offX = e.clientX - rect.left;
+            offY = e.clientY - rect.top;
+            try { ball.setPointerCapture(e.pointerId); } catch (err) { /* 老引擎忽略 */ }
+        });
+        ball.addEventListener('pointermove', function (e) {
+            if (!dragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            if (dx * dx + dy * dy > 9) moved = true;   // 拖拽阈值（位移平方>9）
+            if (moved) applyBallPos({ x: e.clientX - offX, y: e.clientY - offY });
+        });
+        ball.addEventListener('pointerup', function () {
+            if (!dragging) return;
+            dragging = false;
+            if (moved) {
+                saveBallPos({
+                    x: parseFloat(ball.style.left) || 0,
+                    y: parseFloat(ball.style.top) || 0,
+                });
+            } else {
+                setConsoleMinimized(false);   // 未拖动＝点击展开回完整控制台
+            }
+        });
+        // 拖拽被系统打断（来电/手势竞争）：复位拖拽态，不误判为点击
+        ball.addEventListener('pointercancel', function () { dragging = false; });
+        // 窗口尺寸变化：最小化态下按记忆位置重钳制在视口内
+        window.addEventListener('resize', function () {
+            if (document.body.classList.contains(MINIMIZE_CLASS)) {
+                const pos = loadBallPos();
+                if (pos) applyBallPos(pos);
+            }
+        });
+    }
+
+    const minimizeBtn = document.getElementById('console-minimize');
+    if (minimizeBtn) {
+        minimizeBtn.addEventListener('click', function () {
+            setConsoleMinimized(true);
+            showToast('已缩成加速球，点击小球恢复');
+        });
+    }
+    initConsoleBall();
 
 })();

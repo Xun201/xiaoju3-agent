@@ -24,6 +24,10 @@ psutil==7.2.2
 # HTTP 客户端（Ollama / DeepSeek / Home Assistant / 联网搜索）
 requests==2.34.2
 
+# 联网搜索 HTML 结果解析（search_tools：bing / 百度结果页；纯 Python，
+# 官方 requires_python >=3.7，与 requirements-py38.txt 行为一致）
+beautifulsoup4==4.15.0
+
 # 无头浏览器（/gen_log 深度分享页抓取；缺内核时优雅降级）
 playwright==1.63.0
 

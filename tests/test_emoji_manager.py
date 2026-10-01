@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """emoji_manager 离线单测：收藏 / 去重 / 容量截断 / 按标签与随机取用 /
-缺失标签时的下载兜底（架构 §10 #6 闭环）。
+缺失标签时的下载兜底（架构 §10 #6 闭环）/ 下载规格（assets/emoji 目录、
+标签+URL 哈希文件名、Content-Type 扩展名推断、失败返回 None）。
 
-仓库文件与表情库目录一律注入临时目录，不触碰真实 agent_state 与 workspace；
+仓库文件与表情库目录一律注入临时目录，不触碰真实 agent_state 与 assets；
 网络不触碰（download_emoji 的 requests 一律 mock）。patch 全部经
 unittest.mock.patch + addCleanup 自动还原，不向 sys.modules 注入伪模块。
 """
+import hashlib
 import json
 import os
 import tempfile
@@ -176,17 +178,66 @@ class TestEmojiDownloadFallback(unittest.TestCase):
             self.assertEqual(emoji_manager.get_emoji_path("开心"), path)
         get_mock.assert_not_called()
 
-    def test_download_emoji_success_and_failure(self):
+    def test_download_emoji_success_returns_path_with_url_hash_name(self):
+        """下载成功：返回落盘路径；文件名 = 标签 + URL 哈希；默认 .png。"""
         os.makedirs(self.dir, exist_ok=True)
+        url = "https://a/1.jpg"
         with patch("emoji_manager.requests.get",
                    return_value=MagicMock(status_code=200, content=b"data")):
-            self.assertTrue(emoji_manager.download_emoji("https://a/1.jpg", "生气"))
+            path = emoji_manager.download_emoji(url, "生气")
+        self.assertIsNotNone(path)
+        self.assertEqual(os.path.dirname(path), self.dir)   # 下载进本地表情库
+        name = os.path.basename(path)
+        self.assertTrue(name.startswith("生气"))            # 文件名含标签
+        url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
+        self.assertIn(url_hash, name)                       # 文件名含 URL 哈希
+        self.assertTrue(name.endswith(".png"))              # Content-Type 缺失 → 默认 .png
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"data")
+
+    def test_download_emoji_content_type_extension_inference(self):
+        """扩展名按响应 Content-Type 推断；未知类型默认 .png。"""
+        os.makedirs(self.dir, exist_ok=True)
+        cases = [("image/png", ".png"), ("image/jpeg", ".jpg"),
+                 ("image/gif", ".gif"), ("image/webp", ".webp"),
+                 ("application/octet-stream", ".png")]
+        for ctype, ext in cases:
+            resp = MagicMock(status_code=200, content=b"x")
+            resp.headers = {"Content-Type": f"{ctype}; charset=utf-8"}
+            with patch("emoji_manager.requests.get", return_value=resp):
+                path = emoji_manager.download_emoji(f"https://a/{ctype}", "笑")
+            self.assertIsNotNone(path, ctype)
+            self.assertTrue(os.path.basename(path).endswith(ext), (ctype, path))
+
+    def test_ext_helper_defaults_to_png(self):
+        """扩展名推断助手：缺失/空/大小写变体的口径。"""
+        self.assertEqual(emoji_manager._ext_from_content_type(None), ".png")
+        self.assertEqual(emoji_manager._ext_from_content_type(""), ".png")
+        self.assertEqual(emoji_manager._ext_from_content_type("image/JPEG"), ".jpg")
+        self.assertEqual(emoji_manager._ext_from_content_type("text/html"), ".png")
+
+    def test_download_emoji_same_url_same_filename_dedupe(self):
+        """URL 哈希命名：同链接重复下载同名覆盖，不产生随机重名文件。"""
+        os.makedirs(self.dir, exist_ok=True)
+        for _ in range(2):
+            with patch("emoji_manager.requests.get",
+                       return_value=MagicMock(status_code=200, content=b"data")):
+                emoji_manager.download_emoji("https://a/same.gif", "生气")
         files = os.listdir(self.dir)
         self.assertEqual(len(files), 1)
         self.assertTrue(files[0].startswith("生气"))
+
+    def test_download_emoji_failure_returns_none(self):
+        """非 200 / 网络异常 → 返回 None（不抛异常、不写半截文件）。"""
+        os.makedirs(self.dir, exist_ok=True)
         with patch("emoji_manager.requests.get",
                    return_value=MagicMock(status_code=500)):
-            self.assertFalse(emoji_manager.download_emoji("https://a/2.jpg", "生气"))
+            self.assertIsNone(emoji_manager.download_emoji("https://a/2.jpg", "生气"))
+        self.assertEqual(os.listdir(self.dir), [])
+        with patch("emoji_manager.requests.get",
+                   side_effect=RuntimeError("net down")):
+            self.assertIsNone(emoji_manager.download_emoji("https://a/3.jpg", "生气"))
+        self.assertEqual(os.listdir(self.dir), [])
 
 
 if __name__ == "__main__":
