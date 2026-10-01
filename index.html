@@ -56,6 +56,9 @@
 
         /* ==================== 基础重置 ==================== */
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        /* 标签页切换显隐：.chat-history / .chat-input-area 等设了 display:flex，
+           会盖掉 hidden 属性，这里统一兜底（终端记录标签页依赖） */
+        [hidden] { display: none !important; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
@@ -129,6 +132,59 @@
         .header-btn:hover { background: var(--color-progress-track); }
         /* 桌面端隐藏抽屉开关（仅移动端媒体查询中显示） */
         #sidebar-toggle { display: none; }
+
+        /* ==================== 聊天标签页（对话窗口 / 终端记录） ==================== */
+        /* 终端记录入口（R3 后端 GET /api/history?source=terminal 的前端承接）：
+           标签栏挂在聊天头部之下，切换右侧内容区；终端记录为只读展示
+           （无输入框、清空按钮禁用、消息不带操作工具栏）。 */
+        .chat-tabs {
+            display: flex;
+            gap: 4px;
+            padding: 6px 20px 0;
+            background-color: var(--color-card);
+            border-bottom: 1px solid var(--color-border);
+        }
+        .chat-tab {
+            appearance: none;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            padding: 8px 14px;
+            font-size: 14px;
+            cursor: pointer;
+            color: var(--color-text-secondary);
+            transition: color 0.2s, border-color 0.2s;
+        }
+        .chat-tab:hover { color: var(--color-primary); }
+        .chat-tab.active {
+            color: var(--color-primary);
+            font-weight: 600;
+            border-bottom-color: var(--color-primary);
+        }
+        /* 终端记录页只读：清空按钮禁用态（灰色、禁悬停反馈） */
+        .header-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .header-btn:disabled:hover { background: none; }
+        /* 终端记录面板（只读）：工具行 + 复用聊天气泡样式的记录列表 */
+        .terminal-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+        .terminal-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 20px;
+            background-color: var(--color-card);
+            border-bottom: 1px solid var(--color-border);
+            font-size: 13px;
+            color: var(--color-text-secondary);
+        }
+        .terminal-history { background-color: var(--color-bg-chat); }
+        .terminal-empty {
+            margin: auto;
+            text-align: center;
+            font-size: 13px;
+            color: var(--color-text-hint);
+            padding: 20px;
+        }
 
         .chat-history {
             flex: 1;
@@ -438,17 +494,30 @@
         <div class="chat-header">
             <!-- 移动端抽屉开关（≤768px 显示） -->
             <button id="sidebar-toggle" class="header-btn" title="监控面板">☰</button>
-            <span class="header-title">对话窗口</span>
+            <span class="header-title">小橘3号 · 控制台</span>
             <span class="header-actions">
                 <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
                 <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
                 <button id="auto-tts-toggle" class="header-btn" title="自动朗读开关（AI 回复自动播报，与音效独立）">🔇</button>
                 <button id="theme-toggle" class="header-btn" title="切换橘色主题">🦊</button>
-                <button id="console-minimize" class="header-btn" title="缩成加速球">⌄</button>
+                <button id="console-minimize" class="header-btn" title="最小化：缩成加速球">⌄</button>
             </span>
+        </div>
+        <!-- 聊天标签页：对话窗口 / 终端记录（终端记录只读，切换逻辑在 console.js） -->
+        <div class="chat-tabs">
+            <button id="tab-console" class="chat-tab active" type="button">对话窗口</button>
+            <button id="tab-terminal" class="chat-tab" type="button">终端记录</button>
         </div>
         <div class="chat-history" id="chat-history">
             <div class="message bot-message">你好！我是小橘3号，很高兴为你服务喵~</div>
+        </div>
+        <!-- 终端记录面板（只读）：GET /api/history?source=terminal，由 console.js 渲染 -->
+        <div class="terminal-pane" id="terminal-pane" hidden>
+            <div class="terminal-toolbar">
+                <span>终端对话记录（只读）· 运行 python xiaoju3.py 产生</span>
+                <button id="terminal-refresh" class="header-btn" type="button" title="刷新终端记录">⟳ 刷新</button>
+            </div>
+            <div class="chat-history terminal-history" id="terminal-history"></div>
         </div>
         <div class="chat-input-area">
             <input type="text" id="chat-input" placeholder="输入消息，按回车发送..." onkeypress="if(event.key === 'Enter') sendMessage()">

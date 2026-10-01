@@ -1189,6 +1189,126 @@
         sidebarToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
     }
 
+    // ==================== 7.5 终端记录标签页（对话窗口 / 终端记录切换） ====================
+    // 终端记录入口（R3 后端契约承接）：标签栏切换对话窗口与终端记录两个内
+    // 容区。终端记录经 GET /api/history?source=terminal 读取（后端契约：文件
+    // 缺失恒 200 空列表，消息为纯 [{role, content}]），只读展示——无输入框、
+    // 清空按钮禁用、消息不带操作工具栏；思考块沿用 splitThinkBlock 收敛为
+    // 折叠卡片（历史回放口径：不打字、直接折叠展示全文）。切入即拉最新，
+    // 停留期间每 5 秒自动刷新（终端 CLI 每轮落盘，页面跟随），⟳ 手动刷新；
+    // 竞态守卫（请求序号）丢弃慢响应，慢网不回写旧数据。
+    const TERMINAL_HISTORY_URL = '/api/history?source=terminal';
+    const TERMINAL_REFRESH_MS = 5000;
+    const tabConsoleBtn = document.getElementById('tab-console');
+    const tabTerminalBtn = document.getElementById('tab-terminal');
+    const terminalPaneEl = document.getElementById('terminal-pane');
+    const terminalHistoryEl = document.getElementById('terminal-history');
+    const chatHistoryPaneEl = document.getElementById('chat-history');
+    const chatInputAreaEl = document.querySelector('.chat-input-area');
+    let terminalRefreshTimer = null;
+    let terminalFetchSeq = 0;
+
+    // 单条终端记录渲染（只读：无工具栏、无来源徽标；用户消息 textContent
+    // 注入，AI 正文走 renderRich 转义——与聊天视图同口径免 XSS）
+    function appendTerminalEntry(msg) {
+        if (!msg || typeof msg.content !== 'string') return;
+        if (msg.role === 'user') {
+            const userEl = document.createElement('div');
+            userEl.className = 'message user-message';
+            userEl.textContent = msg.content;
+            terminalHistoryEl.appendChild(userEl);
+            return;
+        }
+        if (msg.role !== 'assistant') return;
+        const parts = splitThinkBlock(msg.content);
+        const botEl = document.createElement('div');
+        botEl.className = 'message bot-message';
+        const inner = document.createElement('div');
+        inner.style.cssText = 'display:flex; flex-direction:column; gap:5px;';
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble-content';
+        bubble.innerHTML = renderRich(parts.body);
+        inner.appendChild(bubble);
+        botEl.appendChild(inner);
+        if (parts.think !== null) {
+            // 思考折叠卡片（不打字不动画，直接折叠展示；文本 textContent 注入免 XSS）
+            const card = buildThinkCardEl();
+            const cardBody = card.querySelector('.think-card-body');
+            if (cardBody) cardBody.textContent = renderCQFace(parts.think);
+            botEl.insertBefore(card, inner);   // 卡片在气泡上方（与聊天视图同构）
+        }
+        terminalHistoryEl.appendChild(botEl);
+    }
+
+    function loadTerminalHistory() {
+        if (!terminalHistoryEl) return;
+        const seq = ++terminalFetchSeq;   // 只采纳最新一次请求的响应
+        fetch(TERMINAL_HISTORY_URL)
+            .then(res => res.json())
+            .then(res => {
+                if (seq !== terminalFetchSeq) return;
+                terminalHistoryEl.innerHTML = '';
+                const messages = (res && res.code === 200 && res.data &&
+                                  Array.isArray(res.data.messages))
+                    ? res.data.messages : [];
+                if (!messages.length) {
+                    const empty = document.createElement('div');
+                    empty.className = 'terminal-empty';
+                    empty.textContent = '暂无终端记录：在终端运行 python xiaoju3.py 对话后，这里会显示终端通道的聊天记录。';
+                    terminalHistoryEl.appendChild(empty);
+                    return;
+                }
+                messages.forEach(appendTerminalEntry);
+                terminalHistoryEl.scrollTop = terminalHistoryEl.scrollHeight;
+            })
+            .catch(err => {
+                if (seq !== terminalFetchSeq) return;
+                terminalHistoryEl.innerHTML = '';
+                const tip = document.createElement('div');
+                tip.className = 'terminal-empty';
+                tip.style.color = '#e0433f';
+                tip.textContent = '（终端记录读取失败：' + err.message + '）';
+                terminalHistoryEl.appendChild(tip);
+            });
+    }
+
+    // 标签切换：内容区/输入框互斥显隐 + 清空按钮只对对话窗口生效（终端记录只读）
+    function switchChatTab(tab) {
+        const isTerminal = tab === 'terminal';
+        if (tabConsoleBtn) tabConsoleBtn.classList.toggle('active', !isTerminal);
+        if (tabTerminalBtn) tabTerminalBtn.classList.toggle('active', isTerminal);
+        if (chatHistoryPaneEl) chatHistoryPaneEl.hidden = isTerminal;
+        if (terminalPaneEl) terminalPaneEl.hidden = !isTerminal;
+        if (chatInputAreaEl) chatInputAreaEl.hidden = isTerminal;   // 只读：终端页无输入框
+        const clearBtnEl = document.getElementById('clear-history');
+        if (clearBtnEl) {
+            clearBtnEl.disabled = isTerminal;
+            clearBtnEl.title = isTerminal
+                ? '终端记录为只读；切回对话窗口可清空控制台聊天记录'
+                : '清空聊天记录';
+        }
+        if (isTerminal) {
+            loadTerminalHistory();   // 每次切入拉最新
+            if (!terminalRefreshTimer) {
+                terminalRefreshTimer = setInterval(loadTerminalHistory, TERMINAL_REFRESH_MS);
+            }
+        } else if (terminalRefreshTimer) {
+            clearInterval(terminalRefreshTimer);   // 切走即停，不留后台轮询
+            terminalRefreshTimer = null;
+        }
+    }
+
+    if (tabTerminalBtn) {
+        tabTerminalBtn.addEventListener('click', function () { switchChatTab('terminal'); });
+    }
+    if (tabConsoleBtn) {
+        tabConsoleBtn.addEventListener('click', function () { switchChatTab('console'); });
+    }
+    const terminalRefreshBtn = document.getElementById('terminal-refresh');
+    if (terminalRefreshBtn) {
+        terminalRefreshBtn.addEventListener('click', loadTerminalHistory);
+    }
+
     // ==================== 8. 缩成加速球（任务 7：网页内缩略模式） ====================
     // 与本地桌宠（desktop-pet.js）不同功能、两者共存：本节只切换 body 的
     // 最小化类与球体显隐，不注入/不修改桌宠任何节点（desktop-pet.js 零改动）。
@@ -1308,5 +1428,20 @@
         });
     }
     initConsoleBall();
+
+    // 球体头像裂图兜底：素材缺失（404）时退化为 🦊 emoji 圆球——不改显隐
+    // 类控制（display 仍由 CSS 类管），最小化态永不出现空球/裂图图标
+    (function bindBallImgFallback() {
+        const ball = getBallEl();
+        const img = (ball && ball.querySelector) ? ball.querySelector('img') : null;
+        if (!img) return;
+        img.addEventListener('error', function () {
+            img.remove();
+            ball.textContent = '🦊';
+            ball.style.textAlign = 'center';
+            ball.style.lineHeight = '52px';   // 60px 球体减去上下 3px 橘色描边
+            ball.style.fontSize = '30px';
+        });
+    })();
 
 })();

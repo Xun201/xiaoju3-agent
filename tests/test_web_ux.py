@@ -380,6 +380,102 @@ class BallWidgetTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 终端记录标签页（对话窗口 / 终端记录切换，GET /api/history?source=terminal）
+# ---------------------------------------------------------------------------
+
+class TerminalTabTests(unittest.TestCase):
+    """终端记录标签页静态断言：标签栏结构、内容区互斥、只读语义、取数契约。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.console_js = _read("console.js")
+        cls.index_html = _read("index.html")
+
+    def _tab_section(self):
+        """console.js 终端记录整节（7.5 节，到第 8 节之前）。"""
+        js = self.console_js
+        start = js.index("==================== 7.5 ")
+        return js[start:js.index("==================== 8.")]
+
+    def test_tab_bar_markup(self):
+        """标签栏标记：对话窗口 / 终端记录两个标签位于聊天头部与记录区之间；
+        终端面板缺省隐藏（hidden 属性）；含刷新按钮与记录挂载点。"""
+        html = self.index_html
+        self.assertIn('<div class="chat-tabs">', html)
+        self.assertIn(
+            '<button id="tab-console" class="chat-tab active" type="button">对话窗口</button>',
+            html)
+        self.assertIn(
+            '<button id="tab-terminal" class="chat-tab" type="button">终端记录</button>',
+            html)
+        # 标签栏在聊天头部之后、聊天记录区之前
+        self.assertLess(html.index('class="chat-tabs"'),
+                        html.index('id="chat-history"'))
+        self.assertGreater(html.index('class="chat-tabs"'),
+                           html.index('class="chat-header"'))
+        # 终端面板缺省隐藏（hidden），由 console.js 切换显隐
+        self.assertIn('<div class="terminal-pane" id="terminal-pane" hidden>', html)
+        self.assertIn('id="terminal-history"', html)
+        self.assertIn('id="terminal-refresh"', html)
+
+    def test_tab_css_and_hidden_rule(self):
+        """样式：全局 [hidden] 显隐兜底（display:flex 类会盖掉 hidden 属性）、
+        标签激活态、禁用清空按钮、终端面板样式齐备。"""
+        html = self.index_html
+        self.assertIn("[hidden] { display: none !important; }", html)
+        self.assertIn(".chat-tab.active", html)
+        self.assertIn(".header-btn:disabled", html)
+        self.assertIn(".terminal-pane", html)
+        self.assertIn(".terminal-history", html)
+        self.assertIn(".terminal-empty", html)
+
+    def test_fetch_contract(self):
+        """取数契约：GET /api/history?source=terminal（R3 后端契约，文件缺失
+        恒 200 空列表）；响应形状校验（code/data.messages 数组）；空列表与
+        失败各有占位文案；竞态守卫（请求序号）丢弃慢响应。"""
+        section = self._tab_section()
+        self.assertIn("'/api/history?source=terminal'", section)
+        self.assertIn("Array.isArray(res.data.messages)", section)
+        self.assertIn("terminalFetchSeq", section)
+        self.assertIn("暂无终端记录", section)
+        self.assertIn("（终端记录读取失败：", section)
+
+    def test_readonly_semantics(self):
+        """只读语义：终端页隐藏输入框、清空按钮禁用、消息不带任何操作
+        工具栏（无 msg-tools / buildSystemMsgTools / startThinkTypewriter）。"""
+        section = self._tab_section()
+        self.assertIn("chatInputAreaEl.hidden = isTerminal", section)
+        self.assertIn("clearBtnEl.disabled = isTerminal", section)
+        self.assertNotIn("msg-tools", section)
+        self.assertNotIn("buildSystemMsgTools", section)
+        self.assertNotIn("startThinkTypewriter", section)
+
+    def test_tab_switching_and_autorefresh(self):
+        """切换接线：两个标签点击 ↔ switchChatTab('terminal'/'console')；
+        内容区互斥显隐；切入拉最新 + 停留期间定时自动刷新、切走清定时器。"""
+        section = self._tab_section()
+        self.assertIn("function switchChatTab", section)
+        self.assertIn("tabTerminalBtn.addEventListener('click'", section)
+        self.assertIn("switchChatTab('terminal')", section)
+        self.assertIn("switchChatTab('console')", section)
+        self.assertIn("chatHistoryPaneEl.hidden = isTerminal", section)
+        self.assertIn("terminalPaneEl.hidden = !isTerminal", section)
+        self.assertIn("setInterval(loadTerminalHistory, TERMINAL_REFRESH_MS)",
+                      section)
+        self.assertIn("clearInterval(terminalRefreshTimer)", section)
+
+    def test_think_card_readonly_render(self):
+        """终端 AI 消息：沿用 splitThinkBlock 切分 + 折叠卡片（不打字、直接
+        折叠展示）；正文 renderRich 转义、思考文本 renderCQFace 净化后
+        textContent 注入——与聊天视图同口径免 XSS。"""
+        section = self._tab_section()
+        self.assertIn("splitThinkBlock(msg.content)", section)
+        self.assertIn("buildThinkCardEl()", section)
+        self.assertIn("renderRich(parts.body)", section)
+        self.assertIn("renderCQFace(parts.think)", section)
+
+
+# ---------------------------------------------------------------------------
 # node 实跑（可选）：语法门 + 分段行为 + 加速球互切幂等/位置钳制
 # ---------------------------------------------------------------------------
 
