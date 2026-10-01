@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*-
-"""小橘3号 · 接入层主程序（纯 QQ webhook + API 网关，Flask :5002；网页统一 :5003）。
+"""小橘3号 · QQ 接入层业务逻辑模块（纯逻辑，不监听任何端口；由 :5003 宿主调用）。
+
+【架构合并（2026-10-01，用户口径：彻底废弃 5002 端口，全部迁入 5003）】
+- 本模块不再创建 Flask app、不再监听任何端口；原 POST /onebot 视图的业务
+  处理体原样保留为纯函数 onebot_event(data)，由 :5003 xiaoju3_dashboard.py
+  的同名路由调用（webhook 数据结构与处理逻辑一字未改）；直接运行本文件只会
+  得到迁移提示（见文末 __main__）。
+- 原 GET /（302 跳转 5003/console）随 5002 端口一并废弃：端口不复存在，
+  5003 自身的 GET /（旧版蓝色单页）不受影响。
+- 心跳 / 多设备守望的启动点随托管权移交：start_background_services() 由
+  dashboard 进程启动时调用（原 __main__ 启动点逻辑原样迁入该函数）。
+- werkzeug 访问日志过滤器（meta_event 心跳防刷屏）与 HTTP 层同属宿主进程，
+  一并迁入 xiaoju3_dashboard.py；本模块只保留 QQ 业务逻辑。
 
 按《架构设计文档》§2 /《功能文档》§2.4、§5 与第二阶段 §7 权限调整：
-- 5002 旧版网页已废弃（内置深色聊天页 GET / 与 POST /chat API 由 :5003
-  xiaoju3_dashboard.py 新版控制台取代）：GET / 一律 302 跳转
-  http://127.0.0.1:5003/console；POST /chat 路由已删除，防止误用旧页测试。
 - POST /onebot：OneBot 11 webhook（LLOneBot 实现；无鉴权保持文档口径，依赖内网环境，§9）。
   私聊直接响应；群聊需 @（CQ 码）或触发词（小橘/小桔/橘3号/橘三号/AI测试）
   才理人，防刷屏；戳一戳彩蛋回应；非 @ 图片消息自动收藏表情链接（emoji_manager）。
-- GET /api/health：迁移守望探测端点（migration.health_bp 一行接入，架构 §8）。
 
 指令族（§7 用户新权限表，覆盖旧"固定认证码"口径）：
 - /register <密码> [称呼]：Lv.2 注册（env XIAOJU3_REGISTER_PASSWORD，落盘；称呼不得占用创造者保留名）。
@@ -38,7 +46,6 @@ smart_ask（危险实体拒绝捕获 → Lv.4+MFA 发确认令牌）→
   execute_tool 完整门禁——无任何绕过权限门的路径。
 - /gen_log 后台线程执行 run_link_log，不阻塞聊天。
 """
-import logging
 import os
 import random
 import re
@@ -46,7 +53,6 @@ import threading
 import time
 
 import requests
-from flask import Flask, redirect, request
 
 import brain
 import home_tools
@@ -56,41 +62,13 @@ from brain import load_memory, reset_tool_fuse, save_memory, smart_ask
 from emoji_manager import save_emoji_link
 from heartbeat import start_heartbeat
 from intent_router import dispatch, route
-from migration import PeerWatch, health_bp
+from migration import PeerWatch
 from permission import permission_manager
 from plugins.context_manager import compress_context
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool, get_recent_actions
 from xiaoju3 import (AGENT_STATE_DIR, ONEBOT_API_URL, ONEBOT_TOKEN,
                      TRIGGER_WORDS, WORKSPACE)
-
-app = Flask(__name__)
-# 🛡️ 迁移守望探测端点（架构 §8，migration docstring 接入示例：一行注册）
-app.register_blueprint(health_bp)
-
-# ================= 访问日志刷屏抑制（/onebot 心跳事件） =================
-# 用户口径：LLOneBot 心跳（meta_event 的 heartbeat/lifecycle 等高频事件）每次
-# POST /onebot 都打一条 werkzeug 访问日志，长期运行刷屏。心跳与消息事件同为
-# POST /onebot，访问日志行无法区分——视图内对 meta_event 事件打一次性线程
-# 标记，过滤器据此只拦截心跳那一次请求的访问日志；消息类 /onebot 日志保留。
-# 拦截（filter 返回 False）而非"降为 DEBUG"的取舍见
-# xiaoju3_dashboard.py 注释：werkzeug 3.x 自挂 NOTSET 级 handler，降级 DEBUG
-# 仍会被输出；直接拦截跨日志配置行为确定。
-_onebot_meta_local = threading.local()   # 当前线程是否正处理 meta_event 心跳类事件
-
-
-class _HeartbeatAccessFilter(logging.Filter):
-    """meta_event 心跳请求的 werkzeug 访问日志拦截器（一次性线程标记）。"""
-
-    def filter(self, record):
-        if getattr(_onebot_meta_local, "is_meta_event", False):
-            _onebot_meta_local.is_meta_event = False   # 标记一次性：仅覆盖本次请求
-            return False
-        return True
-
-
-logging.getLogger("werkzeug").setLevel(logging.INFO)   # 保底：非拦截访问日志保持可见
-logging.getLogger("werkzeug").addFilter(_HeartbeatAccessFilter())
 
 # ================= 配置（环境变量优先 → 中立默认值兜底） =================
 # OneBot 11 HTTP API（LLOneBot，标准正向 HTTP 端口 3001；NapCat 用户改回
@@ -160,9 +138,9 @@ def _strip_think(text):
     """剥除 <think>...</think> 思维链包装块（含标签本体，DOTALL 跨行）。
 
     brain.smart_ask 的工具流程回复会在最前面包装 <think> 推理块，供新版
-    网页前端（:5003 控制台）渲染折叠卡片；QQ 发送点（/onebot → OneBot，
-    /send_image 的 CQ 码随回复链路发出同理）必须在发送前剥除——QQ 消息
-    保持干净，推理展示只属于新前端。
+    网页前端（:5003 控制台）渲染折叠卡片；QQ 发送点（:5003 /onebot →
+    OneBot，/send_image 的 CQ 码随回复链路发出同理）必须在发送前剥除——
+    QQ 消息保持干净，推理展示只属于新前端。
     """
     return re.sub(r'<think>.*?</think>', '', str(text or ""), flags=re.DOTALL).strip()
 
@@ -567,15 +545,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     return reply
 # =======================================================
 
-# ================= 网页大门 =================
-@app.route('/')
-def index():
-    # 🚧 5002 旧版网页已废弃（内置深色聊天页 + POST /chat API 由 :5003
-    # xiaoju3_dashboard.py 新版控制台取代）：根路径一律 302 跳转新版控制台，
-    # 防止误在 5002 旧页测试造成误判。
-    return redirect("http://127.0.0.1:5003/console", 302)
-
-# ================= QQ大门 =================
+# ================= QQ大门（业务体；HTTP 视图宿主于 :5003） =================
 def _rebuild_raw_message(data):
     """raw_message 缺失/为空时从 message 字段重建文本（LLOneBot 兼容）。
 
@@ -607,16 +577,13 @@ def _rebuild_raw_message(data):
     return ""
 
 
-@app.route('/onebot', methods=['POST'])
-def onebot_webhook():
-    data = request.get_json(silent=True) or {}
+def onebot_event(data):
+    """处理一条 OneBot 11 webhook 事件字典，返回 HTTP JSON 响应体。
 
-    # 🔇 心跳类高频事件（meta_event 的 heartbeat/lifecycle/connect）先打一次性
-    # 线程标记：本次请求的 werkzeug 访问日志由 _HeartbeatAccessFilter 拦截
-    # （防刷屏）；消息类 /onebot 日志不受影响。
-    if data.get('post_type') == 'meta_event':
-        _onebot_meta_local.is_meta_event = True
-
+    原 :5002 POST /onebot 视图主体原样迁入（架构合并，逻辑一字未改）；
+    HTTP 层（JSON 解析、meta_event 心跳日志标记、Flask 路由）由 :5003
+    xiaoju3_dashboard.py 的 onebot_webhook 视图承担后调进本函数。
+    """
     # 🎁 彩蛋：戳一戳
     if data.get('post_type') == 'notice' and data.get('notice_type') == 'poke':
         group_id = data.get('group_id')
@@ -678,19 +645,25 @@ def onebot_webhook():
     return {"status": "ok", "retcode": 0}
 
 
-if __name__ == '__main__':
-    print("🤖 小橘3号接入层已启动（纯 QQ webhook + API 网关，:5002）！")
-    print("💡 网页控制台已统一到 :5003：http://127.0.0.1:5003/console"
-          "（本端口根路径自动 302 跳转）")
+# ================= 后台线程启动点（宿主：:5003 dashboard 进程） =================
+def start_background_services():
+    """启动 QQ 接入层的后台服务线程（原 :5002 __main__ 启动点，随架构合并
+    移交 :5003 dashboard 进程在启动时调用；重复调用会重复拉心跳，勿多次调用）。
 
-    # 💓 启动主动心跳引擎
+    - 💓 主动心跳引擎（heartbeat.start_heartbeat daemon 线程）；
+    - 👀 多设备互相守望（架构 §8，默认关闭）：env XIAOJU3_PEERS 配置对端
+      且 XIAOJU3_WATCH=1 时才启动守护线程（migration.PeerWatch）。
+    """
     start_heartbeat()
 
-    # 👀 多设备互相守望（架构 §8，默认关闭）：env XIAOJU3_PEERS 配置对端
-    # 且 XIAOJU3_WATCH=1 时才启动守护线程（migration.PeerWatch）
     if _peer_watch_enabled():
         threading.Thread(target=PeerWatch().watch_loop, daemon=True,
                          name="xiaoju3-peer-watch").start()
         print(f"👀 多设备互相守望已启动（对端：{os.environ['XIAOJU3_PEERS'].strip()}）")
 
-    app.run(host='0.0.0.0', port=5002, debug=False)
+
+if __name__ == '__main__':
+    # 🚧 架构合并（5002 → 5003）：本模块已无 HTTP 入口，直接运行只会得到迁移
+    # 提示——QQ webhook 与网页控制台统一由 :5003 xiaoju3_dashboard.py 承载。
+    print("🚧 本模块已并入 5003（5002 端口已废弃）：请运行 python xiaoju3_dashboard.py")
+    print("💡 QQ webhook 新地址：http://127.0.0.1:5003/onebot（请同步修改 LLOneBot 上报地址）")

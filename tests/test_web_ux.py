@@ -173,13 +173,19 @@ class ThinkLineRevealTests(unittest.TestCase):
         start = js.index("function startThinkTypewriter")
         return js[start:js.index("window.toggleThinkCard", start)]
 
-    def test_line_step_constant_200ms(self):
-        """逐行淡入间隔常量 THINK_LINE_STEP_MS = 200（任务规格：每行间隔约
-        200ms），逐行调度经 setTimeout 链。"""
-        js = self.console_js
-        self.assertIn("const THINK_LINE_STEP_MS = 200;", js)
+    def test_all_lines_render_at_once_then_collapsed(self):
+        """2026-10-01 用户口径升级：一次性渲染全部行（同帧插入，非逐行
+        setTimeout 错峰）；渲染完延迟折叠、正文延迟显示（DeepSeek 节奏）。"""
         body = self._typewriter_body()
-        self.assertIn("setTimeout(revealNextLine, THINK_LINE_STEP_MS)", body)
+        # 一次性渲染：全部行同帧插入（函数式回调形态），无逐行 setTimeout 链
+        self.assertIn("segs.forEach(function (seg) { body.appendChild(buildThinkLineEl(seg)); });", body)
+        self.assertNotIn("THINK_LINE_STEP_MS", body)   # 逐行链已废止
+        # 折叠节奏：调度调用在打字函数内；延迟常量与 300ms 过渡 CSS 在
+        # console.js 调度函数与 index.html 样式（_typewriter_body 切片之外）
+        self.assertIn("scheduleThinkCollapse(card, msgEl);", body)
+        self.assertIn("const THINK_COLLAPSE_DELAY_MS = 1500;", self.console_js)
+        self.assertIn("maxHeight = body.clientHeight", self.console_js)
+        self.assertIn("0.3s ease", self.index_html)
 
     def test_stage_split_function_present(self):
         """分段函数：[思考]/[计划]/[行动] 半角方括号阶段标记起新段（与后端
@@ -189,16 +195,16 @@ class ThinkLineRevealTests(unittest.TestCase):
         self.assertIn("function buildThinkLineEl", js)
         self.assertIn(r"/^\[(思考|计划|行动)\]/", js)
 
-    def test_lines_reveal_one_by_one_textcontent_only(self):
-        """逐行淡入主链路：先清空正文（强制兜底卡片预填场景），每段单独成行
-        （appendChild 逐个插入、淡入动画由 CSS 承担）；阶段标签与正文全部
-        textContent 注入免 XSS；播完自动折叠（点击标题可再展开，折叠零回退）。"""
+    def test_lines_rendered_at_once_textcontent_only(self):
+        """一次性渲染主链路：先清空正文（强制兜底卡片预填场景），全部段同帧
+        插入（淡入动画由 CSS 承担）；阶段标签与正文全部 textContent 注入免
+        XSS；渲染完延迟折叠（点击标题可再展开，折叠零回退）。"""
         body = self._typewriter_body()
-        self.assertIn("body.textContent = '';", body)              # 清空后逐行插入
-        append_idx = body.index("body.appendChild(buildThinkLineEl(segs[idx]))")
-        collapse_idx = body.rindex("card.classList.add('think-collapsed')")
-        self.assertLess(append_idx, collapse_idx)                  # 播完才折叠
-        self.assertIn("if (idx < segs.length)", body)
+        self.assertIn("body.textContent = '';", body)              # 清空后一次性插入
+        self.assertIn("body.appendChild(buildThinkLineEl(seg))", body)
+        # 折叠调度存在即可（渲染为同步同帧完成，1.5s 定时器随后触发折叠动画）
+        self.assertIn("scheduleThinkCollapse(card, msgEl);", body)
+        self.assertIn("segs.forEach(function (seg)", body)
         # 阶段标签/正文构建位于 buildThinkLineEl：textContent 注入免 XSS
         el_start = js_index_of(self.console_js, "function buildThinkLineEl")
         el_body = self.console_js[el_start:
@@ -209,8 +215,9 @@ class ThinkLineRevealTests(unittest.TestCase):
         self.assertIn("className = 'think-line'", el_body)
         self.assertIn("className = 'think-line-tag'", el_body)
         self.assertIn("className = 'think-line-text'", el_body)
-        # 卡片被移除即停（清空历史等场景不悬挂计时器）
-        self.assertIn("if (!card.isConnected) return;", body)
+        # 卡片被移除即停（清空历史等场景不悬挂计时器；R2 改造后为
+        # clearInterval + return 复合形态）
+        self.assertIn("if (!card.isConnected)", body)
 
     def test_collapse_and_history_replay_zero_regression(self):
         """零回退哨兵：历史回放不打字（完整填充+保持折叠）、无阶段标记降级

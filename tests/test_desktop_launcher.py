@@ -397,7 +397,7 @@ class IsMainRunningTests(unittest.TestCase):
         with mock.patch.object(launcher.socket, "create_connection") as mc:
             mc.return_value = mock.MagicMock()   # 支持 with 的连接桩
             self.assertTrue(launcher._is_main_running())
-        mc.assert_called_once_with(("127.0.0.1", launcher.MAIN_APP_PORT),
+        mc.assert_called_once_with(("127.0.0.1", launcher.DASHBOARD_APP_PORT),
                                    timeout=1.0)
 
     def test_connect_refused_returns_false(self):
@@ -405,9 +405,10 @@ class IsMainRunningTests(unittest.TestCase):
                                side_effect=OSError("connection refused")):
             self.assertFalse(launcher._is_main_running())
 
-    def test_main_port_constant_matches_main_py(self):
-        """探测端口常量与 main.py 实际监听端口一致（5002）。"""
-        self.assertEqual(launcher.MAIN_APP_PORT, 5002)
+    def test_main_port_constant_retired_after_merge(self):
+        """架构合并（2026-10-01）：5002 彻底废弃，探测常量改为控制台 5003。"""
+        self.assertEqual(launcher.DASHBOARD_APP_PORT, 5003)
+        self.assertFalse(hasattr(launcher, "MAIN_APP_PORT"))
 
     def test_dashboard_port_constant_matches_dashboard(self):
         """复用检测的控制台端口常量与 xiaoju3_dashboard.py 一致（5003）。"""
@@ -418,7 +419,7 @@ class IsMainRunningTests(unittest.TestCase):
         with mock.patch.object(launcher, "_is_port_listening",
                                return_value=True) as mp:
             self.assertTrue(launcher._is_main_running())
-        mp.assert_called_once_with(launcher.MAIN_APP_PORT, timeout=1.0)
+        mp.assert_called_once_with(launcher.DASHBOARD_APP_PORT, timeout=1.0)
 
     def test_port_listening_probe_dashboard(self):
         with mock.patch.object(launcher.socket, "create_connection") as mc:
@@ -518,8 +519,8 @@ class StaticContractTests(unittest.TestCase):
         检测（5002/5003）；taskkill /T 整树终止兜底。"""
         self.assertIn('LAUNCHER_SCRIPT = "xiaoju3_launcher.py"', self.src)
         self.assertIn("subprocess.Popen([_console_python(), script]", self.src)
-        self.assertIn("_is_port_listening(MAIN_APP_PORT)", self.src)
-        self.assertIn("_is_port_listening(DASHBOARD_PORT)", self.src)
+        self.assertIn("_is_port_listening(DASHBOARD_APP_PORT)", self.src)
+        self.assertIn("_is_port_listening(DASHBOARD_APP_PORT)", self.src)
         self.assertIn('"taskkill", "/T", "/F", "/PID"', self.src)
 
     def test_pywebview_lazy_import_with_chinese_hint(self):

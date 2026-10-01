@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-"""接入层 main.py 离线单测（Flask test client，大脑与 OneBot 网络全 mock）。
+"""QQ 接入层 main.py 离线单测（打 :5003 dashboard test client，大脑与 OneBot
+网络全 mock）。
 
-- GET /：302 跳转 http://127.0.0.1:5003/console（5002 旧版网页已废弃，
-  深色聊天页与 POST /chat API 由 :5003 新版控制台取代）；POST /chat 旧版
-  路由断言已下线（404）。
+【架构合并（2026-10-01）：5002 端口废弃，HTTP 层宿主 :5003】main.py 已模块化
+为纯 QQ 业务逻辑（不再监听任何端口），本套件全部 HTTP 用例改打
+xiaoju3_dashboard.app 的 test client（POST /onebot 视图在 dashboard、业务体
+main.onebot_event 一字未改）；指令族用例直接调 main.handle_message 不变。
+行为断言与 5002 时代逐字一致，只改挂载位置。
+
 - /onebot：私聊响应；群聊触发词 / @（CQ 码）/ 戳一戳彩蛋；图片收藏。
 - /onebot LLOneBot 兼容容错：raw_message 缺失时从 OneBot 11 消息段数组重建
   （text 拼接、at/image 段按 CQ 码惯例还原）、post_type 缺失按 message 宽容
@@ -33,6 +37,7 @@ from unittest.mock import MagicMock, patch
 import auth_lv4
 import brain
 import main
+import xiaoju3_dashboard as dashboard
 from agent_state.state_manager import StateManager
 from intent_router import IntentResult
 from permission import PermissionManager
@@ -92,7 +97,7 @@ class _MainCase(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-        self.client = main.app.test_client()
+        self.client = dashboard.app.test_client()   # HTTP 层宿主 :5003（架构合并）
 
     # ---------- 小工具 ----------
     def onebot(self, payload):
@@ -137,20 +142,24 @@ class _MainCase(unittest.TestCase):
         return auth_lv4.generate_totp(self.totp_secret)
 
 
-class TestRootRedirect(_MainCase):
-    """根路径 302：5002 旧版网页（深色聊天页 + POST /chat API）已废弃，
-    网页统一到 :5003 新版控制台——防止误在 5002 旧页测试造成误判。"""
+class TestMergedHosting(_MainCase):
+    """架构合并形态（5002 废弃，HTTP 层宿主 :5003）：main 不再有 Flask app、
+    旧版 POST /chat 路由不复活、/onebot 仅 POST。"""
 
-    def test_root_redirects_to_5003_console(self):
-        resp = self.client.get("/")
-        self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp.headers.get("Location"),
-                         "http://127.0.0.1:5003/console")
+    def test_main_module_has_no_flask_app(self):
+        """main.py 模块化：纯业务逻辑模块，不再创建 Flask app / 监听端口。"""
+        self.assertFalse(hasattr(main, "app"))
+        self.assertIs(dashboard.main, main)   # dashboard 宿主的正是本业务模块
 
     def test_chat_route_removed(self):
-        """POST /chat 旧版网页 API 已随旧页一并下线：返回 404。"""
+        """POST /chat 旧版网页 API 不复活：返回 404。"""
         resp = self.client.post("/chat", json={"message": "你好"})
         self.assertEqual(resp.status_code, 404)
+
+    def test_onebot_get_not_allowed(self):
+        """/onebot 仅 POST：GET 返回 405。"""
+        resp = self.client.get("/onebot")
+        self.assertEqual(resp.status_code, 405)
 
 
 class TestQqChannelKeepsCq(_MainCase):
@@ -1142,7 +1151,7 @@ class TestDangerConfirmFlow(_MainCase):
 
 
 class TestMigrationWiring(_MainCase):
-    """迁移守望接入（架构 §8）：health_bp 注册 + PeerWatch 默认不开。"""
+    """迁移守望接入（架构 §8）：health_bp 注册（宿主 :5003）+ PeerWatch 默认不开。"""
 
     def test_health_endpoint_registered(self):
         resp = self.client.get("/api/health")

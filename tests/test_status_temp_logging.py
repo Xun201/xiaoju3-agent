@@ -16,9 +16,10 @@
     被拦截（filter 返回 False，含带查询串形态），/api/chat、/console、
     /api/history 与非访问日志（werkzeug 启动信息）保留；werkzeug logger
     已挂过滤器 + 级别 INFO 保底；经 logger 实发的端到端抑制。
-  - main._HeartbeatAccessFilter：/onebot 收到 meta_event 打一次性线程标记 →
-    心跳那一次访问日志被拦截、标记消费后不再误拦；/chat 与消息类记录保留；
-    消息类 /onebot 不打标记。
+  - xiaoju3_dashboard._HeartbeatAccessFilter（原 main.py 过滤器，2026-10-01
+    架构合并随 HTTP 层迁入 :5003 宿主）：/onebot 收到 meta_event 打一次性
+    线程标记 → 心跳那一次访问日志被拦截、标记消费后不再误拦；/chat 与
+    消息类记录保留；消息类 /onebot 不打标记。
 
 mock 注意：全部走 mock.patch / patch.dict（结束即还原），不污染 sys.modules
 与全局 logger 状态；不发任何网络/子进程请求。
@@ -36,8 +37,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import main  # noqa: E402  访问日志心跳过滤器与 /onebot 标记（与 test_main 同款 import）
-import xiaoju3_dashboard as dashboard  # noqa: E402
+import main  # noqa: E402  /onebot 业务体宿主（handle_message / requests 打桩用）
+import xiaoju3_dashboard as dashboard  # noqa: E402  过滤器与 /onebot 视图宿主
 
 
 @contextlib.contextmanager
@@ -310,18 +311,19 @@ class PollAccessFilterTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 日志刷屏抑制：main._HeartbeatAccessFilter 与 /onebot 心跳标记
+# 日志刷屏抑制：dashboard._HeartbeatAccessFilter 与 /onebot 心跳标记
 # ---------------------------------------------------------------------------
 
 class HeartbeatAccessFilterTests(unittest.TestCase):
-    """main：meta_event 心跳访问日志拦截（一次性线程标记），消息类保留。"""
+    """dashboard（原 main.py 过滤器随架构合并迁入）：meta_event 心跳访问日志
+    拦截（一次性线程标记），消息类保留。"""
 
     def setUp(self):
         # 防御性清标记：上游用例（如 test_main 的 meta_event 用例）可能在线程
         # 上残留 is_meta_event=True（测试客户端不发访问日志、无人消费）
-        self.local = main._onebot_meta_local
+        self.local = dashboard._onebot_meta_local
         self.local.__dict__.pop("is_meta_event", None)
-        self.filter = main._HeartbeatAccessFilter()
+        self.filter = dashboard._HeartbeatAccessFilter()
 
     def tearDown(self):
         # mock 自动还原：清掉本线程可能残留的心跳标记
@@ -342,13 +344,13 @@ class HeartbeatAccessFilterTests(unittest.TestCase):
     def test_filter_attached_and_level_baseline(self):
         """过滤器已挂 werkzeug logger，且级别保底 INFO。"""
         wz = logging.getLogger("werkzeug")
-        self.assertTrue(any(isinstance(x, main._HeartbeatAccessFilter)
+        self.assertTrue(any(isinstance(x, dashboard._HeartbeatAccessFilter)
                             for x in wz.filters))
         self.assertEqual(wz.level, logging.INFO)
 
     def test_onebot_meta_event_marks_thread(self):
         """/onebot 收到 meta_event（heartbeat）：视图打线程标记并返回 ok。"""
-        client = main.app.test_client()
+        client = dashboard.app.test_client()
         resp = client.post("/onebot", json={"post_type": "meta_event",
                                             "meta_event_type": "heartbeat",
                                             "self_id": 1})
@@ -359,7 +361,7 @@ class HeartbeatAccessFilterTests(unittest.TestCase):
 
     def test_onebot_message_event_no_mark(self):
         """/onebot 消息事件不打标记：消息类访问日志照常保留。"""
-        client = main.app.test_client()
+        client = dashboard.app.test_client()
         with mock.patch.object(main, "handle_message", return_value="你好呀"), \
                 mock.patch.object(main, "requests"), _quiet():
             resp = client.post("/onebot", json={"post_type": "message",

@@ -16,8 +16,14 @@ START_BAT = os.path.join(ROOT, "启动小橘3号.bat")
 STOP_BAT = os.path.join(ROOT, "停止小橘3号.bat")
 
 # 统一日志口径（shell 与 bat 一致）
-LOG_MAIN = "✅ 主程序已启动 (5002)"
+# 2026-10-01 架构合并（5002 废弃，5003 一个进程承载一切）：bat 侧文案已并入
+# 5003；start.sh（Linux 部署脚本，不在本轮合并八文件清单内）保持旧口径常量。
+LOG_DASH_MERGED = "✅ 控制台已启动 (5003/console)——QQ webhook/onebot 已一并宿主其中"    # start.sh 合并后唯一服务行
+LOG_MAIN_BAT = "✅ 主程序已启动 (5003)"    # 启动小橘3号.bat 现行文案（5003 承载一切）
 LOG_CONSOLE = "✅ 控制台已启动 (5003/console)"
+# 启动 bat 的 LLOneBot 改址提醒（架构合并关键提示，必须写入启动日志）
+LLOBOT_HINT_BAT = ("⚠️ QQ webhook 已迁移至 5003：请将 LLOneBot 的 HTTP 上报地址改为 "
+                   "http://127.0.0.1:5003/onebot，否则 QQ 会断连")
 # 停止侧精准匹配正则（原样文本，含转义点）
 KILL_REGEX = r"main\.py|xiaoju3_dashboard\.py"
 
@@ -68,19 +74,21 @@ class ShellScriptTest(unittest.TestCase):
                 r = subprocess.run(["bash", "-n", path], capture_output=True, text=True)
                 self.assertEqual(r.returncode, 0, r.stderr)
 
-    def test_start_sh_only_two_processes_in_order(self):
+    def test_start_sh_only_single_service(self):
+        # 架构合并：唯一服务进程 xiaoju3_dashboard.py（5002 彻底废弃）
         text = read_text(START_SH)
-        # 只拉起两个 python 进程：main.py 与 xiaoju3_dashboard.py
         launches = [ln for ln in text.splitlines()
                     if re.search(r"(?:^|\s)(?:nohup\s+)?python3\s+\S+\.py", ln)]
-        self.assertEqual(len(launches), 2, f"start.sh 只应拉起两个进程，实际：{launches}")
-        main_idx = text.index("python3 main.py &")
-        dash_idx = text.index("nohup python3 xiaoju3_dashboard.py")
-        self.assertLess(main_idx, dash_idx, "必须先后台拉起 main.py，再拉起控制台")
+        self.assertEqual(len(launches), 1, f"start.sh 只应拉起一个服务进程，实际：{launches}")
+        self.assertIn("xiaoju3_dashboard.py", launches[0])
+        self.assertNotIn("python3 main.py", text)
 
     def test_start_sh_log_lines(self):
+        # 架构合并（2026-10-01）：5002 废弃，唯一服务行 + LLOneBot 改址提醒
         text = read_text(START_SH)
-        self.assertIn(LOG_MAIN, text)
+        self.assertIn(LOG_DASH_MERGED, text)
+        self.assertIn("请将 LLOneBot 的 HTTP 上报地址改为 http://127.0.0.1:5003/onebot", text)
+        self.assertNotIn("✅ 主程序已启动 (5002)", text)   # 旧 5002 启动文案已废止
         self.assertIn(LOG_CONSOLE, text)
 
     def test_start_sh_daemon_and_stop_flag_preserved(self):
@@ -147,8 +155,12 @@ class StartBatTest(unittest.TestCase):
         self.assertIn("5003/console", self.text)   # 注释口径保留
 
     def test_two_log_lines(self):
-        self.assertIn(LOG_MAIN, self.text)
+        """架构合并口径：主程序行已并入 5003，控制台行不变；LLOneBot 改址
+        提醒必须写入启动日志（用户口径）。"""
+        self.assertIn(LOG_MAIN_BAT, self.text)
         self.assertIn(LOG_CONSOLE, self.text)
+        self.assertIn(LLOBOT_HINT_BAT, self.text)
+        self.assertNotIn("✅ 主程序已启动 (5002)", self.text)   # 旧 5002 启动文案不再出现
 
     def test_desktop_optional(self):
         self.assertIn("/desktop", self.text)

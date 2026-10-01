@@ -311,7 +311,7 @@ payload = json.dumps({
     "raw_message": "/register " + password,
 }).encode("utf-8")
 req = urllib.request.Request(
-    "http://127.0.0.1:5002/onebot",
+    "http://127.0.0.1:5003/onebot",
     data=payload,
     headers={"Content-Type": "application/json"},
 )
@@ -330,7 +330,7 @@ echo "🎉 小橘3号安装完成！"
 echo "=============================================="
 echo "📖 访问地址："
 echo "   • 网页控制台：http://127.0.0.1:5003/console"
-echo "   • 内置聊天页：http://127.0.0.1:5002/（POST /chat 需 X-API-Key=WEB_API_KEY）"
+echo "   • 网页控制台已含聊天（5003/console）；QQ 上报地址：http://127.0.0.1:5003/onebot"
 echo ""
 echo "📖 权限引导："
 echo "   • LV2 注册：在对话中发送 /register <注册密码>（密码即 .env 的 XIAOJU3_REGISTER_PASSWORD）"

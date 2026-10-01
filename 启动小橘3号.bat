@@ -4,7 +4,8 @@ setlocal
 rem =====================================================
 rem 小橘3号 · Windows 双击启动器（桌面软件化主入口）
 rem 只拉起 desktop_launcher.py（pywebview 独立桌面窗口，1200x800 无地址栏）：
-rem   窗口内部自动后台拉起 xiaoju3_launcher.py（main/控制台/心跳三模块），
+rem   窗口内部自动后台拉起 xiaoju3_launcher.py（5003 一个进程承载一切：
+rem   QQ webhook /onebot + 控制台 + 心跳；5002 端口已废弃），
 rem   关闭桌面窗口即自动停止全部后台进程；
 rem   旧形态（浏览器打开 http://127.0.0.1:5003/console）已废弃，不再开浏览器。
 rem =====================================================
@@ -41,8 +42,9 @@ if exist "desktop_launcher.py" (
 )
 
 rem ⑥ 启动结果（后台服务由桌面窗口拉起，稍候数秒就绪；与 start.sh 日志口径一致）
-echo ✅ 主程序已启动 (5002)（由桌面窗口后台拉起，稍候数秒就绪）
+echo ✅ 主程序已启动 (5003)（由桌面窗口后台拉起，稍候数秒就绪；5002 端口已废弃）
 echo ✅ 控制台已启动 (5003/console)（原生桌面窗口内打开，不再开浏览器）
+echo ⚠️ QQ webhook 已迁移至 5003：请将 LLOneBot 的 HTTP 上报地址改为 http://127.0.0.1:5003/onebot，否则 QQ 会断连
 
 echo 提示：关闭桌面窗口即自动停止全部小橘3号后台进程；也可运行 停止小橘3号.bat 一键关闭
 pause >nul

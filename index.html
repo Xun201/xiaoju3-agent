@@ -230,9 +230,11 @@
 
         /* ==================== 思维链卡片（工具调用 <think> 块展示） ==================== */
         /* 浅灰底折叠卡片，位于消息气泡正文上方（气泡内首个子元素）。
-           折叠实现选 display 切换（最简可靠）：思考正文高度不定，max-height
-           动画需要魔法数字上限且易截断内容；JS 只切换 .think-collapsed 类，
-           箭头方向用 transform 过渡补足动效。 */
+           静态折叠口径仍为 display 切换（.think-collapsed 只藏正文，最简
+           可靠，展开态正文高度不定、无需魔法数字上限）；2026-10-01 起
+           自动折叠先走 .think-anim 的 300ms max-height 过渡动画（见下方
+           折叠动画规则），动画完成后落回本静态口径；箭头方向用 transform
+           过渡补足动效。 */
         .think-card {
             display: block;                     /* 整卡永远可见：.think-collapsed 只藏正文，绝不藏整卡 */
             background-color: #f3f4f6;          /* 浅灰背景（任务规格色） */
@@ -271,21 +273,41 @@
         /* 折叠态：正文 display:none（console.js 切换类名即可，无需内联样式） */
         .think-card.think-collapsed .think-card-body { display: none; }
 
-        /* CoT 逐行展示（任务 6，DeepSeek 风格）：[思考]/[计划]/[行动] 每段
-           单独成行，由 console.js 逐个插入并按 THINK_LINE_STEP_MS 淡入 */
+        /* 折叠动画（2026-10-01 用户口径，DeepSeek 节奏）：思考列表全部渲染完
+           等待 1.5s 后，由 console.js 挂 .think-anim 并把正文内联 max-height
+           从实测可视高度过渡到 0（300ms ease 收缩）；完成后摘除 .think-anim、
+           落回上方 .think-collapsed 静态折叠口径。max-height 选型：内容高度
+           不定，用 clientHeight/scrollHeight 实测值过渡，无魔法数字上限；
+           grid-rows 0fr/1fr 需额外包裹容器且旧引擎兼容差。 */
+        .think-card.think-anim .think-card-body { transition: max-height 0.3s ease; }
+
+        /* 思考展示期间正文气泡暂不显示（折叠完成后由 console.js 摘除
+           .think-pending 显示），形成"先完整思考、收起、后出正文"的节奏 */
+        .message.think-pending .bubble-content,
+        .message.think-pending .source-badge,
+        .message.think-pending .msg-tools { display: none; }
+
+        /* CoT 一次性列表展示（2026-10-01 用户口径，DeepSeek 风格）：[思考]/
+           [计划]/[行动] 每段单独成行，由 console.js 一次性全部插入（无逐行
+           定时器）；.think-line 淡入动画对全部行同时生效（整体浮现，
+           非逐行错峰闪动） */
         .think-line {
             display: flex;
             align-items: flex-start;
             gap: 6px;
             margin: 3px 0;
             opacity: 0;
-            animation: thinkLineFadeIn 0.3s ease forwards;   /* 逐行淡入 */
+            animation: thinkLineFadeIn 0.3s ease forwards;   /* 整体淡入 */
         }
         @keyframes thinkLineFadeIn {
             from { opacity: 0; transform: translateY(3px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        /* 淡蓝色阶段标签小徽章（[思考]/[计划]/[行动]） */
+        /* 阶段层级缩进（完整列表视觉）：[思考] 顶格 / [计划] 一级 / [行动] 二级 */
+        .think-line.think-indent-1 { margin-left: 0; }
+        .think-line.think-indent-2 { margin-left: 14px; }
+        .think-line.think-indent-3 { margin-left: 28px; }
+        /* 淡蓝色阶段标签小徽章（[思考]/[计划]/[行动]，基础样式） */
         .think-line-tag {
             flex-shrink: 0;
             font-size: 11px;
@@ -298,6 +320,10 @@
             border: 1px solid #bfdbfe;
             user-select: none;
         }
+        /* 阶段分色（2026-10-01 用户口径）：[思考] 蓝 / [计划] 绿 / [行动] 橙 */
+        .think-line-tag.think-tag-think { color: #3b82f6; background-color: #eff6ff; border-color: #bfdbfe; }
+        .think-line-tag.think-tag-plan  { color: #2fa24c; background-color: #eefaf1; border-color: #bfe6cb; }
+        .think-line-tag.think-tag-action { color: #d96f2b; background-color: #fdf3ea; border-color: #f3d5ba; }
         .think-line-text {
             color: #6b7280;                     /* 灰色思考文字 */
             min-width: 0;
@@ -354,7 +380,8 @@
         /* ==================== 加速球（任务 7：网页内缩略模式） ==================== */
         /* 最小化：控制台主体（侧栏+聊天区）隐藏，右下角 60px 圆形加速球；
            由 console.js 切换 body 的 .xiaoju3-minimized 类（互切幂等）。
-           与本地桌宠（desktop-pet.js）不同功能、两者共存互不影响。 */
+           任务 4（2026-10-01 用户口径）：桌宠已下线（desktop-pet.js 停止
+           加载），加速球是页面唯一可悬浮交互元素。 */
         body.xiaoju3-minimized > .sidebar,
         body.xiaoju3-minimized > .chat-area { display: none; }
         #xiaoju3-ball {
@@ -429,15 +456,20 @@
         </div>
     </div>
 
-    <!-- 加速球（任务 7：网页内缩略模式，最小化时显示；与桌宠共存互不影响） -->
+    <!-- 加速球（任务 7：网页内缩略模式，最小化时显示；任务 4 后为唯一悬浮元素） -->
     <div id="xiaoju3-ball" title="点击展开控制台（可拖拽移动）">
         <img src="/assets/DSniang1.jpg" alt="小橘3号">
     </div>
 
-    <!-- 挂件容器（桌宠注入点） -->
+    <!-- 挂件容器（桌宠注入点，桌宠下线后保留：空容器无视觉，恢复桌宠时直接复用） -->
     <div id="xiaoju3-root"></div>
 
-    <script src="/console/desktop-pet.js"></script>
+    <!-- 任务 4（2026-10-01 用户口径）：桌宠下线，desktop-pet.js 停止加载。
+         原因：右下角只保留一个悬浮元素（加速球 #xiaoju3-ball，交互逻辑在
+         console.js，不依赖本脚本）；桌宠文件本体保留在仓库不删除（含
+         onerror 裂图回退链与音效引擎），未来恢复时取消下一行注释即可。
+         注意：下一行注释内的 script 标签须保持原文，勿改动 src 写法。 -->
+    <!-- <script src="/console/desktop-pet.js"></script> -->
     <script src="/console/console.js"></script>
 </body>
 </html>

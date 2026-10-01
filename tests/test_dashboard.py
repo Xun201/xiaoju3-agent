@@ -69,8 +69,10 @@ if PROJECT_ROOT not in sys.path:
 
 import prompts  # noqa: E402
 import web_sanitize  # noqa: E402
+import main  # noqa: E402  QQ 接入层业务模块（/onebot 迁移路由打桩用）
 import xiaoju3  # noqa: E402
 import xiaoju3_dashboard as dashboard  # noqa: E402
+from agent_state.state_manager import StateManager  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -308,6 +310,69 @@ class HistoryApiTests(HistoryApiTestsBase):
         self.assertEqual(resp.status_code, 405)
 
 
+class TerminalHistoryApiTests(HistoryApiTestsBase):
+    """GET /api/history?source=terminal（2026-10-01 跨组钉死契约，组 R3 依赖）：
+    终端 CLI 通道 history_terminal.json 的读取端（写端为 xiaoju3.CLI_MEMORY_FILE）；
+    缺省（无 source 参数）保持现状只读控制台通道。"""
+
+    def setUp(self):
+        super().setUp()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.terminal_file = os.path.join(tmp.name, "history_terminal.json")
+        patcher = mock.patch.object(dashboard, "TERMINAL_HISTORY_FILE",
+                                    self.terminal_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _write_terminal(self, messages):
+        os.makedirs(os.path.dirname(self.terminal_file), exist_ok=True)
+        with open(self.terminal_file, "w", encoding="utf-8") as f:
+            json.dump(messages, f, ensure_ascii=False)
+
+    def test_terminal_source_reads_terminal_file(self):
+        """source=terminal：返回 history_terminal.json 内容（同结构）。"""
+        self._write_terminal([
+            {"role": "user", "content": "终端里的问题"},
+            {"role": "assistant", "content": "终端里的回答"},
+        ])
+        payload = self.client.get("/api/history?source=terminal").get_json()
+
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"]["messages"],
+                         [{"role": "user", "content": "终端里的问题"},
+                          {"role": "assistant", "content": "终端里的回答"}])
+
+    def test_terminal_source_missing_file_returns_empty(self):
+        """终端历史文件缺失：{code:200, data:{messages:[]}}，不 500。"""
+        payload = self.client.get("/api/history?source=terminal").get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"]["messages"], [])
+
+    def test_default_source_stays_console_and_ignores_terminal(self):
+        """缺省保持现状：只读控制台通道，终端文件存在也不混入。"""
+        self._write_terminal([{"role": "user", "content": "终端专属"}])
+        self._write_history([{"role": "user", "content": "控制台专属"}])
+
+        default = self.client.get("/api/history").get_json()
+        self.assertEqual([m["content"] for m in default["data"]["messages"]],
+                         ["控制台专属"])
+        terminal = self.client.get("/api/history?source=terminal").get_json()
+        self.assertEqual([m["content"] for m in terminal["data"]["messages"]],
+                         ["终端专属"])
+
+    def test_terminal_source_value_matched_after_trim_and_case(self):
+        """source 取值宽松匹配（首尾空白 / 大小写）：TERMINAL 同样命中终端通道。"""
+        self._write_terminal([{"role": "user", "content": "终端"}])
+        payload = self.client.get("/api/history?source=%20TERMINAL%20").get_json()
+        self.assertEqual(payload["data"]["messages"],
+                         [{"role": "user", "content": "终端"}])
+        # 未知 source 一律回退控制台通道（缺省语义）
+        other = self.client.get("/api/history?source=qq").get_json()
+        self.assertEqual(other["code"], 200)
+        self.assertEqual(other["data"]["messages"], [])   # 控制台文件未写 → 空
+
+
 class ChatHistoryPersistenceTests(HistoryApiTestsBase):
     """POST /api/chat 成功后的历史落盘与 50 条滚动截断。"""
 
@@ -428,6 +493,153 @@ class ChatApiTests(HistoryApiTestsBase):
         payload = resp.get_json()
         self.assertEqual(payload["code"], 500)
         self.assertIn("brain boom", payload["error"])
+
+
+# ---------------------------------------------------------------------------
+# QQ 接入层 webhook（原 :5002 POST /onebot，2026-10-01 架构合并宿主 :5003）
+# ---------------------------------------------------------------------------
+
+class OnebotWebhookMigratedBase(unittest.TestCase):
+    """/onebot 迁移路由夹具：main 业务模块状态注入 tmp 目录（同 test_main 口径，
+    不触碰真实 agent_state），大脑与 NapCat 网络 mock，结束自动还原。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+        tmp = tempfile.TemporaryDirectory()
+        self.tmp = tmp.name
+        self.addCleanup(tmp.cleanup)
+        state_dir = os.path.join(self.tmp, "state")
+        self.smart_ask = mock.MagicMock(return_value=("测试回复", "🏠 本地"))
+        self.napcat = mock.MagicMock()
+        state_manager = StateManager(state_dir)
+
+        for target, value in [
+            ("main.smart_ask", self.smart_ask),
+            ("main.requests", self.napcat),
+            ("main.MEMORY_FILE_WEB", os.path.join(state_dir, "history_web.json")),
+            ("main.MEMORY_FILE_QQ", os.path.join(state_dir, "history_qq.json")),
+            ("main.messages_web", [main.SYSTEM_PROMPT]),
+            ("main.messages_qq", [main.SYSTEM_PROMPT]),
+            ("main.state_manager", state_manager),
+            ("tools.RECENT_ACTIONS_FILE", os.path.join(self.tmp, "recent_actions.json")),
+        ]:
+            patcher = mock.patch(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        # meta_event 心跳线程标记防御性清理（与 test_status_temp_logging 同口径）
+        self.addCleanup(dashboard._onebot_meta_local.__dict__.pop,
+                        "is_meta_event", None)
+
+    def onebot(self, payload):
+        return self.client.post("/onebot", json=payload)
+
+    def napcat_payload(self):
+        return self.napcat.post.call_args[1]["json"]
+
+
+class OnebotWebhookMigratedTests(OnebotWebhookMigratedBase):
+    """POST /onebot 迁移路由行为断言（与 5002 时代逐字一致，零变化口径）：
+    webhook 数据结构 / think 剥离 / 触发词 / 戳一戳 / meta_event 心跳标记 /
+    LLOneBot 兼容容错。"""
+
+    def test_private_message_full_chain(self):
+        """私聊：webhook → main.onebot_event → smart_ask → NapCat 回发。"""
+        with _quiet():
+            resp = self.onebot({
+                "post_type": "message", "message_type": "private",
+                "self_id": "10000", "sender": {"user_id": 123},
+                "raw_message": "你好",
+            })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+        self.napcat.post.assert_called_once()
+        self.assertEqual(self.napcat.post.call_args[0][0],
+                         f"{main.ONEBOT_API_URL}/send_private_msg")
+        payload = self.napcat_payload()
+        self.assertEqual(payload["user_id"], 123)
+        self.assertEqual(payload["message"], "测试回复")
+
+    def test_group_trigger_word_routes_to_group(self):
+        """群聊触发词：回发 send_group_msg 且携带 group_id。"""
+        with _quiet():
+            resp = self.onebot({
+                "post_type": "message", "message_type": "group",
+                "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+                "raw_message": "小橘 帮我看看",
+            })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+        self.assertEqual(self.napcat.post.call_args[0][0],
+                         f"{main.ONEBOT_API_URL}/send_group_msg")
+        self.assertEqual(self.napcat_payload()["group_id"], 456)
+
+    def test_group_without_trigger_ignored(self):
+        """群聊无触发词 / 非 @：不打扰大脑、不回发（防刷屏）。"""
+        with _quiet():
+            resp = self.onebot({
+                "post_type": "message", "message_type": "group",
+                "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+                "raw_message": "今天天气不错",
+            })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+        self.napcat.post.assert_not_called()
+
+    def test_reply_think_block_stripped_before_send(self):
+        """think 剥离：QQ 回复发送前剥除 <think> 块（CQ 码不受影响）。"""
+        self.smart_ask.return_value = (
+            "<think>[思考] 先查设备再开灯。</think>已为你打开卧室灯💡", "🏠 本地")
+        with _quiet():
+            self.onebot({
+                "post_type": "message", "message_type": "private",
+                "self_id": "10000", "sender": {"user_id": 123},
+                "raw_message": "开灯",
+            })
+        self.assertNotIn("<think>", self.napcat_payload()["message"])
+        self.assertEqual(self.napcat_payload()["message"], "已为你打开卧室灯💡")
+
+    def test_poke_easter_egg(self):
+        """戳一戳彩蛋：不进大脑，直接回发彩蛋文案。"""
+        with _quiet():
+            resp = self.onebot({
+                "post_type": "notice", "notice_type": "poke",
+                "group_id": 456, "user_id": 123,
+            })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.napcat.post.assert_called_once()
+        self.assertEqual(self.napcat_payload()["message"], "别戳啦，好痒！😆")
+        self.smart_ask.assert_not_called()
+
+    def test_meta_event_marks_thread_and_ignored(self):
+        """meta_event 心跳：打一次性线程标记（访问日志拦截用）、不进大脑。"""
+        with _quiet():
+            resp = self.onebot({"post_type": "meta_event",
+                                "meta_event_type": "heartbeat"})
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.assertTrue(dashboard._onebot_meta_local.is_meta_event)
+        self.smart_ask.assert_not_called()
+        self.napcat.post.assert_not_called()
+
+    def test_corrupted_fields_return_ok_without_crash(self):
+        """字段损坏（sender 非字典）：不崩，统一返回 ok（LLOneBot 容错）。"""
+        with _quiet():
+            resp = self.onebot({
+                "post_type": "message", "message_type": "private",
+                "sender": 12345, "raw_message": "你好",
+            })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+
+    def test_health_endpoint_hosted_on_5003(self):
+        """GET /api/health（原 :5002 端点）随架构合并迁入 :5003 可用。"""
+        resp = self.client.get("/api/health")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(data["status"], "ok")
+        self.assertTrue(data["device"])
 
 
 # ---------------------------------------------------------------------------

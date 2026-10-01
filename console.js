@@ -496,16 +496,24 @@
         return block;
     }
 
-    // 思考正文展示主链路（任务 6，DeepSeek 风格逐行淡入）+ 逐字打字机降级：
-    // 展开时 [思考]/[计划]/[行动] 每段单独成行、按顺序逐个淡入（每行间隔
-    // 约 200ms），不再整段一次性弹出；无阶段标记的思考文本降级沿用原逐字
-    // 打字机（约 15ms/字，规格 12-20ms 区间，口径零回退）。
-    // animate=false（历史回放共用入口）不打字，直接完整填充并保持折叠。
+    // 思考正文展示主链路（2026-10-01 用户口径，DeepSeek 风格改版）：收到
+    // 思考内容后【一次性把所有行渲染出来】——[思考]/[计划]/[行动] 各占一行、
+    // 徽章分色 + 层级缩进成完整列表（既有逐行淡入 setTimeout 链已废止，
+    // 无逐条闪动/逐字打字）；全部渲染完等待 1.5 秒后动画折叠
+    //（max-height 收缩约 300ms），折叠完成才显示正文气泡；用户点击折叠
+    // 卡片标题可再展开（.think-card-body 既有 max-height + overflow 滚动
+    // 保留，展开时内容完整可见）。无阶段标记的思考文本降级沿用原逐字
+    // 打字机（约 15ms/字，规格 12-20ms 区间，口径零回退），打完走同一套
+    // "等待 → 动画折叠 → 放行正文"节奏。animate=false（历史回放共用入口）
+    // 不打字不动画，直接完整填充并保持折叠态、正文气泡立即可见。
     // 注：全部 textContent 注入，无需 escapeHtml（转义反而会显示 HTML 实体），
     // CQ 码仍走 renderCQFace 与正文同口径净化。
     const THINK_TYPE_MS = 15;
-    // 逐行淡入间隔（任务 6：每行间隔约 200ms）
-    const THINK_LINE_STEP_MS = 200;
+    // 折叠节奏常量：全部行渲染完等待 1.5s → 动画折叠约 300ms（CSS 过渡
+    // 见 index.html .think-card.think-anim .think-card-body，两处口径一致；
+    // JS 常量供兜底收尾定时器取值）
+    const THINK_COLLAPSE_DELAY_MS = 1500;
+    const THINK_COLLAPSE_MS = 300;
     // 阶段标记行：[思考]/[计划]/[行动] 起始（半角方括号，与后端协议同口径）
     const THINK_STAGE_RE = /^\[(思考|计划|行动)\]/;
 
@@ -531,14 +539,30 @@
         return segs;
     }
 
-    // 构建单行段元素：淡蓝色阶段标签徽章（[思考]/[计划]/[行动]）+ 灰色正文
+    // 阶段 → 徽章配色 / 行缩进类映射（2026-10-01 用户口径：三阶段用不同
+    // 颜色与缩进区分，形成完整列表视觉；样式见 index.html .think-tag-* /
+    // .think-indent-*）
+    const THINK_TAG_CLASS = {
+        '思考': 'think-tag-think',
+        '计划': 'think-tag-plan',
+        '行动': 'think-tag-action',
+    };
+    const THINK_INDENT_CLASS = {
+        '思考': 'think-indent-1',
+        '计划': 'think-indent-2',
+        '行动': 'think-indent-3',
+    };
+
+    // 构建单行段元素：阶段标签徽章（[思考]/[计划]/[行动]，分色）+ 灰色正文
     //（textContent 注入免 XSS；无标签段只有正文）
     function buildThinkLineEl(seg) {
         const line = document.createElement('div');
         line.className = 'think-line';
         if (seg.tag) {
+            line.classList.add(THINK_INDENT_CLASS[seg.tag] || 'think-indent-1');
             const tag = document.createElement('span');
             tag.className = 'think-line-tag';
+            tag.classList.add(THINK_TAG_CLASS[seg.tag] || 'think-tag-think');
             tag.textContent = seg.tag;
             line.appendChild(tag);
         }
@@ -547,6 +571,60 @@
         text.textContent = seg.text;
         line.appendChild(text);
         return line;
+    }
+
+    // ==================== 思考动画期间正文气泡显隐（DeepSeek 节奏配套） ====================
+    // 思考列表展示 → 等待 → 动画折叠完成后才显示正文气泡；.think-pending
+    // 的隐藏样式在 index.html（display:none 作用于 .bubble-content /
+    // .source-badge / .msg-tools）。历史回放（animate=false）不隐藏、正文
+    // 立即可见；任何提前退出（卡片被移除/构建失败）都必须放行正文，绝不
+    // 让气泡永久不可见。
+    function hideBubbleUntilThinkDone(msgEl) {
+        if (msgEl && msgEl.classList) msgEl.classList.add('think-pending');
+    }
+    function showBubbleNow(msgEl) {
+        if (msgEl && msgEl.classList) msgEl.classList.remove('think-pending');
+    }
+
+    // 折叠动画（2026-10-01 用户口径）：max-height 技法——先把正文内联
+    // max-height 设为当前可视高度（clientHeight，内容超限滚动态时即可视
+    // 高度，避免先跳到完整内容高度再收起的视觉跳动），挂 .think-anim 启用
+    // CSS transition、强制回流后归零触发收缩；完成后落回既有 .think-collapsed
+    // 静态折叠口径（display:none）并清内联样式。选型说明：grid-rows 0fr/1fr
+    // 需要额外单行子容器包裹且旧引擎兼容差；max-height 以实测可视高度过渡、
+    // 无魔法数字上限，主流引擎表现一致。
+    function animateThinkCollapse(card, msgEl) {
+        const body = card.querySelector('.think-card-body');
+        if (!body || card.classList.contains('think-collapsed')) {
+            showBubbleNow(msgEl);   // 无正文容器/已折叠：直接放行正文
+            return;
+        }
+        body.style.maxHeight = body.clientHeight + 'px';
+        card.classList.add('think-anim');
+        void body.offsetHeight;     // 强制回流：确保过渡从实测高度起算
+        body.style.maxHeight = '0px';
+        let finished = false;
+        const finish = function () {
+            if (finished) return;
+            finished = true;
+            card.classList.add('think-collapsed');   // 复用既有折叠类（点击标题可再展开）
+            card.classList.remove('think-anim');
+            body.style.maxHeight = '';               // 清内联样式，交回类控制
+            showBubbleNow(msgEl);                    // 折叠完成 → 显示正文气泡
+        };
+        body.addEventListener('transitionend', finish);
+        setTimeout(finish, THINK_COLLAPSE_MS + 150); // 兜底收尾（transitionend 丢失时）
+    }
+
+    // 渲染完成后的收起节奏（DeepSeek 口径）：全部内容上屏后等待
+    // THINK_COLLAPSE_DELAY_MS（1.5s）再动画折叠；等待期间卡片被移除
+    //（刷新重建/清空历史）则本链路静默终止——正文放行由接管方负责
+    //（刷新路径 syncThinkCard 会启动新动画链重新接管气泡显隐）。
+    function scheduleThinkCollapse(card, msgEl) {
+        setTimeout(function () {
+            if (!card.isConnected) return;
+            animateThinkCollapse(card, msgEl);
+        }, THINK_COLLAPSE_DELAY_MS);
     }
 
     function startThinkTypewriter(msgEl, thinkText, animate) {
@@ -559,9 +637,10 @@
             return;
         }
         card.classList.remove('think-collapsed');   // 展示期间展开
+        hideBubbleUntilThinkDone(msgEl);            // 思考收起后才显示正文气泡
         const segs = splitThinkStageLines(text);
         if (!segs.length || (segs.length === 1 && !segs[0].tag)) {
-            // 无阶段标记：降级沿用原逐字打字机（口径零回退）
+            // 无阶段标记：降级沿用原逐字打字机（口径零回退），打完走同一套收起节奏
             let shown = 0;
             const timer = setInterval(() => {
                 if (!card.isConnected) { clearInterval(timer); return; }   // 卡片被移除即停
@@ -571,28 +650,20 @@
                 if (history) history.scrollTop = history.scrollHeight;     // 跟随滚动
                 if (shown >= text.length) {
                     clearInterval(timer);
-                    card.classList.add('think-collapsed');   // 打完自动折叠（点击标题可再展开）
+                    scheduleThinkCollapse(card, msgEl);   // 打完 → 等 1.5s → 动画折叠
                 }
             }, THINK_TYPE_MS);
             return;
         }
-        // 逐行淡入（任务 6）：先清空正文（强制兜底卡片可能已预填全文），
-        // 每段单独成行，按顺序每 THINK_LINE_STEP_MS 淡入一行
+        // 一次性渲染（2026-10-01 用户口径，替代既有逐行淡入链）：全部行
+        // 同帧插入、完整列表一次上屏，无逐条闪动/逐字打字；整体浮现动效由
+        // .think-line 的 CSS 动画承担（所有行同时淡入，非逐行错峰）
         body.textContent = '';
-        let idx = 0;
-        const revealNextLine = () => {
-            if (!card.isConnected) return;              // 卡片被移除即停
-            body.appendChild(buildThinkLineEl(segs[idx]));
-            idx += 1;
-            const history = document.getElementById('chat-history');
-            if (history) history.scrollTop = history.scrollHeight;     // 跟随滚动
-            if (idx < segs.length) {
-                setTimeout(revealNextLine, THINK_LINE_STEP_MS);
-            } else {
-                card.classList.add('think-collapsed');  // 播完自动折叠（点击标题可再展开）
-            }
-        };
-        revealNextLine();
+        segs.forEach(function (seg) { body.appendChild(buildThinkLineEl(seg)); });
+        const history = document.getElementById('chat-history');
+        if (history) history.scrollTop = history.scrollHeight;     // 跟随滚动
+        // 全部渲染完 → 等 1.5s → 动画折叠（约 300ms）→ 显示正文气泡
+        scheduleThinkCollapse(card, msgEl);
     }
 
     // 点击标题展开/收起（折叠用 display 切换，样式见 index.html .think-collapsed）
