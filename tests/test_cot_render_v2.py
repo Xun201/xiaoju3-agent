@@ -293,10 +293,10 @@ class PetOfflineBallOnlyTests(unittest.TestCase):
 
     def test_ball_kept_in_html(self):
         """加速球保留（index.html 静态节点）：60px 圆形 #xiaoju3-ball、
-        小橘头像 /assets/DSniang1.jpg、最小化态显示规则原样。"""
+        小橘半身像 /assets/pet/normal_half.png、最小化态显示规则原样。"""
         html = self.index_html
         self.assertIn('id="xiaoju3-ball"', html)
-        self.assertIn('src="/assets/DSniang1.jpg"', html)
+        self.assertIn('src="/assets/pet/normal_half.png"', html)
         self.assertIn("#xiaoju3-ball {", html)
         self.assertIn("body.xiaoju3-minimized #xiaoju3-ball", html)
         self.assertIn('id="console-minimize"', html)      # 缩球入口按钮
@@ -324,12 +324,12 @@ class PetOfflineBallOnlyTests(unittest.TestCase):
         html = self.index_html
         stripped = _strip_html_comments(html)
         imgs = re.findall(r'<img[^>]*src="([^"]+)"', stripped)
-        self.assertEqual(imgs, ["/assets/DSniang1.jpg"])   # 唯一图片=球头像
+        self.assertEqual(imgs, ["/assets/pet/normal_half.png"])   # 唯一图片=球头像
         self.assertIn('<div id="xiaoju3-root"></div>', stripped)
         # 加速球元素仍引用头像（资产保留在仓库且前端仍用）
         ball = re.search(r'<div id="xiaoju3-ball".*?</div>', html, flags=re.S)
         self.assertIsNotNone(ball)
-        self.assertIn("/assets/DSniang1.jpg", ball.group(0))
+        self.assertIn("/assets/pet/normal_half.png", ball.group(0))
 
 
 # ---------------------------------------------------------------------------
