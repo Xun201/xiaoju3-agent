@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
-"""小橘3号 · 接入层主程序（QQ + 网页双入口，Flask :5002）。
+"""小橘3号 · 接入层主程序（纯 QQ webhook + API 网关，Flask :5002；网页统一 :5003）。
 
 按《架构设计文档》§2 /《功能文档》§2.4、§5 与第二阶段 §7 权限调整：
+- 5002 旧版网页已废弃（内置深色聊天页 GET / 与 POST /chat API 由 :5003
+  xiaoju3_dashboard.py 新版控制台取代）：GET / 一律 302 跳转
+  http://127.0.0.1:5003/console；POST /chat 路由已删除，防止误用旧页测试。
 - POST /onebot：OneBot 11 webhook（LLOneBot 实现；无鉴权保持文档口径，依赖内网环境，§9）。
   私聊直接响应；群聊需 @（CQ 码）或触发词（小橘/小桔/橘3号/橘三号/AI测试）
   才理人，防刷屏；戳一戳彩蛋回应；非 @ 图片消息自动收藏表情链接（emoji_manager）。
-- POST /chat：网页控制台入口，校验 X-API-Key 头（统一配置 xiaoju3.WEB_API_KEY，
-  经渲染注入页面，不在源码/前端硬编码真实密钥——修复文档 §9 已知风险）。
-  回复返回前经 web_sanitize.sanitize_for_web 净化 QQ 专用 CQ 码（网页不显示
-  方括号原文）；QQ 链路（/onebot → OneBot、/send_image）保持原样不受影响。
-- GET /：内联深色聊天页（参考实现形态）；GET /api/health：迁移守望探测端点
-  （migration.health_bp 一行接入，架构 §8）。
+- GET /api/health：迁移守望探测端点（migration.health_bp 一行接入，架构 §8）。
 
 指令族（§7 用户新权限表，覆盖旧"固定认证码"口径）：
 - /register <密码> [称呼]：Lv.2 注册（env XIAOJU3_REGISTER_PASSWORD，落盘；称呼不得占用创造者保留名）。
@@ -48,7 +46,7 @@ import threading
 import time
 
 import requests
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, redirect, request
 
 import brain
 import home_tools
@@ -63,9 +61,8 @@ from permission import permission_manager
 from plugins.context_manager import compress_context
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool, get_recent_actions
-from web_sanitize import sanitize_for_web
 from xiaoju3 import (AGENT_STATE_DIR, ONEBOT_API_URL, ONEBOT_TOKEN,
-                     TRIGGER_WORDS, WEB_API_KEY, WORKSPACE)
+                     TRIGGER_WORDS, WORKSPACE)
 
 app = Flask(__name__)
 # 🛡️ 迁移守望探测端点（架构 §8，migration docstring 接入示例：一行注册）
@@ -75,8 +72,8 @@ app.register_blueprint(health_bp)
 # 用户口径：LLOneBot 心跳（meta_event 的 heartbeat/lifecycle 等高频事件）每次
 # POST /onebot 都打一条 werkzeug 访问日志，长期运行刷屏。心跳与消息事件同为
 # POST /onebot，访问日志行无法区分——视图内对 meta_event 事件打一次性线程
-# 标记，过滤器据此只拦截心跳那一次请求的访问日志；/chat 与消息类 /onebot
-# 日志保留。拦截（filter 返回 False）而非"降为 DEBUG"的取舍见
+# 标记，过滤器据此只拦截心跳那一次请求的访问日志；消息类 /onebot 日志保留。
+# 拦截（filter 返回 False）而非"降为 DEBUG"的取舍见
 # xiaoju3_dashboard.py 注释：werkzeug 3.x 自挂 NOTSET 级 handler，降级 DEBUG
 # 仍会被输出；直接拦截跨日志配置行为确定。
 _onebot_meta_local = threading.local()   # 当前线程是否正处理 meta_event 心跳类事件
@@ -163,9 +160,9 @@ def _strip_think(text):
     """剥除 <think>...</think> 思维链包装块（含标签本体，DOTALL 跨行）。
 
     brain.smart_ask 的工具流程回复会在最前面包装 <think> 推理块，供新版
-    网页前端渲染折叠卡片；QQ 发送点（/onebot → OneBot，/send_image 的 CQ 码
-    随回复链路发出同理）与旧版网页出口（/chat，无卡片渲染器）必须在发送前
-    剥除——QQ 消息与旧页保持干净，推理展示只属于新前端。
+    网页前端（:5003 控制台）渲染折叠卡片；QQ 发送点（/onebot → OneBot，
+    /send_image 的 CQ 码随回复链路发出同理）必须在发送前剥除——QQ 消息
+    保持干净，推理展示只属于新前端。
     """
     return re.sub(r'<think>.*?</think>', '', str(text or ""), flags=re.DOTALL).strip()
 
@@ -570,99 +567,13 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     return reply
 # =======================================================
 
-# ================= 网页界面 =================
-HTML_PAGE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>小橘3号 网页控制台</title>
-    <style>
-        body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #eee; margin: 0; padding: 20px; }
-        #chat { height: 70vh; overflow-y: auto; padding: 10px; border: 1px solid #444; border-radius: 10px; background: #16213e; }
-        .msg { margin: 10px 0; padding: 10px; border-radius: 10px; max-width: 80%; }
-        .user { background: #0f3460; margin-left: auto; text-align: right; }
-        .bot { background: #533483; margin-right: auto; }
-        .sys { font-size: 0.8em; color: #888; text-align: center; margin: 5px 0; }
-        #input-area { display: flex; margin-top: 15px; }
-        #input { flex: 1; padding: 12px; border-radius: 20px; border: none; font-size: 16px; background: #eee; }
-        #send { padding: 12px 20px; border: none; border-radius: 20px; background: #e94560; color: white; font-size: 16px; margin-left: 10px; }
-    </style>
-</head>
-<body>
-    <h2>🤖 小橘3号 控制台</h2>
-    <div id="chat"></div>
-    <div id="input-area">
-        <input type="text" id="input" placeholder="跟小橘3号说点什么..." autofocus>
-        <button id="send">发送</button>
-    </div>
-    <script>
-        const chat = document.getElementById('chat');
-        const input = document.getElementById('input');
-        const send = document.getElementById('send');
-
-        function addMsg(text, cls) {
-            const div = document.createElement('div');
-            div.className = 'msg ' + cls;
-            div.textContent = text;
-            chat.appendChild(div);
-            chat.scrollTop = chat.scrollHeight;
-        }
-
-        async function sendMsg() {
-            const text = input.value.trim();
-            if (!text) return;
-            input.value = '';
-            addMsg(text, 'user');
-            addMsg('小橘3号正在思考中...', 'sys');
-
-            try {
-                const res = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': '{{ api_key }}'  // 🛡️ 这里带上暗号（经统一配置注入，不硬编码）
-                    },
-                    body: JSON.stringify({message: text})
-                });
-                const data = await res.json();
-                const sys = document.querySelector('.sys:last-child');
-                if (sys) sys.remove();
-                addMsg(data.reply, 'bot');
-            } catch (e) {
-                addMsg('❌ 连接失败，请检查小橘3号是否在运行。', 'sys');
-            }
-        }
-
-        send.onclick = sendMsg;
-        input.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMsg(); });
-    </script>
-</body>
-</html>
-'''
-# ============================================
-
 # ================= 网页大门 =================
 @app.route('/')
 def index():
-    # 🛡️ API Key 经统一配置渲染注入，不在前端源码硬编码真实值（文档 §9 改进项）
-    return render_template_string(HTML_PAGE, api_key=WEB_API_KEY)
-
-@app.route('/chat', methods=['POST'])
-def chat():
-    # 🛡️ 权限验证
-    token = request.headers.get('X-API-Key')
-    if token != WEB_API_KEY:
-        return jsonify({"reply": "❌ 未授权的访问！"}), 401
-    user_msg = (request.get_json(silent=True) or {}).get('message', '')
-    if not user_msg:
-        return {"reply": "请说点什么吧！"}
-    reply = handle_message('web', 'admin', None, user_msg)
-    # 🛡️ Web 出口净化：先剥除 <think> 思维链块（旧版网页无推理卡片渲染器），
-    # 再净化 CQ 码转 Emoji / [表情] / 剥除（网页不显示方括号原文，且不泄露
-    # 表情包本机路径）；QQ 链路（/onebot → NapCat）同样剥 think 但保留 CQ 原文。
-    return {"reply": sanitize_for_web(_strip_think(reply))}
+    # 🚧 5002 旧版网页已废弃（内置深色聊天页 + POST /chat API 由 :5003
+    # xiaoju3_dashboard.py 新版控制台取代）：根路径一律 302 跳转新版控制台，
+    # 防止误在 5002 旧页测试造成误判。
+    return redirect("http://127.0.0.1:5003/console", 302)
 
 # ================= QQ大门 =================
 def _rebuild_raw_message(data):
@@ -768,8 +679,9 @@ def onebot_webhook():
 
 
 if __name__ == '__main__':
-    print("🌐 小橘3号网页控制台已启动！")
-    print("💡 网页访问：http://127.0.0.1:5002（局域网内其他设备请改用本机内网地址访问）")
+    print("🤖 小橘3号接入层已启动（纯 QQ webhook + API 网关，:5002）！")
+    print("💡 网页控制台已统一到 :5003：http://127.0.0.1:5003/console"
+          "（本端口根路径自动 302 跳转）")
 
     # 💓 启动主动心跳引擎
     start_heartbeat()

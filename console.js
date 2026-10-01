@@ -129,8 +129,45 @@
         refreshVoiceSelector();
     }
 
-    // 音色下拉菜单（纯 JS 动态构建，不改 index.html）：挂在聊天头部工具区，
-    // 只列 zh 音色 + 默认项；切换即写 localStorage；选中项按回退链回显。
+    // ==================== 0.55 Edge-TTS 播放链路（后端 /api/tts，组 M4 契约） ====================
+    // 契约钉死：POST /api/tts body {text, voice} → 200 返回 audio/mpeg 音频流
+    // （blob 直接播放）或 4xx/5xx JSON {error}。voice 缺省时后端走默认音色。
+    // Edge 音色常量表：与后端 xiaoju3_dashboard.EDGE_VOICES 口径一致（voice id
+    // 必须逐字相同，label 为中文说明）；首个为后端默认音色（晓晓）。
+    const EDGE_TTS_VOICES = [
+        { name: 'zh-CN-XiaoxiaoNeural', label: '晓晓-温柔女声' },
+        { name: 'zh-CN-XiaoyiNeural',   label: '晓伊-活泼女声' },
+        { name: 'zh-CN-XiaomoNeural',   label: '晓墨-阳光女声' },
+        { name: 'zh-CN-XiaoqiuNeural',  label: '晓秋-知性女声' },
+    ];
+
+    // localStorage 键值协议（键沿用 xiaoju3_tts_voice，测试锁定）：
+    // ① 值为 EDGE_TTS_VOICES 中的音色名（如 zh-CN-XiaoxiaoNeural）→ Edge 链：
+    //    /api/tts 的 voice 参数即用该值；
+    // ② 值含"浏览器"字样（浏览器项写入的哨兵值 '浏览器TTS（降级）'——真值
+    //    可阻止 adoptBackendTTSVoice 在 2s 轮询中回填覆盖用户选择）、值含
+    //    浏览器音色名（如"Google 普通话"）等非 Edge 音色名、或两者皆空
+    //    → 浏览器 TTS 降级链（既有回退链语义零回退）。
+    // /api/status 下发的 tts_voice（.env TTS_VOICE）仍经上方 adoptBackendTTSVoice
+    // 在 localStorage 为空时写回——后端配置 Edge 音色名即成为 Edge 初始默认。
+    function isEdgeTTSVoice(name) {
+        return EDGE_TTS_VOICES.some(v => v.name === name);
+    }
+
+    // 朗读链路解析：Edge 优先（记忆值为 Edge 音色名），否则浏览器降级链
+    function resolveTTSMode() {
+        const stored = getStoredTTSVoiceName() || backendTTSVoice;
+        if (stored && isEdgeTTSVoice(stored)) return { mode: 'edge', voice: stored };
+        // 协议口径：browser 分支返回音色"名称字符串"（SpeechSynthesisVoice
+        // 对象则解包 .name；playMsg 浏览器路径不经 plan.voice，自行重挑）
+        var v = pickTTSVoice();
+        return { mode: 'browser', voice: (v && v.name) ? v.name : v };
+    }
+
+    // 音色下拉菜单（纯 JS 动态构建，不改 index.html）：挂在聊天头部工具区。
+    // 升级为 Edge 音色列表（/api/tts 云端合成，值 = Edge 音色名）+ "浏览器
+    // TTS（降级）"项（值 = ''，走既有回退链）；切换即写 localStorage；
+    // 选中项按上方键值协议回显。
     let ttsVoiceSelect = null;
     function refreshVoiceSelector() {
         const actions = document.querySelector('.chat-header .header-actions');
@@ -138,7 +175,7 @@
         if (!ttsVoiceSelect) {
             ttsVoiceSelect = document.createElement('select');
             ttsVoiceSelect.id = 'tts-voice-select';
-            ttsVoiceSelect.title = '朗读音色';
+            ttsVoiceSelect.title = '朗读音色（Edge 云端合成 / 浏览器降级）';
             ttsVoiceSelect.style.cssText =
                 'max-width: 140px; font-size: 12px; padding: 3px 4px;' +
                 'border: 1px solid var(--color-border); border-radius: var(--radius-tool);' +
@@ -147,29 +184,44 @@
             ttsVoiceSelect.addEventListener('change', function () {
                 const name = ttsVoiceSelect.value;
                 try {
-                    if (name) localStorage.setItem(TTS_VOICE_KEY, name);
-                    else localStorage.removeItem(TTS_VOICE_KEY);   // 默认 = 清除记忆
+                    if (name) {
+                        localStorage.setItem(TTS_VOICE_KEY, name);   // Edge 音色名（协议①）
+                    } else {
+                        // 空值兜底分支（正常情况下浏览器项 value 直接含"浏览
+                        // 器"字样，走不到这里）：清除记忆交回退链
+                        localStorage.removeItem(TTS_VOICE_KEY);
+                    }
                 } catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
-                showToast(name ? '朗读音色已切换：' + name : '朗读音色：默认（自动选择）');
+                showToast(name && name.indexOf('浏览器') === -1
+                                ? '朗读音色已切换：' + name
+                                : '朗读音色：浏览器 TTS（降级）');
             });
             actions.prepend(ttsVoiceSelect);
         }
-        const voices = listZhVoices();
+        const zhVoices = listZhVoices();
+        const browserVoice = pickTTSVoice();   // 降级链解析照常（回退链语义零回退）
         ttsVoiceSelect.innerHTML = '';
-        const defOpt = document.createElement('option');
-        defOpt.value = '';
-        defOpt.textContent = '默认音色';
-        ttsVoiceSelect.appendChild(defOpt);
-        voices.forEach(v => {
+        // Edge 音色组：值 = Edge 音色名（协议①，/api/tts 携带 voice 参数）
+        EDGE_TTS_VOICES.forEach(v => {
             const opt = document.createElement('option');
             opt.value = v.name;
-            opt.textContent = v.name + (v.lang ? '（' + v.lang + '）' : '');
+            opt.textContent = v.label + '（Edge）';
             ttsVoiceSelect.appendChild(opt);
         });
-        // 选中项回显：当前回退链解析出的音色（不在 zh 列表内则回落默认项）
-        const current = pickTTSVoice();
-        ttsVoiceSelect.value =
-            (current && voices.some(v => v.name === current.name)) ? current.name : '';
+        // 浏览器降级项：值含"浏览器"字样（协议②哨兵值，真值可阻断
+        // adoptBackendTTSVoice 回填；title 提示降级后实际使用的音色）
+        const browserOpt = document.createElement('option');
+        browserOpt.value = '浏览器TTS（降级）';
+        browserOpt.textContent = '浏览器 TTS（降级）';
+        browserOpt.title = browserVoice
+            ? '降级音色：' + browserVoice.name
+            : '浏览器引擎默认音色（当前 ' + zhVoices.length + ' 个中文音色可用）';
+        ttsVoiceSelect.appendChild(browserOpt);
+        // 选中项回显：Edge 音色按名回显；浏览器链路（哨兵值/浏览器音色名/空）
+        // 回落"浏览器 TTS（降级）"项
+        const storedVoice = getStoredTTSVoiceName() || backendTTSVoice;
+        ttsVoiceSelect.value = isEdgeTTSVoice(storedVoice)
+            ? storedVoice : '浏览器TTS（降级）';
     }
 
     if (window.speechSynthesis) {
@@ -813,18 +865,83 @@
             .catch(() => showToast('复制失败，请手动选择文本'));
     };
 
-    // 播放（朗读）：每次播放前清空队列，防止连点无限循环；朗读前剔除 emoji
-    //（任务 7：引擎读不出 emoji，标点保留作自然停顿），并按回退链选择
-    // 音色（任务 4：localStorage → /api/status tts_voice → 中文女声 → zh）
+    // 播放（朗读）——Edge-TTS 优先：解析链路（协议见 0.55）→ Edge 音色时
+    // POST /api/tts（voice 参数带上）→ blob → Audio 播放；网络/4xx/5xx/超时
+    // /播放失败一律自动降级浏览器 speechSynthesis（清队列防连点、emoji 剔除
+    // 与音色回退链零回退）。emoji 剔除在入口统一做一次，两条链路共用同一份
+    // 净化文本（任务 7：引擎读不出 emoji，标点保留作自然停顿）。
     window.playMsg = function(el) {
-        window.speechSynthesis.cancel(); // 清空之前的播放队列
         const text = el.closest('.message').querySelector('.bubble-content').innerText;
-        const utter = new SpeechSynthesisUtterance(stripEmojiForTTS(text));
+        const speakText = stripEmojiForTTS(text);
+        if (!speakText) return;
+        const plan = resolveTTSMode();
+        if (plan.mode !== 'edge') {
+            speakWithBrowserTTS(speakText);   // 浏览器音色/未配置 Edge：原链直走
+            return;
+        }
+        requestEdgeTTS(speakText, plan.voice)
+            .then(playAudioBlob)
+            .catch(() => speakWithBrowserTTS(speakText));   // 任何失败 → 自动降级
+    };
+
+    // Edge-TTS 请求：POST /api/tts {text, voice} → 200 audio/mpeg → blob。
+    // AbortController 超时 8s（超时按失败降级）；非 2xx（后端 4xx/5xx JSON
+    // {error}）或 200 但 Content-Type 非音频（异常网关）一律抛错走降级。
+    const EDGE_TTS_TIMEOUT_MS = 8000;
+    let edgeAudio = null;   // Audio 单例：连点时打断上一段，不叠音
+    function requestEdgeTTS(text, voice) {
+        let timer = null;
+        const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+        if (ctrl) timer = setTimeout(() => ctrl.abort(), EDGE_TTS_TIMEOUT_MS);
+        return fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text, voice: voice }),
+            signal: ctrl ? ctrl.signal : undefined
+        }).then(res => {
+            if (!res.ok) throw new Error('TTS HTTP ' + res.status);
+            return res.blob();
+        }).then(blob => {
+            if (blob && blob.type && blob.type.indexOf('audio') !== 0) {
+                throw new Error('TTS 响应非音频：' + blob.type);
+            }
+            if (timer) clearTimeout(timer);
+            return blob;
+        }, err => {
+            if (timer) clearTimeout(timer);
+            throw err;
+        });
+    }
+
+    // blob → Audio 播放（URL.createObjectURL；播完/出错释放，Audio 单例防叠音）
+    function playAudioBlob(blob) {
+        return new Promise((resolve, reject) => {
+            try {
+                const url = URL.createObjectURL(blob);
+                if (edgeAudio) edgeAudio.pause();
+                edgeAudio = new Audio();
+                edgeAudio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+                edgeAudio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('音频播放失败')); };
+                edgeAudio.src = url;
+                const p = edgeAudio.play();
+                if (p && p.catch) {
+                    p.catch(() => { URL.revokeObjectURL(url); reject(new Error('自动播放被拦截')); });
+                }
+            } catch (e) { reject(e); }
+        });
+    }
+
+    // 浏览器 TTS 降级链（既有链路零回退）：每次播放前清空队列防连点；
+    // 按回退链选择音色（localStorage → /api/status tts_voice → 中文女声 → zh
+    // → 引擎默认），无可用音色时不设 utter.voice
+    function speakWithBrowserTTS(text) {
+        window.speechSynthesis.cancel(); // 清空之前的播放队列
+        const utter = new SpeechSynthesisUtterance(text);
         utter.lang = 'zh-CN';
         const voice = pickTTSVoice();
         if (voice) utter.voice = voice;
         window.speechSynthesis.speak(utter);
-    };
+    }
 
     // 点赞/踩：互斥逻辑（点一个自动取消另一个），再次点击可取消
     window.toggleLike = function(el) {

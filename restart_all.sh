@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 小橘3号 · 一键重启主程序与仪表盘（参考实现口径：清进程 → 清标记 → 重启）
+# 小橘3号 · 一键重启主程序与控制台（口径：先停后启，主程序 5002 → 控制台 5003/console）
 cd "$(dirname "$0")" || exit 1  # 关键：强制进入项目目录
 echo "🔄 正在重启小橘3号（主程序 + 控制台）..."
 # 精准清理：只杀带本项目脚本名的进程，避免误杀系统 Python
@@ -8,6 +8,7 @@ pkill -9 -f "python.*xiaoju3_dashboard\.py" 2>/dev/null
 pkill -9 -f "start\.sh" 2>/dev/null
 rm -f stop.flag
 sleep 1
-echo "✅ 清理完成，正在重新启动控制台与守护..."
-./start_dashboard.sh
+echo "✅ 清理完成，按顺序重新启动：主程序(5002) → 控制台(5003/console)..."
+# 主程序与控制台统一交给 start.sh 按顺序拉起（✅ 两行日志由它输出，保证口径一致；
+# start_dashboard.sh 仍保留供单独拉起控制台使用，重启流程不再单独调用）
 ./start.sh

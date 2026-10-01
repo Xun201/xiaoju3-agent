@@ -16,9 +16,29 @@
 // - 移动端缩放：视口 <600px 时按比例缩小（复用 --pet-scale 机制）。
 // - 音效：WebAudio 程序合成按压音/提示音（零外部音频文件，ASSETS.md 的
 //   CC0 合规口径）；总开关 localStorage 记忆；不支持 AudioContext 静默降级。
+// - 双版本状态机（2026-10-01 用户口径）：默认半身像 normal_half.png（吸附
+//   右下角只露上半身），拖拽中自动切换全身像 normal_full.png，释放吸附回
+//   边缘后切回半身像；任一状态图加载失败自动回退（状态图 → 半身 → 官方
+//   JPG 素材 → SVG 兜底气泡），绝不出现裂图。PET_STATE_IMAGES 常量表即
+//   情绪扩展接口：后续新增情绪（如 happy_full）只需补素材 + 表内登记 +
+//   window.xiaoju3SetPetState('happy_full') 挂载即可。
 (function() {
     if (window.__xiaoju3Pet) return;
     window.__xiaoju3Pet = true;
+
+    // ==================== 0. 双版本状态图常量表（情绪扩展接口） ====================
+    // 键 = 状态名（后续情绪按此表挂载），值 = 素材路径；素材由即梦 AI 生成
+    // 的透明背景 PNG（占位阶段为官方 JPG 字节副本，浏览器按内容解析、与
+    // 扩展名无关）。happy_full 为预留位：素材尚未生成，挂载前先放入
+    // assets/pet/happy_full.png（未放时 setPetState 加载失败自动回退，不裂图）。
+    const PET_STATE_IMAGES = {
+        normal_half: '/assets/pet/normal_half.png',   // 默认：半身（吸附右下角露上半身）
+        normal_full: '/assets/pet/normal_full.png',   // 拖拽中：全身
+        happy_full: '/assets/pet/happy_full.png',     // 预留：开心全身（情绪扩展接口）
+    };
+    const PET_DEFAULT_STATE = 'normal_half';
+    // 状态图全缺时的最终兜底素材（官方设定图 JPG，白底由 multiply 去除）
+    const PET_FALLBACK_IMAGE = '/assets/DSniang1.jpg';
 
     // ==================== 音效引擎（WebAudio 程序合成，零外部音频文件） ====================
     const SOUND_KEY = 'xiaoju3_sound';
@@ -89,12 +109,14 @@
             user-select: none;
             z-index: 99999;
             transition: left .16s ease, top .16s ease, transform .3s ease;
-            /* 去白底（形象图 JPG 白底 + SVG 兜底气泡白底统一处理）：multiply
+            /* 去白底（占位 JPG 白底 + SVG 兜底气泡白底统一处理）：multiply
                混合让白色在浅色页面视觉消失（纯 CSS 零依赖）。注意声明必须落在
                .xiaoju-root 上——fixed 定位容器自成堆叠上下文（隔离组），在内部
                元素（如 .xiaoju-img）上声明 multiply 无法穿透容器混到页面底色；
-               深色主题下 multiply 会压暗形象，追求最佳效果可将 assets/DSniang1.jpg
-               替换为同名透明通道 PNG（文件名不变即可，详见 assets/ASSETS.md） */
+               双版本状态图换成透明背景 PNG 后 multiply 无副作用（透明像素不
+               参与混合、形象原样显示），深色主题也不再压暗；占位 JPG 阶段
+               深色主题会压暗，最佳效果用即梦 AI 透明背景 PNG 替换（文件名
+               不变即可，详见 assets/ASSETS.md） */
             mix-blend-mode: multiply;
         }
         .xiaoju-body {
@@ -239,7 +261,7 @@
 
     const img = document.createElement('img');
     img.className = 'xiaoju-img';
-    img.src = '/assets/DSniang1.jpg'; // 吉祥物图片（作者官方素材，assets 目录）
+    img.src = PET_STATE_IMAGES[PET_DEFAULT_STATE]; // 默认半身像（吸附右下角只露上半身）
     img.alt = '小橘3号吉祥物';
     img.draggable = false;
     flipBox.appendChild(img);
@@ -284,8 +306,42 @@
         if (img.complete && img.naturalWidth > 0) root.classList.add('img-ok');
         else root.classList.remove('img-ok');
     }
+
+    // ==================== 双版本状态机（half 默认 / 拖拽 full / 吸附回 half） ====================
+    let petState = PET_DEFAULT_STATE;
+    const failedStateUrls = new Set();   // 已加载失败的状态图 URL（防 onerror 死循环/裂图）
+
+    // 状态切换（情绪扩展挂载点）：按 PET_STATE_IMAGES 常量表换 src；未登记
+    // 的状态名拒绝；登记过但曾加载失败的 URL 不再重复请求（保持当前兜底图）
+    function setPetState(next) {
+        const url = PET_STATE_IMAGES[next];
+        if (!url) return false;                            // 未登记状态：拒绝
+        petState = next;
+        root.dataset.petState = next;                      // 供后续按状态挂 CSS（半身/全身尺寸差异）
+        if (failedStateUrls.has(url)) return false;        // 曾加载失败：保持兜底图
+        if (img.getAttribute('src') !== url) img.src = url; // 同图不重复触发加载
+        return true;
+    }
+    // 情绪扩展接口（对外只读挂载）：后续 happy_full 等情绪由外部按表调用
+    window.xiaoju3SetPetState = setPetState;
+
+    // 读取失败自动回退链（绝不裂图）：当前非半身 → 退半身；半身也失败 →
+    // 兜底官方 JPG；JPG 仍失败 → refreshImgMode 移除 img-ok，SVG 兜底气泡接管
+    img.addEventListener('error', () => {
+        failedStateUrls.add(img.getAttribute('src'));
+        if (petState !== 'normal_half' &&
+            !failedStateUrls.has(PET_STATE_IMAGES.normal_half)) {
+            setPetState('normal_half');                    // ① 状态图缺失：回退半身
+            return;
+        }
+        if (img.getAttribute('src') !== PET_FALLBACK_IMAGE &&
+            !failedStateUrls.has(PET_FALLBACK_IMAGE)) {
+            img.src = PET_FALLBACK_IMAGE;                  // ② 半身也缺：官方 JPG 兜底
+            return;
+        }
+        refreshImgMode();                                  // ③ 全缺：SVG 兜底气泡
+    });
     img.addEventListener('load', () => { refreshImgMode(); initPosition(); });
-    img.addEventListener('error', refreshImgMode);
     refreshImgMode();
 
     // ==================== 3. 核心交互逻辑 ====================
@@ -420,7 +476,11 @@
         if (!drag || !isDragging) return;
         const dx = e.clientX - drag.startX;
         const dy = e.clientY - drag.startY;
-        if (dx * dx + dy * dy > 9) drag.moved = true;
+        if (dx * dx + dy * dy > 9) {
+            drag.moved = true;
+            // 拖拽中：切换全身像（超过拖拽阈值才算真拖拽，点击不换装）
+            if (petState !== 'normal_full') setPetState('normal_full');
+        }
 
         state.left = drag.origLeft + dx;
         state.top = drag.origTop + dy;
@@ -479,6 +539,9 @@
             // 吸附校正可能改变最终位置：按最终位置重算一次面向（朝向屏幕中心）
             updateFacingByPosition();
         }
+        // 释放并吸附到边缘后：切回默认半身像（未离身则同图跳过；状态图缺失
+        // 时 setPetState 内部保持兜底图，不裂图）
+        if (petState !== 'normal_half') setPetState('normal_half');
         drag = null;
     });
 
