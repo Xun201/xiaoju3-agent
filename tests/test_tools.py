@@ -1346,5 +1346,40 @@ class RecentActionRecorderTests(ToolsTestBase):
         self.assertEqual(actions[-1]["detail"], "adb_tap: 旧记录6")
 
 
+class SanitizeThinkPassthroughTests(unittest.TestCase):
+    """web_sanitize.sanitize_for_web 的 <think> 透传契约（CoT 链路锁定）：
+    brain 包装出的 <think>[思考]…[计划]…</think> 前缀必须原样穿过 Web 净化
+    （标签不被剥掉/转义/破坏），前端才能渲染思维链折叠卡片；思考内容里
+    混入的 CQ 码仍按 Web 口径净化（face→Emoji、image→[表情]、其余剥除）。"""
+
+    def test_wrapped_reply_passthrough_identity(self):
+        from web_sanitize import sanitize_for_web
+        wrapped = ("<think>[思考] 要点WLAN，先定位控件。\n"
+                   "[计划] uiautomator 定位后点击。</think>"
+                   "好的，已经帮你点开WLAN设置页面了。")
+        self.assertEqual(sanitize_for_web(wrapped), wrapped)
+
+    def test_cq_inside_think_sanitized_tags_survive(self):
+        from web_sanitize import sanitize_for_web
+        out = sanitize_for_web(
+            "<think>[思考] 表情[CQ:face,id=4]参考</think>"
+            "正文[CQ:image,file=file:///x/a.jpg][CQ:at,qq=1]")
+        self.assertTrue(out.startswith("<think>[思考] 表情😎参考</think>"), out)
+        self.assertIn("</think>", out)
+        self.assertNotIn("CQ", out)
+        self.assertIn("[表情]", out)
+
+    def test_leading_whitespace_stripped_but_tags_intact(self):
+        # sanitize 末尾 strip 只去首尾空白：<think> 仍稳居返回文本最前面
+        from web_sanitize import sanitize_for_web
+        out = sanitize_for_web("  <think>[思考] a</think> 回答 ")
+        self.assertEqual(out, "<think>[思考] a</think> 回答")
+
+    def test_non_string_input_no_crash(self):
+        from web_sanitize import sanitize_for_web
+        self.assertEqual(sanitize_for_web(None), "")
+        self.assertEqual(sanitize_for_web(123), "123")
+
+
 if __name__ == "__main__":
     unittest.main()

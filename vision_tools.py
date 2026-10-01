@@ -48,6 +48,40 @@ qwen-vl-max-latest 下线/更名）时，按 VISION_FALLBACK_MODELS 备用列表
 失败诊断共用。解析失败时控制台打印两行 ⚠️ 诊断（原始返回内容 /
 清洗后的 JSON 候选，均截断 300，只进控制台），聊天框返回串不变。
 
+缩放换算可见化（2026-10-01 用户指令）：换算数学保持不变（real =
+模型坐标 × 实际屏幕/截图比，与既有"除以 scale_ratio"等价），但两个
+此前"静默按缺省值执行"的薄弱环节改为显式 ⚠️ 警告——_png_size 解析
+失败（设备吐 JPEG 或非 PNG 头）按 1:1 换算时、get_screen_size 走
+缺省 1080x2400 兜底时；旧 🎯 行替换为单行全量日志（📏 [视觉缩放]：
+模型原始坐标 / 截图分辨率 / 手机实际分辨率 / 换算后坐标四要素，
+截图分辨率解析失败时显示"未知(按1:1)"）。换算仍发生在 adb_tap 之前。
+
+提示词末尾强化（2026-10-01 用户指令，用户原文）：提示词最末尾追加
+"请只输出 JSON 格式，不要包含 markdown 代码块（如 ```json），不要
+包含任何解释性文字，示例：{"x": 100, "y": 200}。"——与规则 7/8
+语义重叠属刻意强化（实测仍偶发代码块输出导致解析失败）。
+
+严格匹配强化与顶部坐标警告（2026-10-01 用户指令）：qwen3-vl-flash
+实测找屏幕中下方的"WLAN"文字时误点顶部搜索框——(1) 提示词在"忽略
+状态栏"规则后新增一条：请严格匹配屏幕上的【中文字符】，定位到目标
+文字本身所在位置、不要定位图标或搜索框（附"WLAN"正例），找不到
+务必返回全 -1 坐标、不要瞎猜；(2) 换算出 real_y 落在屏幕顶部 15%
+区域（real_y < 0.15 × screen_height，通常是状态栏/搜索框位置）时，
+adb_tap 前打印一行 ⚠️ 警告"视觉坐标可能定位到搜索框或状态栏"——
+用户找的常是屏幕中下方元素，顶部命中大概率是误定位；仅警告不阻断，
+点击行为保持不变（可观测、不擅改）。
+
+ADB 点击间隔与指令容错（2026-10-01 用户指令，组 D1）：实测"📏 换算
+正确、指令已发送但手机未响应"——(1) 📏 日志后、adb_tap 前固定
+sleep 0.5 秒（截图与点击间隔，避免屏幕未就绪）；(2) adb_tap 返回串含
+失败语义（❌ 开头或含"失败"字样，与 adb_tools 实际返回形态对齐）时
+打印 ⚠️ 警告"ADB 点击指令发送失败，请确认手机已开启 USB 调试（模拟
+点击）权限"并把警告语义并入返回串；(3) 二次确认点击：模块级开关
+VISION_CONFIRM_RETAP（默认开，env 同名置 0/false/off/no 可关）——
+首次点击返回成功串后 sleep 1 秒对相同坐标再点一次"确认点击"（用户
+场景"点击已发送但手机没动"无法直接检测跳转，两次都执行最务实），
+返回串注明"已执行二次确认点击"；首次已明确失败则不重复。
+
 返回口径（2026-09-30 用户指令，聊天框一律极简、不带任何排查指引）：
 - 网络类失败返回 `❌ 视觉模型网络连接失败，操作已中止。`，控制台仅打印
   一行简短提示（❌ 视觉模型网络连接失败: 简短原因）；
@@ -62,6 +96,49 @@ qwen-vl-max-latest 下线/更名）时，按 VISION_FALLBACK_MODELS 备用列表
   明确要求的"模型说没找到"场景引导，与"网络失败文案瘦身"口径不冲突
   （瘦的是网络失败路径）。
 
+观察-描述前置提示（2026-10-01 用户指令，任务 2）：提示词最末尾强势
+追加"请先仔细观察屏幕，先描述你看到了什么，再给出坐标。如果找不到
+目标文字，请直接返回 -1 坐标，不要瞎猜。"——允许模型在 JSON 前先输出
+描述文本（_extract_click_point 对 prose 包裹已容错，JSON 提取不受
+描述影响），同时保留"JSON 本体只含坐标"口径：原末尾强化句的"不要
+包含任何解释性文字"与描述前置直接冲突，改为约束"JSON 本体只含
+x/y 坐标"。
+
+顶部疑似区分级警告与偏移策略修正（2026-10-01 用户指令修正）：此前
+"15%~40% 一律强推 5% 屏高下移"好心办坏事——用户找设置列表里的
+"蓝牙"（y=847/2712=31.2%，正常元素位置）被强推到 y=982，点击漂移
+到"我的设备"。修正为三级矩阵：<15% 屏高（真状态栏/搜索框区）→
+"搜索框/状态栏"提示 + 强警告"目标位于屏幕上部，极易误点到账号或
+搜索框" + 向下偏移 2% 屏高（屏高 2712 时约 54 像素）；15%~40% →
+仅打印"⚠️ 目标位于屏幕上部，请确认"，不偏移、保留模型原始坐标执行；
+≥40% → 零警告零偏移。常量：VISION_TOP_STRONG_RATIO=0.15（偏移+
+强警告线）/ VISION_TOP_ZONE_RATIO=0.40（警告上限）/
+VISION_TOP_OFFSET_RATIO=0.02；开关 VISION_TOP_OFFSET 语义不变
+（默认开、env 置 0/false/off/no 可关，关=连 15% 内也不偏移）。
+
+点击前后变化检测（2026-10-01 用户指令，任务 3 后半）：首次点击前把
+截图（SCREENSHOT_PATH）复制到临时文件留底（adb_screenshot 每次覆盖
+同名文件，必须先留底），二次确认点击完成后重新截图，与留底比对 MD5
+（android_ui_tools.file_md5，stdlib hashlib）——一致打印"⚠️ 页面未
+发生变化，目标可能未点中，尝试滑动屏幕或重新寻找"（返回串处理口径
+升级见下段）；不一致打印"✅ 页面已变化，
+点击已生效"（可观测对照）。整段检测 try/except 兜底（重新截图失败/
+文件缺失/MD5 失败一律静默跳过），不影响点击结果返回；
+VISION_CONFIRM_RETAP=0（无二次点击）时跳过变化检测（只点一次无从
+比对）。
+
+顶部误识别降级告知进返回串 + 页面未变化明确失败（2026-10-01 用户
+指令，F3）：(1) 换算后坐标落在顶部两级疑似区（<15% 或 15%~40% 屏高，
+沿用既有分级判定）时，控制台既有警告之外，返回串末尾追加一行
+"⚠️ 视觉模型可能识别到了顶部区域（如账号/搜索框），建议手动确认。"
+——此前该提示只进控制台、聊天框看不到（背景：视觉模型把"蓝牙"误
+识别为"账号"区域 (163, 847)，两次点击都点到了账号）；≥40% 正常坐标
+不追加。(2) 变化检测 MD5 一致（点击两次页面纹丝不动）时，返回串
+整体替换为明确失败口径"❌ 视觉模型未点中目标，请尝试手动点击或换
+个清晰的图标"（替换原"（⚠️ 页面未发生变化，已尝试点击 2 次）"含糊
+附加段；❌ 前缀同时切断 brain 工具调用重试），控制台保留一行简短
+原因说明；检测本就在两次点击全部完成后进行，不做任何额外重试点击。
+
 与参考实现的差异：依赖白名单无 Pillow，跳过"裁剪状态栏 + 压缩缩放"
 优化，直接发送截图 PNG base64；缩放比经 PNG 头解析实际宽度换算
 （screencap 原图与屏幕等分辨率时恒为 1），坐标换算公式保持参考实现
@@ -72,9 +149,11 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import time
 
 from adb_tools import adb_screenshot, adb_tap, SCREENSHOT_PATH
+from android_ui_tools import file_md5
 from xiaoju3 import VISION_MODEL, VISION_KEY, VISION_API_URL
 
 # 官方 SDK：延迟可用性检查——未安装时模块仍可导入，调用时给清晰中文提示
@@ -102,6 +181,49 @@ VISION_MAX_RETRIES = 0
 # 的 VISION_MODEL 报 404（模型不存在）时按序自动切换重试；403 等鉴权/
 # 域名问题换模型无用，不回退。全部候选耗尽才报终态 404。
 VISION_FALLBACK_MODELS = ("qwen-vl-plus", "qwen-vl-max", "qwen-vl-max-latest")
+
+
+def _env_flag(name):
+    """环境变量布尔开关：未设置或空串默认 True；置 0/false/off/no
+    （不分大小写）为 False。"""
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return True
+    return value.strip().lower() not in ("0", "false", "off", "no")
+
+
+# 二次确认点击开关（2026-10-01 用户指令，组 D1）：默认开——首次 adb_tap
+# 返回成功串后等 1 秒对相同坐标再点一次"确认点击"（用户场景"点击已发送
+# 但手机没动"无法直接检测跳转，两次都执行最务实可靠）；env
+# VISION_CONFIRM_RETAP 置 0/false/off/no 可关（测试与低速场景）。
+VISION_CONFIRM_RETAP = _env_flag("VISION_CONFIRM_RETAP")
+
+# 顶部疑似区分级阈值（屏高比例，2026-10-01 偏移策略修正）：
+# - VISION_TOP_STRONG_RATIO=0.15：偏移+强警告线——real_y < 15% 屏高
+#   （真状态栏/搜索框区域）才自动向下偏移并打强警告；
+# - VISION_TOP_ZONE_RATIO=0.40：警告上限——15%~40% 只打印"请确认"
+#   警告、不偏移（设置列表正常元素如"蓝牙"31.2% 也落在该区间，此前
+#   40% 区 5% 强推下移导致"蓝牙"漂移到"我的设备"，好心办坏事）；
+# - ≥40% 零警告零偏移。
+VISION_TOP_STRONG_RATIO = 0.15
+VISION_TOP_ZONE_RATIO = 0.40
+# 15% 线内向下偏移量（2% 屏高，屏高 2712 时 int(0.02×2712)=54 像素）：
+# env VISION_TOP_OFFSET 置 0/false/off/no 可关（默认开），关闭后连
+# 15% 内也仅警告不偏移
+VISION_TOP_OFFSET_RATIO = 0.02
+VISION_TOP_OFFSET = _env_flag("VISION_TOP_OFFSET")
+
+# 顶部疑似区误识别降级告知（2026-10-01 用户指令，F3-1）：换算后坐标
+# 落在顶部两级疑似区（<15% 或 15%~40% 屏高）时，控制台既有警告之外
+# 把该文案追加进返回串（聊天框可见）；≥40% 正常坐标不追加
+VISION_TOP_ZONE_NOTE = ("⚠️ 视觉模型可能识别到了顶部区域"
+                        "（如账号/搜索框），建议手动确认。")
+# 页面未变化明确失败口径（2026-10-01 用户指令，F3-2）：变化检测 MD5
+# 一致（点击两次页面纹丝不动）时返回串整体替换为该文案——不再含糊地
+# 附加"（⚠️ 页面未发生变化，已尝试点击 2 次）"；控制台保留一行简短
+# 原因说明；❌ 前缀可切断 brain 工具调用重试
+VISION_PAGE_UNCHANGED_FAIL = ("❌ 视觉模型未点中目标，"
+                              "请尝试手动点击或换个清晰的图标")
 
 
 def _mask_key(key):
@@ -401,7 +523,11 @@ def _print_parse_failure_diagnostics(content):
 
 
 def get_screen_size():
-    """获取手机屏幕的物理分辨率"""
+    """获取手机屏幕的物理分辨率
+
+    兜底可见化（2026-10-01 用户指令）：adb 输出无法解析或命令异常时，
+    此前静默回退缺省 1080x2400（缩放比算错导致点击偏差却无从排查），
+    现打印一行 ⚠️ 警告，让"静默错误"变成"可见错误"。"""
     try:
         result = subprocess.run("adb shell wm size", shell=True, capture_output=True, text=True)
         match = re.search(r'(\d+)x(\d+)', result.stdout)
@@ -409,7 +535,84 @@ def get_screen_size():
             return int(match.group(1)), int(match.group(2))
     except Exception:
         pass
+    print("⚠️ [视觉缩放] 手机分辨率获取失败（adb shell wm size），"
+          "按缺省 1080x2400 处理（点击若偏差请检查 ADB 连接）")
     return 1080, 2400
+
+
+def _tap_failed(result):
+    """adb_tap 返回串是否含失败语义（2026-10-01 用户指令，组 D1）：❌
+    开头或含"失败"字样——与 adb_tools.adb_tap 实际返回形态对齐（成功
+    "✅ 已模拟点击坐标: (x, y)" / 失败 "❌ ADB 点击失败: {异常}"，两种
+    判定任一命中即视为发送失败）；非 str（测试替身）不含失败语义、
+    不判失败，不崩溃。"""
+    return isinstance(result, str) and (result.startswith("❌") or "失败" in result)
+
+
+def _discard_snapshot(path):
+    """删除临时快照文件（静默容错：清理失败不影响点击主流程）。"""
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _copy_screenshot_snapshot():
+    """点击前截图留底（2026-10-01 用户指令，任务 3 后半变化检测基线）：
+    adb_screenshot 每次覆盖同名文件，必须先把 SCREENSHOT_PATH 复制到
+    临时文件再点击，否则点击后重新截图会把"点击前"的证据覆盖掉。
+    文件缺失/复制失败返回 None——变化检测整体降级跳过，不影响点击
+    主流程。"""
+    snapshot_path = None
+    try:
+        if not os.path.exists(SCREENSHOT_PATH):
+            return None
+        fd, snapshot_path = tempfile.mkstemp(
+            prefix="xiaoju3_vision_before_", suffix=".png")
+        os.close(fd)
+        with open(SCREENSHOT_PATH, "rb") as src, \
+                open(snapshot_path, "wb") as dst:
+            dst.write(src.read())
+        return snapshot_path
+    except Exception:
+        _discard_snapshot(snapshot_path)
+        return None
+
+
+def _page_change_outcome(before_snapshot):
+    """点击前后变化检测（2026-10-01 用户指令，任务 3 后半；返回口径
+    升级 2026-10-01 F3-2）：重新截图与点击前留底比对 MD5——一致 →
+    控制台打印一行简短原因"⚠️ 页面未发生变化，目标可能未点中，尝试
+    滑动屏幕或重新寻找"，返回串整体替换为明确失败口径
+    VISION_PAGE_UNCHANGED_FAIL（不再含糊地附加"页面未发生变化"段）；
+    不一致 → 打印"✅ 页面已变化，点击已生效"（可观测对照），返回空串
+    （调用方维持成功串）。任何环节失败（重新截图失败/文件缺失/MD5
+    计算失败）返回空串，不影响点击结果返回。before_snapshot 为空
+    （留底失败/未启用二次点击）直接跳过。检测在两次点击全部完成后
+    进行，本函数不做任何额外重试点击。"""
+    if not before_snapshot:
+        return ""
+    try:
+        reshot = adb_screenshot()
+        if not isinstance(reshot, str) or "失败" in reshot:
+            return ""
+        if not os.path.exists(SCREENSHOT_PATH):
+            return ""
+        before_md5 = file_md5(before_snapshot)
+        after_md5 = file_md5(SCREENSHOT_PATH)
+        if not before_md5 or not after_md5:
+            return ""
+        if before_md5 != after_md5:
+            print("✅ 页面已变化，点击已生效")
+            return ""
+        print("⚠️ 页面未发生变化，目标可能未点中，尝试滑动屏幕或重新寻找")
+        return VISION_PAGE_UNCHANGED_FAIL
+    except Exception:
+        return ""
+    finally:
+        _discard_snapshot(before_snapshot)
 
 
 def vision_tap_element(element_name):
@@ -436,10 +639,21 @@ def vision_tap_element(element_name):
     if not os.path.exists(SCREENSHOT_PATH):
         return "❌ 截图文件不存在，请检查 ADB 连接。"
 
-    # 2. 获取屏幕真实分辨率，换算缩放比（无裁剪，cropped_top=0）
-    screen_width, _screen_height = get_screen_size()
+    # 2. 获取屏幕真实分辨率，换算缩放比（无裁剪，cropped_top=0）。
+    #    换算数学保持参考实现结构（center / scale_ratio，与"坐标 ×
+    #    实际屏幕/截图比"等价）；_png_size 解析失败（设备吐 JPEG 或
+    #    非 PNG 头）时此前静默按 1:1 执行，现打印明确警告（2026-10-01
+    #    用户指令：让"静默错误"变成"可见错误"）
+    screen_width, screen_height = get_screen_size()
     png_size = _png_size(SCREENSHOT_PATH)
-    scale_ratio = (png_size[0] / screen_width) if png_size else 1.0
+    if png_size:
+        screenshot_label = f"{png_size[0]}x{png_size[1]}"
+        scale_ratio = png_size[0] / screen_width
+    else:
+        print("⚠️ [视觉缩放] 截图分辨率解析失败，按 1:1 换算"
+              "（点击若偏差请检查截图格式）")
+        screenshot_label = "未知(按1:1)"
+        scale_ratio = 1.0
     cropped_top = 0
 
     # 3. 截图转 base64（PNG 原样发送，不经 Pillow 压缩）
@@ -461,14 +675,34 @@ def vision_tap_element(element_name):
         "“浏览器”），请优先按中文名匹配目标；\n"
         "2. 忽略顶部状态栏（时间/电量/信号）与桌面小组件（天气/时钟/日历），"
         "它们不是要找的目标；\n"
-        "3. 目标可能藏在应用列表或文件夹中，请逐屏仔细排查每一个图标；\n"
-        "4. 请务必只输出 JSON 格式："
+        # 严格匹配强化（2026-10-01 用户指令，用户口径）：qwen3-vl-flash
+        # 实测找屏幕中下方的"WLAN"文字时误点顶部搜索框，故紧跟"忽略状态
+        # 栏"规则强调——定位到目标文字本身，绝不落在图标或搜索框上；
+        # 找不到时如实返回全 -1 坐标，禁止瞎猜
+        "3. 请严格匹配屏幕上的【中文字符】。例如寻找“WLAN”，应该定位到"
+        "文字“WLAN”所在位置，不要定位图标或搜索框。如果找不到，请务必"
+        "返回全 -1 坐标，不要瞎猜；\n"
+        "4. 目标可能藏在应用列表或文件夹中，请逐屏仔细排查每一个图标；\n"
+        "5. 请务必只输出 JSON 格式："
         '{"x": 数字, "y": 数字}，'
-        "表示要点击的屏幕绝对坐标，不要输出其他任何内容；\n"
-        '5. 找不到时，只输出：{"x": -1, "y": -1}，不要编造坐标；\n'
-        "6. 直接输出 JSON 本体，不要用 ```json 等代码块包裹；\n"
-        '7. "x" 与 "y" 每个值都必须带键名，数字不要加引号'
-        '（例：{"x": 246, "y": 531}）。'
+        "表示要点击的屏幕绝对坐标（JSON 本体只含坐标，描述文字放在 "
+        "JSON 之前）；\n"
+        '6. 找不到时，只输出：{"x": -1, "y": -1}，不要编造坐标；\n'
+        "7. 直接输出 JSON 本体，不要用 ```json 等代码块包裹；\n"
+        '8. "x" 与 "y" 每个值都必须带键名，数字不要加引号'
+        '（例：{"x": 246, "y": 531}）。\n'
+        # 末尾强化句（2026-10-01 用户指令）：与规则 7/8 语义重叠属刻意
+        # 强化；其中"不要包含任何解释性文字"按任务 2 口径让位——允许
+        # 模型在 JSON 前先描述所见内容，改为约束"JSON 本体只含 x/y 坐标"
+        "请只输出一行 JSON 格式，JSON 本体只含 x/y 坐标，"
+        "不要包含 markdown 代码块（如 ```json），"
+        '示例：{"x": 100, "y": 200}。'
+        # 观察-描述前置（2026-10-01 用户指令，任务 2，用户原文）：先描述
+        # 再给坐标，逼模型真正"看图"而非凭印象乱点（背景：把"账号"看成
+        # "蓝牙"）；找不到如实返回 -1，解析端 _extract_click_point 对
+        # prose 包裹已容错，JSON 提取不受描述影响
+        "请先仔细观察屏幕，先描述你看到了什么，再给出坐标。"
+        "如果找不到目标文字，请直接返回 -1 坐标，不要瞎猜。"
     )
 
     messages = [{"role": "user", "content": [
@@ -554,12 +788,90 @@ def vision_tap_element(element_name):
                 "（如 qwen-vl-max-latest）")
 
     # 7. 换算成手机真实像素坐标（截图可能被缩放，除以缩放比；无裁剪
-    #    cropped_top=0）
+    #    cropped_top=0）。换算发生在 adb_tap 之前
     real_x = int(click_x / scale_ratio)
     real_y = int(click_y / scale_ratio) + cropped_top
 
-    print(f"🎯 视觉模型解析：模型识别点击点({click_x:g},{click_y:g}) -> "
-          f"实际屏幕坐标({real_x}, {real_y})")
+    # 单行全量日志（2026-10-01 用户指令）：模型原始坐标 / 截图分辨率 /
+    # 手机实际分辨率 / 换算后坐标四要素一行可查，缩放换算错误一眼可见；
+    # 截图分辨率解析失败时显示"未知(按1:1)"（另有 ⚠️ 警告）
+    print(f"📏 [视觉缩放] 模型原始坐标: ({click_x:g}, {click_y:g}) | "
+          f"截图分辨率: {screenshot_label} | "
+          f"手机实际分辨率: {screen_width}x{screen_height} | "
+          f"换算后坐标: ({real_x}, {real_y})")
 
-    # 8. 执行点击
-    return adb_tap(real_x, real_y)
+    # 顶部区域合理性检查（2026-10-01 用户指令）：用户要找的目标常在屏幕
+    # 中下方（如设置页里的"WLAN"），换算后点击点却落在屏幕顶部 15% 区域
+    # （通常是状态栏/搜索框的位置）时，大概率是视觉模型把搜索框/状态栏
+    # 当成了目标文字——打印一行 ⚠️ 警告提醒核对目标文字位置。
+    # top_zone_hit（F3-1）：两级疑似区（<15% 或 15%~40%）任一命中即置
+    # True，供返回串追加聊天框可见的降级告知；判定用换算后原始坐标
+    # （偏移前），≥40% 保持 False 不追加
+    top_zone_hit = False
+    if real_y < VISION_TOP_STRONG_RATIO * screen_height:
+        top_zone_hit = True
+        print("⚠️ 视觉坐标可能定位到搜索框或状态栏，请检查目标文字位置")
+        # 强警告 + 2% 屏高向下偏移（2026-10-01 偏移策略修正）：偏移只在
+        # 15% 线内（真状态栏/搜索框区）生效；VISION_TOP_OFFSET 关时仅
+        # 警告不偏移；偏移后打印实际执行坐标
+        print("⚠️ 目标位于屏幕上部，极易误点到账号或搜索框")
+        if VISION_TOP_OFFSET:
+            real_y += int(VISION_TOP_OFFSET_RATIO * screen_height)
+            print(f"📍 [视觉防误点] 已向下偏移 2% 屏高，实际执行坐标: "
+                  f"({real_x}, {real_y})")
+    elif real_y < VISION_TOP_ZONE_RATIO * screen_height:
+        # 15%~40% 只提醒不偏移（2026-10-01 偏移策略修正，关键修复）：
+        # 设置列表正常元素（如"蓝牙"y=847/2712=31.2%）也落在该区间，
+        # 保留模型原始坐标执行，杜绝"蓝牙→我的设备"式漂移
+        top_zone_hit = True
+        print("⚠️ 目标位于屏幕上部，请确认")
+    # ≥40%：零警告零偏移
+
+    # 8. 点击前固定间隔（2026-10-01 用户指令，组 D1）：截图/识别完成到
+    #    点击之间留 0.5 秒——实测换算正确、指令已发送但手机未响应，怀疑
+    #    是截图后立即点击时屏幕尚未就绪
+    time.sleep(0.5)
+
+    # 9. 点击前截图留底（任务 3 后半变化检测基线）：adb_screenshot 每次
+    #    覆盖同名文件，必须先复制到临时文件再点击；复制失败仅跳过检测、
+    #    不影响点击
+    before_snapshot = _copy_screenshot_snapshot()
+
+    # 10. 执行点击 + 指令结果检查：返回串含失败语义（❌ 开头或含"失败"，
+    #     见 _tap_failed）时打印 ⚠️ 警告并把警告语义并入返回串——此前
+    #     adb 指令发送失败会被静默吞掉，用户只看到"手机没动"无从排查
+    result = adb_tap(real_x, real_y)
+    if _tap_failed(result):
+        _discard_snapshot(before_snapshot)
+        print("⚠️ ADB 点击指令发送失败，请确认手机已开启 USB 调试（模拟点击）权限")
+        return f"{result}（⚠️ 请确认手机已开启 USB 调试/模拟点击权限）"
+
+    # 顶部疑似区降级告知（F3-1）：坐标落在顶部两级疑似区时返回串末尾
+    # 追加聊天框可见提示（前导空格，与既有"未找到"串附加风格一致）；
+    # 点击指令发送失败分支不追加——点击未执行，USB 调试排查优先
+    top_note = f" {VISION_TOP_ZONE_NOTE}" if top_zone_hit else ""
+
+    # 11. 二次确认点击（VISION_CONFIRM_RETAP，默认开）：用户场景"点击
+    #     已发送但手机没动"无法直接检测跳转，最务实口径——首次返回
+    #     成功串后等 1 秒对相同坐标再点一次"确认点击"，两次都执行；
+    #     首次已明确失败（上方分支）则不重复。env VISION_CONFIRM_RETAP=0
+    #     可关（测试与低速场景）
+    if VISION_CONFIRM_RETAP:
+        time.sleep(1)
+        confirm_result = adb_tap(real_x, real_y)
+        if _tap_failed(confirm_result):
+            _discard_snapshot(before_snapshot)
+            print("⚠️ ADB 点击指令发送失败，请确认手机已开启 USB 调试（模拟点击）权限")
+            return (f"{result}（二次确认点击发送失败，"
+                    f"⚠️ 请确认手机已开启 USB 调试/模拟点击权限）")
+        # 变化检测（任务 3 后半；F3-2 口径升级）：二次确认点击完成后
+        # 重新截图与点击前留底比对 MD5；VISION_CONFIRM_RETAP=0（无二次
+        # 点击）时跳过——只点一次无从比对。页面未变化 → 返回串整体
+        # 替换为明确失败口径（❌ 未点中）；已变化 → 成功串 + 顶部降级
+        # 告知（如有）。检测不做任何额外重试点击
+        change_outcome = _page_change_outcome(before_snapshot)
+        if change_outcome:
+            return change_outcome
+        return f"{result}（已执行二次确认点击）{top_note}"
+    _discard_snapshot(before_snapshot)   # 无二次点击：跳过变化检测
+    return f"{result}{top_note}"

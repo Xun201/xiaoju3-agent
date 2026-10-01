@@ -21,13 +21,47 @@ _clean_json_candidates（markdown ```json 围栏剥离 / 纯数字引号串剥
 （VISION_MODEL 不含 vl 打一行 ⚠️ 警告但不阻断调用，含 vl/大小写混写
 不警告）与全 -1 未找到串附加兜底排查引导（2026-10-01 用户指令）；
 .env.example 的 VISION_MODEL 默认值 qwen-vl-max-latest 与"带 VL"
-注释存在。
+注释存在；缩放换算可见化（📏 单行全量日志四要素：模型原始坐标 /
+截图分辨率 / 手机实际分辨率 / 换算后坐标；_png_size 解析失败按 1:1
+换算的 ⚠️ 警告与"未知(按1:1)"标注；get_screen_size 走缺省 1080x2400
+兜底的 ⚠️ 警告）；提示词末尾强化句（不包含 markdown 代码块 /
+解释性文字，置于最末尾）；提示词严格匹配强化（严格匹配屏幕中文字符 /
+定位到文字本身而非图标或搜索框 / 找不到务必全 -1 不瞎猜，紧随"忽略
+状态栏"规则，2026-10-01 用户指令）与换算后坐标顶部 15% 区域误定位
+⚠️ 警告（real_y < 0.15 × screen_height 时仅警告仍点击，中下部不
+警告）；ADB 点击间隔与指令容错（2026-10-01 用户指令，组 D1）——
+点击前 0.5 秒延迟（📏 日志后、adb_tap 前 sleep(0.5)）、adb_tap 返回
+失败语义串（❌ 开头/含"失败"）→ ⚠️ USB 调试权限警告进终端且警告
+语义并入返回串、首次明确失败不二次确认，二次确认点击
+VISION_CONFIRM_RETAP（默认开，env 置 0 可关）——首次成功后 sleep 1
+秒同坐标再点一次，tap 两次坐标一致、sleep 序列 [0.5, 1]、返回串注明
+"已执行二次确认点击"；既有链路用例的 tap 断言已按二次确认同步为
+两次。任务 2/3（2026-10-01 用户指令，组 E1）：提示词末尾观察-描述
+前置强化（先仔细观察屏幕 / 先描述你看到了什么 / 找不到直接返回 -1
+不要瞎猜，保留"JSON 本体只含坐标"口径）；顶部疑似区分级警告与
+偏移策略修正（同日用户指令修正：<15% 屏高 → 强警告"极易误点到
+账号或搜索框" + 15% 线提示 + 2% 屏高向下偏移；15%~40% → 仅
+"请确认"警告、不偏移、保留模型原始坐标——修复用户找"蓝牙"
+y=847/2712=31.2% 被强推到 y=982 误点"我的设备"的漂移；≥40% →
+零警告零偏移；VISION_TOP_OFFSET 可关，关=连 15% 内也不偏移）；
+点击前后变化检测（前后 MD5 一致 → 控制台一行简短原因说明 +
+返回串整体替换为明确失败口径"❌ 视觉模型未点中目标，请尝试手动点击
+或换个清晰的图标"（F3-2：替换原"（⚠️ 页面未发生变化，已尝试点击
+2 次）"含糊附加段，返回串精确等于该 ❌ 文案、tap 仍恰两次无额外
+重试点击），不一致 → "✅ 页面已变化，点击已生效"且返回串不含该
+❌ 文案，MD5 失败静默降级不影响主流程，VISION_CONFIRM_RETAP=0 跳过
+检测）；顶部疑似区误识别降级告知进返回串（F3-1：<15% 或 15%~40%
+屏高两级疑似区 → 返回串追加"⚠️ 视觉模型可能识别到了顶部区域（如
+账号/搜索框），建议手动确认。"，≥40% 不追加，单次点击（无二次确认）
+路径同样追加）与 android_ui_tools.file_md5（stdlib hashlib，失败
+返回 None）。
 """
 import contextlib
 import importlib.util
 import io
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -209,6 +243,36 @@ class StripXmlNoiseTests(unittest.TestCase):
     def test_empty_and_none(self):
         self.assertEqual(android_ui_tools.strip_xml_noise(""), "")
         self.assertIsNone(android_ui_tools.strip_xml_noise(None))
+
+
+class FileMd5Tests(unittest.TestCase):
+    """android_ui_tools.file_md5：stdlib hashlib 计算文件 MD5（vision
+    变化检测复用）；文件不存在/不可读等失败返回 None、不抛异常。"""
+
+    def test_md5_matches_hashlib(self):
+        import hashlib
+        data = "hello 小橘3号".encode("utf-8")
+        fd, path = tempfile.mkstemp(prefix="xiaoju3_md5_case_")
+        os.close(fd)
+
+        def _cleanup():
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        self.addCleanup(_cleanup)
+        with open(path, "wb") as f:
+            f.write(data)
+        self.assertEqual(android_ui_tools.file_md5(path),
+                         hashlib.md5(data).hexdigest())
+
+    def test_missing_file_returns_none(self):
+        self.assertIsNone(android_ui_tools.file_md5(
+            os.path.join(_ROOT, "no_such_file_for_md5_test.png")))
+
+    def test_directory_returns_none(self):
+        # 路径是目录：open 抛异常 → 捕获返回 None
+        self.assertIsNone(android_ui_tools.file_md5(_ROOT))
 
 
 class UiTapElementTests(unittest.TestCase):
@@ -474,12 +538,36 @@ class VisionToolsTests(unittest.TestCase):
     SDK 快速失败（默认不重试）、403 诊断与 404 备用模型自动回退链
     （诊断块只进控制台、返回串极简不带指引，2026-09-30 用户指令）、
     中文屏幕友好提示词结构与全 -1 未找到约定（含附加兜底排查引导）、
-    模型名预检警告（不含 vl 打一行 ⚠️ 但不阻断）。"""
+    模型名预检警告（不含 vl 打一行 ⚠️ 但不阻断）、缩放换算可见化
+    （📏 单行全量日志 / _png_size 失败警告 / wm size 兜底警告）、
+    提示词严格匹配强化（严格匹配中文字符 / 定位文字本身而非图标或
+    搜索框 / 找不到务必全 -1 不瞎猜）与顶部 15% 区域误定位 ⚠️ 警告
+    （仅警告仍点击，中下部不警告，2026-10-01 用户指令）；ADB 点击间隔
+    与指令容错（组 D1，2026-10-01 用户指令）：点击前 0.5 秒延迟 /
+    adb_tap 失败语义 ⚠️ 警告（打印 + 并入返回串，明确失败不二次确认）/
+    二次确认点击 VISION_CONFIRM_RETAP（默认开，env 置 0 可关，tap 两次
+    同坐标 + sleep 序列 [0.5, 1] + 返回串注明）；顶部疑似区分级警告与
+    偏移策略修正（2026-10-01 用户指令修正——<15% 屏高：强警告"极易误点
+    到账号或搜索框" + 15% 线提示 + 2% 屏高向下偏移；15%~40%：仅"请
+    确认"警告、不偏移、保留模型原始坐标（修复"蓝牙"31.2% 被强推误点
+    "我的设备"）；≥40%：零警告零偏移；VISION_TOP_OFFSET 可关）、顶部
+    疑似区误识别降级告知进返回串（F3-1：两级疑似区 → 返回串追加
+    "建议手动确认"文案，≥40% 不追加）与点击前后变化检测（F3-2：MD5
+    一致 → 返回串精确替换为 ❌ 未点中文案、tap 恰两次无额外重试 /
+    不一致打印已变化且返回串不含 ❌ 文案 / 失败静默降级 / 无二次点击
+    跳过）。"""
 
     def setUp(self):
         self._old_model = vision_tools.VISION_MODEL
         self._old_key = vision_tools.VISION_KEY
         self._old_api_url = vision_tools.VISION_API_URL
+        # 二次确认开关快照并强制开启：保证本类用例确定性（宿主机 env
+        # 置 0 时不影响断言口径），tearDown 还原
+        self._old_confirm_retap = vision_tools.VISION_CONFIRM_RETAP
+        vision_tools.VISION_CONFIRM_RETAP = True
+        # 顶部疑似区偏移开关快照并强制开启：保证偏移坐标断言确定性
+        self._old_top_offset = vision_tools.VISION_TOP_OFFSET
+        vision_tools.VISION_TOP_OFFSET = True
         vision_tools.VISION_MODEL = "qwen-vl-test"
         vision_tools.VISION_KEY = "test-vision-key"
         # 统一 patch 新配置 base（与生产形态一致：已含 /compatible-mode/v1）
@@ -499,6 +587,8 @@ class VisionToolsTests(unittest.TestCase):
         vision_tools.VISION_MODEL = self._old_model
         vision_tools.VISION_KEY = self._old_key
         vision_tools.VISION_API_URL = self._old_api_url
+        vision_tools.VISION_CONFIRM_RETAP = self._old_confirm_retap
+        vision_tools.VISION_TOP_OFFSET = self._old_top_offset
         try:
             os.remove(vision_tools.SCREENSHOT_PATH)
         except OSError:
@@ -527,6 +617,12 @@ class VisionToolsTests(unittest.TestCase):
         self.addCleanup(cls_mock.stop)
         return create, cls_mock
 
+    def _assert_tapped_twice_same_point(self, tap, x, y):
+        """二次确认点击生效时的统一断言：tap 恰好两次且坐标完全一致。"""
+        self.assertEqual(tap.call_count, 2)
+        self.assertEqual([c.args for c in tap.call_args_list],
+                         [(x, y), (x, y)])
+
     def test_unconfigured_key_hint(self):
         vision_tools.VISION_KEY = ""
         self.assertEqual(
@@ -544,7 +640,9 @@ class VisionToolsTests(unittest.TestCase):
         # VISION_MODEL → 请求前打印一行 ⚠️ 警告；只警告不阻断，调用照常
         # 走完（背景：qwen3.5-122b-a10b 误填导致一直"未找到"）
         self._write_screenshot(width=1080, height=1200)
-        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (150, 250)")
+        # (150, 250) 落在 15% 线内（< 360）→ 强警告 + 2% 屏高（48px）
+        # 下移 → (150, 298)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (150, 298)")
         create, _cls = self._patch_client(content='{"x": 150, "y": 250}')
         buf = io.StringIO()
         vision_tools.VISION_MODEL = "qwen3.5-122b-a10b"
@@ -562,8 +660,11 @@ class VisionToolsTests(unittest.TestCase):
         self.assertEqual(create.call_count, 1)
         self.assertEqual(create.call_args.kwargs["model"],
                          "qwen3.5-122b-a10b")
-        tap.assert_called_once_with(150, 250)
-        self.assertEqual(result, "✅ 已模拟点击坐标: (150, 250)")
+        # 二次确认点击（组 D1）：tap 两次同坐标；变化检测（任务 3 后半）
+        # MD5 一致（页面未变化）→ F3-2 新口径：返回串整体替换为明确
+        # 失败 ❌ 文案（替换原含糊附加段）
+        self._assert_tapped_twice_same_point(tap, 150, 298)
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
 
     def test_vl_model_name_no_warning(self):
         # 名字含 vl（大小写不敏感）不触发预检警告
@@ -599,6 +700,8 @@ class VisionToolsTests(unittest.TestCase):
     def test_full_flow_coordinate_conversion_and_tap(self):
         # 截图 540 宽 / 屏幕 1080 宽 → 缩放比 0.5
         self._write_screenshot(width=540, height=1200)
+        # (400, 600) 落在 15%~40% 区间（360 ≤ 600 < 960）→ 仅"请确认"
+        # 警告、不偏移，保留模型原始坐标执行
         tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (400, 600)")
         wm_size = mock.MagicMock(stdout="Physical size: 1080x2400")
 
@@ -609,9 +712,12 @@ class VisionToolsTests(unittest.TestCase):
              mock.patch.object(vision_tools.subprocess, "run", return_value=wm_size):
             result = vision_tools.vision_tap_element("设置")
 
-        # 框中心 (200,300) ÷ 0.5 → 真实坐标 (400,600)，无裁剪偏移
-        tap.assert_called_once_with(400, 600)
-        self.assertEqual(result, "✅ 已模拟点击坐标: (400, 600)")
+        # 框中心 (200,300) ÷ 0.5 → 真实坐标 (400,600)，无裁剪偏移；
+        # (400,600) 在 15%~40% 区间 → 不偏移、tap 原坐标；
+        # 二次确认点击（组 D1）：tap 两次同坐标；页面未变化 → F3-2 新
+        # 口径：返回串整体替换为明确失败 ❌ 文案
+        self._assert_tapped_twice_same_point(tap, 400, 600)
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
 
         # SDK 客户端：base_url 不含 /chat/completions（客户端自动追加）、
         # api_key 与 5 秒快速超时正确传入
@@ -642,8 +748,8 @@ class VisionToolsTests(unittest.TestCase):
                                return_value=mock.MagicMock(
                                    stdout="Physical size: 1080x2400")):
             result = vision_tools.vision_tap_element("设置")
-        tap.assert_called_once_with(138, 1028)
-        self.assertEqual(result, "✅ 已模拟点击坐标: (138, 1028)")
+        self._assert_tapped_twice_same_point(tap, 138, 1028)
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
 
     def test_full_flow_user_reported_fence_missing_y_taps_scaled(self):
         # 用户实测原串（```json 围栏 + {"x": 246, "531"}）：清洗修复 →
@@ -658,11 +764,12 @@ class VisionToolsTests(unittest.TestCase):
                                return_value=mock.MagicMock(
                                    stdout="Physical size: 1080x2400")):
             result = vision_tools.vision_tap_element("设置")
-        tap.assert_called_once_with(492, 1062)
-        self.assertEqual(result, "✅ 已模拟点击坐标: (492, 1062)")
+        self._assert_tapped_twice_same_point(tap, 492, 1062)
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
 
     def test_full_flow_bounds_array_taps_center(self):
-        # {"bounds": [100, 200, 300, 400]} → 中心 (200, 300)，缩放 0.5
+        # {"bounds": [100, 200, 300, 400]} → 中心 (200, 300)，缩放 0.5；
+        # (400, 600) 在 15%~40% 区间 → 仅"请确认"警告、不偏移
         self._write_screenshot(width=540, height=1200)
         tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (400, 600)")
         self._patch_client(content='{"bounds": [100, 200, 300, 400]}')
@@ -672,13 +779,15 @@ class VisionToolsTests(unittest.TestCase):
              mock.patch.object(vision_tools.subprocess, "run",
                                return_value=mock.MagicMock(
                                    stdout="Physical size: 1080x2400")):
-            result = vision_tools.vision_tap_element("设置")
-        tap.assert_called_once_with(400, 600)
+            vision_tools.vision_tap_element("设置")
+        self._assert_tapped_twice_same_point(tap, 400, 600)
 
     def test_full_flow_direct_xy_taps_directly(self):
-        # {"x": 150, "y": 250} → 直接作为点击点（截图与屏幕等宽 → 缩放比 1.0）
+        # {"x": 150, "y": 250} → 直接作为点击点（截图与屏幕等宽 → 缩放比
+        # 1.0）；(150, 250) 在 15% 线内（< 360）→ 强警告 + 2% 屏高
+        # （48px）下移 → (150, 298)
         self._write_screenshot(width=1080, height=1200)
-        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (150, 250)")
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (150, 298)")
         self._patch_client(content='{"x": 150, "y": 250}')
         with mock.patch.object(vision_tools, "adb_screenshot",
                                return_value="✅ 截图完成"), \
@@ -687,8 +796,8 @@ class VisionToolsTests(unittest.TestCase):
                                return_value=mock.MagicMock(
                                    stdout="Physical size: 1080x2400")):
             result = vision_tools.vision_tap_element("设置")
-        tap.assert_called_once_with(150, 250)
-        self.assertEqual(result, "✅ 已模拟点击坐标: (150, 250)")
+        self._assert_tapped_twice_same_point(tap, 150, 298)
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
 
     def test_direct_minus_one_xy_reports_not_found(self):
         # 提示词新约定：找不到输出 {"x": -1, "y": -1} → 明确未找到文案，
@@ -817,6 +926,7 @@ class VisionToolsTests(unittest.TestCase):
         resp.choices = [mock.MagicMock()]
         resp.choices[0].message.content = \
             '{"x1": 100, "y1": 200, "x2": 300, "y2": 400}'
+        # (400, 600) 在 15%~40% 区间 → 仅"请确认"警告、不偏移
         tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (400, 600)")
         buf = io.StringIO()
         create, _cls = self._patch_client(side_effect=[err404, resp])
@@ -841,8 +951,11 @@ class VisionToolsTests(unittest.TestCase):
         # 中途切换成功：无终态诊断块、返回串不带已尝试模型
         self.assertNotIn("排查指引", out)
         self.assertNotIn("已尝试模型", out)
-        tap.assert_called_once_with(400, 600)   # 框中心 (200,300) ÷ 0.5
-        self.assertEqual(result, "✅ 已模拟点击坐标: (400, 600)")
+        # 二次确认点击（组 D1，默认开）：tap 两次同坐标；页面未变化 →
+        # F3-2 新口径：返回串整体替换为明确失败 ❌ 文案
+        self.assertEqual(tap.call_args_list,
+                         [mock.call(400, 600), mock.call(400, 600)])
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
 
     def test_http_404_all_models_exhausted_diagnostics(self):
         # 全部候选模型均 404：按回退顺序逐个尝试后输出诊断块（含已尝试
@@ -974,6 +1087,7 @@ class VisionToolsTests(unittest.TestCase):
         # 重试循环骨架保留：把 VISION_MAX_RETRIES 调回 1 即恢复"失败后重试
         # 1 次"行为（指数退避 1s），未来想恢复重试只改常量、无需改代码
         self._write_screenshot(width=540, height=1200)
+        # (400, 600) 在 15%~40% 区间 → 仅"请确认"警告、不偏移
         tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (400, 600)")
         content = '{"x1": 100, "y1": 200, "x2": 300, "y2": 400}'
         resp = mock.MagicMock()
@@ -990,23 +1104,69 @@ class VisionToolsTests(unittest.TestCase):
             result = vision_tools.vision_tap_element("设置")
 
         self.assertEqual(create.call_count, 2)    # 失败 1 次 + 重试成功 1 次
-        self._sleep.assert_called_once_with(1)    # 指数退避第一档 1 秒
-        tap.assert_called_once_with(400, 600)
-        self.assertEqual(result, "✅ 已模拟点击坐标: (400, 600)")
+        # sleep 序列：网络退避 1s → 点击前 0.5s → 二次确认前 1s
+        self.assertEqual(
+            [c.args[0] for c in self._sleep.call_args_list], [1, 0.5, 1])
+        self.assertEqual(tap.call_args_list,
+                         [mock.call(400, 600), mock.call(400, 600)])
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
 
     def test_scale_one_when_png_header_missing(self):
-        # 非 PNG 头（解析失败）→ 缩放比回退 1.0
+        # 非 PNG 头（解析失败）→ 缩放比回退 1.0，且不再静默：打印 ⚠️
+        # 警告（2026-10-01 用户指令：静默错误 → 可见错误），📏 全量日志
+        # 截图分辨率标注"未知(按1:1)"
         with open(vision_tools.SCREENSHOT_PATH, "wb") as f:
             f.write(b"\x00\x01\x02not-a-png")
         tap = mock.MagicMock(return_value="ok")
         content = '{"x1": 100, "y1": 200, "x2": 300, "y2": 400}'
         self._patch_client(content=content)
+        buf = io.StringIO()
         with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
              mock.patch.object(vision_tools, "adb_tap", tap), \
              mock.patch.object(vision_tools.subprocess, "run",
-                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
             vision_tools.vision_tap_element("设置")
-        tap.assert_called_once_with(200, 300)
+        out = buf.getvalue()
+        # 解析失败警告恰好一行，含 1:1 换算与截图格式排查提示
+        self.assertIn("⚠️ [视觉缩放] 截图分辨率解析失败，按 1:1 换算", out)
+        self.assertIn("（点击若偏差请检查截图格式）", out)
+        # 📏 全量日志：截图分辨率显示"未知(按1:1)"，其余三要素齐全
+        self.assertIn("📏 [视觉缩放] 模型原始坐标: (200, 300)", out)
+        self.assertIn("截图分辨率: 未知(按1:1)", out)
+        self.assertIn("手机实际分辨率: 1080x2400", out)
+        self.assertIn("换算后坐标: (200, 300)", out)
+        # (200, 300) 在 15% 线内（< 360）→ 强警告 + 2% 屏高（48px）下移
+        # → 实际点击 (200, 348)
+        self.assertEqual(tap.call_args_list,
+                         [mock.call(200, 348), mock.call(200, 348)])
+
+    def test_scale_conversion_full_log_line(self):
+        # 📏 单行全量日志（2026-10-01 用户指令）：四要素——模型原始坐标 /
+        # 截图分辨率 / 手机实际分辨率 / 换算后坐标；旧 🎯 行不再出现
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="ok")
+        content = '{"x1": 100, "y1": 200, "x2": 300, "y2": 400}'
+        self._patch_client(content=content)
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            vision_tools.vision_tap_element("设置")
+        out = buf.getvalue()
+        # 截图 540 宽 / 屏幕 1080 宽 → 缩放比 0.5：框中心 (200,300) →
+        # 换算 (400,600)，四要素齐全
+        self.assertIn("📏 [视觉缩放] 模型原始坐标: (200, 300)", out)
+        self.assertIn("截图分辨率: 540x1200", out)
+        self.assertIn("手机实际分辨率: 1080x2400", out)
+        self.assertIn("换算后坐标: (400, 600)", out)
+        self.assertNotIn("🎯", out)
+        # 换算发生在 adb_tap 之前：📏 行展示换算坐标 (400, 600)；该点在
+        # 15%~40% 区间 → 仅"请确认"警告、不偏移，tap 两次收到原坐标
+        self.assertEqual(tap.call_args_list,
+                         [mock.call(400, 600), mock.call(400, 600)])
 
     def test_model_response_without_choices(self):
         self._write_screenshot()
@@ -1113,7 +1273,10 @@ class VisionToolsTests(unittest.TestCase):
         for keyword in ("屏幕截图", "【微信】", "中文名称", "忽略", "状态栏",
                         "小组件", "应用列表", "文件夹",
                         "请务必只输出 JSON 格式", "屏幕绝对坐标",
-                        '"x"', '"y"', "-1"):
+                        '"x"', '"y"', "-1",
+                        # 严格匹配强化（2026-10-01 用户指令，用户口径）
+                        "严格匹配", "中文字符", "不要定位图标或搜索框",
+                        "不要瞎猜"):
             self.assertIn(keyword, text)
         # 输出格式段统一为新口径：强制 {"x": 数字, "y": 数字}，未找到
         # 信号改为 {"x": -1, "y": -1}（旧 Bounding Box 指令不再出现）
@@ -1140,6 +1303,456 @@ class VisionToolsTests(unittest.TestCase):
         self.assertIn('"x" 与 "y" 每个值都必须带键名', text)
         self.assertIn("数字不要加引号", text)
         self.assertIn('{"x": 246, "y": 531}', text)
+        # 末尾强化句（2026-10-01 用户指令）：置于提示词末尾段——任务 2
+        # 观察描述段追加后不再位于最末尾；"不要包含任何解释性文字"与
+        # "先描述你看到了什么"直接冲突，按任务 2 口径改为约束 JSON 本体
+        self.assertIn("不要包含 markdown 代码块", text)
+        self.assertNotIn("不要包含任何解释性文字", text)
+        self.assertIn("JSON 本体只含", text)
+        self.assertIn('示例：{"x": 100, "y": 200}。', text)
+
+    def test_prompt_strict_match_reinforcement_adjacent_to_status_bar_rule(self):
+        # 提示词严格匹配强化（2026-10-01 用户指令，用户口径）：背景是
+        # qwen3-vl-flash 找屏幕中下方的"WLAN"文字时误点顶部搜索框——
+        # 强化规则须与"忽略状态栏/小组件"规则相邻（其后）、"逐屏排查"
+        # 规则之前；关键要素：严格匹配中文字符 / 定位到文字本身而非图标
+        # 或搜索框 / 找不到务必全 -1 不瞎猜；既有输出格式与 -1 约定保留
+        self._write_screenshot()
+        create, _cls = self._patch_client(
+            content='{"x1": 0, "y1": 0, "x2": 10, "y2": 10}')
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", mock.MagicMock()), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
+            vision_tools.vision_tap_element("WLAN")
+        text = create.call_args.kwargs["messages"][0]["content"][0]["text"]
+        for keyword in ("严格匹配", "中文字符", "不要定位图标或搜索框",
+                        "不要瞎猜", "返回全 -1 坐标"):
+            self.assertIn(keyword, text)
+        # 位置：紧跟"忽略状态栏"规则（其后）、"逐屏排查"规则之前
+        self.assertLess(text.index("忽略顶部状态栏"), text.index("严格匹配"))
+        self.assertLess(text.index("严格匹配"), text.index("逐屏仔细排查"))
+        # 既有输出格式与 -1 约定保留
+        self.assertIn('{"x": -1, "y": -1}', text)
+
+    def test_top_region_coordinate_warns_but_still_taps(self):
+        # 顶部区域合理性检查（2026-10-01 用户指令）+ F3-1 降级告知进
+        # 返回串：截图 540x1200、屏幕 1080x2400 → 缩放比 0.5，模型返回
+        # y=150 换算 real_y=300 < 360（0.15 × 2400，顶部 15% 通常是
+        # 状态栏/搜索框位置）→ adb_tap 前打印一行 ⚠️ 警告；real_y=300
+        # 同时 < 15% 强警告线 → "极易误点"强警告（另有专项用例）
+        self._write_screenshot(width=540, height=1200)
+        # 第二次截图（变化检测重截图）改写文件 → 页面已变化，返回串走
+        # 成功口径，F3-1 顶部降级告知附加段由此断言
+        reshot_calls = {"count": 0}
+
+        def _fake_screenshot():
+            reshot_calls["count"] += 1
+            if reshot_calls["count"] >= 2:
+                with open(vision_tools.SCREENSHOT_PATH, "wb") as f:
+                    f.write(_png_bytes(541, 1200))
+            return "✅"
+
+        # real_y=300 落在 15% 线内（两行警告都打印，文案不同不去重）
+        # → 2% 屏高（48px）下移 → 实际执行 (992, 348)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (992, 348)")
+        self._patch_client(content='{"x": 496, "y": 150}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               side_effect=_fake_screenshot), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("WLAN")
+        out = buf.getvalue()
+        self.assertIn(
+            "⚠️ 视觉坐标可能定位到搜索框或状态栏，请检查目标文字位置", out)
+        self.assertEqual(out.count("视觉坐标可能定位到搜索框或状态栏"), 1)
+        # 15% 线内强警告同屏打印（与 15% 提示并存，文案不同不去重）
+        self.assertIn("⚠️ 目标位于屏幕上部，极易误点到账号或搜索框", out)
+        self.assertIn("实际执行坐标: (992, 348)", out)
+        # 换算 (496, 150) ÷ 0.5 → (992, 300)，15% 线内下移 48px →
+        # 实际点击 (992, 348)（二次确认默认开：两次同坐标）
+        self.assertEqual(tap.call_args_list,
+                         [mock.call(992, 348), mock.call(992, 348)])
+        # F3-1：页面已变化 → 无 ❌ 未点中文案；成功串后追加顶部降级
+        # 告知（聊天框可见，<15% 强警告区命中）
+        self.assertNotIn(vision_tools.VISION_PAGE_UNCHANGED_FAIL, result)
+        self.assertEqual(
+            result,
+            "✅ 已模拟点击坐标: (992, 348)（已执行二次确认点击）"
+            " ⚠️ 视觉模型可能识别到了顶部区域（如账号/搜索框），"
+            "建议手动确认。")
+
+    def test_mid_lower_coordinate_no_top_region_warning(self):
+        # 反例：换算后 real_y 落在屏幕中下部（1062 ≥ 15%/40% 两级阈值，
+        # 1062 ≥ 0.4 × 2400 = 960）
+        # → 不打印顶部误定位警告、无 40% 严重警告与向下偏移，其余输出
+        # （📏 缩放日志等）保持既有形态
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (492, 1062)")
+        self._patch_client(content='{"x": 246, "y": 531}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("WLAN")
+        self.assertNotIn("视觉坐标可能定位到搜索框或状态栏", buf.getvalue())
+        # 中下部（1062 ≥ 0.4×2400）不触发任何上部警告、无向下偏移
+        self.assertNotIn("极易误点到账号或搜索框", buf.getvalue())
+        self.assertNotIn("目标位于屏幕上部", buf.getvalue())
+        self.assertNotIn("实际执行坐标", buf.getvalue())
+        self.assertIn("📏 [视觉缩放]", buf.getvalue())   # 其余日志不受影响
+        self.assertEqual(tap.call_args_list,
+                         [mock.call(492, 1062), mock.call(492, 1062)])
+        # ≥40% 正常坐标 + 页面未变化 → F3-2 新口径：返回串精确等于 ❌
+        # 文案；F3-1 顶部降级告知不追加（≥40% 不命中）
+        self.assertNotIn("建议手动确认", result)
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
+
+    def test_prompt_observe_and_describe_before_coordinates(self):
+        # 任务 2（2026-10-01 用户指令，用户原文）：提示词末尾强势追加
+        # "先仔细观察屏幕 / 先描述你看到了什么 / 找不到直接返回 -1 坐标
+        # 不要瞎猜"；同时保留"JSON 本体只含坐标"口径（描述允许在 JSON
+        # 之前，解析端 _extract_click_point 对 prose 包裹已容错）
+        self._write_screenshot()
+        create, _cls = self._patch_client(
+            content='我看屏幕上是设置页面。{"x": 150, "y": 250}')
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", mock.MagicMock()), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")):
+            vision_tools.vision_tap_element("设置")
+        text = create.call_args.kwargs["messages"][0]["content"][0]["text"]
+        for keyword in ("先仔细观察屏幕", "先描述你看到了什么",
+                        "如果找不到目标文字，请直接返回 -1 坐标",
+                        "不要瞎猜", "JSON 本体只含"):
+            self.assertIn(keyword, text)
+        # 新增强化段置于提示词最末尾（强势追加）
+        self.assertTrue(text.rstrip().endswith("不要瞎猜。"))
+
+    def test_zone_15_to_40_percent_warns_only_no_offset(self):
+        # 修正后口径（2026-10-01 偏移策略修正）：real_y 落在 15%~40% 区间
+        # （500，≥ 360 且 < 960）→ 只打"⚠️ 目标位于屏幕上部，请确认"警告，
+        # 不偏移、保留模型原始坐标执行 → tap (200, 500)；15% 线提示与
+        # "极易误点"强警告均不出现（设置列表正常元素也落此区间，杜绝
+        # "蓝牙→我的设备"式漂移的关键口径）
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (200, 500)")
+        self._patch_client(content='{"x": 100, "y": 250}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("账号")
+        out = buf.getvalue()
+        # 仅"请确认"警告恰好一行；强警告 / 15% 提示 / 偏移日志均不出现
+        self.assertEqual(out.count("⚠️ 目标位于屏幕上部，请确认"), 1)
+        self.assertNotIn("极易误点到账号或搜索框", out)
+        self.assertNotIn("视觉坐标可能定位到搜索框或状态栏", out)
+        self.assertNotIn("实际执行坐标", out)
+        self.assertIn("换算后坐标: (200, 500)", out)   # 📏 日志展示原坐标
+        self._assert_tapped_twice_same_point(tap, 200, 500)
+        # 15%~40% 疑似区 + 页面未变化 → F3-2 新口径：返回串整体替换为
+        # 明确失败 ❌ 文案（顶部降级告知只改成功串形态，此处被失败口径
+        # 覆盖）
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
+
+    def test_top_offset_env_disabled_warns_only(self):
+        # VISION_TOP_OFFSET 关（env VISION_TOP_OFFSET=0 的模块常量形态）：
+        # 语义不变——关=连 15% 内也不偏移：real_y=300（< 360 强警告线）
+        # 仍打 15% 提示 + "极易误点"强警告，但不下移——tap 原坐标、
+        # 无"实际执行坐标"行
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (200, 300)")
+        self._patch_client(content='{"x": 100, "y": 150}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "VISION_TOP_OFFSET", False), \
+             mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("账号")
+        out = buf.getvalue()
+        self.assertIn("⚠️ 目标位于屏幕上部，极易误点到账号或搜索框", out)
+        self.assertIn("视觉坐标可能定位到搜索框或状态栏", out)
+        self.assertNotIn("实际执行坐标", out)
+        self._assert_tapped_twice_same_point(tap, 200, 300)
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
+
+    def test_user_scenario_31_percent_warns_only_keeps_model_y(self):
+        # 用户场景复现（2026-10-01 偏移策略修正的关键用例）：屏高 2712、
+        # 模型给 y=847 → 31.2%——设置列表中"蓝牙"的正常元素位置。此前
+        # 40% 区 5% 强推下移把它推到 y=982、点击漂移到"我的设备"（好心
+        # 办坏事）；修正后 15%~40% 区间只警告、不偏移，y 保持 847 执行。
+        # 截图与屏幕等宽 → 缩放比 1.0，换算后仍 (540, 847)；31.2% ≥ 15%
+        # （406.8）→ 只有"请确认"警告一行
+        self._write_screenshot(width=1080, height=2712)
+        # 第二次截图（变化检测重截图）改写文件 → 页面已变化，返回串走
+        # 成功口径，F3-1 顶部降级告知（15%~40% 疑似区命中）由此断言
+        reshot_calls = {"count": 0}
+
+        def _fake_screenshot():
+            reshot_calls["count"] += 1
+            if reshot_calls["count"] >= 2:
+                with open(vision_tools.SCREENSHOT_PATH, "wb") as f:
+                    f.write(_png_bytes(1081, 2712))
+            return "✅"
+
+        # 常量口径断言：偏移量收窄至 2%（0.02 × 2712 = 54.24，int 截断
+        # 为 54），偏移线 0.15、警告上限 0.40
+        self.assertEqual(
+            int(vision_tools.VISION_TOP_OFFSET_RATIO * 2712), 54)
+        self.assertEqual(vision_tools.VISION_TOP_STRONG_RATIO, 0.15)
+        self.assertEqual(vision_tools.VISION_TOP_ZONE_RATIO, 0.40)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (540, 847)")
+        self._patch_client(content='{"x": 540, "y": 847}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               side_effect=_fake_screenshot), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2712")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("蓝牙")
+        out = buf.getvalue()
+        # "请确认"警告恰好一行；强警告 / 15% 提示 / 偏移日志均不出现
+        self.assertEqual(out.count("⚠️ 目标位于屏幕上部，请确认"), 1)
+        self.assertNotIn("极易误点到账号或搜索框", out)
+        self.assertNotIn("视觉坐标可能定位到搜索框或状态栏", out)
+        self.assertNotIn("实际执行坐标", out)
+        # 📏 缩放日志展示换算后原坐标；模型 y=847 原样执行（不漂移）
+        self.assertIn("换算后坐标: (540, 847)", out)
+        self._assert_tapped_twice_same_point(tap, 540, 847)
+        # F3-1（用户"蓝牙→账号"误点场景）：页面已变化 → 成功串后追加
+        # 顶部降级告知（15%~40% 疑似区同样命中），无 ❌ 未点中文案
+        self.assertNotIn(vision_tools.VISION_PAGE_UNCHANGED_FAIL, result)
+        self.assertEqual(
+            result,
+            "✅ 已模拟点击坐标: (540, 847)（已执行二次确认点击）"
+            " ⚠️ 视觉模型可能识别到了顶部区域（如账号/搜索框），"
+            "建议手动确认。")
+
+    def test_below_15_percent_strong_zone_offsets_2_percent(self):
+        # <15% 强警告区（14% 用户场景）：屏高 2712、模型 y=378（13.9%）
+        # → 真状态栏/搜索框区 → 15% 提示 + 强警告 + 2% 屏高向下偏移
+        # （int(0.02 × 2712) = 54 像素）→ 实际执行 (540, 432)
+        self._write_screenshot(width=1080, height=2712)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (540, 432)")
+        self._patch_client(content='{"x": 540, "y": 378}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2712")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("搜索")
+        out = buf.getvalue()
+        # 15% 线内两行警告并存（15% 提示 + 强警告，文案不同不去重）
+        self.assertIn("视觉坐标可能定位到搜索框或状态栏", out)
+        self.assertIn("⚠️ 目标位于屏幕上部，极易误点到账号或搜索框", out)
+        # 偏移量恰为 2% 屏高（54px）：378 + 54 = 432
+        self.assertIn("已向下偏移 2% 屏高", out)
+        self.assertIn("实际执行坐标: (540, 432)", out)
+        self._assert_tapped_twice_same_point(tap, 540, 432)
+        # <15% 强警告区 + 页面未变化 → F3-2 新口径：返回串整体替换为
+        # 明确失败 ❌ 文案
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
+
+    def test_just_below_40_percent_boundary_warns_only(self):
+        # 40% 边界反例（下侧）：real_y=936 = 39% × 2400 < 960 → 只打
+        # "请确认"警告、不偏移，tap 原坐标 (300, 936)；936 ≥ 360 →
+        # 无 15% 提示、无强警告、无偏移日志
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (300, 936)")
+        self._patch_client(content='{"x": 150, "y": 468}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            vision_tools.vision_tap_element("账号")
+        out = buf.getvalue()
+        self.assertEqual(out.count("⚠️ 目标位于屏幕上部，请确认"), 1)
+        self.assertNotIn("极易误点到账号或搜索框", out)
+        self.assertNotIn("视觉坐标可能定位到搜索框或状态栏", out)
+        self.assertNotIn("实际执行坐标", out)
+        self._assert_tapped_twice_same_point(tap, 300, 936)
+
+    def test_just_above_40_percent_boundary_silent(self):
+        # 40% 边界反例（上侧）：real_y=984 = 41% × 2400 ≥ 960 → 不警告
+        # 不偏移，tap 原坐标 (300, 984)，无"实际执行坐标"行
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (300, 984)")
+        self._patch_client(content='{"x": 150, "y": 492}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            vision_tools.vision_tap_element("账号")
+        out = buf.getvalue()
+        self.assertNotIn("目标位于屏幕上部", out)
+        self.assertNotIn("极易误点到账号或搜索框", out)
+        self.assertNotIn("视觉坐标可能定位到搜索框或状态栏", out)
+        self.assertNotIn("实际执行坐标", out)
+        self.assertIn("📏 [视觉缩放]", out)   # 其余日志不受影响
+        self._assert_tapped_twice_same_point(tap, 300, 984)
+
+    def test_change_detection_unchanged_reports_clear_failure(self):
+        # 任务 3 后半 + F3-2 明确失败口径：重新截图与点击前留底 MD5 一致
+        # （测试中 adb_screenshot 为 mock、不改写文件）→ 控制台一行简短
+        # 原因说明 + 返回串精确等于 ❌ 未点中文案（替换原"（⚠️ 页面未
+        # 发生变化，已尝试点击 2 次）"含糊附加段）；tap 仍恰两次——
+        # 变化检测不做任何额外重试点击，adb_screenshot 恰两次（首次 +
+        # 检测重截图）
+        self._write_screenshot(width=540, height=1200)
+        screenshot_mock = mock.MagicMock(return_value="✅")
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (492, 1062)")
+        self._patch_client(content='{"x": 246, "y": 531}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               screenshot_mock), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("WLAN")
+        out = buf.getvalue()
+        self.assertIn(
+            "⚠️ 页面未发生变化，目标可能未点中，尝试滑动屏幕或重新寻找", out)
+        self.assertNotIn("✅ 页面已变化", out)
+        # 返回串精确等于新 ❌ 文案（锁死用户指定文案，不残留旧附加段）
+        self.assertEqual(
+            result,
+            "❌ 视觉模型未点中目标，请尝试手动点击或换个清晰的图标")
+        self.assertEqual(result, vision_tools.VISION_PAGE_UNCHANGED_FAIL)
+        # tap 仍恰两次（无额外重试）；截图恰两次（首次 + 检测重截图）
+        self._assert_tapped_twice_same_point(tap, 492, 1062)
+        self.assertEqual(screenshot_mock.call_count, 2)
+
+    def test_change_detection_page_changed_reports_effective_line(self):
+        # 二次截图内容变化（第二次 adb_screenshot 重写截图文件）→ 打印
+        # "✅ 页面已变化，点击已生效"，返回串不附加未变化段
+        self._write_screenshot(width=540, height=1200)
+
+        reshot_calls = {"count": 0}
+
+        def _fake_screenshot():
+            reshot_calls["count"] += 1
+            if reshot_calls["count"] >= 2:
+                # 与点击前留底内容不同 → MD5 变化
+                with open(vision_tools.SCREENSHOT_PATH, "wb") as f:
+                    f.write(_png_bytes(541, 1200))
+            return "✅"
+
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (492, 1062)")
+        self._patch_client(content='{"x": 246, "y": 531}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               side_effect=_fake_screenshot), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("WLAN")
+        out = buf.getvalue()
+        self.assertIn("✅ 页面已变化，点击已生效", out)
+        self.assertNotIn("页面未发生变化", out)
+        # F3-2 反例（测试 ③）：页面已变化 → 返回串不含 ❌ 未点中文案，
+        # 保持成功口径；(492, 1062) ≥ 40% 屏高 → 顶部降级告知也不追加
+        self.assertNotIn(vision_tools.VISION_PAGE_UNCHANGED_FAIL, result)
+        self.assertNotIn("建议手动确认", result)
+        self.assertEqual(
+            result, "✅ 已模拟点击坐标: (492, 1062)（已执行二次确认点击）")
+
+    def test_change_detection_md5_failure_keeps_main_flow(self):
+        # MD5 计算失败（file_md5 返回 None）→ 检测静默降级：不崩溃、
+        # 控制台与返回串均无检测结论，点击主流程结果不受影响
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (492, 1062)")
+        self._patch_client(content='{"x": 246, "y": 531}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "file_md5", return_value=None), \
+             mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("WLAN")
+        out = buf.getvalue()
+        self.assertNotIn("页面未发生变化", out)
+        self.assertNotIn("页面已变化", out)
+        self._assert_tapped_twice_same_point(tap, 492, 1062)
+        self.assertEqual(
+            result, "✅ 已模拟点击坐标: (492, 1062)（已执行二次确认点击）")
+
+    def test_change_detection_skipped_when_confirm_retap_disabled(self):
+        # VISION_CONFIRM_RETAP=0（无二次点击）：跳过变化检测——只点一次
+        # 无从比对：不二次截图（adb_screenshot 共 1 次）、tap 一次、
+        # 返回串无附加段
+        self._write_screenshot(width=540, height=1200)
+        screenshot_mock = mock.MagicMock(return_value="✅")
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (492, 1062)")
+        self._patch_client(content='{"x": 246, "y": 531}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "VISION_CONFIRM_RETAP", False), \
+             mock.patch.object(vision_tools, "adb_screenshot", screenshot_mock), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("WLAN")
+        self.assertEqual(screenshot_mock.call_count, 1)
+        tap.assert_called_once_with(492, 1062)
+        self.assertEqual(result, "✅ 已模拟点击坐标: (492, 1062)")
+        self.assertNotIn("页面未发生变化", buf.getvalue())
+
+    def test_top_zone_note_appended_without_confirm_retap(self):
+        # F3-1 补充：VISION_CONFIRM_RETAP=0（单次点击、跳过变化检测）
+        # 时，顶部疑似区降级告知同样追加进返回串（聊天框可见）
+        self._write_screenshot(width=1080, height=1200)
+        screenshot_mock = mock.MagicMock(return_value="✅")
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (150, 298)")
+        self._patch_client(content='{"x": 150, "y": 250}')
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "VISION_CONFIRM_RETAP", False), \
+             mock.patch.object(vision_tools, "adb_screenshot", screenshot_mock), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("WLAN")
+        # 截图与屏幕等宽 → 缩放比 1.0；(150, 250) < 15% 线（360）→
+        # 偏移 48px → (150, 298)；单次点击、无二次确认附加段
+        tap.assert_called_once_with(150, 298)
+        self.assertEqual(screenshot_mock.call_count, 1)
+        self.assertEqual(
+            result,
+            "✅ 已模拟点击坐标: (150, 298) "
+            "⚠️ 视觉模型可能识别到了顶部区域（如账号/搜索框），"
+            "建议手动确认。")
+        self.assertNotIn("页面未发生变化", buf.getvalue())
 
     def test_generic_exception_wrapped(self):
         # 非 SDK 分类的未知异常：不重试、原样包装（保持可排查）
@@ -1152,15 +1765,32 @@ class VisionToolsTests(unittest.TestCase):
         self.assertEqual(result, "❌ 视觉模型调用失败: boom")
 
     def test_get_screen_size_parses_and_falls_back(self):
+        # 正常解析：返回解析值，无 ⚠️ 警告
+        buf = io.StringIO()
         with mock.patch.object(vision_tools.subprocess, "run",
-                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
             self.assertEqual(vision_tools.get_screen_size(), (1080, 2400))
+        self.assertNotIn("⚠️ [视觉缩放]", buf.getvalue())
+
+        # 输出无法解析 → 兜底 1080x2400 且不再静默：打印 ⚠️ 警告
+        # （2026-10-01 用户指令：静默错误 → 可见错误）
+        buf = io.StringIO()
         with mock.patch.object(vision_tools.subprocess, "run",
-                               return_value=mock.MagicMock(stdout="error")):
+                               return_value=mock.MagicMock(stdout="error")), \
+             contextlib.redirect_stdout(buf):
             self.assertEqual(vision_tools.get_screen_size(), (1080, 2400))
+        self.assertIn("⚠️ [视觉缩放] 手机分辨率获取失败", buf.getvalue())
+        self.assertIn("adb shell wm size", buf.getvalue())
+        self.assertIn("1080x2400", buf.getvalue())
+
+        # subprocess 异常 → 同样兜底 + ⚠️ 警告，不崩溃
+        buf = io.StringIO()
         with mock.patch.object(vision_tools.subprocess, "run",
-                               side_effect=Exception("no adb")):
+                               side_effect=Exception("no adb")), \
+             contextlib.redirect_stdout(buf):
             self.assertEqual(vision_tools.get_screen_size(), (1080, 2400))
+        self.assertIn("⚠️ [视觉缩放] 手机分辨率获取失败", buf.getvalue())
 
 
 class EnvExampleVisionModelTests(unittest.TestCase):

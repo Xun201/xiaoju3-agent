@@ -15,9 +15,23 @@
   执行）时最终 reply 最前面包装捕获的 [思考]/[计划] 文本，模型没输出时按
   实际解析出的工具名动态生成占位符"[思考] 准备调用 {工具名} 尝试完成
   操作."（解析不出工具名回退固定占位符）；❌ 切断/熔断通知同属工具流程
-  同样包装；普通聊天/URL 总结/熔断剥夺路径不包装；CoT 花括号内容不干扰
-  JSON 提取（贪婪正则失败回退逐 { raw_decode 扫描）；[CoT] 终端日志
+  同样包装；全对话强制包装（2026-10-01 用户指令，废止旧"普通聊天零包装"
+  口径）：_seal_bare_cot 对 smart_ask 全部自然语言回复出口封口——旁路普通
+  回复/URL 总结/熔断剥夺路径捕获到原生思考用原生，残缺形态回退工具占位符
+  （正文剥空用"（操作已执行）"占位；正文已以 <think> 开头防重入不二次
+  包）；无任何标记的普通闲聊注入 CHAT_THINKING_PLACEHOLDER 默认占位符
+  （"[思考] 正在理解你的意图..."）；抓取失败/双脑全挂/空回复等固定文案
+  同样注入默认占位符；CoT 花括号内容
+  不干扰 JSON 提取（贪婪正则失败回退逐 { raw_decode 扫描）；[CoT] 终端日志
   （兜底占位符注入 / 模型原生思考输出各一条，redirect_stdout 捕获）；
+  游离标签防御：包装统一走 _wrap_think——thinking/body 两侧剥除模型自吐
+  的 <think>/</think> 字面量 + 拼装后成对校验，恰一对标签且在最前；
+- 裸 CoT 泄漏扫描总测试（BareCotLeakSweepTests，P2 "穷举封死"）：smart_ask
+  全部 11 条 return 路径参数化扫描——ui_tap→vision 回退分支汇总轮复读裸
+  CoT（用户实测"帮我点击蓝牙"漏点，_seal_tool_summary 修复）、[行动] 残缺
+  形态（_seal_bare_cot 任意标记触发）、❌ 切断防御 strip、回退分支端到端
+  （真实 tools.execute_tool 分发）等，逐条断言无裸 [思考]/[计划]/[行动]
+  漏出（判定口径见该类 docstring）；
 - URL 输入触发网页抓取（script/style 被剔除）；
 - MAX_MESSAGES=50 截断；translate_emoji 转换正确且已接入 smart_ask 回复链；
 - smart_ask 返回二元组与来源标签（🏠 本地 / ☁️ 云端 / (工具) / ⛔ 熔断）正确；
@@ -32,6 +46,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -311,7 +326,11 @@ class SmartAskRoutingTests(unittest.TestCase):
             mr.post.return_value = _local_resp("你好呀，我是小橘！")
             result = brain.smart_ask("你好", [])
 
-        self.assertEqual(result, ("你好呀，我是小橘！", "🏠 本地"))
+        # 全对话强制包装：普通闲聊无原生思考 → 注入默认占位符包装
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>你好呀，我是小橘！",
+             "🏠 本地"))
         mcloud.assert_not_called()                     # 本地可用时不惊动云端
         args, kwargs = mr.post.call_args
         self.assertEqual(args[0], xiaoju3.LOCAL_URL)
@@ -324,7 +343,10 @@ class SmartAskRoutingTests(unittest.TestCase):
             mr.post.return_value = _cloud_resp("云端回答")
             result = brain.smart_ask("你好", [])
 
-        self.assertEqual(result, ("云端回答", "☁️ 云端"))
+        # 全对话强制包装：云端热切换的普通回复同样注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>云端回答", "☁️ 云端"))
         args, _ = mr.post.call_args
         self.assertEqual(args[0], xiaoju3.CLOUD_URL)
 
@@ -334,7 +356,9 @@ class SmartAskRoutingTests(unittest.TestCase):
             mr.post.side_effect = [ConnectionError("本地挂了"), _cloud_resp("云端回答")]
             result = brain.smart_ask("你好", [])
 
-        self.assertEqual(result, ("云端回答", "☁️ 云端"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>云端回答", "☁️ 云端"))
         self.assertEqual(mr.post.call_count, 2)
 
     def test_both_brains_down_error_message(self):
@@ -343,7 +367,10 @@ class SmartAskRoutingTests(unittest.TestCase):
             mr.post.side_effect = Exception("network down")
             reply, source = brain.smart_ask("你好", [])
 
-        self.assertTrue(reply.startswith("❌ 大脑连接失败，请检查网络。错误："), reply)
+        # 全对话强制包装：双脑全挂的固定失败文案同样注入默认占位符
+        self.assertTrue(reply.startswith(
+            f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>"), reply)
+        self.assertIn("❌ 大脑连接失败，请检查网络。错误：", reply)
         self.assertIn("云端连接异常", reply)
         self.assertEqual(source, "❌ 失败")
 
@@ -400,13 +427,19 @@ class SmartAskRoutingTests(unittest.TestCase):
             mr.get.return_value = mock.Mock()
             mr.post.return_value = _local_resp("")
             result = brain.smart_ask("你好", [])
-        self.assertEqual(result, ("抱歉，小橘3号刚才脑袋短路了，请再说一遍吧。", "🏠 本地"))
+        # 全对话强制包装：空回复道歉文案同样注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>"
+             "抱歉，小橘3号刚才脑袋短路了，请再说一遍吧。", "🏠 本地"))
 
     def test_result_is_always_tuple_of_two(self):
         with mock.patch.object(brain, "requests") as mr, _quiet():
             mr.get.return_value = mock.Mock()
             mr.post.return_value = _local_resp("好")
-            self.assertEqual(brain.smart_ask("你好", []), ("好", "🏠 本地"))
+            self.assertEqual(
+                brain.smart_ask("你好", []),
+                (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>好", "🏠 本地"))
         with mock.patch.object(brain, "requests") as mr, _quiet():
             mr.get.side_effect = OSError("探测失败")
             mr.post.side_effect = Exception("network down")
@@ -578,17 +611,22 @@ class SmartAskToolTests(unittest.TestCase):
     def test_invalid_json_treated_as_plain_reply(self):
         raw = '{"tool": list_files}'  # 非 JSON（值没加引号）
         result, mexec, mcloud, _ = _run_tool_flow(raw)
-        self.assertEqual(result, (raw, "🏠 本地"))
+        # 全对话强制包装：旁路普通回复（无裸标记）注入默认占位符，原文随正文保留
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>{raw}", "🏠 本地"))
         mexec.assert_not_called()
         mcloud.assert_not_called()
 
     def test_tool_outside_whitelist_rejected(self):
         raw = '{"tool": "format_disk", "args": {}}'
         result, mexec, mcloud, _ = _run_tool_flow(raw)
-        # 白名单外：不执行工具，按普通文本回复处理
+        # 白名单外：不执行工具，按普通文本回复处理（强制包装注入默认占位符）
         mexec.assert_not_called()
         mcloud.assert_not_called()
-        self.assertEqual(result, (raw, "🏠 本地"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>{raw}", "🏠 本地"))
 
     def test_tool_result_starting_with_x_cuts_retry(self):
         # 防死循环硬拦截（单轮）：被拒结果不再喂回模型重试，直接返回拒绝文案
@@ -644,8 +682,19 @@ class ThinkWrapTests(unittest.TestCase):
     - 模型没输出任何 [思考]/[计划] → 按实际工具名动态生成占位符包装
       （"[思考] 准备调用 {工具名} 尝试完成操作."，解析不出工具名回退固定
       占位符）；
-    - 无工具调用（普通聊天/解析失败/白名单外/URL 总结/熔断剥夺）→ 不包装；
-    - CoT 文本里混入花括号内容不得干扰工具 JSON 提取（先提取 JSON 再裁思考）。
+    - 全对话强制包装（_seal_bare_cot，2026-10-01 用户指令，显式废止旧
+      "普通聊天零包装零干扰"）：模型输出了 [思考]/[计划] 但 JSON 解析失败/
+      工具不在白名单等旁路普通回复、URL 总结、熔断剥夺路径 → 捕获到原生
+      思考用原生（正文剥空用"（操作已执行）"占位；正文已以 <think> 开头
+      防重入不再二次包）；无任何标记的普通闲聊 → 注入 CHAT_THINKING_
+      PLACEHOLDER 默认占位符"[思考] 正在理解你的意图..."（正文原样保留，
+      提到"思考"二字不误触发剥标）；抓取失败/双脑全挂/空回复等固定文案
+      同样注入默认占位符；
+    - CoT 文本里混入花括号内容不得干扰工具 JSON 提取（先提取 JSON 再裁思考）；
+    - 游离标签防御：包装统一走 _wrap_think（thinking/body 两侧剥除模型
+      自吐的 <think>/</think> 字面量 + 拼装后成对校验）——模型回复自带
+      </think>/<think> 字面量时最终 reply 仍恰一对标签且在最前，杜绝
+      "</think>[思考]…" 原文直出网页。
     """
 
     COT_RAW = ('[思考] 主人要开灯，先确认设备在线。\n'
@@ -696,6 +745,81 @@ class ThinkWrapTests(unittest.TestCase):
             "control_ha_device",
             {"entity_id": "light.room", "action": "turn_on"},
             brain.permission_manager)
+
+    def test_wlan_tap_scenario_wraps_captured_cot(self):
+        # 用户实测场景："帮我点击手机屏幕上的WLAN"：模型按 [思考] → [计划] →
+        # [行动]+JSON 三段协议输出，最终 reply 必须以
+        # <think>[思考]…[计划]…</think> 开头且拼接在最终回答最前面
+        raw = ('[思考] 主人想打开手机上的WLAN，先看清屏幕布局找到入口。\n'
+               '[计划] 用uiautomator定位文字为"WLAN"的控件并点击中心点。\n'
+               '[行动] {"tool": "ui_tap_element", "args": {"text": "WLAN"}}')
+        result, mexec, _, _ = _run_tool_flow(
+            raw, tool_result="【mock】UI 点击 WLAN", summary_reply="好的，已经帮你点开WLAN设置页面了。")
+
+        reply, source = result
+        self.assertEqual(source, "🏠 本地 (工具)")
+        self.assertTrue(reply.startswith("<think>[思考] "), reply)
+        self.assertIn("[计划] 用uiautomator定位", reply)
+        self.assertTrue(
+            reply.startswith(f"<think>{brain._capture_thinking(raw)}</think>"), reply)
+        self.assertTrue(reply.endswith("好的，已经帮你点开WLAN设置页面了。"))
+        mexec.assert_called_once_with("ui_tap_element", {"text": "WLAN"},
+                                      brain.permission_manager)
+
+    def test_execute_tool_exception_still_wrapped_and_cut(self):
+        # 🛡️ 漏包装分支补齐：[CoT] 日志打印后 execute_tool 抛异常（依赖缺失/
+        # 子进程崩溃等）→ 按 ❌ 切断口径返回，<think> 包装保持完整，
+        # 裸 CoT 原文绝不漏成普通回复；异常按"被拒"计入熔断连续计数
+        raw = ('[思考] 先定位控件。\n'
+               '[计划] 点击WLAN。\n'
+               '[行动] {"tool": "ui_tap_element", "args": {"text": "WLAN"}}')
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool",
+                                  side_effect=RuntimeError("uiautomator boom")), \
+                mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.side_effect = [_local_resp(raw), _local_resp("不会走到这")]
+            mcloud.return_value = "不会走到这"
+            reply, source = brain.smart_ask("帮我点击手机屏幕上的WLAN", [])
+
+        self.assertEqual(source, "☁️ 云端 (工具)")
+        self.assertTrue(reply.startswith("<think>[思考] 先定位控件。"), reply)
+        self.assertIn("</think>❌ 工具执行异常: uiautomator boom", reply)
+        mcloud.assert_not_called()   # ❌ 切断：异常结果不喂回模型重试
+        # 熔断联动：异常计入"同一工具+等价参数被拒"连续次数，达到阈值的那一次
+        # 强制打断并返回 ⛔ 熔断来源（熔断通知回复同样带 <think> 包装；
+        # 之后的会话轮退回纯文本，不再解析工具）
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool",
+                                  side_effect=RuntimeError("uiautomator boom")), \
+                mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+            mr.get.return_value = mock.Mock()
+            mcloud.return_value = "x"
+            fused = None
+            for _ in range(brain.TOOL_FUSE_LIMIT):
+                mr.post.side_effect = [_local_resp(raw), _local_resp("x")]
+                cand = brain.smart_ask("帮我点击手机屏幕上的WLAN", [])
+                if cand[1] == "⛔ 熔断":
+                    fused = cand
+                    break
+        self.assertIsNotNone(fused, "连续异常达到阈值未触发熔断")
+        # 熔断通知回复同样带 <think> 包装（完整捕获思考 + ⛔ 打断文案）
+        self.assertTrue(fused[0].startswith("<think>[思考] 先定位控件。"), fused[0])
+        self.assertIn("</think>⛔ 小橘3号连续多次尝试同一被拒绝的操作", fused[0])
+
+    def test_wrapped_reply_survives_web_sanitize(self):
+        # 净化透传契约：包装后的 reply 经 web_sanitize.sanitize_for_web 原样
+        # 存活（<think>/</think> 标签不被剥掉/转义/破坏），前端才能渲染卡片；
+        # 思考内容里混入的 CQ 码仍按 Web 口径净化（face→Emoji）
+        from web_sanitize import sanitize_for_web
+        wrapped = (f"<think>{self.COT_THINKING}</think>已经帮你弄好了")
+        self.assertEqual(sanitize_for_web(wrapped), wrapped)
+        with_cq = "<think>[思考] 表情[CQ:face,id=4]参考</think>正文[CQ:image,file=file:///x/a.jpg]"
+        out = sanitize_for_web(with_cq)
+        self.assertTrue(out.startswith("<think>[思考] 表情😎参考</think>正文"), out)
+        self.assertIn("</think>", out)
+        self.assertNotIn("CQ", out)
+
 
     def test_tool_flow_default_placeholder_without_cot(self):
         result, mexec, _, _ = _run_tool_flow('{"tool": "list_files", "args": {}}')
@@ -786,14 +910,19 @@ class ThinkWrapTests(unittest.TestCase):
         self.assertTrue(
             brain._tool_thinking_placeholder("ui_tap_element").startswith("[思考] "))
 
-    def test_plain_chat_reply_never_wrapped(self):
-        # 普通聊天零影响：无工具调用绝不加包装
+    def test_plain_chat_reply_wrapped_with_default_placeholder(self):
+        # 全对话强制包装（2026-10-01 用户指令，反转旧"零包装"断言）：普通
+        # 闲聊无原生思考 → 注入默认占位符，前端必定渲染思维链卡片；正文原样
+        self.assertEqual(brain.CHAT_THINKING_PLACEHOLDER,
+                         "[思考] 正在理解你的意图...")
         with mock.patch.object(brain, "requests") as mr, _quiet():
             mr.get.return_value = mock.Mock()
             mr.post.return_value = _local_resp("今天天气不错哦～")
             result = brain.smart_ask("你好", [])
-        self.assertEqual(result, ("今天天气不错哦～", "🏠 本地"))
-        self.assertNotIn("<think>", result[0])
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>今天天气不错哦～",
+             "🏠 本地"))
 
     def test_cot_braces_do_not_break_json_extraction(self):
         # CoT 里混入花括号内容：贪婪正则整体解析失败 → 回退逐 { 扫描提取，
@@ -809,13 +938,79 @@ class ThinkWrapTests(unittest.TestCase):
             ("<think>[思考] 先看\n[计划] 1. 读文件</think>已经帮你弄好了",
              "🏠 本地 (工具)"))
 
-    def test_braces_in_cot_without_tool_json_stays_plain(self):
-        # 有思考、有花括号，但没有合法工具 JSON → 按普通回复处理，不加包装
+    def test_cot_without_tool_json_still_wrapped_no_bare_leak(self):
+        # 裸 CoT 封口（2026-10-01 用户口径）：有思考、有花括号，但没有合法
+        # 工具 JSON → 旁路普通回复路径同样包装 <think>，裸 [思考] 绝不漏出；
+        # 正文保留剥离裸标记后的剩余文本（"宁可隐藏裸文本"）
         raw = '[思考] 我先想想 {看看} 再说。'
         result, mexec, mcloud, _ = _run_tool_flow(raw)
-        self.assertEqual(result, (raw, "🏠 本地"))
+        self.assertEqual(
+            result,
+            ("<think>[思考] 我先想想</think>{看看} 再说。", "🏠 本地"))
         mexec.assert_not_called()
         mcloud.assert_not_called()
+
+    def test_cot_with_unparseable_json_sealed_with_placeholder(self):
+        # 用户实测场景封口（"帮我点击手机屏幕上的蓝牙"）：模型按协议输出
+        # [思考]/[计划]/[行动]+JSON 但 JSON 残缺（缺逗号）解析不出 → 普通
+        # 回复路径同样包装 <think>；正文剥空用"（操作已执行）"占位，
+        # [行动] 行与 JSON 载荷绝不裸漏
+        raw = ('[思考] 主人要点击蓝牙，先定位设置入口。\n'
+               '[计划] 1. UI解析找蓝牙 2. 失败转视觉\n'
+               '[行动] {"tool": "ui_tap_element" "args": {}}')
+        result, mexec, mcloud, _ = _run_tool_flow(raw, summary_reply="x")
+        reply, source = result
+        self.assertEqual(source, "🏠 本地")
+        self.assertTrue(reply.startswith("<think>[思考] 主人要点击蓝牙"), reply)
+        self.assertIn("[计划] 1. UI解析找蓝牙", reply)
+        self.assertTrue(reply.endswith("</think>（操作已执行）"), reply)
+        body_part = reply.split("</think>", 1)[1]
+        self.assertNotIn("[行动]", body_part)
+        self.assertNotIn('"tool"', body_part)
+        mexec.assert_not_called()
+        mcloud.assert_not_called()
+
+    def test_cot_with_whitelist_rejected_tool_still_sealed(self):
+        # 旁路封口：JSON 合法但工具不在白名单 → 不执行，普通回复路径同样包装
+        raw = ('[思考] 试试危险的工具。\n'
+               '[计划] 调用未知工具\n'
+               '[行动] {"tool": "format_disk", "args": {}}')
+        result, mexec, mcloud, _ = _run_tool_flow(raw, summary_reply="x")
+        reply, source = result
+        self.assertEqual(source, "🏠 本地")
+        self.assertTrue(reply.startswith("<think>[思考] 试试危险的工具。"), reply)
+        self.assertTrue(reply.endswith("</think>（操作已执行）"), reply)
+        mexec.assert_not_called()
+        mcloud.assert_not_called()
+
+    def test_plain_chat_mentioning_marker_word_wrapped_with_placeholder(self):
+        # 反转口径（2026-10-01 强制包装）：回复提到"思考"二字（无方括号标记）
+        # 不触发裸标记剥除——正文原样保留，但仍注入默认占位符包装
+        with mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("让我思考一下再回答你哦。")
+            result = brain.smart_ask("你好", [])
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>让我思考一下再回答你哦。",
+             "🏠 本地"))
+
+    def test_seal_bare_cot_placeholder_constant_and_reentry_guard(self):
+        # 防重入：body 已以 <think> 开头（模型自包/上游已包）→ 不再二次包装，
+        # 只剥净裸标记；占位符常量与前端契约字面量一致
+        self.assertEqual(brain.BARE_COT_BODY_PLACEHOLDER, "（操作已执行）")
+        self.assertEqual(brain.CHAT_THINKING_PLACEHOLDER,
+                         "[思考] 正在理解你的意图...")
+        with _quiet():
+            sealed = brain._seal_bare_cot("<think>a</think>[思考] b\nc")
+        self.assertEqual(sealed.count("<think>"), 1, sealed)
+        self.assertEqual(sealed.count("</think>"), 1, sealed)
+        self.assertTrue(sealed.startswith("<think>a</think>"), sealed)
+        self.assertNotIn("[思考]", sealed)
+        # 无标记的普通闲聊同样防重入：模型自吐 <think> 原生包装 → 原样透传
+        with _quiet():
+            native = brain._seal_bare_cot("<think>原生</think>直接聊")
+        self.assertEqual(native, "<think>原生</think>直接聊")
 
     def test_extract_tool_json_multiline_still_works(self):
         # 既有能力不回退：多行 JSON 与夹在文字中的 JSON 照常提取
@@ -843,8 +1038,9 @@ class ThinkWrapTests(unittest.TestCase):
         mexec.assert_called_once()
         mcloud.assert_not_called()
 
-    def test_url_summary_not_wrapped(self):
-        # URL 总结路径无工具调用 → 不加 <think> 包装
+    def test_url_summary_wrapped_with_default_placeholder(self):
+        # 全对话强制包装（反转旧"零包装"断言）：URL 总结路径无工具调用、
+        # 无原生思考 → 注入默认占位符，前端必定渲染思维链卡片
         url = "https://example.com/page"
         with mock.patch.object(brain, "requests") as mr, \
                 mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
@@ -858,8 +1054,127 @@ class ThinkWrapTests(unittest.TestCase):
             mr.get.side_effect = get_side_effect
             mcloud.return_value = "这是网页总结"
             result = brain.smart_ask(f"帮我总结 {url}", [])
-        self.assertEqual(result, ("这是网页总结", "☁️ 云端 (总结)"))
-        self.assertNotIn("<think>", result[0])
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>这是网页总结",
+             "☁️ 云端 (总结)"))
+
+    def test_url_summary_with_native_cot_sealed(self):
+        # URL 总结路径旁路封口：总结文本若带模型原生 [思考]/[计划]（如复读
+        # 页面协议文本），捕获文本进推理卡片不裸漏；无标记总结注入默认占位
+        # 符由上一用例锁定
+        url = "https://example.com/page"
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+            def get_side_effect(target, **kwargs):
+                if target == url:
+                    resp = mock.Mock()
+                    resp.text = "<p>网页正文</p>"
+                    return resp
+                raise OSError("refused")   # 探测失败 → 走云端
+
+            mr.get.side_effect = get_side_effect
+            mcloud.return_value = "[思考] 先梳理正文。\n[计划] 提炼要点\n这是网页总结"
+            reply, source = brain.smart_ask(f"帮我总结 {url}", [])
+        self.assertEqual(source, "☁️ 云端 (总结)")
+        self.assertTrue(reply.startswith("<think>"), reply)
+        body_part = reply.split("</think>", 1)[1]
+        self.assertNotIn("[思考]", body_part)
+        self.assertNotIn("[计划]", body_part)
+        self.assertNotIn("[行动]", body_part)
+
+    # ---- 游离标签防御（_wrap_think 统一包装 + 成对校验）----
+    # 实测复现口径：模型原生输出自带的 <think>/</think> 字面量是游离标签
+    # 唯一来源——首轮混进 [思考] 文本被 _capture_thinking 捕获、汇总轮随
+    # final_reply 进入 body。旧手写拼接把它们原样拼进 reply（1 个 <think>
+    # 对 2 个 </think> 一类），前端非贪婪正则截到第一个 </think> 后把余文
+    # （含游离标签与裸 [计划] 文本）原文直出聊天正文。
+
+    RAW_STRAY_CLOSE = (
+        '[思考] 主人要开灯</think>先确认设备在线。\n'
+        '[计划] 1. 查设备 2. 开灯\n'
+        '[行动] {"tool": "control_ha_device", '
+        '"args": {"entity_id": "light.room", "action": "turn_on"}}')
+
+    def _assert_single_think_pair(self, reply):
+        """契约断言：恰一对标签、<think> 在最前、闭合在开启之后。"""
+        self.assertTrue(reply.startswith("<think>"), reply)
+        self.assertEqual(reply.count("<think>"), 1, reply)
+        self.assertEqual(reply.count("</think>"), 1, reply)
+        self.assertLess(reply.index("<think>"), reply.index("</think>"), reply)
+
+    def test_wrap_think_strips_stray_tags_from_dirty_input(self):
+        # 纯函数单测：脏输入直接喂 _wrap_think —— thinking/body 两侧的
+        # <think>/</think> 字面量一律剥除（文本内容保留），产出恰一对标签
+        out = brain._wrap_think("[思考] 先想想</think>再想想",
+                                "好的<think>嗯</think>")
+        self.assertEqual(out, "<think>[思考] 先想想再想想</think>好的嗯")
+        self._assert_single_think_pair(out)
+        # 大小写/带属性变体同样剥除；None 一侧按空串处理（3.8 兼容纯函数）
+        out2 = brain._wrap_think("<THINK >x</THINK>y", None)
+        self.assertEqual(out2, "<think>xy</think>")
+        self._assert_single_think_pair(out2)
+        self.assertEqual(brain._wrap_think(None, "正文"), "<think></think>正文")
+        self.assertEqual(brain._wrap_think("[思考] x", None),
+                         "<think>[思考] x</think>")
+
+    def test_wrap_think_clean_input_format_unchanged(self):
+        # 干净输入（正常 CoT / 动态占位符）产出与旧手写拼接逐字一致，零回退
+        self.assertEqual(
+            brain._wrap_think(self.COT_THINKING, "已经帮你弄好了"),
+            f"<think>{self.COT_THINKING}</think>已经帮你弄好了")
+        self.assertEqual(
+            brain._wrap_think(brain._tool_thinking_placeholder("list_files"),
+                              "主人，工作区里有 a.txt"),
+            f"<think>{brain._tool_thinking_placeholder('list_files')}"
+            f"</think>主人，工作区里有 a.txt")
+
+    def test_model_stray_close_tag_in_cot_reply_stays_paired(self):
+        # 模型首轮 CoT 自带 </think> 字面量（被 _capture_thinking 捕获进
+        # 思考文本）→ 最终 reply 标签严格成对、游离字面量剥除
+        result, mexec, _, _ = _run_tool_flow(self.RAW_STRAY_CLOSE,
+                                             tool_result="✅ 已开灯")
+        reply, source = result
+        self.assertEqual(source, "🏠 本地 (工具)")
+        self._assert_single_think_pair(reply)
+        self.assertEqual(
+            reply,
+            "<think>[思考] 主人要开灯先确认设备在线。\n"
+            "[计划] 1. 查设备 2. 开灯</think>已经帮你弄好了")
+        mexec.assert_called_once_with(
+            "control_ha_device",
+            {"entity_id": "light.room", "action": "turn_on"},
+            brain.permission_manager)
+
+    def test_model_stray_open_tag_in_cot_reply_stays_paired(self):
+        # 模型首轮 CoT 自带 <think> 字面量（嵌套风险）→ 同样剥除后成对
+        raw = ('[思考] <think>主人要开灯，先确认设备在线。\n'
+               '[计划] 1. 查设备 2. 开灯\n'
+               '[行动] {"tool": "control_ha_device", '
+               '"args": {"entity_id": "light.room", "action": "turn_on"}}')
+        reply, _ = _run_tool_flow(raw, tool_result="✅ 已开灯")[0]
+        self._assert_single_think_pair(reply)
+        self.assertEqual(
+            reply,
+            "<think>[思考] 主人要开灯，先确认设备在线。\n"
+            "[计划] 1. 查设备 2. 开灯</think>已经帮你弄好了")
+
+    def test_summary_reply_with_think_literals_stripped(self):
+        # 汇总轮（body 侧防御）：reasoner 式 </think> 前缀 / 复读
+        # <think>…</think> → body 先剥净标签再拼装（复读的文本内容保留）
+        raw = '{"tool": "list_files", "args": {}}'
+        cases = ["</think>主人，工作区里有 a.txt",
+                 "<think>数一下</think>主人，工作区里有 a.txt"]
+        reply = None
+        for summary in cases:
+            result, _, _, _ = _run_tool_flow(raw, tool_result="a.txt",
+                                             summary_reply=summary)
+            reply, source = result
+            self.assertEqual(source, "🏠 本地 (工具)")
+            self._assert_single_think_pair(reply)
+            self.assertTrue(reply.endswith("主人，工作区里有 a.txt"), reply)
+        # 只剥标签字面量、复读的文本内容按原位保留在正文
+        self.assertIn("数一下主人，工作区里有 a.txt", reply)
 
 
 class RecentActionsPrefixTests(unittest.TestCase):
@@ -971,7 +1286,36 @@ class ToolLoopFuseTests(unittest.TestCase):
             result = brain.smart_ask("再试一次", [], session_key="default")
 
         mexec.assert_not_called()
-        self.assertEqual(result, (self.RAW, "🏠 本地"))
+        # 全对话强制包装：熔断退回的纯文本（无裸标记）同样注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>{self.RAW}",
+             "🏠 本地"))
+
+    def test_tripped_session_still_seals_bare_cot(self):
+        # 熔断剥夺路径同样封口：模型退回纯文本时若仍输出 [思考]/[计划]/[行动]
+        # （工具 JSON 已不再解析），同样包装 <think> 不裸漏；
+        # 无任何标记的纯文本回复注入默认占位符包装（上一用例锁定）
+        for _ in range(3):
+            self._round(tool_result=self.DENY)
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool") as mexec, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp(
+                "[思考] 工具被暂停了，先解释。\n"
+                "[计划] 纯文字说明\n"
+                '[行动] {"tool": "list_files"}\n'
+                "主人，工具刚刚被暂停啦，我们先聊点别的吧。")
+            result = brain.smart_ask("再试一次", [], session_key="default")
+
+        mexec.assert_not_called()
+        reply, source = result
+        self.assertEqual(source, "🏠 本地")
+        self.assertEqual(
+            reply,
+            "<think>[思考] 工具被暂停了，先解释。\n"
+            "[计划] 纯文字说明</think>"
+            "主人，工具刚刚被暂停啦，我们先聊点别的吧。")
 
     def test_tripped_session_injects_system_note(self):
         # 熔断期间注入系统提示，要求模型本轮直接纯文本回答
@@ -1065,6 +1409,450 @@ class ToolLoopFuseTests(unittest.TestCase):
 # smart_ask：URL 网页抓取总结
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 裸 CoT 泄漏扫描总测试（P2 · 2026-10-01 用户口径"穷举封死"）
+# ---------------------------------------------------------------------------
+
+class _Lv3PermissionManager:
+    """恒放行的 Lv.3 权限替身（tools._level_at_least 走 level_value() 数值门）。"""
+
+    def level_value(self):
+        return 3
+
+    def has_permission(self, action):
+        return True
+
+
+class BareCotLeakSweepTests(unittest.TestCase):
+    """smart_ask 全部 return 路径的裸 CoT 封口扫描总测试。
+
+    背景（用户实测"帮我点击蓝牙"网页漏出裸 [思考]... [计划]... [行动]...）：
+    该轮恰为 ui_tap_element 失败自动回退 vision_tap_element 的分支——视觉
+    点击成功（非 ❌）后汇总轮模型复读裸 CoT，旧代码只包装首轮 thinking，
+    汇总轮正文原样直出（brain.py 已修复：汇总轮统一经 _seal_tool_summary
+    封口；_seal_bare_cot 触发条件同步放宽为"出现任意裸协议标记"，只有
+    [行动]+JSON 的残缺形态也封）。
+
+    判定口径（每条路径统一断言 _assert_sealed）：
+    - reply 含 <think> 包装 → 裸标记字面量只允许出现在包装内部，</think>
+      之后的正文不得再出现任何裸标记或游离标签；
+    - reply 无 <think> 包装 → 全文不得出现任何裸标记。
+
+    全对话强制包装（2026-10-01 用户指令）：另有
+    test_all_return_paths_force_wrapped_with_think_block 对全部路径追加
+    "reply 一律以 <think> 开头"断言——有原生思考用原生，无则注入默认
+    占位符，前端必定渲染思维链卡片。
+
+    return 路径全集（11 条，与 brain.smart_ask 一一对应；今后新增返回路径
+    必须在 _sweep_cases 登记同款用例——跑
+    test_all_return_paths_seal_bare_cot 即可兜住）：
+      0. 无工具普通回复（强制包装：无标记注入 CHAT 默认占位符）
+      1. URL 抓取失败（固定文案 + 默认占位符，无模型轮）
+      2. 双脑全挂（固定文案 + 默认占位符，无模型轮）
+      3. 云端 ⚠️ 兜底转失败文案（固定文案 + 默认占位符，无模型轮）
+      4. 模型空回复（固定道歉文案 + 默认占位符）
+      5. URL 总结（_seal_bare_cot）
+      6. 熔断剥夺纯文本（_seal_bare_cot）
+      7. 熔断触发通知（_wrap_think 固定文案）
+      8. ❌ 硬切断（_wrap_think + 防御 strip）
+      9. 工具汇总轮失败（_wrap_think 固定文案）
+     10. 工具成功汇总（_seal_tool_summary ← 本次修复的漏点）
+     11. 旁路普通回复：白名单外 / 解析失败 / [行动] 残缺形态（_seal_bare_cot）
+    """
+
+    # 首轮模型输出：原生 [思考]/[计划]/[行动]+JSON 完整协议形态
+    COT_RAW = ('[思考] 主人要点击蓝牙，先定位设置入口。\n'
+               '[计划] 1. UI解析找蓝牙 2. 失败转视觉\n'
+               '[行动] {"tool": "ui_tap_element", "args": {"element_name": "蓝牙"}}')
+    # 汇总轮模型输出：复读裸 CoT（用户实测漏点形态）+ 最终自然语言收尾
+    SUMMARY_BARE_COT = ('[思考] UI解析没找到蓝牙，已自动改用视觉模型。\n'
+                        '[计划] 视觉定位坐标并点击\n'
+                        '[行动] {"x": 123, "y": 456}\n'
+                        '主人，蓝牙已经帮你点开啦！')
+    # 残缺形态：只有 [行动]+JSON、无任何思考文本（_capture_thinking 捕获为空，
+    # 旧判定"捕获到思考才封口"对此整段裸漏——含工具 JSON 原文）
+    COT_ACTION_ONLY = '[行动] {"tool": "format_disk", "args": {}}'
+    URL = "https://example.com/page"
+    SESSION = "sweep"
+
+    _BARE_MARKERS = ("[思考]", "[计划]", "[行动]",
+                     "【思考】", "【计划】", "【行动】")
+
+    def setUp(self):
+        brain.tool_fuse.reset()
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
+
+    def tearDown(self):
+        brain.tool_fuse.reset()
+
+    # ---- 判定口径（统一的封口断言）----
+
+    def _assert_sealed(self, reply):
+        reply = "" if reply is None else str(reply)
+        match = re.match(r"^<think>(.*?)</think>", reply, re.DOTALL)
+        if match:
+            body = reply[match.end():]
+            self.assertNotIn("<think>", body, reply)
+            self.assertNotIn("</think>", body, reply)
+        else:
+            body = reply
+        for marker in self._BARE_MARKERS:
+            self.assertNotIn(marker, body, reply)
+
+    # ---- 复现场景 runner：每个 return 路径一个零参闭包 → (reply, source) ----
+
+    def _tool_round(self, raw_reply, summary_reply, tool_result,
+                    session_key=None):
+        """通用一轮工具流程：本地首轮 raw_reply、次轮 summary_reply、
+        execute_tool 打桩 tool_result（探测在线 → 本地优先）。"""
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, \
+                contextlib.redirect_stdout(io.StringIO()):
+            mr.get.return_value = mock.Mock()
+            mr.post.side_effect = [_local_resp(raw_reply),
+                                   _local_resp(summary_reply)]
+            mexec.return_value = tool_result
+            mcloud.return_value = summary_reply
+            return brain.smart_ask("帮我点击蓝牙", [],
+                                   session_key=session_key or self.SESSION)
+
+    def _sweep_cases(self):
+        """路径全集 → [(路径名, 零参闭包)]；闭包返回 smart_ask 的 (reply, source)。"""
+        cases = []
+        add = cases.append
+
+        # 0. 无工具普通回复：无任何标记 → 注入默认占位符包装，也绝无泄漏
+        def plain_chat():
+            with mock.patch.object(brain, "requests") as mr, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                mr.get.return_value = mock.Mock()
+                mr.post.return_value = _local_resp("今天天气不错哦～")
+                return brain.smart_ask("你好", [], session_key=self.SESSION)
+        add(("0.无工具普通回复", plain_chat))
+
+        # 1. URL 抓取失败：固定文案（无模型轮；纳入扫描防未来改动引入动态内容）
+        def url_fetch_failure():
+            with mock.patch.object(brain, "requests") as mr, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                mr.get.side_effect = OSError("timed out")
+                return brain.smart_ask(f"帮我总结 {self.URL}", [],
+                                       session_key=self.SESSION)
+        add(("1.URL抓取失败", url_fetch_failure))
+
+        # 2. 双脑全挂：ask_local 抛 + ask_cloud 抛 → 固定失败文案
+        def both_brains_down():
+            with mock.patch.object(brain, "requests") as mr, \
+                    mock.patch.object(brain, "ask_cloud") as mcloud, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                mr.get.return_value = mock.Mock()            # 探测在线
+                mr.post.side_effect = OSError("本地大脑挂了")
+                mcloud.side_effect = Exception("云端也挂了")
+                return brain.smart_ask("帮我点击蓝牙", [],
+                                       session_key=self.SESSION)
+        add(("2.双脑全挂", both_brains_down))
+
+        # 3. 云端 ⚠️ 兜底 → 失败文案（探测失败直接云端，ask_cloud 返回 ⚠️ 串）
+        def cloud_warning_fallback():
+            with mock.patch.object(brain, "requests") as mr, \
+                    mock.patch.object(brain, "ask_cloud") as mcloud, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                mr.get.side_effect = OSError("refused")
+                mcloud.return_value = "⚠️ 云端连接异常: connection reset"
+                return brain.smart_ask("帮我点击蓝牙", [],
+                                       session_key=self.SESSION)
+        add(("3.云端警告兜底", cloud_warning_fallback))
+
+        # 4. 模型空回复 → 固定道歉文案
+        def empty_reply():
+            with mock.patch.object(brain, "requests") as mr, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                mr.get.return_value = mock.Mock()
+                mr.post.return_value = _local_resp("   ")
+                return brain.smart_ask("帮我点击蓝牙", [],
+                                       session_key=self.SESSION)
+        add(("4.空回复", empty_reply))
+
+        # 5. URL 总结：总结文本带原生 [思考]/[计划]/[行动]+JSON → 封口
+        def url_summary():
+            with mock.patch.object(brain, "requests") as mr, \
+                    mock.patch.object(brain, "ask_cloud") as mcloud, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                def get_side_effect(url, **kwargs):
+                    if url == self.URL:
+                        resp = mock.Mock()
+                        resp.text = "<p>网页正文</p>"
+                        return resp
+                    raise OSError("refused")   # 探测失败 → 云端
+                mr.get.side_effect = get_side_effect
+                mcloud.return_value = ("[思考] 先梳理正文要点。\n"
+                                       "[计划] 提炼总结\n"
+                                       '[行动] {"tool": "web_search"}\n'
+                                       "这是网页总结。")
+                return brain.smart_ask(f"帮我总结 {self.URL}", [],
+                                       session_key=self.SESSION)
+        add(("5.URL总结", url_summary))
+
+        # 6. 熔断剥夺纯文本：模型仍输出完整 CoT（工具权已被剥夺，不再解析）
+        def fused_plain_text():
+            for _ in range(brain.TOOL_FUSE_LIMIT):
+                brain.tool_fuse.record_rejection(
+                    self.SESSION, "ui_tap_element", {"element_name": "蓝牙"})
+            with mock.patch.object(brain, "requests") as mr, \
+                    mock.patch.object(brain, "execute_tool") as mexec, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                mr.get.return_value = mock.Mock()
+                mr.post.return_value = _local_resp(self.COT_RAW)
+                mexec.return_value = "不应被执行"
+                return brain.smart_ask("再试一次", [], session_key=self.SESSION)
+        add(("6.熔断剥夺纯文本", fused_plain_text))
+
+        # 7. 熔断触发通知：❌ 结果连续达阈值 → ⛔ 固定通知文案（_wrap_think）
+        def fuse_notice():
+            with mock.patch.object(brain, "requests") as mr, \
+                    mock.patch.object(brain, "execute_tool") as mexec, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                mr.get.return_value = mock.Mock()
+                mexec.return_value = "❌ 安全拒绝：当前权限不足"
+                result = None
+                for _ in range(brain.TOOL_FUSE_LIMIT):
+                    mr.post.side_effect = [_local_resp(self.COT_RAW),
+                                           _local_resp("不会走到这")]
+                    result = brain.smart_ask("帮我点击蓝牙", [],
+                                             session_key=self.SESSION)
+                self.assertEqual(result[1], "⛔ 熔断")
+                return result
+        add(("7.熔断通知", fuse_notice))
+
+        # 8. ❌ 硬切断：vision 回退失败的返回串形态（_wrap_think + 防御 strip）
+        def vision_cutoff():
+            return self._tool_round(
+                self.COT_RAW, "不会走到这",
+                "❌ 视觉模型在屏幕上未找到【蓝牙】。 ⚠️ 请确认手机屏幕已亮屏"
+                "且停留在目标页面，同时确认 .env 中的 VISION_MODEL 是真正的视觉模型")
+        add(("8.视觉回退失败切断", vision_cutoff))
+
+        # 9. 工具汇总轮失败：本地汇总抛 + 云端汇总抛 → 固定失败文案（_wrap_think）
+        def summarize_failure():
+            with mock.patch.object(brain, "requests") as mr, \
+                    mock.patch.object(brain, "execute_tool") as mexec, \
+                    mock.patch.object(brain, "ask_cloud") as mcloud, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                mr.get.return_value = mock.Mock()
+                mr.post.side_effect = [_local_resp(self.COT_RAW),
+                                       ConnectionError("本地汇总挂了")]
+                mexec.return_value = "✅ 已模拟点击坐标: (123, 456)"
+                mcloud.side_effect = Exception("云端汇总也挂了")
+                return brain.smart_ask("帮我点击蓝牙", [],
+                                       session_key=self.SESSION)
+        add(("9.汇总轮失败", summarize_failure))
+
+        # 10. 工具成功汇总（本次修复的漏点）：汇总轮复读裸 CoT
+        #     → _seal_tool_summary（两轮思考并卡、正文只留收尾）
+        def tool_summary_bare_cot():
+            return self._tool_round(
+                self.COT_RAW, self.SUMMARY_BARE_COT,
+                "✅ 已模拟点击坐标: (123, 456)（已执行二次确认点击）")
+        add(("10.工具成功汇总(漏点)", tool_summary_bare_cot))
+
+        # 11a. 旁路普通回复：JSON 合法但工具白名单外 → 不执行，封口
+        def whitelist_rejected():
+            return self._tool_round(
+                self.COT_RAW.replace("ui_tap_element", "format_disk"),
+                "不会走到这", "不应被执行")
+        add(("11a.白名单外", whitelist_rejected))
+
+        # 11b. 旁路普通回复：JSON 残缺解析不出 → 封口
+        def unparseable_json():
+            return self._tool_round(
+                '[思考] 主人要点击蓝牙，先定位设置入口。\n'
+                '[计划] 1. UI解析找蓝牙 2. 失败转视觉\n'
+                '[行动] {"tool": "ui_tap_element" "args": {}}',
+                "不会走到这", "不应被执行")
+        add(("11b.解析失败", unparseable_json))
+
+        # 11c. 残缺形态：只有 [行动]+JSON 无思考文本 → 任意标记触发封口
+        def action_only():
+            return self._tool_round(self.COT_ACTION_ONLY, "不会走到这",
+                                    "不应被执行")
+        add(("11c.行动残缺形态", action_only))
+
+        return cases
+
+    # ---- 总测试：路径全集参数化，逐条断言无裸 CoT 漏出 ----
+
+    def test_all_return_paths_seal_bare_cot(self):
+        for name, runner in self._sweep_cases():
+            with self.subTest(path=name):
+                brain.tool_fuse.reset()   # 各路径用例间熔断状态互不串扰
+                reply, _source = runner()
+                self._assert_sealed(reply)
+
+    def test_all_return_paths_force_wrapped_with_think_block(self):
+        """全对话强制包装（2026-10-01 用户指令）：全部 return 路径的 reply
+        一律以 <think> 开头——有原生思考用原生，无则注入默认占位符
+        （"[思考] 正在理解你的意图..."），前端必定渲染思维链卡片。"""
+        for name, runner in self._sweep_cases():
+            with self.subTest(path=name):
+                brain.tool_fuse.reset()   # 各路径用例间熔断状态互不串扰
+                reply, _source = runner()
+                self.assertTrue(str(reply).startswith("<think>"), (name, reply))
+                self.assertIn("</think>", str(reply), (name, reply))
+
+    # ---- 漏点与封口细节（路径 8 / 10 / 11c 专项）----
+
+    def test_leak_path_tool_summary_folds_round2_cot_into_card(self):
+        """漏点详情（路径 10）：ui_tap 失败→vision 回退成功后的汇总轮复读裸
+        CoT——两轮思考并入同一张推理卡片，正文只留最终自然语言回复，
+        汇总轮 [行动] JSON 载荷不上屏；[CoT] 原生思考日志首轮+汇总轮各一条。"""
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud:
+            mr.get.return_value = mock.Mock()
+            mr.post.side_effect = [_local_resp(self.COT_RAW),
+                                   _local_resp(self.SUMMARY_BARE_COT)]
+            mexec.return_value = "✅ 已模拟点击坐标: (123, 456)"
+            mcloud.return_value = "x"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                reply, source = brain.smart_ask("帮我点击蓝牙", [],
+                                                session_key=self.SESSION)
+        self.assertEqual(source, "🏠 本地 (工具)")
+        self._assert_sealed(reply)
+        self.assertTrue(reply.startswith("<think>[思考] 主人要点击蓝牙"), reply)
+        inner = reply.split("</think>", 1)[0]
+        self.assertIn("[思考] UI解析没找到蓝牙", inner)     # 汇总轮思考并入卡片
+        self.assertIn("[计划] 视觉定位坐标并点击", inner)
+        self.assertTrue(reply.endswith("主人，蓝牙已经帮你点开啦！"), reply)
+        body_part = reply.split("</think>", 1)[1]
+        self.assertNotIn('"x": 123', body_part)             # 汇总轮载荷不上屏
+        # [CoT] 终端日志：首轮与汇总轮各一条（部署侧可确认两轮思考来源）
+        self.assertEqual(buf.getvalue().count("[CoT] 模型原生输出思考内容"), 2)
+
+    def test_action_only_bare_cot_sealed_with_placeholder_thinking(self):
+        """残缺形态（路径 11c）封口细节：只有 [行动]+JSON、无思考文本——
+        旧判定（捕获到思考才封口）整段裸漏（含工具 JSON 原文），现按任意
+        标记触发封口 + 占位思考 + 正文剥空占位。"""
+        result = self._tool_round(self.COT_ACTION_ONLY, "不会走到这",
+                                  "不应被执行")
+        reply, _source = result
+        self._assert_sealed(reply)
+        self.assertTrue(reply.startswith(
+            f"<think>{brain.TOOL_THINKING_PLACEHOLDER}</think>（操作已执行）"),
+            reply)
+        self.assertNotIn('"tool"', reply.split("</think>", 1)[1])
+
+    def test_action_only_marker_with_whitelisted_tool_reaches_tool_path(self):
+        """[行动]+JSON 且工具在白名单：照常走工具路径（占位思考包装），
+        封口加固不改变既有工具行为。"""
+        result = self._tool_round(
+            '[行动] {"tool": "list_files", "args": {}}',
+            "已经帮你弄好了", "（工作区为空）")
+        reply, source = result
+        self.assertEqual(source, "🏠 本地 (工具)")
+        self._assert_sealed(reply)
+        self.assertTrue(reply.endswith("已经帮你弄好了"), reply)
+
+    def test_plain_chat_wrapped_with_default_placeholder(self):
+        """反转口径（2026-10-01 全对话强制包装）：无任何标记的普通聊天注入
+        默认占位符包装，正文原样保留——前端必定渲染思维链卡片。"""
+        with mock.patch.object(brain, "requests") as mr, \
+                contextlib.redirect_stdout(io.StringIO()):
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("让我想想再回答你哦。")
+            reply, source = brain.smart_ask("你好", [], session_key=self.SESSION)
+        self.assertEqual(
+            (reply, source),
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>让我想想再回答你哦。",
+             "🏠 本地"))
+
+    def test_marker_with_empty_content_still_sealed(self):
+        """[思考] 标记后只有空白（捕获为空）→ 任意标记触发封口，
+        标记本身不再裸漏。"""
+        result = self._tool_round("[思考] [计划] ", "x", "不应被执行")
+        reply, _source = result
+        self._assert_sealed(reply)
+        self.assertTrue(reply.startswith("<think>"), reply)
+
+    def test_cutoff_body_with_embedded_model_cot_stripped(self):
+        """❌ 切断防御封口（路径 8）：vision_tools 解析失败形态会把视觉模型
+        原文拼进返回串——原文混入裸 CoT 时正文侧剥净（错误前缀保留），
+        绝不直出网页。"""
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, \
+                contextlib.redirect_stdout(io.StringIO()):
+            mr.get.side_effect = OSError("refused")
+            mcloud.side_effect = [self.COT_RAW]
+            mexec.return_value = ('❌ 视觉模型未能识别出坐标。回复内容：'
+                                  '[思考] 我看到屏幕上有设置图标\n'
+                                  '[计划] 给出坐标\n[行动] {"x": 1, "y": 2}')
+            reply, source = brain.smart_ask("帮我点击蓝牙", [],
+                                            session_key=self.SESSION)
+        self.assertEqual(source, "☁️ 云端 (工具)")
+        self._assert_sealed(reply)
+        body_part = reply.split("</think>", 1)[1]
+        self.assertTrue(body_part.startswith("❌ 视觉模型未能识别出坐标。"),
+                        body_part)
+        self.assertNotIn("[思考]", body_part)
+
+    # ---- ui_tap→vision 回退分支端到端（真实 tools.execute_tool 分发）----
+
+    def test_ui_tap_to_vision_fallback_success_summary_sealed(self):
+        """用户实测漏点端到端复现：ui_tap_element 解析失败 → 自动回退
+        vision_tap_element → 视觉点击成功（非 ❌）→ 汇总轮模型复读裸
+        [思考]/[计划]/[行动]（旧代码在此直出网页）→ 现已封口：两轮思考
+        并入同一张推理卡片，正文只留最终自然语言回复。"""
+        import tools
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "permission_manager",
+                                  _Lv3PermissionManager()), \
+                mock.patch.object(tools, "ui_tap_element",
+                                  return_value="❌ 未找到元素: 蓝牙"), \
+                mock.patch.object(tools, "vision_tap_element",
+                                  return_value="✅ 已模拟点击坐标: (123, 456)"), \
+                mock.patch.object(tools, "VISION_MODEL", "qwen-vl-test"), \
+                mock.patch.object(tools, "VISION_KEY", "sk-test"), \
+                mock.patch.object(brain, "ask_cloud") as mcloud, \
+                contextlib.redirect_stdout(io.StringIO()):
+            mr.get.side_effect = OSError("refused")   # 探测失败 → 全程云端
+            mcloud.side_effect = [self.COT_RAW, self.SUMMARY_BARE_COT]
+            reply, source = brain.smart_ask("帮我点击蓝牙", [],
+                                            session_key=self.SESSION)
+        self.assertEqual(source, "☁️ 云端 (工具)")
+        self._assert_sealed(reply)
+        self.assertTrue(reply.startswith("<think>[思考] 主人要点击蓝牙"), reply)
+        inner = reply.split("</think>", 1)[0]
+        self.assertIn("[思考] UI解析没找到蓝牙", inner)   # 汇总轮思考并入同卡
+        self.assertTrue(reply.endswith("主人，蓝牙已经帮你点开啦！"), reply)
+
+    def test_ui_tap_to_vision_fallback_failure_cutoff_sealed(self):
+        """回退分支 ❌ 结果（视觉也未找到）：❌ 硬切断路径——首轮思考包装 +
+        拒绝文案直出正文（❌ 文案无裸标记），封口判定通过。"""
+        import tools
+        with mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "permission_manager",
+                                  _Lv3PermissionManager()), \
+                mock.patch.object(tools, "ui_tap_element",
+                                  return_value="❌ 未找到元素: 蓝牙"), \
+                mock.patch.object(tools, "vision_tap_element",
+                                  return_value="❌ 视觉模型在屏幕上未找到【蓝牙】。"), \
+                mock.patch.object(tools, "VISION_MODEL", "qwen-vl-test"), \
+                mock.patch.object(tools, "VISION_KEY", "sk-test"), \
+                mock.patch.object(brain, "ask_cloud") as mcloud, \
+                contextlib.redirect_stdout(io.StringIO()):
+            mr.get.side_effect = OSError("refused")
+            mcloud.side_effect = [self.COT_RAW]
+            reply, source = brain.smart_ask("帮我点击蓝牙", [],
+                                            session_key=self.SESSION)
+        self.assertEqual(source, "☁️ 云端 (工具)")
+        self._assert_sealed(reply)
+        self.assertTrue(reply.startswith("<think>[思考] 主人要点击蓝牙"), reply)
+        self.assertIn("❌ 视觉模型在屏幕上未找到【蓝牙】", reply)
+
+
 class SmartAskUrlTests(unittest.TestCase):
     """输入含 URL：先抓正文（剔除 script/style）→ 以总结方式并入提问。"""
 
@@ -1109,7 +1897,11 @@ class SmartAskUrlTests(unittest.TestCase):
 
     def test_url_fetch_cloud_summary_label(self):
         result, mcloud = self._run(probe_ok=False, page=self.HTML)
-        self.assertEqual(result, ("这是网页总结", "☁️ 云端 (总结)"))
+        # 全对话强制包装：无标记总结注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>这是网页总结",
+             "☁️ 云端 (总结)"))
 
         msgs = mcloud.call_args.args[0]
         self.assertEqual(msgs[0]["content"], prompts.SYSTEM_PROMPT["content"])
@@ -1134,7 +1926,11 @@ class SmartAskUrlTests(unittest.TestCase):
             mr.post.return_value = _local_resp("这是网页总结")
             result = brain.smart_ask(f"帮我总结 {self.URL}", [])
 
-        self.assertEqual(result, ("这是网页总结", "🏠 本地 (总结)"))
+        # 全对话强制包装：无标记总结注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>这是网页总结",
+             "🏠 本地 (总结)"))
         web_msg = mr.post.call_args.kwargs["json"]["messages"][-1]["content"]
         self.assertIn("已为你抓取好网页，请直接总结，不要输出任何 JSON！", web_msg)
         self.assertIn("这是正文内容，包含关键信息。", web_msg)
@@ -1145,7 +1941,11 @@ class SmartAskUrlTests(unittest.TestCase):
 
     def test_fetch_failure_returns_error(self):
         result, mcloud = self._run(probe_ok=True, get_error=OSError("timed out"))
-        self.assertEqual(result, ("❌ 抓取网页失败: timed out", "❌ 失败"))
+        # 全对话强制包装：抓取失败固定文案同样注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>"
+             "❌ 抓取网页失败: timed out", "❌ 失败"))
         mcloud.assert_not_called()
 
     def test_body_truncated_to_2000_chars(self):
@@ -1178,7 +1978,10 @@ class HardwareAdaptiveRoutingTests(unittest.TestCase):
             result = brain.smart_ask("你好", [])
         mprobe.assert_not_called()
         mlocal.assert_not_called()
-        self.assertEqual(result, ("云端回答", "☁️ 云端"))
+        # 全对话强制包装：普通闲聊注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>云端回答", "☁️ 云端"))
         args, _kwargs = mr.post.call_args
         self.assertEqual(args[0], xiaoju3.CLOUD_URL)
 
@@ -1189,7 +1992,10 @@ class HardwareAdaptiveRoutingTests(unittest.TestCase):
             mr.get.return_value = mock.Mock()
             mr.post.return_value = _local_resp("小模型回答")
             result = brain.smart_ask("你好", [])
-        self.assertEqual(result, ("小模型回答", "🏠 本地"))
+        # 全对话强制包装：普通闲聊注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>小模型回答", "🏠 本地"))
         args, kwargs = mr.post.call_args
         self.assertEqual(args[0], xiaoju3.LOCAL_URL)
         self.assertEqual(kwargs["json"]["model"], self.SMALL)
@@ -1232,7 +2038,10 @@ class HardwareAdaptiveRoutingTests(unittest.TestCase):
             mr.get.return_value = mock.Mock()
             mr.post.side_effect = [OSError("小模型崩了"), _cloud_resp("云端回答")]
             result = brain.smart_ask("你好", [])
-        self.assertEqual(result, ("云端回答", "☁️ 云端"))
+        # 全对话强制包装：热切换的普通回复同样注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>云端回答", "☁️ 云端"))
 
     def test_explicit_tier_overrides_auto(self):
         """显式 DEVICE_TIER 优先于 auto 探测；探测缓存可重置。"""
@@ -1261,7 +2070,10 @@ class HardwareAdaptiveRoutingTests(unittest.TestCase):
             mr.get.return_value = mock.Mock()        # medium：探测在线 → 本地小模型
             mr.post.return_value = _local_resp("小模型回答")
             result = brain.smart_ask("你好", [])
-        self.assertEqual(result, ("小模型回答", "🏠 本地"))
+        # 全对话强制包装：普通闲聊注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>小模型回答", "🏠 本地"))
         brain._reset_tier_cache()
 
     def test_ask_local_model_parameter(self):
@@ -1368,7 +2180,11 @@ class TranslateEmojiTests(unittest.TestCase):
             result = brain.smart_ask("你好", [])
 
         mtrans.assert_called_once_with("带[EMOJI:开心]的回复")
-        self.assertEqual(result, ("带[已转换]的回复", "🏠 本地"))
+        # 表情先转换再包装：普通闲聊回复同样注入默认占位符
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>带[已转换]的回复",
+             "🏠 本地"))
 
     def test_emoji_translated_end_to_end_with_fake_library(self):
         # 假表情库：正常回复中的 [EMOJI:标签] 转成 CQ 码后随回复真正发出
@@ -1378,9 +2194,10 @@ class TranslateEmojiTests(unittest.TestCase):
             mr.post.return_value = _local_resp("哈哈[EMOJI:开心]")
             result = brain.smart_ask("你好", [])
 
-        self.assertEqual(result,
-                         ("哈哈[CQ:image,file=file:///emoji/lib/kaixin.png]",
-                          "🏠 本地"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>"
+             "哈哈[CQ:image,file=file:///emoji/lib/kaixin.png]", "🏠 本地"))
 
     def setUp(self):
         # 与机器状态/本地 .env 档位解耦：固定 high + 探测在线
@@ -1399,7 +2216,10 @@ class TranslateEmojiTests(unittest.TestCase):
             mr.post.return_value = _local_resp("哈哈[EMOJI:开心]")
             result = brain.smart_ask("你好", [])
 
-        self.assertEqual(result, ("哈哈[EMOJI:开心]", "🏠 本地"))
+        self.assertEqual(
+            result,
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>哈哈[EMOJI:开心]",
+             "🏠 本地"))
 
     def test_tool_summary_reply_translated_too(self):
         # 工具汇总轮的回复同样过 translate_emoji
