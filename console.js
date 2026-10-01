@@ -144,26 +144,99 @@
         return renderCQFace(escapeHtml(text)).replace(/\n/g, '<br>');
     }
 
-    // ==================== 2.5 思维链（<think> 块）解析与折叠卡片 ====================
-    // 契约：brain.smart_ask 在工具调用流程中把 [思考]/[计划] 包装成 reply 的
-    // <think>...</think> 块；普通聊天回复没有该块——此时不渲染思考卡片（零干扰）。
+    // ==================== 2.5 思维链（<think> 块 / 裸 [思考]/[计划] 标记）解析与折叠卡片 ====================
+    // 契约（2026-10-01 全对话强制包装口径）：brain.smart_ask 对所有自然语言
+    // 回复一律包装 <think>...</think> 块——工具流程用原生 [思考]/[计划] 或
+    // 按工具名生成的占位符，普通闲聊（无工具调用）注入"[思考] 正在理解你
+    // 的意图..."默认占位符；渲染入口仅由 think !== null 守卫，正文为自然
+    // 语言或占位符都出卡。裸标记扫描保留作纵深防御：万一仍有旁路/旧版
+    // 后端漏出裸的 [思考]/[计划]/[行动] 文本，统一入口 splitThinkBlock 做
+    // 两段解析，两种形态（<think> 包装 / 裸标记）收敛到同一张折叠卡片：
+    // ① <think> 包装块提取（非锚定正则 + 循环剔块；正文只保留最后一个
+    //    </think> 之后的部分，块前杂散字符丢弃——用户口径）；
+    // ② 剩余正文裸标记扫描：[思考]/[计划] 段落并入思考卡内容并从正文剥离；
+    //    [行动] 标记与其后的单行 JSON 工具载荷（模型过程输出）一并剥离，
+    //    正文只留最终自然语言回复；剥离后正文为空时显示"（操作已执行）"占位。
     // 非锚定匹配（串内任意位置，非贪婪到第一个闭合标签）：即使净化/表情转换
     // 等环节日后在块前插入了任何字符，只要 reply 含 <think> 块就必定渲染卡片，
     // 不因锚定串首而静默漏卡。
     const THINK_BLOCK_RE = /<think>([\s\S]*?)<\/think>/;
 
+    // 裸 [思考] 段（协议硬性要求半角方括号标记，全角变体仅后端兼容）：内容
+    // 跨行（[\s\S] 非贪婪），止于下一个 [计划]/[行动] 标记或串尾——前瞻零
+    // 消费，标记本身留给下一段扫描/[行动] 剥离；普通聊天提到"思考"二字
+    // （无方括号标记）不命中，不误剥离。
+    const BARE_THINK_RE = /(\[思考\][\s\S]*?)(?=\[行动\]|\[计划\]|$)/;
+    // 裸 [计划] 段：止于 [行动] 标记或串尾（边界口径同上）。
+    const BARE_PLAN_RE = /(\[计划\][\s\S]*?)(?=\[行动\]|$)/;
+    // [行动] 剥离：标记本身一律剥离；其后若跟以 { 起头的行内 JSON 工具载荷
+    // （prompts 协议硬性口径"[行动] 行必须且只能是一行合法 JSON"），载荷同样
+    // 剥离（[^\n] 不跨行，载荷之后各行的最终自然语言回复保留）；载荷不是
+    // JSON 形态时只剥标记、保留其后文本，防误伤普通聊天里合法出现的
+    // "[行动]"字样。
+    const BARE_ACTION_RE = /\s*\[行动\](?:[ \t]*\{[^\n]*)?/;
+
     // 渲染入口先判 thinkMatch：把原始 reply 切分为 { think, body }，
     // 调用方再各自走 textContent / renderRich（先切分后转义，顺序不可反）
     function splitThinkBlock(rawReply) {
         const raw = String(rawReply == null ? '' : rawReply);
-        const thinkMatch = raw.match(THINK_BLOCK_RE);
-        if (!thinkMatch) return { think: null, body: raw };
-        return {
-            think: thinkMatch[1].trim(),
-            // 按命中位置剔除块本体；块前若有杂散字符保留进正文，不丢内容
-            body: (raw.slice(0, thinkMatch.index) +
-                   raw.slice(thinkMatch.index + thinkMatch[0].length)).trim(),
-        };
+        let think = null;
+        let body = raw;
+
+        // ① <think> 包装块（用户口径）：非锚定 + 循环剔块——只要 reply 含
+        //    <think> 就必定出卡片，多个块全部并入同一张卡；正文只保留最后
+        //    一个 </think> 之后的部分，块前杂散字符一律丢弃，思考文本绝不
+        //    混进聊天正文。空 <think></think> 块同样算"有思考块"（think 为
+        //    空串而非 null，与既有 think !== null 卡片判定口径一致）。
+        let thinkMatch;
+        while ((thinkMatch = body.match(THINK_BLOCK_RE)) !== null) {
+            think = (think ? think + '\n' : '') + thinkMatch[1].trim();
+            body = body.slice(thinkMatch.index + thinkMatch[0].length);
+        }
+        // ①-b 游离标签容错（后端拼装异常可能残留不成对标签，2026-10-01
+        //     用户口径）：只有闭合 </think> 时——闭合标签（含）之前的全部
+        //     内容按思考处理，正文只保留最后一个 </think> 之后的部分；只有
+        //     开头 <think>（无闭合，串尾截断）时整段按思考处理。随后任何
+        //     残留的游离 <think>/</think> 一律剥除，绝不上屏。
+        const closeIdx = body.lastIndexOf('</think>');
+        if (closeIdx !== -1) {
+            const before = body.slice(0, closeIdx).replace(/<\/?think>/g, '').trim();
+            if (before) think = (think ? think + '\n' : '') + before;
+            body = body.slice(closeIdx + '</think>'.length);
+        } else if (body.trimStart().startsWith("<think>")) {
+            const orphan = body.replace(/<\/?think>/g, '').trim();
+            if (orphan) think = (think ? think + '\n' : '') + orphan;
+            body = '';
+        }
+        body = body.trim();
+
+        // ② 裸 [思考]/[计划] 段落扫描：并入思考卡内容并从正文剥离
+        //    （<think> 包装缺失时，裸 CoT 不再漏进聊天正文）
+        const bareParts = [];
+        body = body.replace(BARE_THINK_RE, function (m, seg) {
+            if (seg.trim()) bareParts.push(seg.trim());
+            return '';
+        });
+        body = body.replace(BARE_PLAN_RE, function (m, seg) {
+            if (seg.trim()) bareParts.push(seg.trim());
+            return '';
+        });
+        if (bareParts.length) {
+            // 两种形态收敛到同一张卡片：<think> 内容在前，裸段按出现顺序追加
+            think = (think ? think + '\n' : '') + bareParts.join('\n');
+        }
+
+        // ③ [行动] 标记与其后的行内 JSON 工具载荷剥离（模型过程输出不上屏）；
+        //    正文被剥空且确有过程输出被剥离（有思考卡或剥过 [行动]）时，
+        //    正文显示占位——说明本轮是纯工具动作、无自然语言收尾
+        const hadAction = BARE_ACTION_RE.test(body);
+        body = body.replace(BARE_ACTION_RE, '').trim();
+        // 安全网：剥离一切残留游离标签（成对块已在 ① 提取，此处只兜底）
+        body = body.replace(/<\/?think>/g, '').trim();
+        if (think !== null) think = think.replace(/<\/?think>/g, '').trim();
+        if (!body && (think !== null || hadAction)) body = '（操作已执行）';
+
+        return { think: think, body: body };
     }
 
     // 构建折叠卡片骨架（纯静态结构，不拼任何用户数据；
@@ -223,7 +296,8 @@
         const old = msgEl.querySelector('.think-card');
         if (old) old.remove();
         if (thinkText === null) return;   // 新回复没有 think 块：不插卡片
-        bubble.before(buildThinkCardEl());
+        const card = buildThinkCardEl();  // 先构建完整元素、再插入 DOM（顺序同上）
+        bubble.before(card);
         startThinkTypewriter(msgEl, thinkText, true);
     }
 
@@ -279,10 +353,19 @@
                 </div>
             </div>
         `;
-        // 渲染入口先判 thinkMatch：仅当 reply 含 <think> 块才插思考卡片
-        // （普通聊天零干扰），卡片位于消息气泡正文上方
+        // 渲染入口先判 thinkMatch：仅当切分出思考内容（<think> 块或裸
+        // [思考]/[计划] 段）才插思考卡片——后端全对话强制包装后，普通闲聊
+        // 同样带默认占位符块，正文为自然语言或占位符都出卡；无块仍不插卡
+        //（前端行为零改动），卡片位于消息气泡正文上方
         if (thinkParts.think !== null) {
-            botMsg.querySelector('.bubble-content').before(buildThinkCardEl());
+            // 先构建完整卡片元素、再插入 DOM（顺序不可反）；正文容器兜底：
+            // 即使 .bubble-content 意外缺失也降级为消息容器直插，绝不让插卡
+            // 环节抛错吞掉整条回复——只要 think 非空卡片必上屏，正文哪怕
+            // 只剩剥空占位文案也不拦卡
+            const thinkCard = buildThinkCardEl();
+            const bubbleEl = botMsg.querySelector('.bubble-content');
+            if (bubbleEl) bubbleEl.before(thinkCard);
+            else botMsg.appendChild(thinkCard);
             startThinkTypewriter(botMsg, thinkParts.think, options.animateThink !== false);
         }
         history.appendChild(botMsg);
@@ -408,8 +491,9 @@
         .then(res => res.json())
         .then(res => {
             if (res.code !== 200) throw new Error(res.error || '未知错误');
-            // 重新生成结果同样可能带 <think> 块：先切分（与 appendBotMessage
-            // 同口径），思考卡片同步更新，正文剥离后再渲染
+            // 重新生成结果同样可能带 <think> 块或裸 [思考]/[计划] 标记：
+            // 先切分（与 appendBotMessage 同口径），思考卡片同步更新，
+            // 正文剥离后再渲染
             const thinkParts = splitThinkBlock(res.data.reply);
             const reply = thinkParts.body;
             syncThinkCard(msgEl, thinkParts.think);

@@ -26,9 +26,14 @@
   拖拽阈值 9 / 5000ms / 60000ms / 报错端口 5003 且不含 5005）、真实素材
   DSniang1.jpg、scaleX(-1) 翻转、吸附阈值 24px、台词库、AudioContext、
   600px 移动端缩放；
-- 思维链前端展示（<think> 块）：console.js 解析切分（先切分后转义、正则
-  非锚定——reply 含块即必出卡片）、
-  渲染入口先判 thinkMatch（无 think 不插卡片、普通聊天零干扰）、思考
+- 思维链前端展示（<think> 块 + 裸 [思考]/[计划] 标记兜底）：console.js
+  统一入口 splitThinkBlock 两段解析（先切分后转义、<think> 正则非锚定——
+  reply 含块即必出卡片；裸 [思考]/[计划] 段并入思考卡并从正文剥离、
+  [行动] 行与其后 JSON 不上屏、剥空占位"（操作已执行）"、普通聊天
+  反例不误剥离）、
+  渲染入口仅由 think !== null 守卫（后端 2026-10-01 全对话强制包装后，
+  普通闲聊同样带"[思考] 正在理解你的意图..."默认占位符块；正文为自然
+  语言或占位符都出卡，无块仍不插卡——前端行为零改动）、思考
   卡片逐字打字（textContent 注入防注入）+ 打完自动折叠/点击展开、历史
   回放不打字、刷新重生成同步卡片、等待期 900ms 轮换状态；index.html
   .think-card / .think-card-header / .think-card-body 浅灰折叠样式。
@@ -42,6 +47,8 @@ import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -724,8 +731,14 @@ class CQFaceRenderTests(unittest.TestCase):
 class ThinkCardFrontendTests(unittest.TestCase):
     """console.js / index.html 思维链展示静态断言（离线，无浏览器）。
 
-    契约：brain.smart_ask 工具调用流程在 reply 最前面包装 <think>...</think>
-    （内含 [思考]/[计划] 文本）；普通聊天回复没有该块——前端不渲染思考卡片。
+    契约（2026-10-01 全对话强制包装口径）：brain.smart_ask 对所有自然语言
+    回复一律在 reply 最前面包装 <think>...</think> 块——工具流程用原生
+    [思考]/[计划] 或按工具名生成的占位符，普通闲聊（无工具调用）注入
+    "[思考] 正在理解你的意图..."默认占位符；前端裸标记扫描保留作纵深
+    防御——万一仍有旁路/旧版后端漏出裸 [思考]/[计划]/[行动] 文本，统一
+    入口 splitThinkBlock 对两种形态（<think> 包装 / 裸标记）都剥离并收敛
+    到同一张折叠卡片，[行动] 行与其后的 JSON 不上屏；渲染入口仅由
+    think !== null 守卫，正文为自然语言或占位符都出卡。
     """
 
     @classmethod
@@ -748,11 +761,17 @@ class ThinkCardFrontendTests(unittest.TestCase):
     def test_think_block_regex_non_anchored(self):
         """解析正则非锚定（串内任意位置命中）：即使净化/表情转换等环节在块前
         插入了任何字符，只要 reply 含 <think> 块就必定渲染思考卡片，不因锚定
-        串首而静默漏卡；剔除按 thinkMatch.index 定位，块前字符保留进正文。"""
+        串首而静默漏卡；剔除按 thinkMatch.index 循环定位（多块全收），用户
+        口径：正文只保留最后一个 </think> 之后的部分，块前杂散字符丢弃。"""
         js = self.console_js
         self.assertIn("/<think>([\\s\\S]*?)<\\/think>/", js)   # 非锚定正则
         self.assertNotIn("/^\\s*<think>", js)                  # 不再锚定串首
         self.assertIn("thinkMatch.index", js)                  # 按命中位置剔块
+        # 用户口径锁定：循环剔块（多个 <think> 块并入同一张卡）；
+        # 正文 = 最后一个 </think> 之后的部分；旧"块前字符保留进正文"已废止
+        self.assertIn("while ((thinkMatch = body.match(THINK_BLOCK_RE)) !== null)", js)
+        self.assertIn("body = body.slice(thinkMatch.index + thinkMatch[0].length)", js)
+        self.assertNotIn("body.slice(0, thinkMatch.index)", js)
 
     def test_simple_text_reply_card_rendering_contract(self):
         """简单文本 reply（如 "<think>[思考] 准备调用 list_files 尝试完成操作。
@@ -809,6 +828,313 @@ class ThinkCardFrontendTests(unittest.TestCase):
         self.assertIn("splitThinkBlock(res.data.reply)", body)
         self.assertIn("syncThinkCard(msgEl, thinkParts.think)", body)
         self.assertIn("renderRich(reply)", body)
+
+    # ---------- 裸 [思考]/[计划] 标记扫描（正文剥离兜底） ----------
+
+    def test_bare_marker_scan_regexes_present(self):
+        """splitThinkBlock 含裸 [思考]/[计划] 段扫描正则与 [行动] 剥离正则：
+        后端 _seal_bare_cot 已对"捕获到原生思考的普通回复"封口包装，前端
+        裸标记扫描保留作纵深防御——万一仍有旁路/旧版后端漏出裸 CoT，
+        裸标记同样收敛进思考卡（解析失败宁可隐藏裸文本）。"""
+        js = self.console_js
+        self.assertIn("BARE_THINK_RE", js)
+        self.assertIn("BARE_PLAN_RE", js)
+        self.assertIn("BARE_ACTION_RE", js)
+        # 任务规格正则（非锚定、前瞻零消费）：[思考] 段止于 [计划]/[行动]/
+        # 串尾，[计划] 段止于 [行动]/串尾——标记本身留给下一段/[行动] 剥离
+        self.assertIn(r"/(\[思考\][\s\S]*?)(?=\[行动\]|\[计划\]|$)/", js)
+        self.assertIn(r"/(\[计划\][\s\S]*?)(?=\[行动\]|$)/", js)
+
+    def test_bare_scan_lives_in_split_think_block(self):
+        """裸标记扫描位于统一入口 splitThinkBlock 内（实时回复/历史回放/
+        刷新重生成三条渲染路径共用）：思考段→计划段 replace 剥离并
+        bareParts 并卡，[行动] 行剥离与剥空占位依次发生。"""
+        start = self.console_js.index("function splitThinkBlock")
+        end = self.console_js.index("function buildThinkCardEl", start)
+        body = self.console_js[start:end]
+        self.assertIn("body.replace(BARE_THINK_RE", body)
+        self.assertIn("body.replace(BARE_PLAN_RE", body)
+        self.assertIn("bareParts.push", body)
+        self.assertIn("bareParts.join('\\n')", body)   # 裸段并入思考卡内容
+        self.assertIn("body.replace(BARE_ACTION_RE", body)
+        self.assertIn("（操作已执行）", body)           # 剥空占位文案
+        # 剥离顺序：思考段 → 计划段 → 行动行 → 返回
+        self.assertLess(body.index("body.replace(BARE_THINK_RE"),
+                        body.index("body.replace(BARE_PLAN_RE"))
+        self.assertLess(body.index("body.replace(BARE_PLAN_RE"),
+                        body.index("body.replace(BARE_ACTION_RE"))
+        self.assertLess(body.index("body.replace(BARE_ACTION_RE"),
+                        body.index("return { think: think, body: body }"))
+
+    def _extract_js_regex(self, name):
+        """从 console.js 源码提取具名 JS 正则字面量并编译为 Python re
+        （所选正则语法为 JS/Python 公共子集，可直接编译复跑）。"""
+        m = re.search(re.escape(name) + r"\s*=\s*/(.+)/;", self.console_js)
+        self.assertIsNotNone(m, msg="console.js 缺少 %s 正则" % name)
+        return re.compile(m.group(1))
+
+    def _bare_strip_pipeline(self, body):
+        """按 splitThinkBlock 的剥离顺序（思考段→计划段→行动行）复跑源码中
+        同一组正则，返回（并入思考卡的裸段列表, 剥离后正文）。"""
+        bare_think = self._extract_js_regex("BARE_THINK_RE")
+        bare_plan = self._extract_js_regex("BARE_PLAN_RE")
+        bare_action = self._extract_js_regex("BARE_ACTION_RE")
+        parts = []
+
+        def _collect(match):
+            seg = (match.group(1) or "").strip()
+            if seg:
+                parts.append(seg)
+            return ""
+
+        body = bare_think.sub(_collect, body)
+        body = bare_plan.sub(_collect, body)
+        body = bare_action.sub("", body).strip()
+        return parts, body
+
+    def test_bare_cot_stripped_and_action_json_hidden(self):
+        """正文剥离行为（用源码同一组正则复跑锁定）：裸 CoT 全漏场景——
+        [思考]/[计划] 段并入思考卡并从正文剥离；[行动] 标记与其后的
+        JSON 工具调用原文一并剥离（JSON 不上屏也不进思考卡）；
+        剥离后正文为空 → 前端显示"（操作已执行）"占位。"""
+        parts, body = self._bare_strip_pipeline(
+            "[思考] 需要点击WLAN，先UI解析，失败用视觉.\n"
+            "[计划] 1. UI解析 2. 失败用视觉\n"
+            '[行动] {"tool": "ui_tap_element", "args": {"text": "WLAN"}}')
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(parts[0].startswith("[思考]"))
+        self.assertTrue(parts[1].startswith("[计划]"))
+        self.assertNotIn('"tool"', "\n".join(parts))   # JSON 不进思考卡
+        self.assertEqual(body, "")                     # 剥空 → 占位文案
+        # 其后有最终自然语言回复时：正文只留该回复，[行动] 后的 JSON 不显示
+        parts, body = self._bare_strip_pipeline(
+            "[思考] a\n[计划] b\n"
+            '[行动] {"tool": "list_files", "args": {"path": "."}}\n'
+            "好的，文件列表已经拿到啦~")
+        self.assertEqual(len(parts), 2)
+        self.assertEqual(body, "好的，文件列表已经拿到啦~")
+        self.assertNotIn("list_files", body)
+        self.assertNotIn('"tool"', body)
+
+    def test_bare_cot_bluetooth_scenario_convergence(self):
+        """用户实测场景（"帮我点击手机屏幕上的蓝牙"旁路漏出形态）复跑锁定：
+        全裸 [思考]/[计划]/[行动]+JSON、无自然语言收尾——思考/计划两段并入
+        思考卡、[行动] 行与其后 JSON 不上屏也不进卡、正文剥空 → 前端显示
+        "（操作已执行）"占位，绝不裸漏过程原文。"""
+        parts, body = self._bare_strip_pipeline(
+            "[思考] 主人要点击蓝牙，先定位设置入口。\n"
+            "[计划] 1. UI解析找蓝牙 2. 失败转视觉点击\n"
+            '[行动] {"tool": "ui_tap_element", "args": {"text": "蓝牙"}}')
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(parts[0].startswith("[思考]"))
+        self.assertIn("蓝牙", parts[0])
+        self.assertTrue(parts[1].startswith("[计划]"))
+        joined = "\n".join(parts)
+        self.assertNotIn('"tool"', joined)          # JSON 不进思考卡
+        self.assertNotIn("ui_tap_element", joined)
+        self.assertEqual(body, "")                  # 剥空 → 占位文案兜底
+
+    def test_bare_cot_with_braces_in_think_convergence(self):
+        """[思考] 文本含花括号（后端按 { 边界截断思考，剥不干净的残余）时的
+        收敛：段落照常剥离并入卡、[行动]+JSON 不上屏、剩余自然语言正文
+        原样保留。"""
+        parts, body = self._bare_strip_pipeline(
+            "[思考] 先看 {配置} 再决定。\n"
+            '[行动] {"tool": "read_file", "args": {"filename": "a.json"}}\n'
+            "文件已经读好啦")
+        self.assertEqual(len(parts), 1)
+        self.assertIn("{配置}", parts[0])
+        self.assertNotIn("read_file", body)
+        self.assertNotIn('"tool"', body)
+        self.assertEqual(body, "文件已经读好啦")
+
+    def test_seal_placeholder_literal_matches_backend(self):
+        """跨端占位契约：前端剥空占位字面量与后端 brain.
+        BARE_COT_BODY_PLACEHOLDER 完全一致（后端封口剥空时注入同款占位，
+        前端不得二次改写）。"""
+        with open(os.path.join(PROJECT_ROOT, "brain.py"), "r",
+                  encoding="utf-8") as f:
+            src = f.read()
+        m = re.search(r'BARE_COT_BODY_PLACEHOLDER\s*=\s*"([^"]+)"', src)
+        self.assertIsNotNone(m, "brain.py 缺少 BARE_COT_BODY_PLACEHOLDER 常量")
+        self.assertIn(m.group(1), self.console_js)
+
+    def test_action_strip_placeholder_contract(self):
+        """占位契约（代码结构级）：剥离后正文为空且确有过程输出被剥离
+        （有思考卡或剥过 [行动]）时，正文显示"（操作已执行）"；
+        普通空回复不受影响。"""
+        js = self.console_js
+        self.assertIn("const hadAction = BARE_ACTION_RE.test(body)", js)
+        self.assertIn("if (!body && (think !== null || hadAction)) "
+                      "body = '（操作已执行）';", js)
+
+    # ---------- 用户点名场景（2026-10-01）：占位符正文 + <think> 块 → 卡片必显示 ----------
+
+    def _extract_split_chunk(self):
+        """提取 console.js 中 THINK_BLOCK_RE 声明起、打字机常量前的整段源码
+        （含 THINK_BLOCK_RE 与裸标记正则、splitThinkBlock、buildThinkCardEl，
+        剥离 IIFE 后可独立运行）。"""
+        js = self.console_js
+        start = js.index("const THINK_BLOCK_RE")
+        end = js.index("const THINK_TYPE_MS")
+        return js[start:end]
+
+    def _think_wrap_pipeline(self, raw_reply):
+        """按 splitThinkBlock 的 <think> 循环剔块 + 剥空占位规则，用源码里
+        同一个 THINK_BLOCK_RE（JS/Python 公共子集，_extract_js_regex 可直接
+        编译）在 Python 侧复跑，返回（think, body）——node 不可用时的
+        离线等价验证。"""
+        block_re = self._extract_js_regex("THINK_BLOCK_RE")
+        think = None
+        body = raw_reply
+        m = block_re.search(body)
+        while m:
+            think = ((think + "\n") if think else "") + m.group(1).strip()
+            body = body[m.end():]
+            m = block_re.search(body)
+        if think is not None and not body.strip():
+            body = "（操作已执行）"
+        return think, body
+
+    def test_placeholder_body_with_think_block_card_must_render(self):
+        """用户点名场景：reply 为"<think>块内容</think>（操作已执行）"形态
+        （正文只剩占位符）时灰色思维链卡片必显示。三层断言：
+        ① 渲染入口插卡仅由 think !== null 守卫，与正文是否为占位符无关
+           （守卫与插卡之间不得出现占位符/空正文二次条件），且先构建完整
+           卡片元素、再插入 DOM；
+        ② Python 复跑 <think> 剔块管线：两种占位形态 think 都非空、
+           body 都为占位符；
+        ③ node 实跑验证见 test_placeholder_body_node_live_run。"""
+        js = self.console_js
+        start = js.index("function appendBotMessage")
+        end = js.index("==================== 3.", start)
+        body = js[start:end]
+        self.assertIn("if (thinkParts.think !== null)", body)      # 唯一插卡守卫
+        guard = body.index("if (thinkParts.think !== null)")
+        build = body.index("buildThinkCardEl()")
+        self.assertLess(guard, build)                              # 守卫先于插卡
+        # 占位正文不得拦卡：守卫与插卡之间不得出现"正文为占位符/为空"类条件
+        between = body[guard:build]
+        self.assertNotIn("（操作已执行）", between)
+        self.assertNotIn("!reply", between)
+        # 先构建完整元素、再插入 DOM：buildThinkCardEl() 赋值给局部变量后才 before
+        self.assertIn("= buildThinkCardEl()", body)
+        self.assertIn(".before(thinkCard)", body)
+        # ② Python 复跑："<think>块内容</think>（操作已执行）"→ think 非空 + 占位正文
+        think, body_text = self._think_wrap_pipeline(
+            "<think>块内容</think>（操作已执行）")
+        self.assertEqual(think, "块内容")
+        self.assertEqual(body_text, "（操作已执行）")
+        # 块后无任何正文的形态（剥空占位由前端注入）：think 同样非空
+        think, body_text = self._think_wrap_pipeline("<think>有思考内容</think>")
+        self.assertIsNotNone(think)
+        self.assertTrue(think)
+        self.assertEqual(body_text, "（操作已执行）")
+
+    def test_placeholder_body_node_live_run(self):
+        """node 实跑验证元素结构（环境无 node 时跳过，上一测试的静态断言
+        仍全量生效）：提取 console.js 的 splitThinkBlock + buildThinkCardEl
+        源码经 stdin 喂给 node 真实运行——"<think>块内容</think>（操作已
+        执行）"切分结果 think 非空、body 为占位符；卡片节点存在、类名为
+        think-card think-collapsed、含"思考过程"标题与 .think-card-body
+        正文容器。纯计算子进程（stdin 管道、无网络、无临时文件）。"""
+        if not shutil.which("node"):
+            self.skipTest("环境无 node，跳过 JS 实跑（静态断言已覆盖）")
+        script = (
+            # 最小 DOM 桩：buildThinkCardEl 只用 createElement + 属性赋值
+            "var document = { createElement: function (tag) "
+            "{ return { nodeName: tag, className: '', innerHTML: '' }; } };\n"
+            + self._extract_split_chunk() + "\n"
+            "var r = splitThinkBlock('<think>块内容</think>（操作已执行）');\n"
+            "var rEmpty = splitThinkBlock('<think>有思考内容</think>');\n"
+            "var card = buildThinkCardEl();\n"
+            "console.log(JSON.stringify({\n"
+            "  think: r.think, body: r.body,\n"
+            "  emptyBody: rEmpty.body,\n"
+            "  cardClass: card.className,\n"
+            "  hasTitle: card.innerHTML.indexOf('思考过程') !== -1,\n"
+            "  hasBodyDiv: card.innerHTML.indexOf('think-card-body') !== -1\n"
+            "}));\n")
+        proc = subprocess.run(["node"], input=script.encode("utf-8"),
+                              capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0,
+                         proc.stderr.decode("utf-8", "replace"))
+        out = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(out["think"], "块内容")            # 思考内容完整进卡
+        self.assertEqual(out["body"], "（操作已执行）")      # 正文为占位符
+        self.assertEqual(out["emptyBody"], "（操作已执行）")  # 剥空占位同样成立
+        self.assertEqual(out["cardClass"], "think-card think-collapsed")  # 卡片节点存在
+        self.assertTrue(out["hasTitle"])                    # 含"思考过程"标题
+        self.assertTrue(out["hasBodyDiv"])                  # 含 .think-card-body 正文容器
+
+    def test_card_guard_independent_of_body_form(self):
+        """全对话强制包装契约（2026-10-01）：后端所有自然语言回复都带
+        <think> 块——正文可为自然语言（普通闲聊默认占位符包装下的聊天
+        正文）或占位符（"（操作已执行）"）；渲染入口插卡仅由
+        think !== null 守卫，与正文形态无关：守卫条件全文唯一，且守卫与
+        插卡之间不得出现任何基于正文内容的二次条件。"""
+        js = self.console_js
+        start = js.index("function appendBotMessage")
+        end = js.index("==================== 3.", start)
+        body = js[start:end]
+        # 唯一插卡守卫：think !== null（appendBotMessage 内仅出现一次）
+        self.assertEqual(body.count("think !== null"), 1, body)
+        guard = body.index("if (thinkParts.think !== null)")
+        build = body.index("buildThinkCardEl()")
+        between = body[guard:build]
+        # 守卫与插卡之间不得出现"正文为占位符/为空"类拦截条件
+        self.assertNotIn("（操作已执行）", between)
+        self.assertNotIn("正在理解你的意图", between)
+        self.assertNotIn("!reply", between)
+        # Python 复跑切分管线：占位符正文与自然语言正文两种形态 think 都
+        # 非空（卡片由 think !== null 守卫渲染，与正文内容无关）
+        think, body_text = self._think_wrap_pipeline(
+            "<think>[思考] 正在理解你的意图...</think>（操作已执行）")
+        self.assertEqual(think, "[思考] 正在理解你的意图...")
+        self.assertEqual(body_text, "（操作已执行）")
+        think, body_text = self._think_wrap_pipeline(
+            "<think>[思考] 正在理解你的意图...</think>今天天气不错哦～")
+        self.assertEqual(think, "[思考] 正在理解你的意图...")
+        self.assertEqual(body_text, "今天天气不错哦～")
+
+    def test_chat_placeholder_body_node_live_run(self):
+        """node 实跑（环境无 node 时跳过，上一测试的静态断言仍全量生效）：
+        普通闲聊默认占位符包装形态 "<think>[思考] 正在理解你的意图...
+        </think>今天天气不错哦～" 切分结果 think 非空、正文原样保留；
+        占位符正文形态 "<think>...</think>（操作已执行）" 同样成立——
+        两种正文形态都满足 think !== null 出卡条件。纯计算子进程
+        （stdin 管道、无网络、无临时文件）。"""
+        if not shutil.which("node"):
+            self.skipTest("环境无 node，跳过 JS 实跑（静态断言已覆盖）")
+        script = (
+            "var document = { createElement: function (tag) "
+            "{ return { nodeName: tag, className: '', innerHTML: '' }; } };\n"
+            + self._extract_split_chunk() + "\n"
+            "var rChat = splitThinkBlock('<think>[思考] 正在理解你的意图..."
+            "</think>今天天气不错哦～');\n"
+            "var rPh = splitThinkBlock('<think>[思考] 正在理解你的意图..."
+            "</think>（操作已执行）');\n"
+            "console.log(JSON.stringify({\n"
+            "  chatThink: rChat.think, chatBody: rChat.body,\n"
+            "  phThink: rPh.think, phBody: rPh.body\n"
+            "}));\n")
+        proc = subprocess.run(["node"], input=script.encode("utf-8"),
+                              capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0,
+                         proc.stderr.decode("utf-8", "replace"))
+        out = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(out["chatThink"], "[思考] 正在理解你的意图...")
+        self.assertEqual(out["chatBody"], "今天天气不错哦～")   # 自然语言正文原样
+        self.assertEqual(out["phThink"], "[思考] 正在理解你的意图...")
+        self.assertEqual(out["phBody"], "（操作已执行）")        # 占位符正文同样成立
+
+    def test_plain_chat_mentioning_thinking_not_stripped(self):
+        """反例：普通聊天提到"思考"二字（无 [思考] 方括号标记）不触发
+        剥离——正文原样保留、不产生思考卡内容、不误显示占位。"""
+        text = "让我思考一下这个问题，稍后给你答案。"
+        parts, body = self._bare_strip_pipeline(text)
+        self.assertEqual(parts, [])
+        self.assertEqual(body, text)
 
     # ---------- console.js：等待期轮换状态 ----------
 
@@ -929,6 +1255,32 @@ class ChatCqSanitizeTests(HistoryApiTestsBase):
             payload = self.client.post("/api/chat", json={"message": "在吗"}).get_json()
 
         self.assertEqual(payload["data"]["reply"], "嗯😊好呀")
+
+    def test_chat_wrapped_think_reply_survives_full_chain(self):
+        """全链路 think 存活断言（CoT 数据传递链路 b+c 环节）：smart_ask 返回
+        <think>[思考]…[计划]…</think>最终回答 形态 → /api/chat 经真实
+        sanitize_for_web 后 <think>/</think> 标签原样存活（不被剥掉/转义/
+        破坏）、思考文本与最终回答完整，前端才可能渲染折叠卡片；
+        思考内容混入的 CQ face 码仍按 Web 口径转 Emoji。"""
+        wrapped = ("<think>[思考] 要点WLAN，先定位控件。[CQ:face,id=4]\n"
+                   "[计划] uiautomator 定位后点击。</think>"
+                   "好的，已经帮你点开WLAN设置页面了。")
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = (wrapped, "🏠 本地 (工具)")
+            payload = self.client.post(
+                "/api/chat", json={"message": "帮我点击手机屏幕上的WLAN"}).get_json()
+
+        self.assertEqual(payload["code"], 200)
+        reply = payload["data"]["reply"]
+        self.assertTrue(reply.startswith("<think>[思考] 要点WLAN，先定位控件。😎\n"),
+                        reply)
+        self.assertIn("[计划] uiautomator 定位后点击。</think>", reply)
+        self.assertTrue(reply.endswith("好的，已经帮你点开WLAN设置页面了。"))
+        self.assertEqual(reply.count("<think>"), 1)       # 标签恰好一对，未被破坏
+        self.assertEqual(reply.count("</think>"), 1)
+        # 落盘历史同样保持 think 完整（刷新/历史回放渲染同源）
+        stored = _read_json_file(self.history_file)
+        self.assertEqual(stored[-1]["content"], reply)
 
 
 # ---------------------------------------------------------------------------

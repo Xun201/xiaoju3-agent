@@ -234,6 +234,7 @@
            动画需要魔法数字上限且易截断内容；JS 只切换 .think-collapsed 类，
            箭头方向用 transform 过渡补足动效。 */
         .think-card {
+            display: block;                     /* 整卡永远可见：.think-collapsed 只藏正文，绝不藏整卡 */
             background-color: #f3f4f6;          /* 浅灰背景（任务规格色） */
             border: 1px solid var(--color-border);
             border-radius: 10px;

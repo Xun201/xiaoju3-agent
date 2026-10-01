@@ -10,7 +10,12 @@ stdout，省去 pull 的第二次 adb 通信延迟）；exec-out 失败（返回
 stdout 无 XML）时自动回退旧版「dump 到设备文件 + adb pull 拉取」两步法，
 功能不退化。找不到元素时返回明确失败串，供模型按点击优先级（prompts.py
 规则）回退 vision_tap_element。
+
+文件 MD5 工具（2026-10-01 用户指令，任务 3 后半）：file_md5(path) 供
+vision_tools 点击前后变化检测复用——stdlib hashlib 分块计算，文件不
+存在/不可读等任何失败返回 None、不抛异常（调用方兜底降级）。
 """
+import hashlib
 import os
 import re
 import subprocess
@@ -73,6 +78,20 @@ def strip_xml_noise(text):
     if idx < 0:
         idx = text.find("<?")
     return text[idx:] if idx > 0 else text
+
+
+def file_md5(path):
+    """计算文件 MD5（2026-10-01 用户指令，任务 3 后半）：stdlib hashlib
+    分块读取（65536 字节/块，防大文件占内存）。文件不存在/不可读/路径
+    是目录等任何失败返回 None、不抛异常，由调用方兜底降级。"""
+    try:
+        md5 = hashlib.md5()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                md5.update(chunk)
+        return md5.hexdigest()
+    except Exception:
+        return None
 
 
 def _dump_ui_xml_exec_out():
