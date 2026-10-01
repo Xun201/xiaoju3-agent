@@ -1,23 +1,29 @@
 # -*- coding: utf-8 -*-
-"""小橘3号 · 统一启动器：一条命令拉起全栈（心跳 + QQ 接入层 + 控制台）。
+"""小橘3号 · 统一启动器：一条命令拉起全栈（5003 一个进程承载一切）。
 
 用法：
     python xiaoju3_launcher.py             # 前台运行，Ctrl+C 优雅停止全部
     python xiaoju3_launcher.py --dry-run   # 只打印启动计划，不实际拉起
 
-拉起内容与顺序（三行 ✅ 按启动完成顺序打印）：
-1. ✅ QQ 接入层已启动 (5002)      —— subprocess: python main.py
-2. ✅ 心跳已启动                  —— 宿主于接入层进程（选型见下）
-3. ✅ 控制台已启动 (5003/console) —— subprocess: python xiaoju3_dashboard.py
+【架构合并（2026-10-01，用户口径：彻底废弃 5002 端口，全部迁入 5003）】
+main.py 已模块化为纯 QQ 业务逻辑（不再监听任何端口），launcher 只拉起
+xiaoju3_dashboard.py 一个子进程：QQ webhook（POST /onebot）、网页控制台
+（/console）与心跳线程全部宿主于该 5003 进程。
+
+启动日志（✅ 三行 + ⚠️ 提醒，按打印顺序）：
+1. ✅ QQ 接入层已启动 (5003)      —— subprocess: python xiaoju3_dashboard.py
+2. ✅ 心跳已启动                  —— 宿主于 5003 进程（选型见下）
+3. ✅ 控制台已启动 (5003/console) —— 与 QQ 接入层同一 5003 进程（:5003/console 路由）
+4. ⚠️ QQ webhook 已迁移至 5003：请将 LLOneBot 的 HTTP 上报地址改为
+   http://127.0.0.1:5003/onebot，否则 QQ 会断连（关键提示必须写入启动日志）
 
 【心跳选型（读码定论）】heartbeat.py 提供两种形态（独立运行入口 /
-start_heartbeat() daemon 线程），但 main.py 的 __main__ 已无条件内嵌
-start_heartbeat()——python main.py 一启动，心跳即宿主于接入层进程内。
-launcher 若再拉第二条心跳（进程内线程或独立进程皆然）会形成双心跳：
-两份快照各自 diff，同一环境变化触发两次大模型决策与两次设备控制
-（重复控灯、双倍 token，甚至互相打架）。故 launcher 不重复拉起心跳，
-仅在 main.py 启动后打印确认行；若未来 main.py 移除内嵌心跳，把计划
-中该条目改回 in-process 线程调用 start_heartbeat() 即可。
+start_heartbeat() daemon 线程），而 xiaoju3_dashboard.py 的 __main__ 已无条件
+经 main.start_background_services() 内嵌 start_heartbeat()——5003 进程一启动，
+心跳即宿主其中。launcher 若再拉第二条心跳（进程内线程或独立进程皆然）会形成
+双心跳：两份快照各自 diff，同一环境变化触发两次大模型决策与两次设备控制
+（重复控灯、双倍 token，甚至互相打架）。故 launcher 不重复拉起心跳，仅在
+dashboard 启动后打印确认行。
 
 【进程管理边界】launcher 只负责"拉起 + 优雅终止 + 退出码警告"，
 不做异常自动重启——守护循环（异常 2 秒拉起、stop.flag 安全退出）是
@@ -42,18 +48,19 @@ import time
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# ✅ 三行确认日志文案（文案口径固定，测试断言）
-BANNER_QQ = "✅ QQ 接入层已启动 (5002)"
+# ✅ 三行确认日志 + ⚠️ 改址提醒（文案口径固定，测试断言）
+BANNER_QQ = "✅ QQ 接入层已启动 (5003)"
 BANNER_HEARTBEAT = "✅ 心跳已启动"
 BANNER_DASHBOARD = "✅ 控制台已启动 (5003/console)"
+QQ_WEBHOOK_MIGRATION_HINT = ("⚠️ QQ webhook 已迁移至 5003：请将 LLOneBot 的 HTTP 上报地址改为 "
+                             "http://127.0.0.1:5003/onebot，否则 QQ 会断连")
 
 # 心跳选型说明（随计划条目携带，供测试断言"注释与实现一致性"）
 HEARTBEAT_REASON = (
-    "heartbeat 为线程形态（start_heartbeat daemon 线程），且 main.py 的 "
-    "__main__ 已内嵌 start_heartbeat()——python main.py 一启动心跳即宿主于"
-    "接入层进程；launcher 再拉第二条会双心跳（同一变化两次决策、两次控设备、"
-    "双倍 token），故不单独拉起。若未来 main.py 移除内嵌心跳，本条目改回 "
-    "in-process 线程调用 start_heartbeat() 即可。"
+    "heartbeat 为线程形态（start_heartbeat daemon 线程），且 xiaoju3_dashboard.py "
+    "的 __main__ 已内嵌 main.start_background_services()（内部调用 start_heartbeat()）"
+    "——python xiaoju3_dashboard.py 一启动心跳即宿主于 5003 进程；launcher 再拉第二条"
+    "会双心跳（同一变化两次决策、两次控设备、双倍 token），故不单独拉起。"
 )
 
 
@@ -62,37 +69,36 @@ def build_launch_plan(python=None, root=None):
 
     条目字段：
     - kind="subprocess"：独立子进程，launcher 持 Popen 句柄管理生命周期；
-    - kind="hosted"：随宿主子进程内部自启（不单独 Popen，仅打印确认行）。
-    顺序（用户口径）：main 先、dashboard 后（dashboard 的 /api/chat 直连
-    brain 与 main 无硬依赖，顺序为部署口径）；心跳随 main 进程，hosted
-    条目排在 qq 之后、dashboard 之前，三行 ✅ 按此顺序打印。
+    - kind="hosted"：随 5003 宿主进程内部承载（不单独 Popen，仅打印确认行）。
+    顺序（用户口径）：QQ 接入层行先、心跳次之、控制台行最后，三行 ✅ 按此
+    顺序打印——三者实为同一 5003 子进程（subprocess 条目 Popen 一次，
+    hosted 条目只打印）。
     """
     py = python or sys.executable or "python"
     base = root or PROJECT_ROOT
     return [
         {
-            "name": "qq",
+            "name": "server",
             "kind": "subprocess",
-            "cmd": [py, os.path.join(base, "main.py")],
+            "cmd": [py, os.path.join(base, "xiaoju3_dashboard.py")],
             "cwd": base,
             "banner": BANNER_QQ,
-            "desc": "QQ 接入层（:5002，webhook + API 网关，心跳宿主其中）",
+            "desc": "统一服务进程（:5003：QQ webhook /onebot + 心跳宿主；5002 已废弃）",
         },
         {
             "name": "heartbeat",
             "kind": "hosted",
-            "host": "qq",
+            "host": "server",
             "banner": BANNER_HEARTBEAT,
-            "desc": "主动服务心跳（60s 轮询 HA，宿主于接入层进程 daemon 线程）",
+            "desc": "主动服务心跳（60s 轮询 HA，宿主于 5003 进程 daemon 线程）",
             "reason": HEARTBEAT_REASON,
         },
         {
-            "name": "dashboard",
-            "kind": "subprocess",
-            "cmd": [py, os.path.join(base, "xiaoju3_dashboard.py")],
-            "cwd": base,
+            "name": "console",
+            "kind": "hosted",
+            "host": "server",
             "banner": BANNER_DASHBOARD,
-            "desc": "监控仪表盘 + 网络控制台（:5003，/console 同进程）",
+            "desc": "新版控制台（:5003/console，与 QQ 接入层同一 5003 进程承载）",
         },
     ]
 
@@ -135,8 +141,10 @@ class XiaojuLauncher:
     def start(self):
         """按计划顺序拉起：subprocess 条目 Popen，hosted 条目仅打印确认行。
 
-        子进程继承本进程控制台（不接管管道，避免缓冲死锁）。三行 ✅ 按
-        启动完成顺序打印：qq → heartbeat（随 qq 进程）→ dashboard。
+        子进程继承本进程控制台（不接管管道，避免缓冲死锁）。✅ 三行按启动
+        完成顺序打印：QQ 接入层（5003 子进程）→ 心跳（随该进程）→ 控制台
+        （同进程 :5003/console）；随后打印 ⚠️ LLOneBot 改址提醒（关键提示
+        必须写入启动日志，用户口径）。
         """
         for entry in self.plan:
             kind = entry.get("kind")
@@ -148,6 +156,7 @@ class XiaojuLauncher:
             else:
                 raise ValueError(f"未知启动形态: {kind!r}（{entry.get('name')}）")
             self.out(entry["banner"])
+        self.out(QQ_WEBHOOK_MIGRATION_HINT)
         # atexit 双保险：无论从哪条路径退出（主循环 return、信号、异常
         # 冒泡），解释器收尾时都再清一次子进程（shutdown 幂等，不重复杀）
         self.register_atexit(self.shutdown)
@@ -212,9 +221,9 @@ class XiaojuLauncher:
     def shutdown(self, timeout=None):
         """优雅终止全部子进程（幂等，三路退出入口共用）。
 
-        逆启动序收尾（先 dashboard 后 main，接入层最后退便于上游先断）：
-        terminate → 等 timeout 秒 → 超时 kill 兜底；已退出的直接跳过
-        （send_signal 对已死进程安全）。"""
+        架构合并后仅一个 5003 统一服务子进程（接入层/控制台/心跳全在其中，
+        收尾即整栈退出）：terminate → 等 timeout 秒 → 超时 kill 兜底；
+        已退出的直接跳过（send_signal 对已死进程安全）。"""
         if self._shutdown_done:
             return
         self._shutdown_done = True
@@ -249,6 +258,7 @@ def main(argv=None):
             target = entry.get("cmd") or f"(宿主于 {entry['host']} 进程)"
             print(f"  - {entry['name']}: {target}")
             print(f"      {entry.get('reason') or entry.get('desc', '')}")
+        print(QQ_WEBHOOK_MIGRATION_HINT)
         return 0
     launcher = XiaojuLauncher(plan)
     return launcher.run()

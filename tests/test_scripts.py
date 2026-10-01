@@ -80,8 +80,9 @@ class TestStartSh(unittest.TestCase):
         self.content = read_script("start.sh")
 
     def test_daemon_loop(self):
+        # 架构合并：start.sh 只拉起 dashboard 单服务进程（5002 废弃）
         self.assertIn("while true", self.content)
-        self.assertIn("python3 main.py", self.content)
+        self.assertIn("python3 xiaoju3_dashboard.py", self.content)
         self.assertIn("sleep 2", self.content)
         self.assertIn("2秒后自动重启", self.content)
         self.assertIn('cd "$(dirname "$0")"', self.content)
@@ -342,14 +343,14 @@ class TestInstaller(unittest.TestCase):
         self.assertIn("bash start.sh", self.content)
         self.assertIn("start_dashboard.sh", self.content)
         self.assertIn("http://127.0.0.1:5003/console", self.content)
-        self.assertIn("http://127.0.0.1:5002", self.content)
+        self.assertIn("http://127.0.0.1:5003/onebot", self.content)  # 架构合并：QQ 上报随迁移
         self.assertIn("/register <注册密码>", self.content)
         self.assertIn("类 Root 安全警告", self.content)
         self.assertIn("TOTP", self.content)
         self.assertIn("stop_all.sh", self.content)
         # 可选 --register：经本机 /onebot 自调发出 LV2 注册请求
         self.assertIn("--register", self.content)
-        self.assertIn("127.0.0.1:5002/onebot", self.content)
+        self.assertIn("127.0.0.1:5003/onebot", self.content)  # 架构合并：QQ 上报随迁移
 
     def test_idempotent_and_failure_report(self):
         self.assertIn("跳过创建", self.content)  # .venv 已存在跳过（幂等）

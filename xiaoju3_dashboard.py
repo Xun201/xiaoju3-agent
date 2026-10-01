@@ -30,16 +30,29 @@
                  （main.py /onebot → NapCat）不经此处，发图能力不受影响。
 - GET /api/history  {code, data:{messages:[...]}}：控制台聊天历史（role/content，
                  assistant 条目附 source 来源标签），供前端页面加载时渲染。
+                 扩展契约（2026-10-01 跨组钉死）：?source=terminal 读取
+                 agent_state/history_terminal.json（终端 CLI 通道，R3 写入端
+                 xiaoju3.CLI_MEMORY_FILE），文件缺失返回空列表；缺省仍为
+                 history_console.json（现状不变）。
 - DELETE /api/history 清空控制台聊天历史（确认语义由前端 confirm 承担）。
 - POST /api/tts     Edge-TTS 语音合成（用户口径：人类少女音、免费无 Key）：
                  JSON {text, voice?} → audio/mpeg 音频流；edge_tts 延迟导入，
                  服务端未安装 → 501 JSON 中文提示（不让 import 崩溃）；
                  默认音色 zh-CN-XiaoxiaoNeural（晓晓·温柔女声）。
 - GET /api/tts      Edge-TTS 自然女声音色表（EDGE_VOICES 常量，前端参考）。
-- 静态路由（/console*、/assets*）统一 Cache-Control: no-store——浏览器每次
-  刷新都拉取最新 HTML/JS，避免发版后命中旧版 console.js 导致前端修复不生效。
-- 访问日志刷屏抑制：werkzeug logger 挂 _PollAccessFilter，/api/status（前端
-  2s 轮询）与 /api/balance（60s 轮询）的访问日志直接拦截，其余照常输出。
+
+【QQ 接入层并入（2026-10-01 架构合并：彻底废弃 5002 端口）】
+- POST /onebot     OneBot 11 webhook（LLOneBot 上报，原 :5002 main.py 路由
+                 原样迁入）：视图只做 JSON 解析 + meta_event 心跳日志标记，
+                 业务处理一字未改地调 main.onebot_event（think 剥离、触发词/@、
+                 图片收藏、戳一戳、LLOneBot 容错均在 main 纯逻辑模块内）。
+- GET /api/health  迁移守望探测端点（migration.health_bp 一行注册，随 :5002
+                 一并迁入本进程）。
+- 💓 心跳 / 多设备守望：dashboard 直接运行（__main__）时经
+                 main.start_background_services() 拉起（原 main.py 启动点）。
+- 访问日志刷屏抑制：werkzeug logger 挂 _PollAccessFilter（/api/status、
+  /api/balance 轮询）与 _HeartbeatAccessFilter（/onebot meta_event 心跳，
+  原 main.py 过滤器迁入），各自拦截，其余照常输出。
 
 三接口按文档 §9.1 口径均无鉴权（X-API-Key 门禁为规划项 🔜）。
 """
@@ -47,18 +60,24 @@ import glob
 import logging
 import os
 import re
+import threading
 import time
 
+import main  # QQ 接入层业务逻辑模块（架构合并：webhook 业务体宿主于此进程）
 import psutil
 import requests
 from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
 
 from brain import load_memory, save_memory, smart_ask  # 直连大脑（架构设计文档 §2：仪表盘 /api/chat 绕过路由层）
+from migration import health_bp  # 迁移守望探测端点（架构 §8，原 :5002 注册点迁入）
 from web_sanitize import sanitize_for_web  # Web 出口 CQ 码净化（QQ 通道不经此处）
 from xiaoju3 import (AGENT_STATE_DIR, CLOUD_BALANCE_URL, CLOUD_KEY,
                      DASHBOARD_PORT, MAX_MESSAGES, TTS_VOICE)
 
 app = Flask(__name__)
+# 🛡️ 迁移守望探测端点（架构 §8，migration docstring 接入示例：一行注册；
+# 原 :5002 main.py 注册点随架构合并迁入）
+app.register_blueprint(health_bp)
 
 # 项目根目录（新版控制台前端文件与 assets 的静态托管基准）
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -110,6 +129,29 @@ class _PollAccessFilter(logging.Filter):
 _werkzeug_logger = logging.getLogger("werkzeug")
 _werkzeug_logger.setLevel(logging.INFO)   # 保底（取舍说明见上方注释）
 _werkzeug_logger.addFilter(_PollAccessFilter())
+
+# ==================== /onebot 心跳事件访问日志抑制（原 :5002 main.py 迁入） ====================
+# 用户口径：LLOneBot 心跳（meta_event 的 heartbeat/lifecycle 等高频事件）每次
+# POST /onebot 都打一条 werkzeug 访问日志，长期运行刷屏。心跳与消息事件同为
+# POST /onebot，访问日志行无法区分——视图内对 meta_event 事件打一次性线程
+# 标记，过滤器据此只拦截心跳那一次请求的访问日志；消息类 /onebot 日志保留。
+# 拦截（filter 返回 False）而非"降为 DEBUG"的取舍见 _PollAccessFilter 上方
+# 注释：werkzeug 3.x 自挂 NOTSET 级 handler，降级 DEBUG 仍会被输出；直接拦截
+# 跨日志配置行为确定。
+_onebot_meta_local = threading.local()   # 当前线程是否正处理 meta_event 心跳类事件
+
+
+class _HeartbeatAccessFilter(logging.Filter):
+    """meta_event 心跳请求的 werkzeug 访问日志拦截器（一次性线程标记）。"""
+
+    def filter(self, record):
+        if getattr(_onebot_meta_local, "is_meta_event", False):
+            _onebot_meta_local.is_meta_event = False   # 标记一次性：仅覆盖本次请求
+            return False
+        return True
+
+
+_werkzeug_logger.addFilter(_HeartbeatAccessFilter())
 
 
 # ============================ 静态托管 ============================
@@ -413,6 +455,9 @@ def index():
 # 内存、刷新即清空，现与 QQ/网页双通道同口径落盘 agent_state/history_console.json
 # （50 条滚动截断），读写直接复用 brain.load_memory / brain.save_memory。
 HISTORY_FILE = os.path.join(AGENT_STATE_DIR, "history_console.json")
+# 终端 CLI 通道历史（跨组契约 2026-10-01：写端为 xiaoju3.CLI_MEMORY_FILE，
+# R3 终端 REPL 每轮落盘；本模块只读展示，文件缺失回退空列表）
+TERMINAL_HISTORY_FILE = os.path.join(AGENT_STATE_DIR, "history_terminal.json")
 
 
 def _read_console_history():
@@ -441,7 +486,15 @@ def _clear_console_history():
 
 @app.route("/api/history", methods=["GET"])
 def api_history():
-    """控制台聊天历史 API：{code, data:{messages:[...]}}（按时间正序）。"""
+    """聊天历史 API：{code, data:{messages:[...]}}（按时间正序）。
+
+    source 参数（2026-10-01 跨组钉死契约，组 R3 终端记录展示依赖）：
+    - 缺省：控制台聊天历史 history_console.json（现状不变）；
+    - source=terminal：终端 CLI 通道 history_terminal.json（文件缺失返回
+      空列表，接口恒 200）；格式与控制台通道一致（纯 [{role, content}]）。
+    """
+    if (request.args.get("source") or "").strip().lower() == "terminal":
+        return jsonify({"code": 200, "data": {"messages": load_memory(TERMINAL_HISTORY_FILE)}})
     return jsonify({"code": 200, "data": {"messages": _read_console_history()}})
 
 
@@ -552,6 +605,26 @@ def api_chat():
         return jsonify({"code": 500, "error": str(e)}), 500
 
 
+# ==================== QQ 接入层 webhook（原 :5002 POST /onebot 原样迁入） ====================
+
+@app.route('/onebot', methods=['POST'])
+def onebot_webhook():
+    """OneBot 11 webhook（LLOneBot 上报；架构合并后 :5003 一个端口承载一切）。
+
+    视图只做两件事：① 解析 JSON；② meta_event 心跳事件打一次性线程标记
+    （本次请求的 werkzeug 访问日志由 _HeartbeatAccessFilter 拦截，防刷屏；
+    消息类 /onebot 日志不受影响）。业务处理（戳一戳、LLOneBot 容错、
+    handle_message 指令族、think 剥离、NapCat 回发）在 main.onebot_event
+    纯逻辑函数内，一字未改。
+    """
+    data = request.get_json(silent=True) or {}
+
+    if data.get('post_type') == 'meta_event':
+        _onebot_meta_local.is_meta_event = True
+
+    return main.onebot_event(data)
+
+
 # ============================ Edge-TTS 语音合成（/api/tts） ============================
 # 用户口径：人类少女音、免费无 Key——edge-tts 走微软 Edge 在线朗读接口，
 # 免注册、免费、无 API Key。依赖策略沿用红线"延迟导入 + 优雅降级"：服务端
@@ -631,4 +704,11 @@ def api_tts():
 
 if __name__ == "__main__":
     print(f"🍊 小橘3号监控仪表盘已启动（端口 {DASHBOARD_PORT}）")
+    print("🔌 QQ 接入层已并入本进程（5002 端口废弃）：webhook 地址 "
+          "http://127.0.0.1:5003/onebot，请同步修改 LLOneBot 的 HTTP 上报地址")
+
+    # 💓 心跳 + 多设备互相守望（原 main.py __main__ 启动点，随架构合并移交
+    # 本进程拉起：start_heartbeat daemon 线程 + PeerWatch（默认关闭））
+    main.start_background_services()
+
     app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False)

@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 """统一启动器（xiaoju3_launcher）单元测试（全部离线）。
 
-铁律：不真实拉起 main.py / xiaoju3_dashboard.py / heartbeat——Popen、
-打印、sleep、atexit / signal 注册一律经构造参数注入 mock（每个用例
-setUp 现造、用例间互不共享；patch 用上下文管理器自动还原）。
+铁律：不真实拉起 xiaoju3_dashboard.py / heartbeat——Popen、打印、sleep、
+atexit / signal 注册一律经构造参数注入 mock（每个用例 setUp 现造、用例间
+互不共享；patch 用上下文管理器自动还原）。
 
-覆盖：
-- 启动计划三模块齐全与顺序（main 先、dashboard 后，心跳 hosted 随 main）；
-- ✅ 三行日志文案逐字断言；
+【架构合并（2026-10-01：5002 废弃，5003 一个进程承载一切）后的覆盖面】
+- 启动计划三行条目（server 子进程 + 心跳/控制台 hosted 随 5003 进程）；
+- ✅ 三行日志文案逐字断言 + ⚠️ LLOneBot 改址提醒写入启动日志；
 - 子进程句柄管理：Ctrl+C / SIGTERM 模拟 → terminate 被调、超时 kill
   兜底、已退出跳过、shutdown 幂等（atexit 双保险不重复杀）；
-- 心跳选型注释与实现一致性（hosted 条目 + 模块不持有 start_heartbeat）；
+- 心跳选型注释与实现一致性（hosted 随 5003 进程，模块不持有
+  start_heartbeat）；
 - parse_args 默认值与 --dry-run / --root。
 """
 import io
@@ -69,45 +70,53 @@ class LauncherFixtureMixin(object):
 
 
 class TestBuildLaunchPlan(unittest.TestCase):
-    """启动计划：三模块齐全、顺序与参数。"""
+    """启动计划：三行条目（一个子进程 + 两个 hosted）与顺序。"""
 
     def setUp(self):
         self.plan = xl.build_launch_plan(python=FAKE_PY, root=FAKE_ROOT)
 
-    def test_three_modules_complete_and_order(self):
+    def test_three_entries_complete_and_order(self):
         names = [e["name"] for e in self.plan]
-        self.assertEqual(names, ["qq", "heartbeat", "dashboard"])
-        # main 先、dashboard 后（用户口径）；心跳 hosted 条目居中
-        self.assertLess(names.index("qq"), names.index("dashboard"))
+        self.assertEqual(names, ["server", "heartbeat", "console"])
+        # QQ 接入层行先、心跳居中、控制台行最后（用户口径）；后两行 hosted
         self.assertEqual([e["kind"] for e in self.plan],
-                         ["subprocess", "hosted", "subprocess"])
+                         ["subprocess", "hosted", "hosted"])
+        self.assertEqual([e.get("host") for e in self.plan],
+                         [None, "server", "server"])
 
-    def test_subprocess_cmds_target_two_entrypoints(self):
-        by_name = {e["name"]: e for e in self.plan}
-        qq, dash = by_name["qq"], by_name["dashboard"]
-        self.assertEqual(qq["cmd"], [FAKE_PY, os.path.join(FAKE_ROOT, "main.py")])
-        self.assertEqual(dash["cmd"],
+    def test_single_subprocess_targets_dashboard_only(self):
+        """架构合并：只 Popen 一个 5003 统一服务子进程，main.py 不再被拉起。"""
+        subprocess_entries = [e for e in self.plan if e["kind"] == "subprocess"]
+        self.assertEqual(len(subprocess_entries), 1)
+        server = subprocess_entries[0]
+        self.assertEqual(server["cmd"],
                          [FAKE_PY, os.path.join(FAKE_ROOT, "xiaoju3_dashboard.py")])
-        for e in (qq, dash):
-            self.assertEqual(e["cwd"], FAKE_ROOT)
-            self.assertIn("banner", e)
+        self.assertEqual(server["cwd"], FAKE_ROOT)
+        self.assertIn("banner", server)
+        for entry in self.plan:   # 旧 main.py 入口彻底退出启动计划
+            for cmd_part in (entry.get("cmd") or []):
+                self.assertNotIn("main.py", cmd_part)
 
     def test_banner_texts_exact(self):
-        """✅ 三行文案逐字断言（文案口径固定）。"""
-        self.assertEqual(xl.BANNER_QQ, "✅ QQ 接入层已启动 (5002)")
+        """✅ 三行 + ⚠️ 改址提醒文案逐字断言（文案口径固定）。"""
+        self.assertEqual(xl.BANNER_QQ, "✅ QQ 接入层已启动 (5003)")
         self.assertEqual(xl.BANNER_HEARTBEAT, "✅ 心跳已启动")
         self.assertEqual(xl.BANNER_DASHBOARD, "✅ 控制台已启动 (5003/console)")
+        self.assertEqual(
+            xl.QQ_WEBHOOK_MIGRATION_HINT,
+            "⚠️ QQ webhook 已迁移至 5003：请将 LLOneBot 的 HTTP 上报地址改为 "
+            "http://127.0.0.1:5003/onebot，否则 QQ 会断连")
         banners = [e["banner"] for e in self.plan]
         self.assertEqual(banners, [xl.BANNER_QQ, xl.BANNER_HEARTBEAT,
                                    xl.BANNER_DASHBOARD])
 
     def test_heartbeat_hosted_consistency(self):
-        """心跳选型注释与实现一致性：hosted 随 qq 进程，launcher 不重复拉起。"""
+        """心跳选型注释与实现一致性：hosted 随 5003 进程，launcher 不重复拉起。"""
         hb = {e["name"]: e for e in self.plan}["heartbeat"]
         self.assertEqual(hb["kind"], "hosted")
-        self.assertEqual(hb["host"], "qq")
+        self.assertEqual(hb["host"], "server")
         self.assertNotIn("cmd", hb)  # 绝不单独 Popen 心跳
-        for kw in ("start_heartbeat", "main.py", "双心跳"):
+        for kw in ("start_heartbeat", "xiaoju3_dashboard.py", "双心跳"):
             self.assertIn(kw, hb["reason"])
         # 模块未 import heartbeat / 未持有 start_heartbeat → 实现确实不拉起
         self.assertFalse(hasattr(xl, "start_heartbeat"))
@@ -118,20 +127,21 @@ class TestBuildLaunchPlan(unittest.TestCase):
 
 
 class TestStartSequence(LauncherFixtureMixin, unittest.TestCase):
-    """启动序列：Popen 调用、三行 ✅ 顺序、句柄与 atexit 注册。"""
+    """启动序列：Popen 调用、三行 ✅ + ⚠️ 提醒顺序、句柄与 atexit 注册。"""
 
-    def test_start_spawns_two_and_prints_three_banners_in_order(self):
+    def test_start_spawns_one_and_prints_banners_plus_hint_in_order(self):
         launcher = self.make_launcher()
         procs = launcher.start()
-        # 只 Popen 两次（main 先、dashboard 后）；hosted 心跳不单独拉起
-        self.assertEqual(len(self.handles), 2)
-        self.assertEqual([h.cmd for h in self.handles],
-                         [[FAKE_PY, os.path.join(FAKE_ROOT, "main.py")],
-                          [FAKE_PY, os.path.join(FAKE_ROOT, "xiaoju3_dashboard.py")]])
-        self.assertEqual(len(procs), 2)
-        # 三行 ✅ 按启动完成顺序：qq → 心跳（随 qq 进程）→ dashboard
+        # 只 Popen 一次（5003 统一服务进程）；hosted 心跳/控制台不单独拉起
+        self.assertEqual(len(self.handles), 1)
+        self.assertEqual(self.handles[0].cmd,
+                         [FAKE_PY, os.path.join(FAKE_ROOT, "xiaoju3_dashboard.py")])
+        self.assertEqual(len(procs), 1)
+        # 三行 ✅ 按启动完成顺序：QQ 接入层 → 心跳（随该进程）→ 控制台；
+        # 随后打印 ⚠️ LLOneBot 改址提醒（关键提示必须写入启动日志）
         self.assertEqual(self.prints,
-                         [xl.BANNER_QQ, xl.BANNER_HEARTBEAT, xl.BANNER_DASHBOARD])
+                         [xl.BANNER_QQ, xl.BANNER_HEARTBEAT, xl.BANNER_DASHBOARD,
+                          xl.QQ_WEBHOOK_MIGRATION_HINT])
 
     def test_handles_kept_and_atexit_double_insurance_registered(self):
         launcher = self.make_launcher()
@@ -154,24 +164,20 @@ class TestStartSequence(LauncherFixtureMixin, unittest.TestCase):
 class TestGracefulShutdown(LauncherFixtureMixin, unittest.TestCase):
     """优雅终止：Ctrl+C / SIGTERM 模拟 → terminate 被调；kill 兜底；幂等。"""
 
-    def test_ctrlc_simulate_terminates_all_reverse_order(self):
-        """Ctrl+C（KeyboardInterrupt）→ 逆启动序 terminate 全部子进程。"""
+    def test_ctrlc_simulate_terminates_the_server_process(self):
+        """Ctrl+C（KeyboardInterrupt）→ terminate 5003 统一服务子进程。"""
         def boom(_seconds):
             raise KeyboardInterrupt()
         launcher = self.make_launcher(sleep=boom)
-        order = []
+        terminated = []
         self.assertEqual(len(self.handles), 0)
         launcher.start()
-        h_qq, h_dash = self.handles[0], self.handles[1]
-        h_qq.terminate.side_effect = lambda: order.append("qq")
-        h_dash.terminate.side_effect = lambda: order.append("dashboard")
+        self.handles[0].terminate.side_effect = lambda: terminated.append("server")
 
         self.assertEqual(launcher.run(), 0)
 
-        # 先 dashboard 后 main（接入层最后退）
-        self.assertEqual(order, ["dashboard", "qq"])
-        for h in (h_qq, h_dash):
-            h.terminate.assert_called_once_with()
+        self.assertEqual(terminated, ["server"])
+        self.handles[0].terminate.assert_called_once_with()
         self.assertEqual(launcher.procs, [])  # 句柄清空，无孤儿
 
     def test_sigterm_handler_sets_stop_and_exits_cleanly(self):
@@ -207,7 +213,6 @@ class TestGracefulShutdown(LauncherFixtureMixin, unittest.TestCase):
         launcher = self.make_launcher()
         launcher.start()
         self.handles[0].poll.return_value = 1  # 已异常退出
-        self.handles[1].poll.return_value = 0  # 已正常退出
 
         launcher.shutdown()
         launcher.shutdown()  # atexit 双保险再进一次
@@ -216,14 +221,12 @@ class TestGracefulShutdown(LauncherFixtureMixin, unittest.TestCase):
             h.terminate.assert_not_called()
 
     def test_shutdown_survives_single_proc_termination_error(self):
-        """单个子进程终止异常不阻断其余子进程清理。"""
+        """单个子进程终止异常不阻断其余子进程清理（异常被吞、不抛出）。"""
         launcher = self.make_launcher()
         launcher.start()
         self.handles[0].terminate.side_effect = OSError("boom")
 
         launcher.shutdown()  # 不抛异常
-
-        self.handles[1].terminate.assert_called_once_with()
 
 
 class TestPollChildren(LauncherFixtureMixin, unittest.TestCase):
@@ -232,29 +235,29 @@ class TestPollChildren(LauncherFixtureMixin, unittest.TestCase):
     def test_nonzero_exit_warns_once_no_restart(self):
         launcher = self.make_launcher()
         launcher.start()
-        self.handles[1].poll.return_value = 3  # dashboard 崩了
+        self.handles[0].poll.return_value = 3  # 5003 统一服务进程崩了
 
-        self.assertEqual(launcher.poll_children(), 1)  # 只剩 main 存活
+        self.assertEqual(launcher.poll_children(), 0)  # 无存活子进程
         warns = [p for p in self.prints if "exit=3" in p]
         self.assertEqual(len(warns), 1)
         self.assertIn("不自动重启", warns[0])
         self.assertIn("start.sh", warns[0])
         # 不自动重启：不会再次 Popen（handles 数不变），且巡检两次只告警一次
         launcher.poll_children()
-        self.assertEqual(len(self.handles), 2)
+        self.assertEqual(len(self.handles), 1)
         self.assertEqual(len([p for p in self.prints if "exit=3" in p]), 1)
 
     def test_zero_exit_is_silent(self):
         launcher = self.make_launcher()
         launcher.start()
         self.handles[0].poll.return_value = 0
-        self.assertEqual(launcher.poll_children(), 1)
+        self.assertEqual(launcher.poll_children(), 0)
         self.assertFalse([p for p in self.prints if "exit=0" in p])
 
-    def test_alive_count_when_all_running(self):
+    def test_alive_count_when_running(self):
         launcher = self.make_launcher()
         launcher.start()
-        self.assertEqual(launcher.poll_children(), 2)
+        self.assertEqual(launcher.poll_children(), 1)
 
 
 class TestParseArgs(unittest.TestCase):
@@ -283,9 +286,10 @@ class TestMainDryRun(unittest.TestCase):
                 code = xl.main(["--dry-run"])
         out = buf.getvalue()
         self.assertEqual(code, 0)
-        for frag in ("main.py", "xiaoju3_dashboard.py", ":5003",
-                     "dashboard", "start_heartbeat"):
+        for frag in ("xiaoju3_dashboard.py", ":5003", "console",
+                     "start_heartbeat", "127.0.0.1:5003/onebot"):
             self.assertIn(frag, out)
+        self.assertNotIn("main.py", out)   # 旧 5002 入口不再出现在计划中
 
 
 if __name__ == "__main__":

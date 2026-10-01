@@ -167,8 +167,12 @@ import requests
 # 本地生成更耗时，参考实现取 30 秒。
 CLI_LOCAL_TIMEOUT = float(os.environ.get("CLI_LOCAL_TIMEOUT", "30"))
 
-# CLI 会话记忆：与 history_qq / history_web 并行的终端通道（已入 .gitignore）
-CLI_MEMORY_FILE = os.path.join(AGENT_STATE_DIR, "history_cli.json")
+# CLI 会话记忆：与 history_qq / history_web 并行的终端通道（已入 .gitignore）。
+# 跨组契约（2026-10-01）：文件统一为 agent_state/history_terminal.json，
+# 格式与 main.py 通道 history_web.json 完全一致（brain.save_memory 口径：
+# 纯 [{role, content}] JSON 列表）；网页控制台
+# GET /api/history?source=terminal 直接读取本文件展示终端聊天记录。
+CLI_MEMORY_FILE = os.path.join(AGENT_STATE_DIR, "history_terminal.json")
 
 
 def _fallback_system_prompt():
@@ -225,15 +229,30 @@ def load_memory():
 
 
 def save_memory(messages):
-    """退出/每轮后保存会话，滚动保留最近 MAX_MESSAGES 条（不含 system）。"""
+    """退出/每轮后保存会话，滚动保留最近 MAX_MESSAGES 条（不含 system）。
+
+    落盘口径与 brain.save_memory（history_web.json 通道）逐字对齐：纯
+    [{role, content}] JSON 列表、ensure_ascii=False、indent=2。写入经
+    临时文件 + os.replace 原子替换（与 tools.record_recent_action 同法，
+    不留半截文件）；任何异常只打警告，绝不中断对话。
+    """
     history_to_save = [m for m in messages if m.get("role") != "system"]
     if len(history_to_save) > MAX_MESSAGES:
         history_to_save = history_to_save[-MAX_MESSAGES:]
+    tmp_path = None
     try:
         os.makedirs(AGENT_STATE_DIR, exist_ok=True)
-        with open(CLI_MEMORY_FILE, "w", encoding="utf-8") as f:
+        tmp_path = CLI_MEMORY_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(history_to_save, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, CLI_MEMORY_FILE)
     except Exception as e:
+        # 半成品清理：替换失败时删除残留 .tmp，避免污染隔离区
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
         print(f"⚠️ 记忆保存失败：{e}")
 
 

@@ -3,8 +3,8 @@
 
 用户口径："像 exe 一样的本地独立桌面窗口"——双击/启动小橘3号.bat 拉起本模块：
   ① subprocess 后台拉起统一启动器 xiaoju3_launcher.py（S2 交付：拉起
-    main.py(:5002，心跳宿主其中) + xiaoju3_dashboard.py(:5003)）；
-    若 :5002 与 :5003 均已监听则跳过拉起，提示复用现有进程；
+    xiaoju3_dashboard.py(:5003——QQ webhook/onebot、指令族、心跳引擎已全部宿主其中)）；
+    若 :5003 已监听则跳过拉起，提示复用现有进程；
   ② pywebview 打开原生窗口（标题"小橘3号 · 控制台"，1200x800，可最小化/
     可关闭，无地址栏），加载本机回环内置服务的 /console 页面——
     **绝对禁止加载任何外网 URL**。
@@ -25,7 +25,7 @@
 
 【后台进程生命周期（桌面软件化新增）】
   启动（ensure_backend_services）：
-    :5002 与 :5003 都在线 → 复用现有进程，不重复拉起；否则后台 Popen
+    :5003 在线 → 复用现有进程，不重复拉起；否则后台 Popen
     拉起 xiaoju3_launcher.py。子进程 stdin/out/err 全部 DEVNULL（pythonw
     下无控制台句柄也稳，杜绝 print 崩溃与管道缓冲死锁）；Windows
     creationflags=CREATE_NO_WINDOW 防闪黑窗；POSIX start_new_session=True
@@ -42,7 +42,7 @@
     进程。关闭窗口即停全部，无孤儿进程驻留。
 
 【启动探测】
-  main.py 接入层（:5002）未在线且后台启动器缺位（脚本缺失/拉起失败）时，
+  控制台（:5003）未在线且后台启动器缺位（脚本缺失/拉起失败）时，
   打印（并注入窗口标题）"主程序未启动，聊天功能受限"——窗口仍可打开界面
   （状态/历史等仪表盘功能不受影响）；自拉启动器途中不打该过时提示。
 
@@ -52,7 +52,7 @@
 
 【打包规划（文档标记，暂不实施）】
   pyinstaller -F -w desktop_launcher.py 打包为单文件免终端 exe → 🔜 规划中
-  （届时需把 xiaoju3_launcher.py / main.py / xiaoju3_dashboard.py 等作为
+  （届时需把 xiaoju3_launcher.py / xiaoju3_dashboard.py 等作为
   随包数据一并处理）。
 """
 import argparse
@@ -71,8 +71,8 @@ WINDOW_TITLE = "小橘3号 · 控制台"      # 桌面窗口标题（用户口�
 WINDOW_WIDTH = 1200                   # 窗口尺寸（用户口径 1200x800）
 WINDOW_HEIGHT = 800
 DEFAULT_HOST = "127.0.0.1"           # 内置服务只听回环地址（离线红线）
-# main.py 接入层固定端口（main.py app.run 口径），用于启动探测/复用检测
-MAIN_APP_PORT = 5002
+# 控制台固定端口（5003——QQ webhook/onebot 已宿主其中），用于启动探测/复用检测
+DASHBOARD_APP_PORT = 5003
 # xiaoju3_dashboard.py 控制台固定端口，用于后台服务复用检测
 DASHBOARD_PORT = 5003
 # 统一后台启动器（S2 交付：拉起 main/dashboard，心跳宿主于 main 进程）
@@ -80,7 +80,7 @@ LAUNCHER_SCRIPT = "xiaoju3_launcher.py"
 _WIN_CREATE_NO_WINDOW = 0x08000000   # Windows creationflags：CREATE_NO_WINDOW
 
 MAIN_NOT_RUNNING_HINT = "⚠️ 主程序未启动，聊天功能受限（界面仍可打开）"
-LAUNCHER_REUSE_HINT = "ℹ️ 主程序(5002)与控制台(5003)已在运行，复用现有进程"
+LAUNCHER_REUSE_HINT = "ℹ️ 控制台(5003)已在运行，复用现有进程"
 LAUNCHER_MISSING_HINT = ("ℹ️ 未找到 " + LAUNCHER_SCRIPT +
                          "，跳过后台服务拉起（仅打开控制台窗口）")
 MISSING_WEBVIEW_HINT = (
@@ -154,8 +154,8 @@ def _is_port_listening(port, timeout=1.0):
         return False
 
 
-def _is_main_running(port=MAIN_APP_PORT, timeout=1.0):
-    """探测 main.py 接入层（:5002）是否在线（复用 _is_port_listening）。"""
+def _is_main_running(port=DASHBOARD_APP_PORT, timeout=1.0):
+    """探测控制台服务（:5003）是否在线（复用 _is_port_listening）。"""
     return _is_port_listening(port, timeout=timeout)
 
 
@@ -174,7 +174,7 @@ def _console_python():
 def start_backend_launcher():
     """subprocess 后台拉起统一启动器 xiaoju3_launcher.py。
 
-    它再拉起 main.py(:5002，心跳宿主其中) 与 xiaoju3_dashboard.py(:5003)。
+    它再拉起控制台服务 xiaoju3_dashboard.py(:5003——QQ webhook/心跳宿主其中)。
     返回 Popen 句柄（供窗口关闭后整树终止）；脚本缺失/拉起失败返回 None
     （仅打开控制台窗口，不报错中断）。
     """
@@ -204,9 +204,9 @@ def start_backend_launcher():
 
 
 def ensure_backend_services():
-    """后台服务决策：:5002 与 :5003 都已监听 → 复用现有进程（跳过拉起）；
+    """后台服务决策：:5003 已监听 → 复用现有进程（跳过拉起）；
     否则后台拉起 xiaoju3_launcher.py。返回 Popen 句柄或 None。"""
-    if _is_port_listening(MAIN_APP_PORT) and _is_port_listening(DASHBOARD_PORT):
+    if _is_port_listening(DASHBOARD_APP_PORT):
         _print(LAUNCHER_REUSE_HINT)
         return None
     return start_backend_launcher()
@@ -284,7 +284,7 @@ def main(argv=None):
 
     args = parse_args(argv)
 
-    # ① 后台服务：:5002/:5003 已监听则复用现有进程，否则后台拉起统一启动器
+    # ① 后台服务：:5003 已监听则复用现有进程，否则后台拉起统一启动器
     launcher_proc = ensure_backend_services()
 
     # ② 启动探测：主程序未在线且没有启动器在拉起途中 → 提示"聊天功能受限"
