@@ -552,6 +552,26 @@ class EmergencyExemptionTests(unittest.TestCase):
         self.assertFalse(ok)
         mpost.assert_not_called()
 
+    def test_notify_master_uses_onebot_api_url_env(self):
+        """推送端点：env ONEBOT_API_URL 优先（LLOneBot，标准端口 3001）。"""
+        with mock.patch.dict(os.environ, {
+                "XIAOJU3_OWNER_QQ": "123",
+                "ONEBOT_API_URL": "http://127.0.0.1:3001",
+                "NAPCAT_API_URL": ""}),                 mock.patch("requests.post") as mpost:
+            ok = heartbeat.notify_master("测试")
+        self.assertTrue(ok)
+        self.assertEqual(mpost.call_args.args[0],
+                         "http://127.0.0.1:3001/send_private_msg")
+
+    def test_notify_master_falls_back_to_napcat_env(self):
+        """ONEBOT_API_URL 未配置时兼容回退旧 NAPCAT_API_URL 键。"""
+        with mock.patch.dict(os.environ, {
+                "XIAOJU3_OWNER_QQ": "123", "ONEBOT_API_URL": "",
+                "NAPCAT_API_URL": "http://127.0.0.1:3000/"}),                 mock.patch("requests.post") as mpost:
+            heartbeat.notify_master("测试")
+        self.assertEqual(mpost.call_args.args[0],
+                         "http://127.0.0.1:3000/send_private_msg")
+
 
 if __name__ == "__main__":
     unittest.main()

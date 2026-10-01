@@ -228,6 +228,45 @@
             background-color: var(--color-progress-track);
         }
 
+        /* ==================== 思维链卡片（工具调用 <think> 块展示） ==================== */
+        /* 浅灰底折叠卡片，位于消息气泡正文上方（气泡内首个子元素）。
+           折叠实现选 display 切换（最简可靠）：思考正文高度不定，max-height
+           动画需要魔法数字上限且易截断内容；JS 只切换 .think-collapsed 类，
+           箭头方向用 transform 过渡补足动效。 */
+        .think-card {
+            background-color: #f3f4f6;          /* 浅灰背景（任务规格色） */
+            border: 1px solid var(--color-border);
+            border-radius: 10px;
+            font-size: 13px;
+            overflow: hidden;
+        }
+        .think-card-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-weight: 600;
+            color: var(--color-text-secondary);
+            user-select: none;
+        }
+        .think-card-header:hover { color: var(--color-primary); }
+        .think-card-title { flex: 1; }
+        .think-card-arrow {
+            font-size: 11px;
+            transition: transform 0.2s ease;
+        }
+        .think-card.think-collapsed .think-card-arrow { transform: rotate(-90deg); }
+        .think-card-body {
+            padding: 2px 10px 8px;
+            line-height: 1.6;
+            color: var(--color-text-secondary);
+            white-space: pre-wrap;              /* 保留 [思考]/[计划] 的换行结构 */
+            word-break: break-word;
+        }
+        /* 折叠态：正文 display:none（console.js 切换类名即可，无需内联样式） */
+        .think-card.think-collapsed .think-card-body { display: none; }
+
         /* ==================== 轻提示 toast（替代 alert 占位） ==================== */
         #xiaoju3-toast {
             position: fixed;

@@ -38,3 +38,5 @@ adb.exe
 AdbWinApi.dll
 AdbWinUsbApi.dll
 nul
+agent_state/recent_actions.json
+agent_state/recent_actions.json.tmp

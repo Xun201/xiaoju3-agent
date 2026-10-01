@@ -1,15 +1,21 @@
 # -*- coding: utf-8 -*-
-"""接入层 main.py 离线单测（Flask test client，大脑与 NapCat 网络全 mock）。
+"""接入层 main.py 离线单测（Flask test client，大脑与 OneBot 网络全 mock）。
 
 - /chat：无/错 X-API-Key 拒绝；正确 key 走 mock brain.smart_ask 返回回复。
 - /onebot：私聊响应；群聊触发词 / @（CQ 码）/ 戳一戳彩蛋；图片收藏。
+- /onebot LLOneBot 兼容容错：raw_message 缺失时从 OneBot 11 消息段数组重建
+  （text 拼接、at/image 段按 CQ 码惯例还原）、post_type 缺失按 message 宽容
+  处理、任何字段异常不崩统一返回 ok、发送失败打印 LLOneBot 排查提示。
 - handle_message：标点清洗、内置指令族（/help、/register、/coder_auth、
-  /sudo、/lv4_auth、/lv4_revoke、/confirm、/reset_fuse、/gen_log、/send_image）。
+  /sudo、/lv4_auth、/lv4_revoke、/confirm、/reset_fuse、/gen_log、/send_image、
+  /clear、/reset、清空记忆、重置记忆——一键清空通道记忆）。
 - 第二阶段 §7 权限接线：TOTP 激活 Lv.3 落盘持久、/sudo 写操作窗口、
   /lv4_auth 两步流（类 Root 警告 + 双因子 + 撤销）、/gen_log Lv.3 门槛、
   /send_image 等级 ≥ Lv.3。
 - 第二阶段架构接线：意图路由命中/透传、前情提要压缩与失败回退、长期记忆
   存取注入、熔断重置、高危设备二次确认令牌流、/api/health 迁移守望端点。
+- <think> 思维链剥离（brain 工具流程 <think> 包装契约的出口侧）：QQ /onebot
+  发送与 /chat 旧版网页出口都剥除 <think> 块，CQ 发图能力不受影响。
 - 记忆与状态目录一律注入临时目录，不触碰真实 agent_state（identity.json /
   long_term.db 均经 patch 隔离）；TOTP 用固定测试密钥现场生成；mock 全部经
   unittest.mock.patch + addCleanup 自动还原，不向 sys.modules 注入任何伪模块。
@@ -44,6 +50,9 @@ class _MainCase(unittest.TestCase):
         self.mem_web = os.path.join(self.state_dir, "history_web.json")
         self.mem_qq = os.path.join(self.state_dir, "history_qq.json")
         self.totp_secret = TEST_TOTP_SECRET
+        # 最近设备操作记录：注入临时路径（不存在 → 默认无注入），既隔离
+        # 真实 agent_state，也兜住 /confirm 等真实工具链路产生的设备操作记录
+        self.actions_file = os.path.join(self.tmp, "recent_actions.json")
 
         self.smart_ask = MagicMock(return_value=("测试回复", "🏠 本地"))
         self.napcat = MagicMock()
@@ -57,6 +66,7 @@ class _MainCase(unittest.TestCase):
             ("main.messages_web", [main.SYSTEM_PROMPT]),
             ("main.messages_qq", [main.SYSTEM_PROMPT]),
             ("main.state_manager", state_manager),
+            ("tools.RECENT_ACTIONS_FILE", self.actions_file),
         ]:
             p = patch(target, value)
             p.start()
@@ -94,7 +104,7 @@ class _MainCase(unittest.TestCase):
         return self.client.post("/chat", json={"message": message}, headers=headers)
 
     def napcat_url(self, endpoint):
-        return f"{main.NAPCAT_API_URL}/{endpoint}"
+        return f"{main.ONEBOT_API_URL}/{endpoint}"
 
     def napcat_payload(self):
         return self.napcat.post.call_args[1]["json"]
@@ -209,6 +219,73 @@ class TestWebCqSanitize(_MainCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(self.napcat_payload()["message"], cq_reply)  # 原样透传，零净化
+
+
+class TestThinkStrip(_MainCase):
+    """<think> 思维链包装剥离（brain 工具流程 <think> 包装契约的出口侧）：
+    QQ /onebot 发送与 /chat 旧版网页出口都在发送前剥除 <think> 块
+    （QQ 消息保持干净、旧页无推理卡片渲染器），CQ 码发图能力不受影响。"""
+
+    WRAPPED = "<think>[思考] 先查设备再开灯。</think>已为你打开卧室灯💡"
+
+    def test_qq_reply_strips_think_block(self):
+        self.smart_ask.return_value = (self.WRAPPED, "🏠 本地 (工具)")
+        resp = self.onebot({
+            "post_type": "message", "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "raw_message": "开灯",
+        })
+        self.assertEqual(resp.status_code, 200)
+        # NapCat payload 不含 <think>：QQ 消息保持干净
+        self.assertNotIn("<think>", self.napcat_payload()["message"])
+        self.assertEqual(self.napcat_payload()["message"], "已为你打开卧室灯💡")
+
+    def test_qq_multiline_think_stripped(self):
+        # <think> 块内含换行的多行推理文本同样整块剥除（DOTALL）
+        wrapped = ("<think>[思考] 主人要开灯。\n[计划] 1. 查设备 2. 开灯</think>"
+                   "已为你打开卧室灯💡")
+        self.smart_ask.return_value = (wrapped, "🏠 本地 (工具)")
+        self.onebot({
+            "post_type": "message", "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "raw_message": "开灯",
+        })
+        self.assertEqual(self.napcat_payload()["message"], "已为你打开卧室灯💡")
+
+    def test_qq_reply_keeps_cq_after_think_strip(self):
+        # 剥 think 不误伤 CQ 码：/send_image 等随回复链路的发图能力保持
+        self.smart_ask.return_value = (
+            "<think>[思考] 发个图。</think>[CQ:image,file=file:///ws/表情包.jpg]",
+            "🏠 本地")
+        self.onebot({
+            "post_type": "message", "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "raw_message": "来个表情",
+        })
+        self.assertEqual(self.napcat_payload()["message"],
+                         "[CQ:image,file=file:///ws/表情包.jpg]")
+
+    def test_chat_reply_strips_think_block(self):
+        # 旧版网页 /chat 出口同样剥除（旧页无卡片渲染器）
+        self.smart_ask.return_value = (self.WRAPPED, "🏠 本地 (工具)")
+        resp = self.chat("开灯", key=xiaoju3.WEB_API_KEY)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("<think>", resp.get_json()["reply"])
+        self.assertEqual(resp.get_json()["reply"], "已为你打开卧室灯💡")
+
+    def test_chat_plain_reply_untouched_by_think_strip(self):
+        # 无 think 包装的回复：CQ 净化逻辑照常（face 码仍转 Emoji）
+        self.smart_ask.return_value = ("得意[CQ:face,id=4]你好", "🏠 本地")
+        resp = self.chat("你好", key=xiaoju3.WEB_API_KEY)
+        self.assertEqual(resp.get_json()["reply"], "得意😎你好")
+
+    def test_strip_think_helper(self):
+        self.assertEqual(main._strip_think("<think>a</think>回复"), "回复")
+        self.assertEqual(
+            main._strip_think("<think>[思考] x\n[计划] y</think>好"), "好")
+        self.assertEqual(main._strip_think("无包装回复"), "无包装回复")
+        self.assertEqual(main._strip_think(None), "")
+        self.assertEqual(main._strip_think("<think>只有思考没有正文</think>"), "")
 
 
 class TestOnebotEntry(_MainCase):
@@ -338,6 +415,108 @@ class TestOnebotEntry(_MainCase):
         self.napcat.post.assert_not_called()
 
 
+class TestOnebotLLOneBotTolerance(_MainCase):
+    """LLOneBot 兼容容错（/onebot）：raw_message 缺失时从 OneBot 11 消息段
+    数组重建文本（at/image 段按 CQ 码惯例还原）、post_type 缺失按 message
+    宽容处理、任何字段异常不崩、发送失败打印 LLOneBot 排查提示。"""
+
+    def test_message_segments_rebuild_text(self):
+        """raw_message 缺失：从消息段数组拼接 type=="text" 段的 data.text。"""
+        resp = self.onebot({
+            "post_type": "message", "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "message": [{"type": "text", "data": {"text": "你好"}}],
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.smart_ask.assert_called_once()
+        args, _ = self.smart_ask.call_args
+        self.assertEqual(args[0], "你好")
+
+    def test_message_string_used_directly(self):
+        """raw_message 缺失且 message 为字符串：直接使用。"""
+        resp = self.onebot({
+            "post_type": "message", "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "message": "字符串消息",
+        })
+        self.assertEqual(resp.status_code, 200)
+        args, _ = self.smart_ask.call_args
+        self.assertEqual(args[0], "字符串消息")
+
+    def test_message_at_segment_restored_triggers_group_reply(self):
+        """at 段还原 [CQ:at,qq=...]：群聊 @ 判定与回复链路保持可用。"""
+        resp = self.onebot({
+            "post_type": "message", "message_type": "group",
+            "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+            "message": [{"type": "at", "data": {"qq": "10000"}},
+                        {"type": "text", "data": {"text": " 在吗"}}],
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+        self.assertEqual(self.napcat.post.call_args[0][0],
+                         self.napcat_url("send_group_msg"))
+
+    def test_message_at_other_user_without_raw_message_ignored(self):
+        """还原后的 at 段指向他人：群聊防刷屏过滤仍然生效。"""
+        resp = self.onebot({
+            "post_type": "message", "message_type": "group",
+            "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+            "message": [{"type": "at", "data": {"qq": "999"}},
+                        {"type": "text", "data": {"text": " 你好"}}],
+        })
+        self.smart_ask.assert_not_called()
+        self.napcat.post.assert_not_called()
+
+    def test_message_image_segment_restored_saves_emoji(self):
+        """image 段还原 [CQ:image,file=...]：非 @ 图片收藏逻辑保持可用。"""
+        with patch("main.save_emoji_link", return_value=True) as save_mock:
+            resp = self.onebot({
+                "post_type": "message", "message_type": "private",
+                "self_id": "10000", "sender": {"user_id": 123},
+                "message": [{"type": "image",
+                             "data": {"file": "https://gchat.qpic.cn/d.jpg"}}],
+            })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        save_mock.assert_called_once_with("https://gchat.qpic.cn/d.jpg")
+        self.smart_ask.assert_not_called()
+
+    def test_missing_post_type_treated_as_message(self):
+        """post_type 缺失：按 message 事件宽容处理（LLOneBot 兼容）。"""
+        resp = self.onebot({
+            "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "raw_message": "你好",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.smart_ask.assert_called_once()
+
+    def test_corrupted_fields_return_ok_without_crash(self):
+        """字段类型损坏（如 sender 为非字典）：不崩，统一返回 ok。"""
+        resp = self.onebot({
+            "post_type": "message", "message_type": "private",
+            "sender": 12345, "raw_message": "你好",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+
+    def test_send_failure_prints_llonebot_hint(self):
+        """发送端点连不上：打印 LLOneBot 排查提示（默认端口 3001），不阻断。"""
+        self.napcat.post.side_effect = RuntimeError("connection refused")
+        with patch("builtins.print") as print_mock:
+            resp = self.onebot({
+                "post_type": "message", "message_type": "private",
+                "self_id": "10000", "sender": {"user_id": 123},
+                "raw_message": "你好",
+            })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        printed = "\n".join(str(c.args[0]) for c in print_mock.call_args_list
+                            if c.args)
+        self.assertIn("无法连接至 OneBot 服务", printed)
+        self.assertIn("LLOneBot", printed)
+        self.assertIn("3001", printed)
+
+
 class TestHandleMessageRouting(_MainCase):
     """handle_message 路由编排：清洗、内置指令。"""
 
@@ -434,8 +613,8 @@ class TestHandleMessageRouting(_MainCase):
         self.assertIn("降级", reply)
         self.assertEqual(self.pm.current_level, "Lv.1")
 
-    def test_lv3_write_file_needs_window_or_credential(self):
-        """窗口内写文件成功用例：激活后写文件仍需逐次动态密码/操作窗口。"""
+    def test_lv3_write_file_directly_succeeds(self):
+        """Lv.3 激活后写文件直接成功（逐次动态密码要求已由用户 2026-09-30 取消）。"""
         self.identity_path()
         self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret)
         ws = self.make_ws()
@@ -446,14 +625,7 @@ class TestHandleMessageRouting(_MainCase):
                                         f"/coder_auth {self.totp_code()}")
             self.assertTrue(reply.startswith("✅"))
             self.assertEqual(self.pm.current_level, "Lv.3")
-            # 激活后直接写文件：仍被"逐次动态密码"门禁拒绝
-            denied = execute_tool("write_file",
-                                  {"filename": "a.txt", "content": "hi"}, self.pm)
-            self.assertTrue(denied.startswith("❌"))
-            # /sudo 开启写操作窗口后：无需凭据即可写入
-            sudo_reply = main.handle_message('web', 'admin', None,
-                                             f"/sudo {self.totp_code()}")
-            self.assertTrue(sudo_reply.startswith("✅"))
+            # 激活后直接写文件：无需 /sudo 窗口或凭据
             ok = execute_tool("write_file",
                               {"filename": "a.txt", "content": "hi"}, self.pm)
             self.assertTrue(ok.startswith("✅"))
@@ -779,6 +951,156 @@ class TestMemoryAndCompression(_MainCase):
             main.handle_message('web', 'admin', None, "你好")
         args, _ = self.smart_ask.call_args
         self.assertEqual(len([m for m in args[1] if m.get("role") == "system"]), 1)
+
+
+class TestClearMemoryCommand(_MainCase):
+    """一键清空记忆（/clear、/reset、清空记忆、重置记忆）：
+    精确匹配触发；内存列表 + 磁盘文件双清（文件置空数组 []）；另一通道不受
+    影响；/reset_fuse 不被 /reset 误吞；清空后旧历史不复活。"""
+
+    CLEAR_REPLY = "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
+    TRIGGERS = ("/clear", "/reset", "清空记忆", "重置记忆")
+
+    def _seed_both(self):
+        """两个通道各预置内存历史与磁盘文件（清空前已有旧记忆）。"""
+        web_old = [main.SYSTEM_PROMPT,
+                   {"role": "user", "content": "网页旧记忆"},
+                   {"role": "assistant", "content": "网页旧回复"}]
+        qq_old = [main.SYSTEM_PROMPT,
+                  {"role": "user", "content": "QQ旧记忆"},
+                  {"role": "assistant", "content": "QQ旧回复"}]
+        for attr, seeded in (("main.messages_web", list(web_old)),
+                             ("main.messages_qq", list(qq_old))):
+            p = patch(attr, seeded)
+            p.start()
+            self.addCleanup(p.stop)
+        brain.save_memory(web_old[1:], self.mem_web)
+        brain.save_memory(qq_old[1:], self.mem_qq)
+
+    def test_each_trigger_clears_web_channel_and_replies(self):
+        """四个触发词（web 通道）：返回指定文案，内存+文件双清，QQ 通道不受影响。"""
+        for word in self.TRIGGERS:
+            with self.subTest(trigger=word):
+                self._seed_both()
+                reply = main.handle_message('web', 'admin', None, word)
+                self.assertEqual(reply, self.CLEAR_REPLY)
+                self.assertEqual(main.messages_web, [main.SYSTEM_PROMPT])
+                with open(self.mem_web, encoding="utf-8") as f:
+                    self.assertEqual(json.load(f), [])
+                self.assertIn({"role": "user", "content": "QQ旧记忆"},
+                              main.messages_qq)
+                with open(self.mem_qq, encoding="utf-8") as f:
+                    self.assertIn("QQ旧记忆", f.read())
+                self.smart_ask.assert_not_called()
+
+    def test_each_trigger_clears_qq_channel_and_replies(self):
+        """四个触发词（QQ 私聊通道）：双清 QQ 记忆，网页通道不受影响。"""
+        for word in self.TRIGGERS:
+            with self.subTest(trigger=word):
+                self._seed_both()
+                reply = main.handle_message('qq', 10001, None, word)
+                self.assertEqual(reply, self.CLEAR_REPLY)
+                self.assertEqual(main.messages_qq, [main.SYSTEM_PROMPT])
+                with open(self.mem_qq, encoding="utf-8") as f:
+                    self.assertEqual(json.load(f), [])
+                with open(self.mem_web, encoding="utf-8") as f:
+                    self.assertIn("网页旧记忆", f.read())
+
+    def test_reset_fuse_not_swallowed_by_reset(self):
+        """/reset 存在后 /reset_fuse 仍正常工作，且不清空记忆。"""
+        self._seed_both()
+        self.pm.current_level = "Lv.2"
+        with patch("main.reset_tool_fuse") as reset_mock:
+            reply = main.handle_message('web', 'admin', None, "/reset_fuse")
+        self.assertTrue(reply.startswith("✅ 防死循环熔断"))
+        reset_mock.assert_called_once_with()
+        self.assertIn({"role": "user", "content": "网页旧记忆"}, main.messages_web)
+        with open(self.mem_web, encoding="utf-8") as f:
+            self.assertIn("网页旧记忆", f.read())
+
+    def test_memory_does_not_revive_after_clear(self):
+        """内存确实被清空：清空后再发消息，落盘文件不复活旧历史。"""
+        self._seed_both()
+        main.handle_message('web', 'admin', None, "清空记忆")
+        self.assertEqual(main.messages_web, [main.SYSTEM_PROMPT])
+        main.handle_message('web', 'admin', None, "这是新的开始")
+        with open(self.mem_web, encoding="utf-8") as f:
+            hist = json.load(f)
+        self.assertEqual([m["content"] for m in hist],
+                         ["这是新的开始", "测试回复"])
+        contents = [m.get("content") or "" for m in main.messages_web]
+        self.assertNotIn("网页旧记忆", contents)
+        self.assertEqual(main.messages_web[0], main.SYSTEM_PROMPT)
+
+    def test_normal_sentence_containing_words_not_cleared(self):
+        """精确匹配口径：含"清空记忆"的普通问句不触发清空，照常走大脑。"""
+        self._seed_both()
+        reply = main.handle_message('web', 'admin', None, "怎么清空记忆")
+        self.smart_ask.assert_called_once()
+        self.assertNotEqual(reply, self.CLEAR_REPLY)
+        self.assertIn({"role": "user", "content": "怎么清空记忆"},
+                      main.messages_web)
+
+
+class TestRecentActionsInjection(_MainCase):
+    """最近设备操作记录注入（指代消解上下文）：QQ/网页通道均注入、
+    空记录不注入、损坏记录不炸主链路、注入块紧跟置顶系统提示词。"""
+
+    def _seed_actions(self, details):
+        """向 tmp 记录文件预置设备操作（与 tools.record_recent_action 同构）。"""
+        entries = [{"ts": "2026-09-30 12:00:00", "tool": "control_ha_device",
+                    "detail": d} for d in details]
+        with open(self.actions_file, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False)
+
+    def _action_blocks(self):
+        args, _ = self.smart_ask.call_args
+        return [m for m in args[1]
+                if m.get("role") == "system"
+                and (m.get("content") or "").startswith("以下是最近的设备操作记录")]
+
+    def test_web_channel_injects_recent_actions(self):
+        self._seed_actions(["control_ha_device: light.living → turn_on"])
+        main.handle_message('web', 'admin', None, "把它关了")
+        blocks = self._action_blocks()
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("control_ha_device: light.living → turn_on",
+                      blocks[0]["content"])
+        self.smart_ask.assert_called_once()
+
+    def test_qq_channel_injects_recent_actions(self):
+        self._seed_actions(["adb_tap: 点击 (10, 20)"])
+        main.handle_message('qq', 1, None, "再点一次")
+        blocks = self._action_blocks()
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("adb_tap: 点击 (10, 20)", blocks[0]["content"])
+
+    def test_empty_records_no_injection(self):
+        # 记录文件不存在（夹具默认）→ 不注入，只有置顶系统提示词
+        self.assertFalse(os.path.exists(self.actions_file))
+        main.handle_message('web', 'admin', None, "你好")
+        args, _ = self.smart_ask.call_args
+        systems = [m for m in args[1] if m.get("role") == "system"]
+        self.assertEqual(systems, [main.SYSTEM_PROMPT])
+
+    def test_corrupted_records_no_injection_and_no_crash(self):
+        with open(self.actions_file, "w", encoding="utf-8") as f:
+            f.write("corrupted!")
+        main.handle_message('web', 'admin', None, "你好")
+        args, _ = self.smart_ask.call_args
+        self.assertEqual([m for m in args[1] if m.get("role") == "system"],
+                         [main.SYSTEM_PROMPT])
+        self.assertEqual(args[0], "你好")   # 主链路照常走到 smart_ask
+
+    def test_injection_block_sits_right_after_system_prompt(self):
+        self._seed_actions(["control_ha_device: light.a → turn_off"])
+        main.state_manager.save_memory("user", "用户喜欢蓝色")
+        main.handle_message('web', 'admin', None, "关掉它")
+        args, _ = self.smart_ask.call_args
+        hist = args[1]
+        self.assertEqual(hist[0], main.SYSTEM_PROMPT)
+        self.assertTrue(hist[1]["content"].startswith("以下是最近的设备操作记录"))
+        self.assertIn("长期记忆", hist[2]["content"])   # 长期记忆块次序不被破坏
 
 
 class TestDangerConfirmFlow(_MainCase):

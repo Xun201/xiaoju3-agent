@@ -2,14 +2,36 @@
 """adb_tools / android_ui_tools / vision_tools 单元测试：全离线。
 
 subprocess 与网络全部 mock：ADB 三原语命令行组装、uiautomator XML 解析
-（text 命中 / content-desc 命中 / 找不到 / 中心点计算）、视觉流程
-（未配置提示串、坐标解析与换算、tap 调用）。
+（text 命中 / content-desc 命中 / 找不到 / 中心点计算）、exec-out 单次
+往返导出（噪声剥离 / 失败回退旧 dump+pull 两步法）、视觉流程（未配置
+提示串、坐标解析与换算、tap 调用）、视觉端点动态解析（旧环境变量
+VISION_URL 向后兼容覆盖 / 新配置 VISION_API_URL 拼 /chat/completions，
+防双段丢段）与请求失败诊断（403/404 鉴权与模型错误的中文诊断块与
+错误串指引、密钥脱敏；超时/连接重置等网络类失败默认不重试，控制台
+仅一行简短提示、返回简短文案，重试骨架在调大 MAX_RETRIES 后可用；
+404 模型不存在自动回退备用模型链——中途切换成功 / 全部耗尽诊断 /
+403 不回退；中文屏幕友好提示词结构与全 -1 未找到约定；多格式坐标
+解析容错 _extract_click_point（2026-10-01 用户指令：实测返回
+{"x1": [69, 514, 312, 547]} 值为数组也能解析，另兼容 bounds 数组 /
+直接 x+y / 标准框，畸形输入返回"未能识别"不崩溃）；解析前清洗链
+_clean_json_candidates（markdown ```json 围栏剥离 / 纯数字引号串剥
+引号 / 缺 "y" 键补键，针对用户实测 ```json 包裹的 {"x": 246, "531"}）
+与解析失败时控制台两行 ⚠️ 诊断（原始返回内容 / 清洗后的 JSON 候选，
+截断 300）；提示词禁代码块包裹与数字不加引号两条新约束；模型名预检
+（VISION_MODEL 不含 vl 打一行 ⚠️ 警告但不阻断调用，含 vl/大小写混写
+不警告）与全 -1 未找到串附加兜底排查引导（2026-10-01 用户指令）；
+.env.example 的 VISION_MODEL 默认值 qwen-vl-max-latest 与"带 VL"
+注释存在。
 """
+import contextlib
 import importlib.util
+import io
 import os
 import sys
 import unittest
 from unittest import mock
+
+import requests
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -32,6 +54,7 @@ _ensure_real_modules("adb_tools", "android_ui_tools", "vision_tools")
 
 import adb_tools
 import android_ui_tools
+import openai
 import vision_tools
 
 
@@ -154,11 +177,46 @@ class UiXmlParsingTests(unittest.TestCase):
         self.assertIsNone(android_ui_tools.parse_bounds(None))
 
 
+class StripXmlNoiseTests(unittest.TestCase):
+    """exec-out 输出噪声剥离：首个 '<?xml' / '<?' 之前的内容一律截断。"""
+
+    def test_strip_log_line_before_xml_declaration(self):
+        # 典型噪声：设备把 "UI hierchary dumped to: ..." 一并打到 stdout
+        noisy = ("UI hierchary dumped to: [/dev/tty]\r\n"
+                 '<?xml version=\'1.0\' encoding="UTF-8"?><hierarchy/>')
+        self.assertEqual(android_ui_tools.strip_xml_noise(noisy),
+                         '<?xml version=\'1.0\' encoding="UTF-8"?><hierarchy/>')
+
+    def test_strip_generic_declaration_marker(self):
+        # 无 '<?xml' 完整声明时回退按 '<?' 定位（声明被设备截断的情形）
+        noisy = "UI hierchary dumped to: [/dev/tty]\r\n<?"
+        self.assertEqual(android_ui_tools.strip_xml_noise(noisy), "<?")
+
+    def test_strip_bom_prefix_before_declaration(self):
+        # 编码前缀（如误解码的 UTF-8 BOM）夹在声明之前 → 截断至 '<?xml'
+        noisy = "\xef\xbb\xbf<?xml version='1.0'?><hierarchy/>"
+        self.assertEqual(android_ui_tools.strip_xml_noise(noisy),
+                         "<?xml version='1.0'?><hierarchy/>")
+
+    def test_clean_output_unchanged(self):
+        self.assertEqual(android_ui_tools.strip_xml_noise(SAMPLE_UI_XML), SAMPLE_UI_XML)
+
+    def test_no_declaration_unchanged(self):
+        # 部分设备直接吐 <hierarchy> 开头（无声明）→ 不截断
+        xml = '<hierarchy><node text="A" bounds="[0,0][1,1]"/></hierarchy>'
+        self.assertEqual(android_ui_tools.strip_xml_noise(xml), xml)
+
+    def test_empty_and_none(self):
+        self.assertEqual(android_ui_tools.strip_xml_noise(""), "")
+        self.assertIsNone(android_ui_tools.strip_xml_noise(None))
+
+
 class UiTapElementTests(unittest.TestCase):
-    """ui_tap_element 集成路径：dump/pull 命令组装 + 定位 + adb_tap。"""
+    """ui_tap_element 集成路径：exec-out 单次往返（优先）+ 失败回退旧
+    dump/pull 两步法 + 定位 + adb_tap。"""
 
     def setUp(self):
-        # 预置本地 dump 文件（subprocess 被 mock，dump/pull 不真跑）
+        # 预置本地 dump 文件：回退两步法时（subprocess 被 mock）直接读取
         with open(android_ui_tools.LOCAL_DUMP_PATH, "w", encoding="utf-8") as f:
             f.write(SAMPLE_UI_XML)
 
@@ -168,27 +226,76 @@ class UiTapElementTests(unittest.TestCase):
         except OSError:
             pass
 
-    def test_tap_found_element(self):
+    @staticmethod
+    def _exec_out_result(stdout_bytes):
+        """构造 exec-out 成功返回（stdout 为字节流）。"""
+        res = mock.MagicMock()
+        res.stdout = stdout_bytes
+        return res
+
+    def test_tap_found_element_exec_out_single_roundtrip(self):
+        # stdout 带噪声行，验证剥离后仍能定位命中
+        noisy = ("UI hierchary dumped to: [/dev/tty]\r\n".encode("utf-8")
+                 + SAMPLE_UI_XML.encode("utf-8"))
         tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (200, 300)")
-        with mock.patch.object(android_ui_tools.subprocess, "run") as mrun, \
+        with mock.patch.object(android_ui_tools.subprocess, "run",
+                               return_value=self._exec_out_result(noisy)) as mrun, \
              mock.patch.object(android_ui_tools, "adb_tap", tap):
             result = android_ui_tools.ui_tap_element("设置")
 
-        # 命令行组装：dump → pull
-        self.assertEqual(mrun.call_count, 2)
-        dump_cmd = mrun.call_args_list[0].args[0]
-        pull_cmd = mrun.call_args_list[1].args[0]
-        self.assertIn("adb shell uiautomator dump /sdcard/window_dump.xml", dump_cmd)
-        self.assertTrue(pull_cmd.startswith(
-            f"adb pull /sdcard/window_dump.xml {android_ui_tools.LOCAL_DUMP_PATH}"))
+        # 单次往返：仅一条 exec-out 命令，不再 dump+pull 两次通信
+        mrun.assert_called_once_with(
+            android_ui_tools.EXEC_OUT_DUMP_CMD,
+            shell=True, check=True, capture_output=True)
 
         # 命中元素 → bounds 中心点点击
         tap.assert_called_once_with(200, 300)
         self.assertEqual(result, "✅ 已模拟点击坐标: (200, 300)")
 
+    def test_exec_out_failure_falls_back_to_dump_pull(self):
+        # exec-out 返回码非 0 → 自动回退旧版 dump+pull 两步法
+        import subprocess as sp
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (200, 300)")
+        with mock.patch.object(android_ui_tools.subprocess, "run",
+                               side_effect=[sp.CalledProcessError(1, "adb"),
+                                            mock.MagicMock(), mock.MagicMock()]) as mrun, \
+             mock.patch.object(android_ui_tools, "adb_tap", tap):
+            result = android_ui_tools.ui_tap_element("设置")
+
+        # 首条 exec-out 失败 → 第 2/3 条为旧 dump 与 pull 命令
+        self.assertEqual(mrun.call_count, 3)
+        self.assertEqual(mrun.call_args_list[0].args[0],
+                         android_ui_tools.EXEC_OUT_DUMP_CMD)
+        self.assertIn("adb shell uiautomator dump /sdcard/window_dump.xml",
+                      mrun.call_args_list[1].args[0])
+        self.assertTrue(mrun.call_args_list[2].args[0].startswith(
+            f"adb pull /sdcard/window_dump.xml {android_ui_tools.LOCAL_DUMP_PATH}"))
+
+        # 回退后功能不退化：仍能定位并点击
+        tap.assert_called_once_with(200, 300)
+        self.assertEqual(result, "✅ 已模拟点击坐标: (200, 300)")
+
+    def test_exec_out_without_xml_falls_back_to_dump_pull(self):
+        # exec-out 返回 0 但 stdout 无 XML（设备报错串）→ 同样回退两步法
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (200, 300)")
+        no_xml = self._exec_out_result(b"ERROR: could not get idle state.")
+        with mock.patch.object(android_ui_tools.subprocess, "run",
+                               side_effect=[no_xml, mock.MagicMock(),
+                                            mock.MagicMock()]) as mrun, \
+             mock.patch.object(android_ui_tools, "adb_tap", tap):
+            result = android_ui_tools.ui_tap_element("设置")
+
+        self.assertEqual(mrun.call_count, 3)
+        self.assertIn("adb shell uiautomator dump", mrun.call_args_list[1].args[0])
+        self.assertIn("adb pull", mrun.call_args_list[2].args[0])
+        tap.assert_called_once_with(200, 300)
+        self.assertEqual(result, "✅ 已模拟点击坐标: (200, 300)")
+
     def test_tap_element_not_found(self):
         tap = mock.MagicMock()
-        with mock.patch.object(android_ui_tools.subprocess, "run"), \
+        with mock.patch.object(android_ui_tools.subprocess, "run",
+                               return_value=self._exec_out_result(
+                                   SAMPLE_UI_XML.encode("utf-8"))), \
              mock.patch.object(android_ui_tools, "adb_tap", tap):
             result = android_ui_tools.ui_tap_element("不存在的按钮")
         # 明确失败串（供模型回退 vision_tap_element）
@@ -198,13 +305,17 @@ class UiTapElementTests(unittest.TestCase):
         tap.assert_not_called()
 
     def test_tap_empty_xml(self):
+        # exec-out 空输出 → 回退两步法 → 本地 dump 文件也为空 → 明确失败串
         with open(android_ui_tools.LOCAL_DUMP_PATH, "w", encoding="utf-8") as f:
             f.write("")
-        with mock.patch.object(android_ui_tools.subprocess, "run"):
+        with mock.patch.object(android_ui_tools.subprocess, "run",
+                               side_effect=[self._exec_out_result(b""),
+                                            mock.MagicMock(), mock.MagicMock()]):
             result = android_ui_tools.ui_tap_element("设置")
         self.assertEqual(result, "❌ UI 解析失败：未获取到 XML 数据，请检查手机屏幕是否亮起。")
 
     def test_tap_subprocess_exception_wrapped(self):
+        # exec-out 与回退两步法双双抛异常 → 上层统一包装失败串
         with mock.patch.object(android_ui_tools.subprocess, "run",
                              side_effect=Exception("adb not found")):
             result = android_ui_tools.ui_tap_element("设置")
@@ -222,19 +333,172 @@ def _png_bytes(width, height):
             + b"\x08\x06\x00\x00\x00" + b"\x00" * 8)
 
 
+class ExtractClickPointTests(unittest.TestCase):
+    """_extract_click_point 纯函数：多格式坐标解析容错（2026-10-01
+    用户指令）。背景：视觉模型实测返回 {"x1": [69, 514, 312, 547]}
+    （值是数组）导致旧正则解析报"未能识别出坐标"。"""
+
+    def test_user_reported_array_x1_format(self):
+        # 实测格式：值为数组 → 按用户口径取前两个元素作为 x 和 y
+        self.assertEqual(
+            vision_tools._extract_click_point('{"x1": [69, 514, 312, 547]}'),
+            (69, 514))
+
+    def test_bounds_array_center(self):
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '{"bounds": [100, 200, 300, 400]}'),
+            (200, 300))
+
+    def test_direct_xy(self):
+        self.assertEqual(
+            vision_tools._extract_click_point('{"x": 150, "y": 250}'),
+            (150, 250))
+
+    def test_standard_box_center(self):
+        # 标准框（既有行为保持）：中心点
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '{"x1": 100, "y1": 200, "x2": 300, "y2": 400}'),
+            (200, 300))
+
+    def test_priority_order_bounds_over_xy_over_box(self):
+        # 优先级：bounds 数组 > x1 数组 > 直接 x/y > 标准框
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '{"bounds": [100, 200, 300, 400], "x": 999, "y": 999}'),
+            (200, 300))
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '{"x1": [69, 514, 312, 547], "x": 1, "y": 2}'),
+            (69, 514))
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '{"x": 1, "y": 2, "x1": 10, "y1": 20, "x2": 30, "y2": 40}'),
+            (1, 2))
+
+    def test_numeric_string_and_float_tolerated(self):
+        # 数值容错：数字字符串与 float 均可
+        self.assertEqual(
+            vision_tools._extract_click_point('{"x": "150", "y": "250"}'),
+            (150, 250))
+        self.assertEqual(
+            vision_tools._extract_click_point('{"x": 12.5, "y": 24.5}'),
+            (12.5, 24.5))
+
+    def test_not_found_signals_parse_to_minus_one(self):
+        # 各格式的全 -1 均解析为 (-1, -1)，由调用方统一识别为"未找到"
+        self.assertEqual(
+            vision_tools._extract_click_point('{"x": -1, "y": -1}'),
+            (-1, -1))
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '{"x1": -1, "y1": -1, "x2": -1, "y2": -1}'),
+            (-1, -1))
+
+    def test_prose_wrapped_json(self):
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '好的，要点击的坐标是 {"x": 150, "y": 250}，请查收。'),
+            (150, 250))
+
+    def test_user_reported_json_fence_with_missing_y_key(self):
+        # 用户实测原串（2026-10-01）：```json 包裹 + {"x": 246, "531"}
+        # 缺 "y" 键且数字带引号 → 围栏剥离 + 剥引号 + 补键后解析 (246, 531)
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '```json\n{"x": 246, "531"}\n```'),
+            (246, 531))
+        # 行内围栏（首尾 ```json / ```）同样剥离
+        self.assertEqual(
+            vision_tools._extract_click_point(
+                '看这里 ```json {"x": 1, "531"} ``` 完毕'),
+            (1, 531))
+        # 无围栏的裸数字缺 y 键形态（{"x": 246, 531}）同样修复
+        self.assertEqual(
+            vision_tools._extract_click_point('{"x": 246, 531}'),
+            (246, 531))
+        # 引号数字 + 缺 y 键：引号形态先剥引号再补键
+        self.assertEqual(
+            vision_tools._extract_click_point('{"x": "246", "531"}'),
+            (246, 531))
+
+    def test_clean_json_candidates_shared_by_parser_and_diagnostics(self):
+        # 清洗函数（解析与诊断共用）：合法片段原样保留、畸形片段修复、
+        # 修复无效保持原貌、空/非 str/无花括号返回空列表
+        self.assertEqual(
+            vision_tools._clean_json_candidates(
+                '```json\n{"x": 246, "531"}\n```'),
+            ['{"x": 246, "y": 531}'])
+        self.assertEqual(
+            vision_tools._clean_json_candidates('{"x": 150, "y": 250}'),
+            ['{"x": 150, "y": 250}'])
+        self.assertEqual(
+            vision_tools._clean_json_candidates('{"x1": oops}'),
+            ['{"x1": oops}'])
+        self.assertEqual(vision_tools._clean_json_candidates(''), [])
+        self.assertEqual(vision_tools._clean_json_candidates(None), [])
+        self.assertEqual(
+            vision_tools._clean_json_candidates('抱歉，找不到。'), [])
+
+    def test_quoted_non_numeric_string_untouched(self):
+        # 剥引号只针对纯数字引号串：含其他字符的字符串不碰（"12a" 原样
+        # 保留 → x 非法 → 整体仍解析失败返回 None）
+        self.assertIsNone(
+            vision_tools._extract_click_point('{"x": "12a", "531"}'))
+
+    def test_malformed_inputs_return_none(self):
+        # 数组元素不足 / 非数字 / 空 JSON / 畸形 JSON / 无 JSON → None 不崩溃
+        self.assertIsNone(
+            vision_tools._extract_click_point('{"x1": [69]}'))   # 仅 1 个元素
+        self.assertIsNone(
+            vision_tools._extract_click_point('{"x1": []}'))
+        self.assertIsNone(
+            vision_tools._extract_click_point('{"x1": ["a", "b"]}'))
+        self.assertIsNone(
+            vision_tools._extract_click_point('{"x": "abc", "y": 1}'))
+        self.assertIsNone(vision_tools._extract_click_point('{}'))  # 空 JSON
+        self.assertIsNone(
+            vision_tools._extract_click_point('{"x1": 100, "y1": 200'))  # 截断
+        self.assertIsNone(
+            vision_tools._extract_click_point('{"x1": oops}'))  # 非法 JSON
+        self.assertIsNone(
+            vision_tools._extract_click_point('抱歉，我找不到这个图标。'))
+        self.assertIsNone(vision_tools._extract_click_point(''))
+        self.assertIsNone(vision_tools._extract_click_point(None))
+
+
 class VisionToolsTests(unittest.TestCase):
-    """vision_tap_element：未配置提示串、坐标解析换算、tap 调用。"""
+    """vision_tap_element：未配置提示串、坐标解析换算（多格式容错：
+    标准框 / bounds 数组 / 实测 x1 数组值 / 直接 x+y）、tap 调用、
+    SDK 快速失败（默认不重试）、403 诊断与 404 备用模型自动回退链
+    （诊断块只进控制台、返回串极简不带指引，2026-09-30 用户指令）、
+    中文屏幕友好提示词结构与全 -1 未找到约定（含附加兜底排查引导）、
+    模型名预检警告（不含 vl 打一行 ⚠️ 但不阻断）。"""
 
     def setUp(self):
         self._old_model = vision_tools.VISION_MODEL
         self._old_key = vision_tools.VISION_KEY
+        self._old_api_url = vision_tools.VISION_API_URL
         vision_tools.VISION_MODEL = "qwen-vl-test"
         vision_tools.VISION_KEY = "test-vision-key"
+        # 统一 patch 新配置 base（与生产形态一致：已含 /compatible-mode/v1）
+        vision_tools.VISION_API_URL = "https://vision.test/compatible-mode/v1"
+        # 环境变量快照：清除宿主机旧 VISION_URL，防止污染端点解析
+        self._env_patcher = mock.patch.dict(os.environ)
+        self._env_patcher.start()
+        os.environ.pop("VISION_URL", None)
+        # 重试退避不真等：patch 掉 time.sleep 并记录调用序列
+        self._sleep_patch = mock.patch.object(vision_tools.time, "sleep")
+        self._sleep = self._sleep_patch.start()   # start() 返回 mock 本体
         self._screenshot_exists = False
 
     def tearDown(self):
+        self._sleep_patch.stop()
+        self._env_patcher.stop()
         vision_tools.VISION_MODEL = self._old_model
         vision_tools.VISION_KEY = self._old_key
+        vision_tools.VISION_API_URL = self._old_api_url
         try:
             os.remove(vision_tools.SCREENSHOT_PATH)
         except OSError:
@@ -244,11 +508,24 @@ class VisionToolsTests(unittest.TestCase):
         with open(vision_tools.SCREENSHOT_PATH, "wb") as f:
             f.write(_png_bytes(width, height))
 
-    def _mock_post(self, content):
-        resp = mock.MagicMock()
-        resp.json.return_value = {
-            "choices": [{"message": {"content": content}}]}
-        return resp
+    def _patch_client(self, content=None, side_effect=None):
+        """构造假 OpenAI SDK：_OpenAIClient(...) 返回 fake 客户端，
+        chat.completions.create 按需返回 content 或抛 side_effect 序列。
+        返回 (create 的 mock, 客户端类的 mock) 供断言。"""
+        fake_client = mock.MagicMock()
+        create = fake_client.chat.completions.create
+        if side_effect is not None:
+            create.side_effect = side_effect
+        else:
+            resp = mock.MagicMock()
+            resp.choices = [mock.MagicMock()]
+            resp.choices[0].message.content = content
+            create.return_value = resp
+        cls_patch = mock.patch.object(vision_tools, "_OpenAIClient",
+                                      return_value=fake_client)
+        cls_mock = cls_patch.start()   # start() 返回替换用的 mock 本体
+        self.addCleanup(cls_mock.stop)
+        return create, cls_mock
 
     def test_unconfigured_key_hint(self):
         vision_tools.VISION_KEY = ""
@@ -261,6 +538,51 @@ class VisionToolsTests(unittest.TestCase):
         self.assertEqual(
             vision_tools.vision_tap_element("设置"),
             "❌ 未配置视觉模型 VISION_MODEL，无法使用视觉点击功能。")
+
+    def test_non_vl_model_name_warns_but_proceeds(self):
+        # 模型名预检（2026-10-01 用户指令）：纯文本模型名（不含 vl）填入
+        # VISION_MODEL → 请求前打印一行 ⚠️ 警告；只警告不阻断，调用照常
+        # 走完（背景：qwen3.5-122b-a10b 误填导致一直"未找到"）
+        self._write_screenshot(width=1080, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (150, 250)")
+        create, _cls = self._patch_client(content='{"x": 150, "y": 250}')
+        buf = io.StringIO()
+        vision_tools.VISION_MODEL = "qwen3.5-122b-a10b"
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("设置")
+        out = buf.getvalue()
+        # 警告恰好一行进控制台，含推荐模型名
+        self.assertEqual(out.count("⚠️ 警告：当前模型可能不支持视觉"), 1)
+        self.assertIn("推荐使用 qwen-vl-max-latest 或 qwen-vl-plus", out)
+        # 不阻断：请求仍按配置模型发出并完成整个点击流程
+        self.assertEqual(create.call_count, 1)
+        self.assertEqual(create.call_args.kwargs["model"],
+                         "qwen3.5-122b-a10b")
+        tap.assert_called_once_with(150, 250)
+        self.assertEqual(result, "✅ 已模拟点击坐标: (150, 250)")
+
+    def test_vl_model_name_no_warning(self):
+        # 名字含 vl（大小写不敏感）不触发预检警告
+        self._write_screenshot()
+        self._patch_client(content='{"x1": 0, "y1": 0, "x2": 10, "y2": 10}')
+        for model in ("qwen-vl-test", "Qwen-VL-Plus"):
+            vision_tools.VISION_MODEL = model
+            buf = io.StringIO()
+            with mock.patch.object(vision_tools, "adb_screenshot",
+                                   return_value="✅"), \
+                 mock.patch.object(vision_tools, "adb_tap",
+                                   mock.MagicMock()), \
+                 mock.patch.object(vision_tools.subprocess, "run",
+                                   return_value=mock.MagicMock(
+                                       stdout="Physical size: 1080x2400")), \
+                 contextlib.redirect_stdout(buf):
+                vision_tools.vision_tap_element("设置")
+            self.assertNotIn("⚠️ 警告：当前模型可能不支持视觉",
+                             buf.getvalue())
 
     def test_screenshot_failure_propagates(self):
         with mock.patch.object(vision_tools, "adb_screenshot",
@@ -281,26 +603,396 @@ class VisionToolsTests(unittest.TestCase):
         wm_size = mock.MagicMock(stdout="Physical size: 1080x2400")
 
         content = '好的，元素位置是 {"x1": 100, "y1": 200, "x2": 300, "y2": 400} 请查收'
+        create, cls_mock = self._patch_client(content=content)
         with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅ 截图完成"), \
              mock.patch.object(vision_tools, "adb_tap", tap), \
-             mock.patch.object(vision_tools.subprocess, "run", return_value=wm_size), \
-             mock.patch.object(vision_tools.requests, "post",
-                             return_value=self._mock_post(content)) as mpost:
+             mock.patch.object(vision_tools.subprocess, "run", return_value=wm_size):
             result = vision_tools.vision_tap_element("设置")
 
         # 框中心 (200,300) ÷ 0.5 → 真实坐标 (400,600)，无裁剪偏移
         tap.assert_called_once_with(400, 600)
         self.assertEqual(result, "✅ 已模拟点击坐标: (400, 600)")
 
-        # 请求组装：OpenAI 兼容 chat/completions + Bearer + base64 PNG + 模型名
-        kwargs = mpost.call_args.kwargs
-        self.assertEqual(kwargs["headers"]["Authorization"],
-                         f"Bearer {vision_tools.VISION_KEY}")
-        self.assertEqual(kwargs["json"]["model"], vision_tools.VISION_MODEL)
-        user_content = kwargs["json"]["messages"][0]["content"]
+        # SDK 客户端：base_url 不含 /chat/completions（客户端自动追加）、
+        # api_key 与 5 秒快速超时正确传入
+        cls_mock.assert_called_once_with(
+            api_key="test-vision-key",
+            base_url="https://vision.test/compatible-mode/v1",
+            timeout=5.0)
+
+        # 请求组装：模型名 + OpenAI 兼容消息（文本 + base64 PNG）
+        kwargs = create.call_args.kwargs
+        self.assertEqual(kwargs["model"], vision_tools.VISION_MODEL)
+        self.assertEqual(kwargs["temperature"], 0.1)
+        user_content = kwargs["messages"][0]["content"]
         self.assertIn("【设置】", user_content[0]["text"])
         image_url = user_content[1]["image_url"]["url"]
         self.assertTrue(image_url.startswith("data:image/png;base64,"))
+
+    def test_full_flow_user_reported_array_format_taps_first_two(self):
+        # 用户实测格式 {"x1": [69, 514, 312, 547]}：前两个元素作为点击点
+        # (69, 514)，缩放比 0.5 换算 → (138, 1028)（旧解析对此报"未能识别"）
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (138, 1028)")
+        self._patch_client(content='{"x1": [69, 514, 312, 547]}')
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               return_value="✅ 截图完成"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+        tap.assert_called_once_with(138, 1028)
+        self.assertEqual(result, "✅ 已模拟点击坐标: (138, 1028)")
+
+    def test_full_flow_user_reported_fence_missing_y_taps_scaled(self):
+        # 用户实测原串（```json 围栏 + {"x": 246, "531"}）：清洗修复 →
+        # (246, 531)，缩放比 0.5 换算 → (492, 1062)
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (492, 1062)")
+        self._patch_client(content='```json\n{"x": 246, "531"}\n```')
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               return_value="✅ 截图完成"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+        tap.assert_called_once_with(492, 1062)
+        self.assertEqual(result, "✅ 已模拟点击坐标: (492, 1062)")
+
+    def test_full_flow_bounds_array_taps_center(self):
+        # {"bounds": [100, 200, 300, 400]} → 中心 (200, 300)，缩放 0.5
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (400, 600)")
+        self._patch_client(content='{"bounds": [100, 200, 300, 400]}')
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               return_value="✅ 截图完成"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+        tap.assert_called_once_with(400, 600)
+
+    def test_full_flow_direct_xy_taps_directly(self):
+        # {"x": 150, "y": 250} → 直接作为点击点（截图与屏幕等宽 → 缩放比 1.0）
+        self._write_screenshot(width=1080, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (150, 250)")
+        self._patch_client(content='{"x": 150, "y": 250}')
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               return_value="✅ 截图完成"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+        tap.assert_called_once_with(150, 250)
+        self.assertEqual(result, "✅ 已模拟点击坐标: (150, 250)")
+
+    def test_direct_minus_one_xy_reports_not_found(self):
+        # 提示词新约定：找不到输出 {"x": -1, "y": -1} → 明确未找到文案，
+        # 不换算、不点击
+        self._write_screenshot()
+        tap = mock.MagicMock()
+        self._patch_client(content='{"x": -1, "y": -1}')
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+        # 未找到串后附加兜底排查引导（2026-10-01 用户指令：亮屏/页面 +
+        # VISION_MODEL 模型配置两手排查）
+        self.assertEqual(
+            result,
+            "❌ 视觉模型在屏幕上未找到【设置】。 ⚠️ 请确认手机屏幕已亮屏"
+            "且停留在目标页面，同时确认 .env 中的 VISION_MODEL 是真正的"
+            "视觉模型（如 qwen-vl-max-latest）")
+        tap.assert_not_called()
+
+    def test_malformed_array_content_reports_unrecognized(self):
+        # 数组值格式但元素不足（{"x1": [69]}）→ "未能识别" 文案，不崩溃
+        self._write_screenshot()
+        tap = mock.MagicMock()
+        self._patch_client(content='{"x1": [69]}')
+        with mock.patch.object(vision_tools, "adb_screenshot",
+                               return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+        self.assertTrue(
+            result.startswith("❌ 视觉模型未能识别出坐标。回复内容："))
+        tap.assert_not_called()
+
+    def test_endpoint_join_no_double_or_lost_segment(self):
+        # base 末尾带 / → rstrip 后拼接防双斜杠；/compatible-mode/v1 段不丢
+        vision_tools.VISION_API_URL = "https://vision.test/compatible-mode/v1/"
+        self.assertEqual(
+            vision_tools._vision_endpoint(),
+            "https://vision.test/compatible-mode/v1/chat/completions")
+        vision_tools.VISION_API_URL = "https://vision.test/compatible-mode/v1"
+        self.assertEqual(
+            vision_tools._vision_endpoint(),
+            "https://vision.test/compatible-mode/v1/chat/completions")
+
+    def test_endpoint_already_full_not_duplicated(self):
+        # base 被误填成完整端点 → 防双段：不再追加 /chat/completions
+        vision_tools.VISION_API_URL = (
+            "https://vision.test/compatible-mode/v1/chat/completions")
+        self.assertEqual(
+            vision_tools._vision_endpoint(),
+            "https://vision.test/compatible-mode/v1/chat/completions")
+
+    def test_client_base_url_strips_endpoint_suffix(self):
+        # SDK base_url 必须剥掉 /chat/completions 尾段（客户端自己追加）
+        vision_tools.VISION_API_URL = "https://vision.test/compatible-mode/v1"
+        self.assertEqual(vision_tools._client_base_url(),
+                         "https://vision.test/compatible-mode/v1")
+        vision_tools.VISION_API_URL = (
+            "https://vision.test/compatible-mode/v1/chat/completions")
+        self.assertEqual(vision_tools._client_base_url(),
+                         "https://vision.test/compatible-mode/v1")
+
+    def test_legacy_vision_url_env_override(self):
+        # 旧环境变量 VISION_URL（完整端点）向后兼容覆盖，原样使用
+        os.environ["VISION_URL"] = "https://legacy.example/v1/chat/completions"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            endpoint = vision_tools._vision_endpoint()
+        self.assertEqual(endpoint, "https://legacy.example/v1/chat/completions")
+        # 覆盖行为在控制台有 ⚠️ 提示，便于发现残留旧变量遮蔽新域名
+        self.assertIn("VISION_URL", buf.getvalue())
+
+    def _fake_status_error(self, exc_cls, status_code, body):
+        """构造 openai HTTP 状态类异常（403/404 等鉴权与模型错误）。"""
+        return exc_cls(
+            f"{status_code} error",
+            response=mock.MagicMock(status_code=status_code),
+            body=body)
+
+    def test_http_403_diagnostics_reply_short_no_retry(self):
+        # sk-ws- 新版 Key 配了老域名 → 403：返回串极简（无指引），诊断块只进
+        # 控制台；鉴权类错误不重试（create 仅一次）
+        self._write_screenshot()
+        err = self._fake_status_error(
+            openai.PermissionDeniedError, 403,
+            '{"error":{"code":"AccessDenied","message":"InvalidApiKey"}}')
+        buf = io.StringIO()
+        create, _cls = self._patch_client(side_effect=err)
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("设置")
+
+        self.assertEqual(create.call_count, 1)   # 403 不重试
+        # 返回串：只报状态码 + 操作已中止，不带任何排查指引
+        self.assertEqual(result, "❌ 视觉模型调用失败: HTTP 403，操作已中止。")
+        for keyword in ("请检查", "VISION_API_URL", "VISION_KEY", "VISION_MODEL"):
+            self.assertNotIn(keyword, result)
+
+        # 控制台诊断块：完整 URL / 状态码 / 错误摘要 / 脱敏 Key / 排查指引
+        out = buf.getvalue()
+        self.assertIn(
+            "请求 URL: https://vision.test/compatible-mode/v1/chat/completions", out)
+        self.assertIn("HTTP 状态码: 403", out)
+        self.assertIn("响应体摘要:", out)
+        self.assertIn("AccessDenied", out)
+        self.assertIn("test-v****", out)          # 密钥仅显示前 6 位 + 掩码
+        self.assertNotIn("test-vision-key", out)  # 完整 Key 不得入日志
+        self.assertIn("排查指引:", out)
+        self.assertIn("sk-ws- 开头的新版 Key", out)
+
+    def test_http_404_falls_back_to_next_model_succeeds(self):
+        # 404 回退链：第一候选 404 → ⚠️ 切换备用模型 → 第二候选成功
+        self._write_screenshot()
+        err404 = self._fake_status_error(
+            openai.NotFoundError, 404,
+            '{"error":{"code":"model.not_found","message":"Model not found"}}')
+        resp = mock.MagicMock()
+        resp.choices = [mock.MagicMock()]
+        resp.choices[0].message.content = \
+            '{"x1": 100, "y1": 200, "x2": 300, "y2": 400}'
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (400, 600)")
+        buf = io.StringIO()
+        create, _cls = self._patch_client(side_effect=[err404, resp])
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("设置")
+
+        # create 共两次：第一次配置模型，第二次为第一个备用模型
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(
+            create.call_args_list[0].kwargs["model"], vision_tools.VISION_MODEL)
+        self.assertEqual(
+            create.call_args_list[1].kwargs["model"],
+            vision_tools.VISION_FALLBACK_MODELS[0])
+        # ⚠️ 提示同时含失败模型与备用模型名
+        out = buf.getvalue()
+        self.assertIn("⚠️ 模型 qwen-vl-test 不存在（404），"
+                      "自动切换备用模型: qwen-vl-plus", out)
+        # 中途切换成功：无终态诊断块、返回串不带已尝试模型
+        self.assertNotIn("排查指引", out)
+        self.assertNotIn("已尝试模型", out)
+        tap.assert_called_once_with(400, 600)   # 框中心 (200,300) ÷ 0.5
+        self.assertEqual(result, "✅ 已模拟点击坐标: (400, 600)")
+
+    def test_http_404_all_models_exhausted_diagnostics(self):
+        # 全部候选模型均 404：按回退顺序逐个尝试后输出诊断块（含已尝试
+        # 模型列表），返回串保持极简口径（括号内补已尝试模型，无指引）
+        self._write_screenshot()
+        err = self._fake_status_error(
+            openai.NotFoundError, 404,
+            '{"error":{"code":"model.not_found","message":"Model not found"}}')
+        buf = io.StringIO()
+        create, _cls = self._patch_client(side_effect=err)
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("设置")
+
+        candidates = vision_tools._model_candidates()
+        self.assertEqual(create.call_count, len(candidates))
+        self.assertEqual(
+            [call.kwargs["model"] for call in create.call_args_list],
+            candidates)
+        tried = "/".join(candidates)
+        self.assertEqual(
+            result,
+            f"❌ 视觉模型调用失败: HTTP 404，操作已中止。（已尝试模型: {tried}）")
+        self.assertNotIn("请检查", result)          # 返回串仍极简、无指引
+        out = buf.getvalue()
+        self.assertIn("HTTP 状态码: 404", out)
+        self.assertIn("model.not_found", out)
+        self.assertIn(f"已尝试模型: {tried}", out)   # 诊断块列出已尝试模型
+        self.assertIn("排查指引:", out)
+
+    def test_model_candidates_dedup_preserves_order(self):
+        # 尝试序列 = 配置模型 + 备用去重保序；配置模型本身在备用列表中
+        # 时不重复尝试同名模型
+        vision_tools.VISION_MODEL = "qwen-vl-test"
+        self.assertEqual(
+            vision_tools._model_candidates(),
+            ["qwen-vl-test", "qwen-vl-plus", "qwen-vl-max",
+             "qwen-vl-max-latest"])
+        vision_tools.VISION_MODEL = "qwen-vl-max-latest"
+        self.assertEqual(
+            vision_tools._model_candidates(),
+            ["qwen-vl-max-latest", "qwen-vl-plus", "qwen-vl-max"])
+
+    def test_fallback_stops_on_non_404_status_error(self):
+        # 404 切换备用模型后遇 403（Key/域名问题）：换模型无用，不回退、
+        # 立即诊断返回，剩余备用模型不再尝试
+        self._write_screenshot()
+        err404 = self._fake_status_error(
+            openai.NotFoundError, 404,
+            '{"error":{"code":"model.not_found","message":"Model not found"}}')
+        err403 = self._fake_status_error(
+            openai.PermissionDeniedError, 403,
+            '{"error":{"code":"AccessDenied","message":"InvalidApiKey"}}')
+        buf = io.StringIO()
+        create, _cls = self._patch_client(side_effect=[err404, err403])
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("设置")
+
+        self.assertEqual(create.call_count, 2)   # 403 后不再尝试第 3/4 候选
+        self.assertEqual(result, "❌ 视觉模型调用失败: HTTP 403，操作已中止。")
+        self.assertNotIn("已尝试模型", result)
+        self.assertIn("HTTP 状态码: 403", buf.getvalue())  # 403 诊断块进控制台
+
+    def test_timeout_no_retry_short_message(self):
+        # 超时属网络类错误：默认不重试（MAX_RETRIES=0），快速失败不拖慢响应；
+        # 控制台仅一行简短提示，返回简短文案，无大段诊断块
+        self._write_screenshot()
+        err = openai.APITimeoutError(request=mock.MagicMock())
+        buf = io.StringIO()
+        create, _cls = self._patch_client(side_effect=err)
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("设置")
+
+        self.assertEqual(create.call_count, 1)    # 不重试，create 仅调用 1 次
+        self._sleep.assert_not_called()           # 无退避等待
+        self.assertEqual(result, "❌ 视觉模型网络连接失败，操作已中止。")
+        # 返回串极简：无任何指引 / 旧文案残留
+        self.assertNotIn("请检查", result)
+        self.assertNotIn("请稍后重试", result)
+        out = buf.getvalue()
+        # 控制台单行简短提示（含异常自身的简短原因）
+        self.assertEqual(out.count("❌ 视觉模型网络连接失败"), 1)
+        self.assertIn("❌ 视觉模型网络连接失败: Request timed out.", out)
+        # 网络路径不再输出大段诊断块 / 重试提示
+        self.assertNotIn("排查指引", out)
+        self.assertNotIn("请求 URL", out)
+        self.assertNotIn("重试", out)
+        self.assertNotIn("HTTP 状态码", out)
+
+    def test_connection_reset_no_retry_short_message(self):
+        # ConnectionResetError(10054) 属网络类：不重试、一行简短提示、快速失败
+        self._write_screenshot(width=540, height=1200)
+        buf = io.StringIO()
+        create, _cls = self._patch_client(
+            side_effect=ConnectionResetError(10054))
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("设置")
+
+        self.assertEqual(create.call_count, 1)    # 不重试，create 仅调用 1 次
+        self._sleep.assert_not_called()           # 无退避等待
+        self.assertEqual(result, "❌ 视觉模型网络连接失败，操作已中止。")
+        self.assertNotIn("请检查", result)         # 返回串极简，无指引
+        self.assertNotIn("请稍后重试", result)
+        out = buf.getvalue()
+        # 控制台单行简短提示，冒号后带简短原因
+        lines = [ln for ln in out.splitlines()
+                 if "❌ 视觉模型网络连接失败" in ln]
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("❌ 视觉模型网络连接失败: "))
+        self.assertTrue(lines[0].split(":", 1)[1].strip())
+        # 网络路径不输出大段诊断块，且完整 Key 不泄漏
+        self.assertNotIn("排查指引", out)
+        self.assertNotIn("请求 URL", out)
+        self.assertNotIn("HTTP 状态码", out)
+        self.assertNotIn("test-vision-key", out)
+
+    def test_retry_skeleton_restorable_when_constant_raised(self):
+        # 重试循环骨架保留：把 VISION_MAX_RETRIES 调回 1 即恢复"失败后重试
+        # 1 次"行为（指数退避 1s），未来想恢复重试只改常量、无需改代码
+        self._write_screenshot(width=540, height=1200)
+        tap = mock.MagicMock(return_value="✅ 已模拟点击坐标: (400, 600)")
+        content = '{"x1": 100, "y1": 200, "x2": 300, "y2": 400}'
+        resp = mock.MagicMock()
+        resp.choices = [mock.MagicMock()]
+        resp.choices[0].message.content = content
+        create, _cls = self._patch_client(
+            side_effect=[ConnectionResetError(10054), resp])
+        with mock.patch.object(vision_tools, "VISION_MAX_RETRIES", 1), \
+             mock.patch.object(vision_tools, "adb_screenshot",
+                               return_value="✅ 截图完成"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+
+        self.assertEqual(create.call_count, 2)    # 失败 1 次 + 重试成功 1 次
+        self._sleep.assert_called_once_with(1)    # 指数退避第一档 1 秒
+        tap.assert_called_once_with(400, 600)
+        self.assertEqual(result, "✅ 已模拟点击坐标: (400, 600)")
 
     def test_scale_one_when_png_header_missing(self):
         # 非 PNG 头（解析失败）→ 缩放比回退 1.0
@@ -308,46 +1000,156 @@ class VisionToolsTests(unittest.TestCase):
             f.write(b"\x00\x01\x02not-a-png")
         tap = mock.MagicMock(return_value="ok")
         content = '{"x1": 100, "y1": 200, "x2": 300, "y2": 400}'
+        self._patch_client(content=content)
         with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
              mock.patch.object(vision_tools, "adb_tap", tap), \
              mock.patch.object(vision_tools.subprocess, "run",
-                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
-             mock.patch.object(vision_tools.requests, "post",
-                               return_value=self._mock_post(content)):
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
             vision_tools.vision_tap_element("设置")
         tap.assert_called_once_with(200, 300)
 
     def test_model_response_without_choices(self):
         self._write_screenshot()
+        create, _cls = self._patch_client()
         resp = mock.MagicMock()
-        resp.json.return_value = {"error": {"message": "bad request"}}
+        resp.choices = []
+        create.return_value = resp
         with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
              mock.patch.object(vision_tools.subprocess, "run",
-                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
-             mock.patch.object(vision_tools.requests, "post", return_value=resp):
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
             result = vision_tools.vision_tap_element("设置")
         self.assertTrue(result.startswith("❌ 视觉模型返回异常: "))
 
     def test_model_response_without_coordinates(self):
         self._write_screenshot()
+        self._patch_client(content="抱歉，我找不到这个图标。")
         with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
              mock.patch.object(vision_tools.subprocess, "run",
-                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
-             mock.patch.object(vision_tools.requests, "post",
-                             return_value=self._mock_post("抱歉，我找不到这个图标。")):
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
             result = vision_tools.vision_tap_element("设置")
         self.assertEqual(
             result, "❌ 视觉模型未能识别出坐标。回复内容：抱歉，我找不到这个图标。")
 
-    def test_request_exception_wrapped(self):
+    def test_parse_failure_prints_diagnostics(self):
+        # 解析失败诊断（2026-10-01 用户指令）：控制台两行 ⚠️（原始返回
+        # 内容 / 清洗后的 JSON 候选，各截断 300），返回串保持既有口径
         self._write_screenshot()
+        tap = mock.MagicMock()
+        long_content = "前" * 300 + "后" * 100 + ' {"x": "abc"}'
+        self._patch_client(content=long_content)
+        buf = io.StringIO()
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
+            result = vision_tools.vision_tap_element("设置")
+        out = buf.getvalue()
+        self.assertIn("⚠️ [视觉坐标解析失败] 原始返回内容: ", out)
+        self.assertIn("⚠️ [视觉坐标解析失败] 清洗后的 JSON 候选: ", out)
+        # 原始内容截断 300：前 300 字保留，其后内容不进诊断（返回串除外）
+        self.assertIn("前" * 300, out)
+        self.assertNotIn("后" * 100, out)
+        # 候选行给出清洗后的 JSON 候选（{"x": "abc"} 本身合法 → 原样保留）
+        self.assertIn('{"x": "abc"}', out)
+        # 返回串与点击行为不变：既有失败串 + 不点击
+        self.assertTrue(
+            result.startswith("❌ 视觉模型未能识别出坐标。回复内容："))
+        tap.assert_not_called()
+
+    def test_parse_failure_diagnostics_without_candidates(self):
+        # 无任何 JSON 候选（纯 prose 回复）：第二行给占位说明，两行诊断
+        # 仍然齐全
+        self._write_screenshot()
+        self._patch_client(content="抱歉，我找不到这个图标。")
+        buf = io.StringIO()
         with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
              mock.patch.object(vision_tools.subprocess, "run",
-                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")), \
-             mock.patch.object(vision_tools.requests, "post",
-                             side_effect=ConnectionError("network down")):
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")), \
+             contextlib.redirect_stdout(buf):
             result = vision_tools.vision_tap_element("设置")
-        self.assertTrue(result.startswith("❌ 视觉模型调用失败: "))
+        out = buf.getvalue()
+        self.assertIn(
+            "⚠️ [视觉坐标解析失败] 原始返回内容: 抱歉，我找不到这个图标。", out)
+        self.assertIn(
+            "⚠️ [视觉坐标解析失败] 清洗后的 JSON 候选: （无 JSON 候选）", out)
+        self.assertEqual(
+            result, "❌ 视觉模型未能识别出坐标。回复内容：抱歉，我找不到这个图标。")
+
+    def test_minus_one_coords_reports_not_found(self):
+        # 模型按约定输出全 -1（未找到信号）→ 明确失败文案，不换算、不点击
+        self._write_screenshot()
+        tap = mock.MagicMock()
+        self._patch_client(content='{"x1": -1, "y1": -1, "x2": -1, "y2": -1}')
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", tap), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+        # 未找到串后附加兜底排查引导（2026-10-01 用户指令），与上一用例
+        # （直接 x+y 格式）共同覆盖两种全 -1 解析路径
+        self.assertEqual(
+            result,
+            "❌ 视觉模型在屏幕上未找到【设置】。 ⚠️ 请确认手机屏幕已亮屏"
+            "且停留在目标页面，同时确认 .env 中的 VISION_MODEL 是真正的"
+            "视觉模型（如 qwen-vl-max-latest）")
+        tap.assert_not_called()
+
+    def test_prompt_structure_chinese_screen_friendly(self):
+        # 提示词结构（中文屏幕识别友好）：截图语境 + 中文名优先 + 忽略
+        # 状态栏/小组件 + 应用列表/文件夹逐屏排查 + 强制点击点 JSON 输出
+        # （2026-10-01 用户指令）与 {"x": -1, "y": -1} 未找到约定
+        self._write_screenshot()
+        create, _cls = self._patch_client(
+            content='{"x1": 0, "y1": 0, "x2": 10, "y2": 10}')
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", mock.MagicMock()), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
+            vision_tools.vision_tap_element("微信")
+        text = create.call_args.kwargs["messages"][0]["content"][0]["text"]
+        for keyword in ("屏幕截图", "【微信】", "中文名称", "忽略", "状态栏",
+                        "小组件", "应用列表", "文件夹",
+                        "请务必只输出 JSON 格式", "屏幕绝对坐标",
+                        '"x"', '"y"', "-1"):
+            self.assertIn(keyword, text)
+        # 输出格式段统一为新口径：强制 {"x": 数字, "y": 数字}，未找到
+        # 信号改为 {"x": -1, "y": -1}（旧 Bounding Box 指令不再出现）
+        self.assertIn('{"x": 数字, "y": 数字}', text)
+        self.assertIn('{"x": -1, "y": -1}', text)
+        self.assertNotIn('"x1"', text)
+        self.assertNotIn('"y2"', text)
+
+    def test_prompt_forbids_code_fence_and_requires_keyed_numbers(self):
+        # 提示词补强（2026-10-01 用户指令）：直接输出 JSON 本体禁 ```json
+        # 等代码块包裹 + "x"/"y" 每个值必须带键名、数字不加引号（附正例）
+        self._write_screenshot()
+        create, _cls = self._patch_client(
+            content='{"x1": 0, "y1": 0, "x2": 10, "y2": 10}')
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools, "adb_tap", mock.MagicMock()), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(
+                                   stdout="Physical size: 1080x2400")):
+            vision_tools.vision_tap_element("设置")
+        text = create.call_args.kwargs["messages"][0]["content"][0]["text"]
+        self.assertIn("直接输出 JSON 本体", text)
+        self.assertIn("不要用 ```json 等代码块包裹", text)
+        self.assertIn('"x" 与 "y" 每个值都必须带键名', text)
+        self.assertIn("数字不要加引号", text)
+        self.assertIn('{"x": 246, "y": 531}', text)
+
+    def test_generic_exception_wrapped(self):
+        # 非 SDK 分类的未知异常：不重试、原样包装（保持可排查）
+        self._write_screenshot()
+        create, _cls = self._patch_client(side_effect=ValueError("boom"))
+        with mock.patch.object(vision_tools, "adb_screenshot", return_value="✅"), \
+             mock.patch.object(vision_tools.subprocess, "run",
+                               return_value=mock.MagicMock(stdout="Physical size: 1080x2400")):
+            result = vision_tools.vision_tap_element("设置")
+        self.assertEqual(result, "❌ 视觉模型调用失败: boom")
 
     def test_get_screen_size_parses_and_falls_back(self):
         with mock.patch.object(vision_tools.subprocess, "run",
@@ -359,6 +1161,28 @@ class VisionToolsTests(unittest.TestCase):
         with mock.patch.object(vision_tools.subprocess, "run",
                                side_effect=Exception("no adb")):
             self.assertEqual(vision_tools.get_screen_size(), (1080, 2400))
+
+
+class EnvExampleVisionModelTests(unittest.TestCase):
+    """.env.example：VISION_MODEL 默认值与紧邻注释（2026-10-01 用户指令）。
+
+    背景：纯文本模型 qwen3.5-122b-a10b 被误填进 VISION_MODEL 导致视觉
+    识别一直返回"未找到"——模板默认值改为 qwen-vl-max-latest，紧邻注释
+    标注"必须使用带 VL 的视觉模型"。注意：模板默认值不影响代码缺省
+    （xiaoju3.py 代码缺省保持空串，未配置仍走未配置提示，由
+    test_unconfigured_model_hint 覆盖）。
+    """
+
+    def test_env_example_vision_model_default_and_comment(self):
+        with open(os.path.join(_ROOT, ".env.example"),
+                  "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("必须使用带 VL 的视觉模型", content)
+        # VISION_MODEL= 恰好一行且为推荐视觉模型默认值（同时证明旧空值
+        # 形态不再出现；splitlines 兼容 \n 与 \r\n）
+        vision_lines = [ln.strip() for ln in content.splitlines()
+                        if ln.strip().startswith("VISION_MODEL=")]
+        self.assertEqual(vision_lines, ["VISION_MODEL=qwen-vl-max-latest"])
 
 
 if __name__ == "__main__":

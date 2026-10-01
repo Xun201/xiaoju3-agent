@@ -106,8 +106,14 @@ _EMERGENCY_ALARM_STATES = {"on", "alarm", "triggered", "gas", "smoke", "leak", "
 
 
 def notify_master(text):
-    """QQ 推送通知主人（NapCat send_private_msg；未配置则仅日志，不抛错）。"""
-    api = (os.environ.get("NAPCAT_API_URL", "") or "http://127.0.0.1:3000").rstrip("/")
+    """QQ 推送通知主人（OneBot send_private_msg；未配置则仅日志，不抛错）。
+
+    端点：env ONEBOT_API_URL 优先（LLOneBot，标准端口 3001），兼容回退旧
+    NAPCAT_API_URL 键，缺省 http://127.0.0.1:3001。
+    """
+    api = (os.environ.get("ONEBOT_API_URL", "").strip()
+           or os.environ.get("NAPCAT_API_URL", "").strip()
+           or "http://127.0.0.1:3001").rstrip("/")
     owner = (os.environ.get("XIAOJU3_OWNER_QQ", "") or "").strip()
     if not owner:
         print("📨 [紧急豁免] 未配置 XIAOJU3_OWNER_QQ，跳过 QQ 推送（仅记录日志）。")
@@ -119,7 +125,8 @@ def notify_master(text):
         print("📨 已推送 QQ 通知主人（紧急豁免）。")
         return True
     except Exception as e:
-        print(f"⚠️ [紧急豁免] QQ 推送失败（不影响豁免动作）: {e}")
+        print(f"⚠️ [紧急豁免] QQ 推送失败（请确认 LLOneBot 是否已启动，且 .env "
+              f"中的端口配置是否正确，默认通常为 3001；不影响豁免动作）: {e}")
         return False
 
 

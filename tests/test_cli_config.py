@@ -114,6 +114,57 @@ class ConfigContractTest(unittest.TestCase):
         self.assertIn("IMPORT_OK", proc.stdout)
 
 
+class VisionApiUrlPrefixToleranceTests(unittest.TestCase):
+    """VISION_API_URL 前缀自动容错（2026-09-30 用户指令）：值 strip 后不以
+    http:// 或 https:// 开头（大小写不敏感）→ 自动补 https:// 前缀；
+    空值（含纯空白）仍回退缺省 DashScope 地址。子进程探测隔离宿主环境
+    变量（env 优先级高于 .env，探测结果确定）。"""
+
+    _PROBE_CODE = (
+        "import sys; sys.path.insert(0, r'{root}'); import xiaoju3; "
+        "print(xiaoju3.VISION_API_URL)"
+    ).format(root=PROJECT_ROOT)
+
+    def _probe_vision_url(self, value):
+        """子进程设置 VISION_API_URL 后探测清洗结果（先剔除宿主同名变量）。"""
+        env = {k: v for k, v in os.environ.items() if k != "VISION_API_URL"}
+        env["VISION_API_URL"] = value
+        proc = subprocess.run([sys.executable, "-c", self._PROBE_CODE],
+                              capture_output=True, text=True, env=env, timeout=120)
+        if proc.returncode != 0:
+            raise AssertionError(f"VISION_API_URL 探测子进程失败：{proc.stderr}")
+        return proc.stdout.strip()
+
+    def test_bare_probe_domain_gets_https_prefix(self):
+        # 不带前缀的试探地址（如 qwen 开头裸域名）→ 自动补 https://
+        url = self._probe_vision_url(
+            "qwen-probe.maas.aliyuncs.com/compatible-mode/v1")
+        self.assertTrue(url.startswith("https://"), url)
+        self.assertEqual(
+            url, "https://qwen-probe.maas.aliyuncs.com/compatible-mode/v1")
+
+    def test_value_stripped_before_prefix_added(self):
+        # 两侧空白先 strip 再补前缀
+        url = self._probe_vision_url("  vision.test/compatible-mode/v1  ")
+        self.assertEqual(url, "https://vision.test/compatible-mode/v1")
+
+    def test_existing_https_prefix_kept_as_is(self):
+        # 已带 https:// → 原样保留，不二次补前缀
+        url = self._probe_vision_url("https://vision.test/compatible-mode/v1")
+        self.assertEqual(url, "https://vision.test/compatible-mode/v1")
+
+    def test_uppercase_http_prefix_detected_case_insensitive(self):
+        # HTTP:// 大写前缀：大小写不敏感识别，原样保留不重复补前缀
+        url = self._probe_vision_url("HTTP://vision.test/compatible-mode/v1")
+        self.assertEqual(url, "HTTP://vision.test/compatible-mode/v1")
+
+    def test_empty_value_falls_back_to_default_dashscope(self):
+        # 空值仍走缺省 DashScope 地址
+        url = self._probe_vision_url("")
+        self.assertEqual(
+            url, "https://dashscope.aliyuncs.com/compatible-mode/v1")
+
+
 class CliBrainTest(unittest.TestCase):
     """终端 CLI 平行双脑：ask_local / ask_cloud / smart_ask（mock 网络）。"""
 

@@ -25,7 +25,13 @@
   （无 alert 占位）、主题/音效开关；desktop-pet.js 桌宠规格（250 / 0.88 /
   拖拽阈值 9 / 5000ms / 60000ms / 报错端口 5003 且不含 5005）、真实素材
   DSniang1.jpg、scaleX(-1) 翻转、吸附阈值 24px、台词库、AudioContext、
-  600px 移动端缩放。
+  600px 移动端缩放；
+- 思维链前端展示（<think> 块）：console.js 解析切分（先切分后转义、正则
+  非锚定——reply 含块即必出卡片）、
+  渲染入口先判 thinkMatch（无 think 不插卡片、普通聊天零干扰）、思考
+  卡片逐字打字（textContent 注入防注入）+ 打完自动折叠/点击展开、历史
+  回放不打字、刷新重生成同步卡片、等待期 900ms 轮换状态；index.html
+  .think-card / .think-card-header / .think-card-body 浅灰折叠样式。
 
 mock 注意：所有 patch 均走 context manager / start+addCleanup（结束即还原），
 不污染 sys.modules；历史文件一律注入 tmp 目录，可与其它测试文件在同一
@@ -680,10 +686,10 @@ class CQFaceRenderTests(unittest.TestCase):
     def test_all_bot_paths_go_through_render_rich(self):
         """实时回复 / /api/history 历史加载 / 刷新重生成：三条机器人渲染
         路径全部经 appendBotMessage→renderRich→renderCQFace（历史回放与
-        实时发送共用同一个气泡入口）。"""
-        self.assertIn("renderRich(reply)", self.content)            # appendBotMessage 气泡
-        self.assertIn("renderRich(res.data.reply)", self.content)   # 刷新重新生成
-        self.assertIn("appendBotMessage(m.content, m.source || '', lastUser)",
+        实时发送共用同一个气泡入口）；刷新重生成先剥离 <think> 再渲染。"""
+        self.assertIn("renderRich(reply)", self.content)              # 气泡正文（think 已剥离）
+        self.assertIn("const reply = thinkParts.body", self.content)  # 刷新重生成先剥离 think
+        self.assertIn("appendBotMessage(m.content, m.source || '', lastUser",
                       self.content)                                 # 历史回放同入口
 
     def test_face_mapping_covers_full_classic_range(self):
@@ -709,6 +715,130 @@ class CQFaceRenderTests(unittest.TestCase):
         self.assertIn("[表情]", self.content)
         self.assertIn(r"/\[CQ:image,[^\]]*\]/g", self.content)
         self.assertIn(r"/\[CQ:[^\]]*\]/g", self.content)
+
+
+# ---------------------------------------------------------------------------
+# 思维链（<think> 块）前端展示：折叠卡片 + 逐字打字 + 等待期轮换状态
+# ---------------------------------------------------------------------------
+
+class ThinkCardFrontendTests(unittest.TestCase):
+    """console.js / index.html 思维链展示静态断言（离线，无浏览器）。
+
+    契约：brain.smart_ask 工具调用流程在 reply 最前面包装 <think>...</think>
+    （内含 [思考]/[计划] 文本）；普通聊天回复没有该块——前端不渲染思考卡片。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        def _read(name):
+            with open(os.path.join(PROJECT_ROOT, name), "r", encoding="utf-8") as f:
+                return f.read()
+        cls.console_js = _read("console.js")
+        cls.index_html = _read("index.html")
+
+    # ---------- console.js：<think> 解析与切分 ----------
+
+    def test_think_parse_regex_present(self):
+        """console.js 含 <think> 块解析正则、切分函数与 thinkMatch 判定。"""
+        js = self.console_js
+        self.assertIn("<think>", js)                      # 解析正则
+        self.assertIn("splitThinkBlock", js)              # 切分函数
+        self.assertIn("thinkMatch", js)                   # 渲染入口先判 thinkMatch
+
+    def test_think_block_regex_non_anchored(self):
+        """解析正则非锚定（串内任意位置命中）：即使净化/表情转换等环节在块前
+        插入了任何字符，只要 reply 含 <think> 块就必定渲染思考卡片，不因锚定
+        串首而静默漏卡；剔除按 thinkMatch.index 定位，块前字符保留进正文。"""
+        js = self.console_js
+        self.assertIn("/<think>([\\s\\S]*?)<\\/think>/", js)   # 非锚定正则
+        self.assertNotIn("/^\\s*<think>", js)                  # 不再锚定串首
+        self.assertIn("thinkMatch.index", js)                  # 按命中位置剔块
+
+    def test_simple_text_reply_card_rendering_contract(self):
+        """简单文本 reply（如 "<think>[思考] 准备调用 list_files 尝试完成操作。
+        </think>文件列表…"）必出卡片的渲染契约：三条机器人渲染路径全部
+        以 think !== null 守卫插卡——实时回复（appendBotMessage 渲染入口）、
+        历史回放（同入口、animateThink=false）、刷新重生成（syncThinkCard）。"""
+        js = self.console_js
+        self.assertIn("splitThinkBlock(rawReply)", js)                 # 先切分
+        self.assertIn("if (thinkParts.think !== null)", js)            # 实时路径守卫
+        self.assertIn("syncThinkCard(msgEl, thinkParts.think)", js)    # 刷新路径同步
+        self.assertIn("if (thinkText === null) return;", js)           # 刷新无块不插卡
+        self.assertIn("appendBotMessage(m.content, m.source || '', lastUser",
+                      js)                                              # 历史回放同入口
+
+    def test_card_render_guarded_by_think_match(self):
+        """无 <think> 块不插卡片（默认不渲染）：appendBotMessage 渲染入口
+        先在原始 reply 上切分，卡片构建调用位于 thinkMatch 守卫之内。"""
+        js = self.console_js
+        start = js.index("function appendBotMessage")
+        end = js.index("==================== 3.", start)   # 函数体到下一节为止
+        body = js[start:end]
+        self.assertIn("splitThinkBlock(rawReply)", body)       # 先在原始 reply 上切分
+        self.assertIn("if (thinkParts.think !== null)", body)  # 渲染入口守卫
+        guard = body.index("if (thinkParts.think !== null)")
+        self.assertLess(guard, body.index("buildThinkCardEl()"))  # 守卫先于插卡
+        self.assertIn("options.animateThink !== false", body)  # 历史回放可关打字
+
+    def test_history_replay_no_typing(self):
+        """历史回放共用 appendBotMessage 入口，但不打字（animateThink=false）。"""
+        self.assertIn(
+            "appendBotMessage(m.content, m.source || '', lastUser, { animateThink: false })",
+            self.console_js)
+
+    # ---------- console.js：打字机与折叠 ----------
+
+    def test_typewriter_and_auto_collapse(self):
+        """思考正文逐字打字（textContent 注入防注入），打完自动折叠、
+        点击标题可再展开/收起。"""
+        js = self.console_js
+        self.assertIn("startThinkTypewriter", js)                     # 打字函数
+        self.assertIn("THINK_TYPE_MS", js)                            # 打字间隔常量
+        self.assertIn("body.textContent = text.slice(0, shown)", js)  # textContent 注入
+        self.assertIn("renderCQFace(thinkText)", js)                  # 思考正文同口径净化
+        self.assertIn("classList.add('think-collapsed')", js)         # 打完自动折叠
+        self.assertIn("window.toggleThinkCard", js)                   # 点击标题展开/收起
+        self.assertIn("classList.toggle('think-collapsed')", js)
+
+    def test_refresh_regenerate_syncs_think_card(self):
+        """刷新重生成同样先切分 <think>：卡片同步 + 正文剥离后再渲染。"""
+        js = self.console_js
+        start = js.index("window.refreshMsg")
+        end = js.index("window.forwardMsg", start)
+        body = js[start:end]
+        self.assertIn("splitThinkBlock(res.data.reply)", body)
+        self.assertIn("syncThinkCard(msgEl, thinkParts.think)", body)
+        self.assertIn("renderRich(reply)", body)
+
+    # ---------- console.js：等待期轮换状态 ----------
+
+    def test_waiting_status_rotation(self):
+        """发送后占位气泡动态轮换：900ms 间隔、四条状态循环、回复到达即停。"""
+        js = self.console_js
+        self.assertIn("THINKING_STATUS", js)
+        for phrase in ("正在思考执行方案", "正在分析屏幕",
+                       "正在读取文件", "正在执行操作"):
+            self.assertIn(phrase, js)
+        self.assertIn("THINKING_ROTATE_MS = 900", js)         # 每 900ms 轮换
+        self.assertIn("clearInterval(rotateTimer)", js)       # 收到回复/出错停止轮换
+        self.assertIn("小橘3号正在思考... 🧠", js)             # 初始占位文案保留
+
+    # ---------- index.html：思维链卡片样式 ----------
+
+    def test_index_think_card_styles(self):
+        """index.html 内联样式区含 .think-card / .think-card-header /
+        .think-card-body：浅灰背景 #f3f4f6、圆角 10px、13px 字号、
+        折叠用 .think-collapsed 类 + display 切换。"""
+        html = self.index_html
+        for cls in (".think-card {", ".think-card-header {", ".think-card-body {"):
+            self.assertIn(cls, html)
+        start = html.index(".think-card {")
+        block = html[start:html.index("}", start)]
+        self.assertIn("#f3f4f6", block)             # 浅灰背景
+        self.assertIn("border-radius: 10px", block)  # 圆角 10px
+        self.assertIn("font-size: 13px", block)      # 13px 字号
+        # 折叠实现：.think-collapsed 类 + 正文 display:none
+        self.assertIn(".think-card.think-collapsed .think-card-body", html)
 
 
 # ---------------------------------------------------------------------------

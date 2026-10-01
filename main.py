@@ -2,13 +2,13 @@
 """小橘3号 · 接入层主程序（QQ + 网页双入口，Flask :5002）。
 
 按《架构设计文档》§2 /《功能文档》§2.4、§5 与第二阶段 §7 权限调整：
-- POST /onebot：NapCat webhook（无鉴权保持文档口径，依赖内网环境，§9）。
+- POST /onebot：OneBot 11 webhook（LLOneBot 实现；无鉴权保持文档口径，依赖内网环境，§9）。
   私聊直接响应；群聊需 @（CQ 码）或触发词（小橘/小桔/橘3号/橘三号/AI测试）
   才理人，防刷屏；戳一戳彩蛋回应；非 @ 图片消息自动收藏表情链接（emoji_manager）。
 - POST /chat：网页控制台入口，校验 X-API-Key 头（统一配置 xiaoju3.WEB_API_KEY，
   经渲染注入页面，不在源码/前端硬编码真实密钥——修复文档 §9 已知风险）。
   回复返回前经 web_sanitize.sanitize_for_web 净化 QQ 专用 CQ 码（网页不显示
-  方括号原文）；QQ 链路（/onebot → NapCat、/send_image）保持原样不受影响。
+  方括号原文）；QQ 链路（/onebot → OneBot、/send_image）保持原样不受影响。
 - GET /：内联深色聊天页（参考实现形态）；GET /api/health：迁移守望探测端点
   （migration.health_bp 一行接入，架构 §8）。
 
@@ -16,15 +16,18 @@
 - /register <密码> [称呼]：Lv.2 注册（env XIAOJU3_REGISTER_PASSWORD，落盘；称呼不得占用创造者保留名）。
 - /name <称呼>：设置/修改自称称呼（创造者保留名不可占用）。
 - /coder_auth <6位动态密码>：TOTP 激活 Lv.3（等级持久化接线，修复"重启回落"）。
-- /sudo <6位动态密码>：开启 120 秒写操作窗口（窗口内写文件免逐次密码）。
+- /sudo <6位动态密码>：开启 120 秒写操作窗口（Lv.3 已可直接写文件，本窗口作为兼容保留）。
 - /lv4_auth：两步流——先发 /lv4_auth 看类 Root 警告，再 /lv4_auth confirm <TOTP>
   携双因子凭据授权；/lv4_revoke 撤销（立即生效）。全程不落任何密钥。
 - /gen_log 限 Lv.3+；/send_image 需等级 ≥ Lv.3（修复 Lv.4 主人被拒）。
 - /reset_fuse（Lv.2+）：重置防死循环熔断；新会话首条消息自动重置该通道熔断。
 - /confirm <6位令牌>：高危设备（门锁/燃气）二次确认令牌流。
+- /clear、/reset、清空记忆、重置记忆：一键清空当前通道会话记忆
+  （内存列表 + 磁盘 history_web.json / history_qq.json 双清，文件置空数组 []）。
 
 大脑链路编排（架构 §10）：意图路由（命中直达，未命中透传 smart_ask）→
-长期记忆注入系统上下文 → smart_ask（危险实体拒绝捕获 → Lv.4+MFA 发确认令牌）→
+长期记忆注入系统上下文 → 最近设备操作记录注入（指代消解，空记录不注入）→
+smart_ask（危险实体拒绝捕获 → Lv.4+MFA 发确认令牌）→
 前情提要压缩（>20 条浓缩为 ≤50 字前情提要并入历史头部，50 条硬上限，失败回退
 纯截断）→ 双通道落盘。
 
@@ -58,19 +61,19 @@ from migration import PeerWatch, health_bp
 from permission import permission_manager
 from plugins.context_manager import compress_context
 from prompts import SYSTEM_PROMPT
-from tools import execute_tool
+from tools import execute_tool, get_recent_actions
 from web_sanitize import sanitize_for_web
-from xiaoju3 import AGENT_STATE_DIR, TRIGGER_WORDS, WEB_API_KEY, WORKSPACE
+from xiaoju3 import (AGENT_STATE_DIR, ONEBOT_API_URL, ONEBOT_TOKEN,
+                     TRIGGER_WORDS, WEB_API_KEY, WORKSPACE)
 
 app = Flask(__name__)
 # 🛡️ 迁移守望探测端点（架构 §8，migration docstring 接入示例：一行注册）
 app.register_blueprint(health_bp)
 
 # ================= 配置（环境变量优先 → 中立默认值兜底） =================
-# NapCat OneBot HTTP API：统一配置 xiaoju3.py 未定义 NapCat 项且不允许改动，
-# 按统一契约在本模块读取环境变量，缺省本机默认端口、令牌为空。
-NAPCAT_API_URL = os.environ.get("NAPCAT_API_URL", "http://127.0.0.1:3000")
-NAPCAT_TOKEN = os.environ.get("NAPCAT_TOKEN", "")
+# OneBot 11 HTTP API（LLOneBot，标准正向 HTTP 端口 3001；NapCat 用户改回
+# 3000 即可）：统一配置见 xiaoju3.py（ONEBOT_API_URL / ONEBOT_TOKEN，env
+# 兼容回退旧 NAPCAT_* 键），本模块统一经 from xiaoju3 import 使用。
 
 # DeepSeek 分享链接前缀（与 run_link_log.SHARE_PREFIX / plugins.link_logger 一致）
 SHARE_PREFIX = "https://chat.deepseek.com/share/"
@@ -95,9 +98,9 @@ messages_qq = [SYSTEM_PROMPT] + load_memory(MEMORY_FILE_QQ)
 # ============================================
 
 
-def _napcat_headers():
-    """NapCat API 请求头（Bearer 认证；未配置令牌时与参考口径一致传空）。"""
-    return {"Authorization": f"Bearer {NAPCAT_TOKEN}"}
+def _onebot_headers():
+    """OneBot API 请求头（Bearer 认证；未配置令牌时与参考口径一致传空）。"""
+    return {"Authorization": f"Bearer {ONEBOT_TOKEN}"}
 
 
 def _peer_watch_enabled():
@@ -129,6 +132,17 @@ def _arg_after(raw_message, command):
 def _strip_cq(text):
     """去掉 CQ 码（@ 提及码不参与意图识别 / 触发词匹配）。"""
     return re.sub(r'\[CQ:[^\]]*\]', '', text).strip()
+
+
+def _strip_think(text):
+    """剥除 <think>...</think> 思维链包装块（含标签本体，DOTALL 跨行）。
+
+    brain.smart_ask 的工具流程回复会在最前面包装 <think> 推理块，供新版
+    网页前端渲染折叠卡片；QQ 发送点（/onebot → OneBot，/send_image 的 CQ 码
+    随回复链路发出同理）与旧版网页出口（/chat，无卡片渲染器）必须在发送前
+    剥除——QQ 消息与旧页保持干净，推理展示只属于新前端。
+    """
+    return re.sub(r'<think>.*?</think>', '', str(text or ""), flags=re.DOTALL).strip()
 
 
 # ================= 权限指令族辅助（§7） =================
@@ -249,6 +263,27 @@ def _inject_long_term_memories(history):
     return [block] + list(history)
 
 
+def _inject_recent_actions(history):
+    """最近设备操作注入（指代消解上下文）：进入 smart_ask 前取最近 5 条设备
+    操作记录，以"以下是最近的设备操作记录"为中文前缀拼入系统上下文；
+    空记录（无文件/读取异常）不拼。范围说明：仪表盘 /api/chat 直连
+    smart_ask 不经本链路，不在注入范围。"""
+    try:
+        actions = get_recent_actions()
+    except Exception as e:
+        print(f"⚠️ 读取设备操作记录失败: {e}")
+        actions = []
+    if not actions:
+        return history
+    lines = "\n".join(f"· {a.get('detail', '')}" for a in actions)
+    block = {"role": "system",
+             "content": (f"以下是最近的设备操作记录（最新在最后），主人提到"
+                         f"\"它/再一次/刚才那个\"等指代时可据此解析：\n{lines}")}
+    if history and isinstance(history[0], dict) and history[0].get("role") == "system":
+        return [history[0], block] + list(history[1:])
+    return [block] + list(history)
+
+
 def _compress_and_save(messages, filepath):
     """前情提要压缩落盘（架构 §10 #2）：>20 条时把旧消息浓缩为 ≤50 字前情提要
     并入历史头部；仍保留 50 条硬上限；压缩失败（双脑不可用）回退纯截断。"""
@@ -276,7 +311,8 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
     ② 意图路由：route 命中 → dispatch 直达（export_ebook 注入通道历史）；
        route 返回 None 或 dispatch 失败 → 透传原 smart_ask 链路，绝不吞消息；
     ③ 长期记忆注入系统上下文；
-    ④ smart_ask（危险设备确认令牌捕获包装）。
+    ④ 最近设备操作记录注入（指代消解上下文，空记录不注入）；
+    ⑤ smart_ask（危险设备确认令牌捕获包装）。
     """
     session_key = source
     if new_session:
@@ -302,6 +338,7 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
             return str(dispatched)
 
     history = _inject_long_term_memories(messages)
+    history = _inject_recent_actions(history)
     return _smart_ask_with_danger_confirm(message, history, session_key, user_id)
 
 
@@ -309,7 +346,7 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
 def handle_message(source, user_id, group_id, message, self_qq=None):
     """所有消息（QQ/网页）都统一交给这个函数处理。
 
-    self_qq: 本机机器人的 QQ 号（NapCat 事件自带 self_id），用于群聊 @ 判定；
+    self_qq: 本机机器人的 QQ 号（OneBot 事件自带 self_id），用于群聊 @ 判定；
     缺省时退化为"消息含任意 CQ:at 即视为 @"（无法识别被@对象时的宽容口径）。
     """
     if isinstance(message, list):
@@ -323,6 +360,21 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     # 如果清洗后为空，直接返回
     if not message:
         return "（你发了一条空消息）"
+
+    # === 🧹 一键清空记忆（/clear、/reset、清空记忆、重置记忆） ===
+    # 精确匹配（清洗后全等）：不误吞更长的 /reset_fuse，也不误伤含"清空记忆"
+    # 字样的普通对话。内存列表与磁盘文件双清——只清文件不清内存的话，本会话
+    # 记忆并未消失，下一轮 _compress_and_save 又会把旧历史写回文件。
+    # 内存仅保留置顶系统提示词（通道历史恒以 system 开头的不变量不破坏）。
+    global messages_web, messages_qq
+    if message in ("/clear", "/reset", "清空记忆", "重置记忆"):
+        if source == 'web':
+            messages_web[:] = [SYSTEM_PROMPT]
+            save_memory([], MEMORY_FILE_WEB)          # 文件内容置空数组 []
+        else:
+            messages_qq[:] = [SYSTEM_PROMPT]
+            save_memory([], MEMORY_FILE_QQ)
+        return "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
 
     user_key = str(user_id)
 
@@ -350,7 +402,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     if message.startswith("/sudo"):
         code = _arg_after(raw_message, "/sudo")
         if not code:
-            return ("用法：/sudo <6位动态密码>——开启 120 秒写操作窗口，"
+            return ("用法：/sudo <6位动态密码>——开启 120 秒写操作窗口（Lv.3 已可直接写文件，本指令为兼容保留），"
                     "窗口内写文件/写代码无需逐次输入动态密码。")
         return permission_manager.open_operation_window(None, totp_code=code)
 
@@ -431,7 +483,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         if not _is_in_workspace(img_path):
             return "❌ 只能发送项目工作区内的图片。"
 
-        # CQ 码发图：随回复链路交回 NapCat 解析发送
+        # CQ 码发图：随回复链路交回 OneBot 实现端解析发送
         return f"[CQ:image,file=file://{img_path}]"
 
     # 1. 收集图片表情包（拦截非 @ 的图片消息，仅存链接不下载——文档 §5 口径）
@@ -467,8 +519,8 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             except Exception as e:
                 return f"❌ 长期记忆保存失败：{e}"
 
-    # 4. 调用大脑进行思考（根据来源，选择不同的记忆库）
-    global messages_web, messages_qq
+    # 4. 调用大脑进行思考（根据来源，选择不同的记忆库；
+    #    messages_web / messages_qq 已在清空记忆段声明 global，整个函数生效）
     if source == 'web':
         is_new_session = len(messages_web) <= 1   # 历史为空 = 新会话首条消息
         messages_web.append({"role": "user", "content": message})
@@ -582,11 +634,43 @@ def chat():
     if not user_msg:
         return {"reply": "请说点什么吧！"}
     reply = handle_message('web', 'admin', None, user_msg)
-    # 🛡️ Web 出口净化：CQ 码转 Emoji / [表情] / 剥除（旧版网页同样不显示方括号
-    # 原文，且不泄露表情包本机路径）；QQ 链路（/onebot → NapCat）保持原样。
-    return {"reply": sanitize_for_web(reply)}
+    # 🛡️ Web 出口净化：先剥除 <think> 思维链块（旧版网页无推理卡片渲染器），
+    # 再净化 CQ 码转 Emoji / [表情] / 剥除（网页不显示方括号原文，且不泄露
+    # 表情包本机路径）；QQ 链路（/onebot → NapCat）同样剥 think 但保留 CQ 原文。
+    return {"reply": sanitize_for_web(_strip_think(reply))}
 
 # ================= QQ大门 =================
+def _rebuild_raw_message(data):
+    """raw_message 缺失/为空时从 message 字段重建文本（LLOneBot 兼容）。
+
+    OneBot 11 消息段数组格式：拼接 type=="text" 段的 data.text，并按 CQ 码
+    惯例还原 at / image 段（[CQ:at,qq=...] / [CQ:image,file=...]），保持既有
+    触发词 / @ 判定与图片收藏逻辑可用；message 为字符串时直接使用；其余类型
+    （缺失 / None）返回空串。任何段结构异常都不抛错（逐段容错跳过）。
+    """
+    message = data.get("message")
+    if isinstance(message, str):
+        return message
+    if isinstance(message, list):
+        parts = []
+        for seg in message:
+            try:
+                if not isinstance(seg, dict):
+                    continue
+                seg_data = seg.get("data") or {}
+                seg_type = str(seg.get("type") or "")
+                if seg_type == "text":
+                    parts.append(str(seg_data.get("text") or ""))
+                elif seg_type == "at":
+                    parts.append(f"[CQ:at,qq={seg_data.get('qq', '')}]")
+                elif seg_type == "image":
+                    parts.append(f"[CQ:image,file={seg_data.get('file', '')}]")
+            except Exception:
+                continue   # 单段异常不影响整体重建
+        return "".join(parts)
+    return ""
+
+
 @app.route('/onebot', methods=['POST'])
 def onebot_webhook():
     data = request.get_json(silent=True) or {}
@@ -599,23 +683,36 @@ def onebot_webhook():
         reply = "别戳啦，好痒！😆"
         try:
             if group_id:
-                requests.post(f"{NAPCAT_API_URL}/send_group_msg", json={"group_id": group_id, "message": reply},
-                              timeout=10, headers=_napcat_headers())
+                requests.post(f"{ONEBOT_API_URL}/send_group_msg", json={"group_id": group_id, "message": reply},
+                              timeout=10, headers=_onebot_headers())
             else:
-                requests.post(f"{NAPCAT_API_URL}/send_private_msg", json={"user_id": user_id, "message": reply},
-                              timeout=10, headers=_napcat_headers())
+                requests.post(f"{ONEBOT_API_URL}/send_private_msg", json={"user_id": user_id, "message": reply},
+                              timeout=10, headers=_onebot_headers())
         except Exception as e:
             print(f"戳一戳回复失败: {e}")
+            print("❌ 无法连接至 OneBot 服务，请确认 LLOneBot 是否已启动，"
+                  "且 .env 中的端口配置是否正确（默认通常为 3001）。")
         return {"status": "ok", "retcode": 0}
 
-    if data.get('post_type') == 'message':
-        user_id = data.get('sender', {}).get('user_id')
+    # 🛡️ LLOneBot 兼容：post_type 缺失时按 message 事件宽容处理（部分实现
+    # 不上报该字段）；meta_event 等其余事件原样忽略。
+    if data.get('post_type', 'message') != 'message':
+        return {"status": "ok", "retcode": 0}
+
+    # 🛡️ 任何字段异常不崩（如 sender 结构损坏 / message 类型异常）：统一
+    # 兜底返回 ok，不让单条 webhook 事件拖垮接入层主流程。
+    try:
+        user_id = (data.get('sender') or {}).get('user_id')
         raw_message = data.get('raw_message')
+        if not raw_message:
+            raw_message = _rebuild_raw_message(data)
         group_id = data.get('group_id')
         self_id = data.get('self_id')
         self_qq = str(self_id) if self_id is not None else None
 
         reply = handle_message('qq', user_id, group_id, raw_message or "", self_qq=self_qq)
+        # 🧠 QQ 消息保持干净：剥除 <think> 思维链包装块（推理卡片只在网页前端展示）
+        reply = _strip_think(reply)
         print(f"🐛 准备发送回复，内容为: {reply}")
 
         if reply:
@@ -627,10 +724,14 @@ def onebot_webhook():
                 else:
                     payload["user_id"] = user_id
 
-                requests.post(f"{NAPCAT_API_URL}/{api_endpoint}", json=payload,
-                              timeout=10, headers=_napcat_headers())
+                requests.post(f"{ONEBOT_API_URL}/{api_endpoint}", json=payload,
+                              timeout=10, headers=_onebot_headers())
             except Exception as e:
                 print(f"❌ 发送QQ消息失败: {e}")
+                print("❌ 无法连接至 OneBot 服务，请确认 LLOneBot 是否已启动，"
+                      "且 .env 中的端口配置是否正确（默认通常为 3001）。")
+    except Exception as e:
+        print(f"⚠️ /onebot 事件处理异常（已忽略，不阻断 webhook）: {e}")
 
     return {"status": "ok", "retcode": 0}
 
