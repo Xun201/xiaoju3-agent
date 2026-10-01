@@ -63,6 +63,125 @@
         toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
     }
 
+    // ==================== 0.5 TTS 朗读 emoji 剔除（任务 7）+ 音色选择（任务 4） ====================
+    // 语音引擎读不出 emoji（静音/跳读）：朗读前正则整体剔除——emoji 主体区
+    //（\u{1F300}-\u{1FAFF}，肤色修饰符 1F3FB-1F3FF 亦在其中）、牌类/括号/
+    // 旗帜扩展区（\u{1F000}-\u{1F2FF}）、杂项符号与装饰（\u2600-\u27BF）、
+    // 箭头与技术符号（\u2B00-\u2BFF、\u2300-\u23FF）、变体选择符
+    //（\uFE00-\uFE0F）、ZWJ 零宽连接符（\u200D，emoji 组合序列）、键帽
+    // 组合符（\u20E3）与标签变体（\u{E0020}-\u{E007F}）。标点不在任何
+    // 区间内，保留作自然停顿；剔除后连续空白折叠为一个空格。
+    const TTS_EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{1F000}-\u{1F2FF}\u2600-\u27BF\u2B00-\u2BFF\u2300-\u23FF\uFE00-\uFE0F\u200D\u20E3\u{E0020}-\u{E007F}]/gu;
+    function stripEmojiForTTS(text) {
+        return String(text == null ? '' : text)
+            .replace(TTS_EMOJI_RE, '')     // emoji/修饰符/ZWJ 序列整体剔除
+            .replace(/\s+/g, ' ')          // 连续空白折叠为一个空格
+            .trim();
+    }
+
+    // 朗读音色回退链：localStorage(xiaoju3_tts_voice) → /api/status 下发的
+    // tts_voice（后端 .env TTS_VOICE，localStorage 为空时采用并写回）→
+    // getVoices() 首个中文女声（name 含女性特征词）→ 首个 zh 音色 →
+    // 引擎默认音色（不设 utter.voice）。
+    const TTS_VOICE_KEY = 'xiaoju3_tts_voice';
+    // 女性特征词（zh 音色 name 命中其一即视为女声，大小写不敏感）
+    const TTS_FEMALE_HINTS = ['晓晓', '小艺', '悦', 'female', 'Xiaoxiao'];
+    // /api/status 下发的 tts_voice（空串表示后端未配置）
+    let backendTTSVoice = '';
+
+    function getStoredTTSVoiceName() {
+        try { return localStorage.getItem(TTS_VOICE_KEY); } catch (e) { return null; }
+    }
+
+    // zh 音色列表（lang 以 zh 开头，兼容 zh-CN / zh-Hans-CN 等写法）
+    function listZhVoices() {
+        const voices = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+        return voices.filter(v => /^zh/i.test(String(v.lang || '')));
+    }
+
+    function isFemaleZhVoice(voice) {
+        const name = String((voice && voice.name) || '').toLowerCase();
+        return TTS_FEMALE_HINTS.some(hint => name.indexOf(hint.toLowerCase()) !== -1);
+    }
+
+    // 按回退链解析当前朗读音色；返回 null 表示交给引擎默认音色
+    function pickTTSVoice() {
+        const zhVoices = listZhVoices();
+        const wanted = getStoredTTSVoiceName() || backendTTSVoice;
+        if (wanted) {
+            const all = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+            const hit = zhVoices.find(v => v.name === wanted) ||
+                all.find(v => v.name === wanted);
+            if (hit) return hit;                    // 用户/后端指定且当前可用
+        }
+        if (!zhVoices.length) return null;          // 无 zh 音色：默认音色兜底
+        return zhVoices.find(isFemaleZhVoice) || zhVoices[0];   // 首个中文女声 → 首个 zh
+    }
+
+    // /api/status 下发 tts_voice 的采用与写回（仅 localStorage 为空时接管；
+    // 同值轮询直接跳过，避免每 2s 重复重建下拉）
+    function adoptBackendTTSVoice(val) {
+        if (typeof val !== 'string' || !val || backendTTSVoice === val) return;
+        backendTTSVoice = val;
+        if (!getStoredTTSVoiceName()) {
+            try { localStorage.setItem(TTS_VOICE_KEY, val); } catch (e) { /* 忽略 */ }
+        }
+        refreshVoiceSelector();
+    }
+
+    // 音色下拉菜单（纯 JS 动态构建，不改 index.html）：挂在聊天头部工具区，
+    // 只列 zh 音色 + 默认项；切换即写 localStorage；选中项按回退链回显。
+    let ttsVoiceSelect = null;
+    function refreshVoiceSelector() {
+        const actions = document.querySelector('.chat-header .header-actions');
+        if (!actions) return;
+        if (!ttsVoiceSelect) {
+            ttsVoiceSelect = document.createElement('select');
+            ttsVoiceSelect.id = 'tts-voice-select';
+            ttsVoiceSelect.title = '朗读音色';
+            ttsVoiceSelect.style.cssText =
+                'max-width: 140px; font-size: 12px; padding: 3px 4px;' +
+                'border: 1px solid var(--color-border); border-radius: var(--radius-tool);' +
+                'background: var(--color-card); color: var(--color-text-secondary);' +
+                'outline: none; cursor: pointer;';
+            ttsVoiceSelect.addEventListener('change', function () {
+                const name = ttsVoiceSelect.value;
+                try {
+                    if (name) localStorage.setItem(TTS_VOICE_KEY, name);
+                    else localStorage.removeItem(TTS_VOICE_KEY);   // 默认 = 清除记忆
+                } catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
+                showToast(name ? '朗读音色已切换：' + name : '朗读音色：默认（自动选择）');
+            });
+            actions.prepend(ttsVoiceSelect);
+        }
+        const voices = listZhVoices();
+        ttsVoiceSelect.innerHTML = '';
+        const defOpt = document.createElement('option');
+        defOpt.value = '';
+        defOpt.textContent = '默认音色';
+        ttsVoiceSelect.appendChild(defOpt);
+        voices.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v.name;
+            opt.textContent = v.name + (v.lang ? '（' + v.lang + '）' : '');
+            ttsVoiceSelect.appendChild(opt);
+        });
+        // 选中项回显：当前回退链解析出的音色（不在 zh 列表内则回落默认项）
+        const current = pickTTSVoice();
+        ttsVoiceSelect.value =
+            (current && voices.some(v => v.name === current.name)) ? current.name : '';
+    }
+
+    if (window.speechSynthesis) {
+        refreshVoiceSelector();   // 首次构建（部分引擎同步即可列出音色）
+        // 音色列表常异步到达：voiceschanged 后重建下拉（addEventListener 与
+        // onvoiceschanged 双保险，重建幂等）
+        if (typeof window.speechSynthesis.addEventListener === 'function') {
+            window.speechSynthesis.addEventListener('voiceschanged', refreshVoiceSelector);
+        }
+        window.speechSynthesis.onvoiceschanged = refreshVoiceSelector;
+    }
+
     // ==================== 1. 定时请求后端系统状态（2 秒轮询） ====================
     function fetchStatus() {
         fetch('/api/status')
@@ -90,8 +209,14 @@
 
                     const tempText = document.getElementById('temp-text');
                     if (tempText) {
-                        tempText.textContent = (d.temperature === 'N/A' ? 'N/A' : d.temperature + ' °C');
+                        tempText.textContent = (typeof d.temperature === 'number'
+                ? d.temperature + ' °C'
+                : (d.temperature || 'N/A'));   // 字符串占位（如"暂无温度"）直接展示
                     }
+
+                    // TTS 音色回退链第二级：后端 .env TTS_VOICE（payload 契约
+                    // 字段 tts_voice；localStorage 为空时采用并写回）
+                    adoptBackendTTSVoice(d.tts_voice);
                 }
             })
             .catch(err => console.error('获取系统状态失败', err));
@@ -358,6 +483,51 @@
         return userMsg;
     }
 
+    // ==================== 2.6 系统类消息统一工具栏（任务 5） ====================
+    // 首条系统欢迎语与系统提示类消息（清空后的欢迎语、请求失败提示）与
+    // AI 回复共用同一套工具栏行为：复制/朗读/点赞/点踩（重新生成依赖
+    // dataset.prompt 原消息、转发面向会话回复，系统消息不提供这两项）。
+    // 正文包进 .bubble-content，与 appendBotMessage 气泡结构同构——
+    // copyText/playMsg/toggleLike/toggleDislike 全局函数零改动直接复用。
+    function buildSystemMsgTools() {
+        const tools = document.createElement('div');
+        tools.className = 'msg-tools';
+        tools.innerHTML =
+            '<span class="tool-btn" onclick="copyText(this)" title="复制">' +
+                '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>' +
+            '</span>' +
+            '<span class="tool-btn" onclick="playMsg(this)" title="播放">' +
+                '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>' +
+            '</span>' +
+            '<span class="tool-btn like-btn" onclick="toggleLike(this)" title="点赞">' +
+                '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>' +
+            '</span>' +
+            '<span class="tool-btn dislike-btn" onclick="toggleDislike(this)" title="踩">' +
+                '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path></svg>' +
+            '</span>';
+        return tools;
+    }
+
+    // 给系统类消息挂统一工具栏：已有 .msg-tools（appendBotMessage 产物）
+    // 直接跳过，不重复挂载；挂载后消息自带 .bubble-content，复制/朗读
+    // 取到的就是纯文本正文
+    function mountSystemToolbar(msgEl) {
+        if (!msgEl || msgEl.querySelector('.msg-tools')) return;
+        const inner = document.createElement('div');
+        inner.style.cssText = 'display:flex; flex-direction:column; gap:5px;';
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble-content';
+        while (msgEl.firstChild) bubble.appendChild(msgEl.firstChild);   // 正文迁入气泡容器
+        inner.appendChild(bubble);
+        inner.appendChild(buildSystemMsgTools());
+        msgEl.appendChild(inner);
+    }
+
+    // 首条系统欢迎语（index.html 静态节点）挂统一工具栏；appendBotMessage
+    // 生成的消息自带 .msg-tools，经上方 guard 自动跳过
+    document.querySelectorAll('#chat-history .message.bot-message')
+        .forEach(mountSystemToolbar);
+
     // 大脑来源徽标（§4.3：消费 /api/chat 返回的 source 字段）
     // dataset.prompt 记录触发本回复的原消息，供"刷新"按钮重新生成
     // opts.animateThink=false（历史回放）时思考卡片不打字、直接折叠展示全文
@@ -573,6 +743,7 @@
             errMsg.className = 'message bot-message';
             errMsg.style.color = '#e0433f';
             errMsg.textContent = '（请求失败：' + err.message + '）';
+            mountSystemToolbar(errMsg);   // 系统提示类消息同样挂统一工具栏
             history.appendChild(errMsg);
             history.scrollTop = history.scrollHeight;
         });
@@ -642,11 +813,17 @@
             .catch(() => showToast('复制失败，请手动选择文本'));
     };
 
-    // 播放：每次播放前清空队列，防止连点无限循环
+    // 播放（朗读）：每次播放前清空队列，防止连点无限循环；朗读前剔除 emoji
+    //（任务 7：引擎读不出 emoji，标点保留作自然停顿），并按回退链选择
+    // 音色（任务 4：localStorage → /api/status tts_voice → 中文女声 → zh）
     window.playMsg = function(el) {
         window.speechSynthesis.cancel(); // 清空之前的播放队列
         const text = el.closest('.message').querySelector('.bubble-content').innerText;
-        window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        const utter = new SpeechSynthesisUtterance(stripEmojiForTTS(text));
+        utter.lang = 'zh-CN';
+        const voice = pickTTSVoice();
+        if (voice) utter.voice = voice;
+        window.speechSynthesis.speak(utter);
     };
 
     // 点赞/踩：互斥逻辑（点一个自动取消另一个），再次点击可取消
@@ -687,12 +864,18 @@
     if (clearBtn) {
         clearBtn.addEventListener('click', () => {
             if (!confirm('确定清空聊天记录吗？此操作不可恢复。')) return;
-            fetch('/api/history', { method: 'DELETE' })
+                fetch('/api/history', { method: 'DELETE' })
                 .then(res => res.json())
                 .then(res => {
                     if (res.code !== 200) throw new Error(res.error || '清空失败');
                     const history = document.getElementById('chat-history');
-                    history.innerHTML = '<div class="message bot-message">你好！我是小橘3号，很高兴为你服务喵~</div>';
+                    // 清空后重建欢迎语并挂统一工具栏（与首条系统欢迎语同口径）
+                    history.innerHTML = '';
+                    const welcome = document.createElement('div');
+                    welcome.className = 'message bot-message';
+                    welcome.textContent = '你好！我是小橘3号，很高兴为你服务喵~';
+                    mountSystemToolbar(welcome);
+                    history.appendChild(welcome);
                     showToast('聊天记录已清空');
                 })
                 .catch(err => showToast('清空失败：' + err.message));

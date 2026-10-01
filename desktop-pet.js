@@ -4,8 +4,13 @@
 //   素材自带空白思考气泡区（实测 1280×1280，气泡区中心约在图宽 36%、高 29%
 //   处），文字优先绝对定位渲染在素材气泡区域内（随 --pet-scale 缩放跟随）；
 //   素材加载失败时回退到内联 SVG 气泡（测试不依赖定位细节）。
-// - 左右翻转：拖拽水平位移方向决定面向，scaleX(-1) 镜像（翻转层与按压
-//   形变层分离，避免 transform 组合顺序冲突；文字覆盖层不翻转保持可读）。
+// - 去白底：素材 JPG 无透明通道，注入样式以 mix-blend-mode: multiply 让
+//   白底在浅色页面视觉消失（纯 CSS 零依赖；深色主题会压暗，换透明 PNG 最佳，
+//   详见 assets/ASSETS.md 透明化说明）。
+// - 左右翻转：面向由桌宠中心 x 相对屏幕中线决定（左半边朝右、右半边朝左，
+//   始终朝向屏幕中心；吸附校正后按最终位置重算一次），scaleX(-1) 镜像
+//   （翻转层与按压形变层分离，避免 transform 组合顺序冲突；文字覆盖层不翻转
+//   保持可读）。
 // - 边缘吸附：松手后距屏幕左/右边缘 < 24px 磁吸贴边。
 // - 随机台词气泡：内置台词库与余额/今日已用轮换展示（60s 余额轮询保留）。
 // - 移动端缩放：视口 <600px 时按比例缩小（复用 --pet-scale 机制）。
@@ -84,6 +89,13 @@
             user-select: none;
             z-index: 99999;
             transition: left .16s ease, top .16s ease, transform .3s ease;
+            /* 去白底（形象图 JPG 白底 + SVG 兜底气泡白底统一处理）：multiply
+               混合让白色在浅色页面视觉消失（纯 CSS 零依赖）。注意声明必须落在
+               .xiaoju-root 上——fixed 定位容器自成堆叠上下文（隔离组），在内部
+               元素（如 .xiaoju-img）上声明 multiply 无法穿透容器混到页面底色；
+               深色主题下 multiply 会压暗形象，追求最佳效果可将 assets/DSniang1.jpg
+               替换为同名透明通道 PNG（文件名不变即可，详见 assets/ASSETS.md） */
+            mix-blend-mode: multiply;
         }
         .xiaoju-body {
             position: absolute;
@@ -243,13 +255,15 @@
     `;
 
     // SVG 兜底气泡（素材加载失败时回退）
+    // 去白底：气泡填充由白色改为透明（fill="transparent"），页面底色自然透出，
+    // 与形象图 multiply 去白底口径一致；描边保留维持气泡轮廓
     const pop = document.createElement('div');
     pop.className = 'xiaoju-pop';
     pop.innerHTML = `
         <svg viewBox="0 0 1026 700" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
-            <path class="bshape" fill="#FFFFFF" stroke="#203170" stroke-width="18" stroke-linejoin="round" stroke-linecap="round" d="M 827 248 A 373 232 0 1 0 81 246 A 373 232 0 0 0 301 465 A 57 32 10 0 0 413 484 A 373 232 0 0 0 827 248 Z"/>
-            <ellipse class="b1" cx="352" cy="561" rx="37.5" ry="26" fill="#FFFFFF" stroke="#203170" stroke-width="18"/>
-            <ellipse class="b2" cx="442" cy="646" rx="24.5" ry="18" fill="#FFFFFF" stroke="#203170" stroke-width="18"/>
+            <path class="bshape" fill="transparent" stroke="#203170" stroke-width="18" stroke-linejoin="round" stroke-linecap="round" d="M 827 248 A 373 232 0 1 0 81 246 A 373 232 0 0 0 301 465 A 57 32 10 0 0 413 484 A 373 232 0 0 0 827 248 Z"/>
+            <ellipse class="b1" cx="352" cy="561" rx="37.5" ry="26" fill="transparent" stroke="#203170" stroke-width="18"/>
+            <ellipse class="b2" cx="442" cy="646" rx="24.5" ry="18" fill="transparent" stroke="#203170" stroke-width="18"/>
         </svg>
         <div class="xiaoju-text">
             <div class="label">deepseek余额</div>
@@ -278,7 +292,7 @@
     let state = { scale: 1, left: 0, top: 0 };
     let drag = null;
     let isDragging = false;
-    let facing = 'left';   // 素材原始朝向：角色面朝左侧气泡区；拖拽方向决定翻转
+    let facing = 'left';   // 素材原始朝向：角色面朝左侧气泡区；面向由位置相对屏幕中线决定
 
     function express() {
         root.style.left = state.left + 'px';
@@ -287,6 +301,19 @@
 
     function applyFacing() {
         root.classList.toggle('facing-right', facing === 'right');
+    }
+
+    // 翻转判定（修复拖到屏幕右侧吸附时翻错方向）：面向由桌宠中心 x 相对
+    // 屏幕中线决定——左半边朝右、右半边朝左，始终朝向屏幕中心，与拖拽
+    // 位移方向无关；吸附校正可能改变最终位置，松手后按最终位置再重算一次
+    // （见 pointerup）。用逻辑坐标 state.left 判定（left 有 .16s 过渡，
+    // rect.left 会滞后于目标位置）。
+    function updateFacingByPosition() {
+        const rect = root.getBoundingClientRect();
+        const centerX = state.left + rect.width / 2;
+        const midLine = window.innerWidth / 2;   // 屏幕中线
+        facing = centerX < midLine ? 'right' : 'left';
+        applyFacing();
     }
 
     // 移动端缩放（界面 §7 规划落地）：视口 <600px 时按视口比例缩小（复用 --pet-scale）
@@ -315,6 +342,8 @@
         state.top = Math.max(0, limitBottom - petHeight);
 
         express();
+        // 出生/校准位置后按位置定面向（默认出生右下角 → 朝左即朝向屏幕中心）
+        updateFacingByPosition();
     }
 
     function pressDown() { body.style.transform = 'scaleY(0.88) scaleX(1.05)'; }
@@ -416,6 +445,8 @@
         state.top = Math.max(0, Math.min(state.top, limitBottom - rect.height));
 
         express();
+        // 拖拽中实时按当前位置更新面向（相对屏幕中线，跨中线即翻转）
+        updateFacingByPosition();
     });
 
     // 🌟 边缘吸附（界面 §5.2 规划落地）：松手后距屏幕左/右边缘 < 24px 磁吸贴边
@@ -444,13 +475,9 @@
         if (!drag.moved) {
             showBubble();
         } else {
-            // 左右翻转：拖拽水平位移方向决定面向
-            const dx = e.clientX - drag.startX;
-            if (Math.abs(dx) > 4) {
-                facing = dx > 0 ? 'right' : 'left';
-                applyFacing();
-            }
             snapToEdge();
+            // 吸附校正可能改变最终位置：按最终位置重算一次面向（朝向屏幕中心）
+            updateFacingByPosition();
         }
         drag = null;
     });
@@ -461,6 +488,7 @@
         state.left = Math.min(state.left, window.innerWidth - rect.width);
         state.top = Math.min(state.top, window.innerHeight - rect.height);
         express();
+        updateFacingByPosition();   // 窗口剧变可能导致所在半区变化，按新位置重算
     });
 
     // 请求后端获取真实余额（余额 + 今日已用）

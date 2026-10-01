@@ -40,6 +40,7 @@ smart_ask（危险实体拒绝捕获 → Lv.4+MFA 发确认令牌）→
   execute_tool 完整门禁——无任何绕过权限门的路径。
 - /gen_log 后台线程执行 run_link_log，不阻塞聊天。
 """
+import logging
 import os
 import random
 import re
@@ -69,6 +70,30 @@ from xiaoju3 import (AGENT_STATE_DIR, ONEBOT_API_URL, ONEBOT_TOKEN,
 app = Flask(__name__)
 # 🛡️ 迁移守望探测端点（架构 §8，migration docstring 接入示例：一行注册）
 app.register_blueprint(health_bp)
+
+# ================= 访问日志刷屏抑制（/onebot 心跳事件） =================
+# 用户口径：LLOneBot 心跳（meta_event 的 heartbeat/lifecycle 等高频事件）每次
+# POST /onebot 都打一条 werkzeug 访问日志，长期运行刷屏。心跳与消息事件同为
+# POST /onebot，访问日志行无法区分——视图内对 meta_event 事件打一次性线程
+# 标记，过滤器据此只拦截心跳那一次请求的访问日志；/chat 与消息类 /onebot
+# 日志保留。拦截（filter 返回 False）而非"降为 DEBUG"的取舍见
+# xiaoju3_dashboard.py 注释：werkzeug 3.x 自挂 NOTSET 级 handler，降级 DEBUG
+# 仍会被输出；直接拦截跨日志配置行为确定。
+_onebot_meta_local = threading.local()   # 当前线程是否正处理 meta_event 心跳类事件
+
+
+class _HeartbeatAccessFilter(logging.Filter):
+    """meta_event 心跳请求的 werkzeug 访问日志拦截器（一次性线程标记）。"""
+
+    def filter(self, record):
+        if getattr(_onebot_meta_local, "is_meta_event", False):
+            _onebot_meta_local.is_meta_event = False   # 标记一次性：仅覆盖本次请求
+            return False
+        return True
+
+
+logging.getLogger("werkzeug").setLevel(logging.INFO)   # 保底：非拦截访问日志保持可见
+logging.getLogger("werkzeug").addFilter(_HeartbeatAccessFilter())
 
 # ================= 配置（环境变量优先 → 中立默认值兜底） =================
 # OneBot 11 HTTP API（LLOneBot，标准正向 HTTP 端口 3001；NapCat 用户改回
@@ -674,6 +699,12 @@ def _rebuild_raw_message(data):
 @app.route('/onebot', methods=['POST'])
 def onebot_webhook():
     data = request.get_json(silent=True) or {}
+
+    # 🔇 心跳类高频事件（meta_event 的 heartbeat/lifecycle/connect）先打一次性
+    # 线程标记：本次请求的 werkzeug 访问日志由 _HeartbeatAccessFilter 拦截
+    # （防刷屏）；消息类 /onebot 日志不受影响。
+    if data.get('post_type') == 'meta_event':
+        _onebot_meta_local.is_meta_event = True
 
     # 🎁 彩蛋：戳一戳
     if data.get('post_type') == 'notice' and data.get('notice_type') == 'poke':

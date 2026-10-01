@@ -25,3 +25,5 @@ playwright==1.48.0
 openai==2.6.0
 
 # 说明：flask-cors 在最新版依赖中存在，但全仓代码未 import，3.8 环境不安装。
+# 说明：wmi（Windows 温度读取，见 requirements.txt）不加入本清单——香橙派
+# Linux 温度走 /sys/class/thermal/thermal_zone* 系统文件，无需 wmi。

@@ -132,6 +132,9 @@ HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "60"))
 # 5003 监控仪表盘端口
 DASHBOARD_PORT = int(os.environ.get("DASHBOARD_PORT", "5003"))
 
+# 前端 TTS 音色（可选，留空则由浏览器自动选择；仪表盘 /api/status 下发 tts_voice）
+TTS_VOICE = os.environ.get("TTS_VOICE", "")
+
 # 硬件自适应路由（high=游戏本/满血：本地大模型优先、汇总走本地；medium=普通本/
 # 混合：本地小模型优先、汇总走云端；low=轻薄本/开发板/云端优先：跳过本地探测）
 # auto（默认）= 经 hardware_profiler 自动探测硬件并缓存结果
