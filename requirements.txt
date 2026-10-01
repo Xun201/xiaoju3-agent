@@ -29,3 +29,9 @@ playwright==1.63.0
 
 # 阿里云百炼视觉模型官方兼容 SDK（新版 sk-ws- Key 须走 SDK 的请求头/签名机制）
 openai==3.22.1
+
+# Windows 温度读取（仪表盘 /api/status，WMI MSAcpi_ThermalZoneTemperature；
+# 代码内延迟导入，仅 Windows 生效，传递依赖 pywin32）。
+# Linux/香橙派温度走 /sys/class/thermal/thermal_zone*，无需本包
+# （requirements-py38.txt 对应说明）。
+wmi==1.5.1

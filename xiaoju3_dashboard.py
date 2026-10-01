@@ -8,8 +8,13 @@
                  监控真正可用（运行时长由服务端注入的 boot_ts 推算）。
 - GET /console   托管新版控制台（index.html + console.js + desktop-pet.js），
                  静态目录为项目根。
-- GET /api/status   {code, data:{cpu, memory, temperature, timestamp}}：psutil
-                 取值，温度取 sensors_temperatures 首个可用值，失败回退 0.0。
+- GET /api/status   {code, data:{cpu, memory, temperature, timestamp, tts_voice}}：
+                 psutil 取 cpu/memory；温度三平台优先级（用户口径，修复 psutil
+                 在 Windows 读不到恒 0 的问题）：① psutil sensors →
+                 ② Windows wmi（MSAcpi_ThermalZoneTemperature，开尔文×10 转摄氏）
+                 → ③ Linux/香橙派 /sys/class/thermal（÷1000），全部失败返回
+                 字符串 "暂无温度"；tts_voice 为前端 TTS 音色（.env TTS_VOICE，
+                 与组 B 前端契约）。
 - GET /api/balance  {code, data:{balance, currency, today_usage, is_peak}}：
                  GET CLOUD_BALANCE_URL + Bearer CLOUD_KEY；today_usage 按文档
                  口径恒 0.0（真实消耗统计未接入）；无 KEY / 请求失败回退 0.0
@@ -28,10 +33,15 @@
 - DELETE /api/history 清空控制台聊天历史（确认语义由前端 confirm 承担）。
 - 静态路由（/console*、/assets*）统一 Cache-Control: no-store——浏览器每次
   刷新都拉取最新 HTML/JS，避免发版后命中旧版 console.js 导致前端修复不生效。
+- 访问日志刷屏抑制：werkzeug logger 挂 _PollAccessFilter，/api/status（前端
+  2s 轮询）与 /api/balance（60s 轮询）的访问日志直接拦截，其余照常输出。
 
 三接口按文档 §9.1 口径均无鉴权（X-API-Key 门禁为规划项 🔜）。
 """
+import glob
+import logging
 import os
+import re
 import time
 
 import psutil
@@ -41,7 +51,7 @@ from flask import Flask, jsonify, render_template_string, request, send_from_dir
 from brain import load_memory, save_memory, smart_ask  # 直连大脑（架构设计文档 §2：仪表盘 /api/chat 绕过路由层）
 from web_sanitize import sanitize_for_web  # Web 出口 CQ 码净化（QQ 通道不经此处）
 from xiaoju3 import (AGENT_STATE_DIR, CLOUD_BALANCE_URL, CLOUD_KEY,
-                     DASHBOARD_PORT, MAX_MESSAGES)
+                     DASHBOARD_PORT, MAX_MESSAGES, TTS_VOICE)
 
 app = Flask(__name__)
 
@@ -63,6 +73,38 @@ def _no_store_static(resp):
 
 # 仪表盘进程启动时间（psutil.boot_time 不可用时"运行时长"兜底基准）
 PROCESS_START = int(time.time())
+
+
+# ============================ 访问日志刷屏抑制 ============================
+# 用户口径：/api/status（前端 2s 轮询）与 /api/balance（余额 60s 轮询）的
+# werkzeug 访问日志高频刷屏，予以屏蔽；/api/chat、/console 等其余照常输出。
+# 实现取舍（对任务建议"降为 DEBUG"的修正）：werkzeug 3.x 首次打日志时会
+# 给 logger 自挂 NOTSET 级 StreamHandler（见 werkzeug/_internal._log），
+# 而 logger 级别只在 emit 入口把关、不约束 handler——被降级的 DEBUG 记录
+# 仍会经 handler 输出。故本过滤器对轮询路径的记录直接返回 False（拦截，
+# 等效"任何日志级别下不可见"）；setLevel(INFO) 保底：确保非拦截访问日志
+# 在无宿主日志配置时仍按 INFO 正常输出。
+_QUIET_LOG_PREFIXES = ("/api/status", "/api/balance")
+
+
+class _PollAccessFilter(logging.Filter):
+    """高频轮询路径（/api/status、/api/balance）的 werkzeug 访问日志拦截器。"""
+
+    # 访问日志行形如：'127.0.0.1 - - [01/Oct/2026 12:00:00] "GET /api/status HTTP/1.1" 200 -'
+    _REQUEST_LINE_RE = re.compile(r'"[A-Z]+ (\S+)(?: HTTP/[^"]*)?"')
+
+    def filter(self, record):
+        match = self._REQUEST_LINE_RE.search(record.getMessage())
+        if match:
+            path = match.group(1).split("?", 1)[0]   # 剥查询串只比对路径
+            if path.startswith(_QUIET_LOG_PREFIXES):
+                return False   # 拦截（取舍说明见上方注释）
+        return True
+
+
+_werkzeug_logger = logging.getLogger("werkzeug")
+_werkzeug_logger.setLevel(logging.INFO)   # 保底（取舍说明见上方注释）
+_werkzeug_logger.addFilter(_PollAccessFilter())
 
 
 # ============================ 静态托管 ============================
@@ -109,8 +151,14 @@ def console_static(filename):
 
 # ============================ 工具函数 ============================
 
-def get_cpu_temp():
-    """读取 CPU 温度：psutil.sensors_temperatures 取首个可用值，失败回退 0.0。"""
+# 温度读取失败/平台不支持时 /api/status 的占位文案（用户口径，替换旧恒 0.0）
+NO_TEMP_TEXT = "暂无温度"
+
+
+def _temp_from_psutil():
+    """温度优先级①：psutil.sensors_temperatures 跨平台首选（Linux/香橙派
+    直接可用；Windows 上 psutil 未实现该方法，抛 NotImplementedError 后
+    自然落到下一优先级）。无可用值返回 None。"""
     try:
         temps = psutil.sensors_temperatures()
         for entries in (temps or {}).values():
@@ -119,7 +167,55 @@ def get_cpu_temp():
                     return float(t.current)
     except Exception:
         pass
-    return 0.0
+    return None
+
+
+def _temp_from_wmi():
+    """温度优先级②（Windows）：WMI MSAcpi_ThermalZoneTemperature 的
+    CurrentTemperature 为开尔文×10，转换摄氏度 = (值 / 10) - 273.15。
+    wmi 为 Windows 专用依赖（requirements.txt）：函数内延迟导入，未安装 /
+    非 Windows / 无传感器或权限不足（多数设备该命名空间需管理员）时返回
+    None 优雅跳过，绝不让 import 崩溃。"""
+    try:
+        import wmi  # 延迟导入：未装 / 非 Windows 优雅跳过
+    except Exception:
+        return None
+    try:
+        zones = wmi.WMI(namespace="root/wmi").MSAcpi_ThermalZoneTemperature()
+        for zone in zones:
+            current = getattr(zone, "CurrentTemperature", None)
+            if current:
+                return float(current) / 10.0 - 273.15
+    except Exception:
+        pass
+    return None
+
+
+def _temp_from_sys_thermal():
+    """温度优先级③（Linux/香橙派）：/sys/class/thermal/thermal_zone*/temp
+    单位为毫摄氏度，÷1000 转摄氏度；按路径序取第一个可解析的有效值，
+    读不到/非数字（驱动未就绪）跳过继续。无可用 zone 返回 None。"""
+    for path in sorted(glob.glob("/sys/class/thermal/thermal_zone*/temp")):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read().strip()
+            if raw:
+                return float(raw) / 1000.0   # 毫摄氏度 → 摄氏度
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def get_cpu_temp():
+    """读取 CPU 温度（用户口径三平台优先级）：
+    ① psutil.sensors_temperatures → ② Windows wmi → ③ Linux /sys/class/thermal。
+    读取失败或平台不支持返回字符串 "暂无温度"（替换旧恒 0.0）；成功返回
+    float 摄氏度。"""
+    for reader in (_temp_from_psutil, _temp_from_wmi, _temp_from_sys_thermal):
+        value = reader()
+        if value is not None:
+            return float(value)
+    return NO_TEMP_TEXT
 
 
 def _boot_ts():
@@ -249,8 +345,14 @@ def index():
                     document.getElementById('cpu-bar').style.width = d.cpu + '%';
                     document.getElementById('mem-val').innerText = d.memory.toFixed(1) + '%';
                     document.getElementById('mem-bar').style.width = d.memory + '%';
-                    document.getElementById('temp-val').innerText = d.temperature.toFixed(1) + '°C';
-                    document.getElementById('temp-bar').style.width = Math.min(d.temperature * 2, 100) + '%';
+                    // 温度数值走进度条；"暂无温度"（字符串占位）直接展示、进度条归零
+                    if (typeof d.temperature === 'number') {
+                        document.getElementById('temp-val').innerText = d.temperature.toFixed(1) + '°C';
+                        document.getElementById('temp-bar').style.width = Math.min(d.temperature * 2, 100) + '%';
+                    } else {
+                        document.getElementById('temp-val').innerText = d.temperature;
+                        document.getElementById('temp-bar').style.width = '0%';
+                    }
                     let uptimeSec = Math.floor(Date.now()/1000) - BOOT_TS;
                     document.getElementById('uptime-val').innerText = Math.floor(uptimeSec/3600) + 'h ' + Math.floor((uptimeSec%3600)/60) + 'm';
                 });
@@ -347,9 +449,11 @@ def api_history_delete():
 
 @app.route("/api/status")
 def api_status():
-    """系统状态 API：{code, data:{cpu, memory, temperature, timestamp}}。
+    """系统状态 API：{code, data:{cpu, memory, temperature, timestamp, tts_voice}}。
 
-    psutil 异常时对应字段回退 0.0，不让接口 500。
+    psutil 异常时 cpu/memory 回退 0.0，不让接口 500；temperature 走三平台
+    读取链（get_cpu_temp），全失败返回 "暂无温度"；tts_voice 供前端 TTS
+    音色选择（组 B 前端契约）。
     """
     try:
         cpu = float(psutil.cpu_percent(interval=0.5))
@@ -364,8 +468,9 @@ def api_status():
         "data": {
             "cpu": cpu,
             "memory": memory,
-            "temperature": get_cpu_temp(),   # sensors_temperatures 取可用值，失败 0.0
+            "temperature": get_cpu_temp(),   # 三平台读取链，失败 "暂无温度"
             "timestamp": int(time.time()),
+            "tts_voice": TTS_VOICE,          # 前端 TTS 音色（组 B 前端消费）
         }
     })
 

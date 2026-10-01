@@ -49,6 +49,7 @@ mock 注意：所有 patch 均走 context manager / start+addCleanup（结束即
 进程中共存。
 """
 import contextlib
+import glob
 import io
 import json
 import os
@@ -122,7 +123,7 @@ class StatusApiTests(unittest.TestCase):
         self.assertEqual(payload["code"], 200)
         data = payload["data"]
         self.assertEqual(set(data.keys()),
-                         {"cpu", "memory", "temperature", "timestamp"})
+                         {"cpu", "memory", "temperature", "timestamp", "tts_voice"})
         self.assertEqual(data["cpu"], 32.5)
         self.assertEqual(data["memory"], 61.2)
         self.assertEqual(data["temperature"], 52.3)  # 取首个可用温度
@@ -140,16 +141,17 @@ class StatusApiTests(unittest.TestCase):
         fake_psutil.sensors_temperatures.side_effect = NotImplementedError(
             "sensors not supported")
 
-        with mock.patch.object(dashboard, "psutil", fake_psutil), _quiet():
+        with mock.patch.dict(sys.modules, {"wmi": None}),              mock.patch.object(dashboard, "glob", glob),              mock.patch.object(dashboard, "psutil", fake_psutil), _quiet():
             resp = self.client.get("/api/status")
 
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()["data"]
         self.assertEqual(set(data.keys()),
-                         {"cpu", "memory", "temperature", "timestamp"})
+                         {"cpu", "memory", "temperature", "timestamp", "tts_voice"})
         self.assertEqual(data["cpu"], 0.0)
         self.assertEqual(data["memory"], 0.0)
-        self.assertEqual(data["temperature"], 0.0)
+        # 组 C 新口径：温度读取链全失败返回字符串占位（替换旧恒 0.0）
+        self.assertEqual(data["temperature"], "暂无温度")
         self.assertIsInstance(data["timestamp"], int)
 
     def test_status_sensors_empty_fallback(self):
@@ -159,10 +161,11 @@ class StatusApiTests(unittest.TestCase):
         fake_psutil.virtual_memory.return_value = mock.Mock(percent=20.0)
         fake_psutil.sensors_temperatures.return_value = {}
 
-        with mock.patch.object(dashboard, "psutil", fake_psutil):
+        with mock.patch.dict(sys.modules, {"wmi": None}),              mock.patch.object(dashboard, "glob", glob),              mock.patch.object(dashboard, "psutil", fake_psutil):
             data = self.client.get("/api/status").get_json()["data"]
 
-        self.assertEqual(data["temperature"], 0.0)
+        # 组 C 新口径：sensors 空且 wmi/sys 均无 → 字符串占位
+        self.assertEqual(data["temperature"], "暂无温度")
         self.assertEqual(data["cpu"], 10.0)
 
 
