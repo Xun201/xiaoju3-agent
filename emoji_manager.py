@@ -1,33 +1,51 @@
 # -*- coding: utf-8 -*-
-"""小橘3号 · 表情包收藏与闭环（架构设计文档 §5 / §10 #6、功能文档 §5）。
+"""小橘3号 · 表情包收藏与配图回复闭环（架构设计文档 §5 / §10 #6、功能文档 §5）。
 
 - save_emoji_link(url)：收到非 @ 图片消息时把链接追加进本地"小仓库"——
   落盘 agent_state/emoji_links.json（文件名与参考实现一致，位置收敛到
   统一配置的 agent_state 隔离区），去重 + 容量截断（滚动保留最新
   MAX_EMOJI_LINKS 条，防链接无限膨胀）。
-- get_emoji_path(tag) / get_random_emoji()：按标签 / 随机从本地表情库
-  （工作区 emoji_library/）取图，签名与参考实现一致，供 brain.translate_emoji
-  函数内延迟导入对接；库为空或标签未命中时返回 None，调用方据此优雅降级。
+- download_emoji(url, tag)：从链接下载图片到本地表情库 assets/emoji/
+  （目录自动创建；文件名 = 安全化标签 + URL MD5 哈希，同链接同名天然去重；
+  扩展名按响应 Content-Type 推断、默认 .png）；超时/失败返回 None，
+  绝不抛异常。
+- get_emoji_path(tag) / get_random_emoji()：按标签 / 随机从本地表情库取图，
+  签名与参考实现一致，供 brain.translate_emoji 函数内延迟导入对接；库为空
+  或标签未命中时返回 None，调用方据此优雅降级。
 - 闭环兜底（架构 §10 #6）：get_emoji_path 未命中标签时，从收藏链接库取最新
-  一条经 download_emoji 下载到工作区 emoji_library/（文件名含标签），成功后
-  translate 链路自然可用；下载失败优雅返回 None，不阻断回复链。
+  一条经 download_emoji 下载到本地，成功后 translate 链路自然可用；下载失败
+  优雅返回 None，不阻断回复链。
 """
+import hashlib
 import json
 import os
 import random
+import re
 
 import requests
 
-from xiaoju3 import AGENT_STATE_DIR, WORKSPACE
+from xiaoju3 import AGENT_STATE_DIR, PROJECT_ROOT
 
-# 本地表情库目录（下载形态用；参考实现口径：工作区下的 emoji_library）
-EMOJI_DIR = os.path.join(WORKSPACE, "emoji_library")
+# 本地表情库目录（W1 接线口径：项目 assets/emoji/，下载时自动创建）
+EMOJI_DIR = os.path.join(PROJECT_ROOT, "assets", "emoji")
 
 # 链接收藏仓库（agent_state 隔离区，运行数据不入仓库）
 EMOJI_LOG_FILE = os.path.join(AGENT_STATE_DIR, "emoji_links.json")
 
 # 收藏容量上限：滚动保留最新 N 条（环境变量可覆盖）
 MAX_EMOJI_LINKS = int(os.environ.get("MAX_EMOJI_LINKS", "500"))
+
+# Content-Type → 扩展名（推断失败 / 缺失一律默认 .png）
+_CONTENT_TYPE_EXT = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
+    "image/gif": ".gif", "image/webp": ".webp",
+}
+
+
+def _ext_from_content_type(content_type):
+    """按响应 Content-Type 推断扩展名；缺失 / 未知 / 非字符串默认 .png。"""
+    ctype = str(content_type or "").split(";")[0].strip().lower()
+    return _CONTENT_TYPE_EXT.get(ctype, ".png")
 
 
 def _lookup_emoji(tag):
@@ -57,14 +75,18 @@ def get_emoji_path(tag):
     """根据标签查找表情包，比如找'开心'。
 
     本地库缺失该标签时触发下载兜底：从收藏链接库取最新一条下载到本地
-    （文件名含标签），成功后 translate 链路自然可用；失败返回 None。
+    （文件名 = 标签 + URL 哈希），成功后 translate 链路自然可用；失败返回 None。
     """
     path = _lookup_emoji(tag)
     if path:
         return path
     url = _latest_stored_link()
-    if url and download_emoji(url, tag):
-        return _lookup_emoji(tag)
+    if url:
+        downloaded = download_emoji(url, tag)
+        if downloaded:
+            # 正常按标签回查（文件名含标签）；标签含特殊字符被安全化时
+            # 直接用下载返回的落盘路径兜底
+            return _lookup_emoji(tag) or downloaded
     return None
 
 
@@ -79,29 +101,32 @@ def get_random_emoji():
 
 
 def download_emoji(url, tag="unknow"):
-    """下载图片到本地表情库（工作区 emoji_library/，文件名含标签）。
+    """下载图片到本地表情库（assets/emoji/，目录自动创建）。
 
-    网络异常 / 非 200 一律优雅返回 False，不抛异常（回复链路降级口径）。
+    文件名 = 安全化标签 + URL MD5 哈希 + 扩展名：同链接同名覆盖（天然去重、
+    不产生随机重名文件）；扩展名按响应 Content-Type 推断、默认 .png。
+    成功返回落盘路径；网络异常 / 非 200 / 写盘失败一律返回 None，绝不抛异常
+    （回复链路降级口径）。
     """
-    if not os.path.exists(EMOJI_DIR):
-        os.makedirs(EMOJI_DIR)
     try:
+        os.makedirs(EMOJI_DIR, exist_ok=True)
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         res = requests.get(url, headers=headers, timeout=15)
-        if res.status_code == 200:
-            # 为了避免重名覆盖，用随机数命名
-            filename = f"{tag}_{random.randint(1000, 9999)}.jpg"
-            filepath = os.path.join(EMOJI_DIR, filename)
-            with open(filepath, 'wb') as f:
-                f.write(res.content)
-            print(f"✅ 表情已保存到: {filepath}")
-            return True
-        else:
+        if res.status_code != 200:
             print(f"❌ 表情下载失败，状态码: {res.status_code}")
-            return False
+            return None
+        ext = _ext_from_content_type(res.headers.get("Content-Type"))
+        url_hash = hashlib.md5(str(url).encode("utf-8")).hexdigest()[:12]
+        safe_tag = re.sub(r'[\\/:*?"<>|\s]+', "_", str(tag)).strip("._") or "unknow"
+        filename = f"{safe_tag}_{url_hash}{ext}"
+        filepath = os.path.join(EMOJI_DIR, filename)
+        with open(filepath, 'wb') as f:
+            f.write(res.content)
+        print(f"✅ 表情已保存到: {filepath}")
+        return filepath
     except Exception as e:
         print(f"❌ 表情下载出错: {e}")
-        return False
+        return None
 
 
 def save_emoji_link(url):

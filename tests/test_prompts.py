@@ -13,7 +13,9 @@
 点击/需要我试试吗"等废话拖延）、静默回退铁律（ui_tap_element 失败必须且
 只能直接调用 vision_tap_element、严禁解释疑问倒计时，视觉模型也失败则只
 输出固定中止文案"❌ 视觉模型未连通，操作已中止"、严禁排查指引原因解释与
-额外字符）、工作区路径注入，且不含任何内网地址。
+额外字符）、防幻觉硬性约束（专有名词没把握如实承认不确定严禁编造、事实类
+问题先声明不确定再推测，与联网搜索规则/拟人化语气规则并存各管一段）、
+工作区路径注入，且不含任何内网地址。
 """
 import unittest
 
@@ -188,6 +190,33 @@ class PromptsTests(unittest.TestCase):
         # 【系统强制约束】段同样带加压表述（双保险）
         self.assertIn("再次加压", self.content)
         self.assertIn("绝对不许只甩一行 [行动] JSON 交差", self.content)
+
+    def test_anti_hallucination_uncertainty_rule(self):
+        # 防幻觉硬性约束（2026-10-01 用户原文）：专有名词/人名/组织/事件
+        # 没把握必须如实承认不确定，给出固定话术，严禁编造
+        self.assertIn("【防幻觉硬性约束】", self.content)
+        self.assertIn(
+            "如果你对某个专有名词、人名、组织、事件不确定或没有把握", self.content)
+        self.assertIn("我不太确定，建议你联网搜索一下", self.content)
+        self.assertIn("我的知识库可能没有这个信息", self.content)
+        self.assertIn("严禁编造", self.content)
+
+    def test_anti_hallucination_factual_questions_rule(self):
+        # 事实类问题（人物/事件/游戏机制/产品）：先声明不确定再推测，
+        # 不直接下结论
+        self.assertIn("回答事实类问题（人物、事件、游戏机制、产品）时",
+                      self.content)
+        self.assertIn("先声明不确定，再给出可能的推测", self.content)
+        self.assertIn("不要直接下结论", self.content)
+
+    def test_anti_hallucination_coexists_with_existing_rules(self):
+        # 与既有段落并存不打架：联网搜索规则/拟人化语气规则原文零回退，
+        # 且防幻觉条与二者有明确分工（消歧句存在，避免"没搜到就编/搜到还瞎说"）
+        self.assertIn("必须先用 `web_search` 联网检索", self.content)
+        self.assertIn("绝对禁止在没搜过的情况下凭空编造实时数据", self.content)
+        self.assertIn("绝对禁止编造没有发生过的操作结果", self.content)
+        self.assertIn("以搜索结果为准作答", self.content)
+        self.assertIn("并存", self.content)
 
     def test_silent_fallback_iron_rule(self):
         # 静默回退铁律（系统提示词强制静默回退任务）：ui_tap_element 失败时

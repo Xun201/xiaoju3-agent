@@ -15,6 +15,11 @@ psutil==7.2.2
 # HTTP 客户端（Ollama / DeepSeek / Home Assistant / 联网搜索；2.33 起要求 >=3.9）
 requests==2.32.3
 
+# 联网搜索 HTML 结果解析（search_tools：bing / 百度结果页）。纯 Python 库，
+# 最新 4.15 经核实 requires_python >=3.7 本可直接用；此处钉成熟 4.13 线，
+# 与其依赖 soupsieve 在 3.8 + 旧 pip 环境的解析组合最稳，行为与 PC 版一致。
+beautifulsoup4==4.13.5
+
 # 无头浏览器（/gen_log 深度分享页抓取）
 # playwright 1.49 起要求 >=3.9；1.48.0 为最后支持 Python 3.8 的版本，
 # 提供 linux-arm64 Chromium 构建，官方支持 Ubuntu 20.04 / 22.04。

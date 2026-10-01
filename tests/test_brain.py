@@ -45,11 +45,21 @@
 - MAX_MESSAGES=50 截断；translate_emoji 转换正确且已接入 smart_ask 回复链；
 - smart_ask 返回二元组与来源标签（🏠 本地 / ☁️ 云端 / (工具) / ⛔ 熔断）正确；
 - _build_messages 前缀白名单：最近设备操作记录 system 条目保留注入，
-  既有【前情提要】/长期记忆前缀不回退。
+  既有【前情提要】/长期记忆前缀不回退；
+- W1 核心功能接线（2026-10-01）：前情提要压缩（>20 条 → compress_context
+  前情提要 + 最近 10 条明细；缓存持久化命中复用 / 历史变化失效重压 /
+  压缩失败降级硬截断 / 缓存损坏重压）；长期记忆（关键词规则落库
+  preference/event、回答前 get_recent_memories(5) 注入、SQLite 异常静默、
+  与 main 先行注入不重复）；表情降级（下载失败/模块缺席/链路异常 →
+  "[表情: 标签]"纯文本，绝不再返回未转换的 [EMOJI: 原文）。
 
 外部模块（home_tools / adb_tools / vision_tools / android_ui_tools）由并行
 开发负责，与 tests/test_tools.py 相同：在 import brain（→ tools）之前向
-sys.modules 注入 mock；emoji_manager 用 patch.dict 按需注入。
+sys.modules 注入 mock；emoji_manager 用 patch.dict 按需注入；
+agent_state.state_manager 由 setUpModule 注入进程内 fake（测试期全局生效、
+tearDownModule 还原）——brain 对它是函数内延迟导入，不拦截会触碰真实
+agent_state/long_term.db（隔离区红线），且真实库有历史记忆时会污染
+消息结构断言。
 """
 import contextlib
 import io
@@ -129,6 +139,47 @@ for _name, _old in _SAVED_MODULES.items():
         sys.modules.pop(_name, None)
     else:
         sys.modules[_name] = _old
+
+
+# ---------------------------------------------------------------------------
+# agent_state.state_manager 进程内 fake（本模块测试期全局生效）
+# ---------------------------------------------------------------------------
+
+_STATE_FAKE = None
+_STATE_FAKE_PATCHER = None
+
+
+def setUpModule():
+    """挂载 agent_state / agent_state.state_manager 的进程内 fake。
+
+    brain 对长期记忆是函数内延迟导入：不拦截的话，任意一次 smart_ask 都会
+    触碰真实 agent_state/long_term.db（违反隔离区红线），且真实库有历史
+    记忆时会向模型消息注入记忆条目、破坏既有断言。tearDownModule 还原，
+    不影响其它测试模块；记忆专项用例经 _STATE_FAKE 操控 fake。
+    """
+    global _STATE_FAKE, _STATE_FAKE_PATCHER
+    fake_pkg = types.ModuleType("agent_state")
+    fake_pkg.__path__ = []  # 标记为包，杜绝真实文件系统查找
+    fake_mod = types.ModuleType("agent_state.state_manager")
+    fake_mod.state_manager = mock.MagicMock(name="state_manager")
+    fake_mod.state_manager.get_recent_memories.return_value = []
+    fake_mod.state_manager.save_memory.return_value = None
+    fake_pkg.state_manager = fake_mod
+    _STATE_FAKE = fake_mod
+    _STATE_FAKE_PATCHER = mock.patch.dict(sys.modules, {
+        "agent_state": fake_pkg,
+        "agent_state.state_manager": fake_mod,
+    })
+    _STATE_FAKE_PATCHER.start()
+
+
+def tearDownModule():
+    """还原 sys.modules，真实 agent_state.state_manager 对后续模块可见。"""
+    global _STATE_FAKE, _STATE_FAKE_PATCHER
+    if _STATE_FAKE_PATCHER is not None:
+        _STATE_FAKE_PATCHER.stop()
+    _STATE_FAKE_PATCHER = None
+    _STATE_FAKE = None
 
 
 # ---------------------------------------------------------------------------
@@ -2499,24 +2550,40 @@ class TranslateEmojiTests(unittest.TestCase):
             self.assertEqual(brain.translate_emoji("哈哈[EMOJI:开心]"),
                              "哈哈[CQ:image,file=file:///emoji/lib/kaixin.png]")
 
-    def test_unknown_tag_removed(self):
+    def test_unknown_tag_degrades_to_text(self):
+        # W1 降级口径：下载兜底仍无图 → 降级纯文本"[表情: 标签]"，
+        # 绝不返回未转换的 [EMOJI: 原文
         with mock.patch.dict(sys.modules, {"emoji_manager": _fake_emoji_manager()}):
-            self.assertEqual(brain.translate_emoji("呜呜[EMOJI:大哭]"), "呜呜")
+            self.assertEqual(brain.translate_emoji("呜呜[EMOJI:大哭]"),
+                             "呜呜[表情: 大哭]")
 
     def test_mixed_tags(self):
         with mock.patch.dict(sys.modules, {"emoji_manager": _fake_emoji_manager()}):
             self.assertEqual(
                 brain.translate_emoji("A[EMOJI:开心]B[EMOJI:缺失]C"),
-                "A[CQ:image,file=file:///emoji/lib/kaixin.png]BC")
+                "A[CQ:image,file=file:///emoji/lib/kaixin.png]B[表情: 缺失]C")
 
     def test_no_tag_unchanged(self):
         self.assertEqual(brain.translate_emoji("普通回复，没有标签。"),
                          "普通回复，没有标签。")
 
     def test_emoji_manager_missing_graceful(self):
-        # sys.modules 置 None 使延迟导入稳定抛 ImportError → 原样返回
+        # sys.modules 置 None 使延迟导入稳定抛 ImportError → 安全封口转纯文本，
+        # 绝不崩溃、绝不再返回未转换的 [EMOJI: 原文
         with mock.patch.dict(sys.modules, {"emoji_manager": None}):
-            self.assertEqual(brain.translate_emoji("[EMOJI:开心]"), "[EMOJI:开心]")
+            self.assertEqual(brain.translate_emoji("[EMOJI:开心]"), "[表情: 开心]")
+
+    def test_get_emoji_path_crash_still_degrades_to_text(self):
+        # 链路异常（get_emoji_path 抛错，如下载崩溃）→ 降级纯文本，绝不崩溃
+        mod = types.ModuleType("emoji_manager")
+
+        def boom(tag):
+            raise RuntimeError("下载链路崩了")
+
+        mod.get_emoji_path = boom
+        with mock.patch.dict(sys.modules, {"emoji_manager": mod}):
+            self.assertEqual(brain.translate_emoji("哈哈[EMOJI:开心]"),
+                             "哈哈[表情: 开心]")
 
     def test_wired_into_smart_ask_reply_chain(self):
         # 文档 §5 闭环口径：smart_ask 返回前调用 translate_emoji 转换
@@ -2558,7 +2625,7 @@ class TranslateEmojiTests(unittest.TestCase):
         self.addCleanup(pp.stop)
 
     def test_emoji_missing_library_degrades_gracefully(self):
-        # emoji_manager 缺席 → [EMOJI:] 原样保留，不阻断回复链
+        # emoji_manager 缺席 → 安全封口降级"[表情: 标签]"纯文本，不阻断回复链
         with mock.patch.dict(sys.modules, {"emoji_manager": None}), \
                 mock.patch.object(brain, "requests") as mr, _quiet():
             mr.get.return_value = mock.Mock()
@@ -2567,7 +2634,7 @@ class TranslateEmojiTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>哈哈[EMOJI:开心]",
+            (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>哈哈[表情: 开心]",
              "🏠 本地"))
 
     def test_tool_summary_reply_translated_too(self):
@@ -2590,6 +2657,324 @@ class TranslateEmojiTests(unittest.TestCase):
             (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>弄好啦[图]",
              "🏠 本地 (工具)"))
         mtrans.assert_called_once_with("弄好啦[EMOJI:开心]")
+
+
+# ---------------------------------------------------------------------------
+# W1 核心功能接线：前情提要压缩（§10 #2）
+# ---------------------------------------------------------------------------
+
+class ContextCompressionWiringTests(unittest.TestCase):
+    """smart_ask 前情提要压缩接线：>20 条 → compress_context 前情提要 +
+    最近 10 条明细（替换硬截断口径）；缓存持久化（命中复用 / 历史变化失效
+    重压）；压缩失败 / 降级摘要 / 缓存损坏降级不崩溃。compress_context 一律
+    mock，全程离线；缓存文件一律注入临时目录。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="xiaoju3_brain_compress_")
+        cp = mock.patch.object(brain, "CONTEXT_SUMMARY_FILE",
+                               os.path.join(self.tmpdir, "context_summary.json"))
+        cp.start()
+        self.addCleanup(cp.stop)
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
+        # 共享 fake 状态外置层归零：长期记忆注入不影响本类消息结构断言
+        self.sm = _STATE_FAKE.state_manager
+        self._reset_sm()
+
+    def _reset_sm(self):
+        # MagicMock 的重置方法是 reset_mock（reset 会被当作子 mock 属性，清不掉）
+        self.sm.reset_mock(return_value=True, side_effect=True)
+        self.sm.get_recent_memories.return_value = []
+        self.sm.save_memory.return_value = None
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        self._reset_sm()
+
+    @staticmethod
+    def _history(n):
+        return [{"role": "user" if i % 2 == 0 else "assistant",
+                 "content": f"历史消息{i}"} for i in range(n)]
+
+    _SUMMARY = "【前情提要】：主人此前与小橘聊过小橘的功能与记忆机制。"
+
+    def _compress_patch(self, summary=_SUMMARY):
+        """把 plugins.context_manager.compress_context 换成可控假压缩。"""
+
+        def fake_compress(messages, max_messages=20, keep_recent=10):
+            return [messages[0],
+                    {"role": "system", "content": summary},
+                    *messages[-keep_recent:]]
+
+        return mock.patch("plugins.context_manager.compress_context",
+                          side_effect=fake_compress)
+
+    def test_over_20_history_compresses_and_injects_summary(self):
+        history = self._history(25)
+        with self._compress_patch() as mcomp, \
+                mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好的呀")
+            brain.smart_ask("当前问题", history)
+
+        mcomp.assert_called_once()
+        msgs = mr.post.call_args.kwargs["json"]["messages"]
+        # 压缩形态：置顶系统提示词 + 前情提要 system 条目 + 最近 10 条明细
+        self.assertEqual(msgs[0], prompts.SYSTEM_PROMPT)
+        self.assertEqual(msgs[1]["role"], "system")
+        self.assertTrue(msgs[1]["content"].startswith("【前情提要】"))
+        self.assertIn(self._SUMMARY, msgs[1]["content"])
+        self.assertEqual(len(msgs), 12)
+        self.assertEqual(msgs[-1], {"role": "user", "content": "当前问题"})
+        self.assertEqual(msgs[2]["content"], "历史消息16")   # 最近明细保留尾部
+        # 替换硬截断口径：旧消息不再整段直送
+        self.assertNotIn({"role": "user", "content": "历史消息0"}, msgs)
+
+    def test_compress_failure_falls_back_to_existing_truncation(self):
+        history = self._history(25)
+        with self._compress_patch() as mcomp, \
+                mock.patch.object(brain, "requests") as mr, _quiet():
+            mcomp.side_effect = RuntimeError("双脑全挂")
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好的呀")
+            brain.smart_ask("当前问题", history)
+
+        mcomp.assert_called_once()
+        msgs = mr.post.call_args.kwargs["json"]["messages"]
+        # 降级：既有口径原样直送（保存侧 50 条硬截断仍在下游生效），不崩溃
+        self.assertEqual(len(msgs), 27)
+        self.assertFalse(any(
+            isinstance(m, dict)
+            and str(m.get("content", "")).startswith("【前情提要】")
+            for m in msgs))
+
+    def test_degraded_summary_treated_as_failure(self):
+        # compress_context 双脑不可用时返回降级摘要（不抛异常）——按失败处理
+        history = self._history(25)
+        summary = "【前情提要】：（由于系统原因，早期对话记忆已丢失）"
+        with self._compress_patch(summary=summary) as mcomp, \
+                mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好的呀")
+            brain.smart_ask("当前问题", history)
+
+        mcomp.assert_called_once()
+        msgs = mr.post.call_args.kwargs["json"]["messages"]
+        self.assertEqual(len(msgs), 27)
+        self.assertFalse(any(
+            isinstance(m, dict)
+            and str(m.get("content", "")).startswith("【前情提要】")
+            for m in msgs))
+        # 降级摘要不落缓存
+        self.assertFalse(os.path.exists(brain.CONTEXT_SUMMARY_FILE))
+
+    def test_cache_hit_skips_second_compress(self):
+        history = self._history(25)
+        with self._compress_patch() as mcomp, \
+                mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好的呀")
+            brain.smart_ask("当前问题", history)
+            mcomp.assert_called_once()
+            # 第二轮：同一历史（指纹未变）→ 缓存命中，不再压缩
+            brain.smart_ask("又来啦", history)
+            mcomp.assert_called_once()
+
+        # 缓存已持久化，两轮 payload 都注入前情提要
+        self.assertTrue(os.path.exists(brain.CONTEXT_SUMMARY_FILE))
+        payloads = [c.kwargs["json"]["messages"] for c in mr.post.call_args_list]
+        self.assertEqual(len(payloads), 2)
+        for msgs in payloads:
+            self.assertTrue(msgs[1]["content"].startswith("【前情提要】"))
+
+    def test_history_growth_invalidates_cache(self):
+        history = self._history(25)
+        with self._compress_patch() as mcomp, \
+                mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好")
+            brain.smart_ask("第一问", history)
+            mcomp.assert_called_once()
+            # 新增消息 → 旧消息段指纹变化 → 自动失效重压
+            history.append({"role": "user", "content": "新增消息"})
+            brain.smart_ask("第二问", history)
+            self.assertEqual(mcomp.call_count, 2)
+
+    def test_corrupt_cache_file_recompresses(self):
+        with open(brain.CONTEXT_SUMMARY_FILE, "w", encoding="utf-8") as f:
+            f.write("{broken json")
+        history = self._history(25)
+        with self._compress_patch() as mcomp, \
+                mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好")
+            brain.smart_ask("当前问题", history)
+
+        # 持久化读失败/文件损坏 → 视为无缓存重新压缩，不崩溃
+        mcomp.assert_called_once()
+        msgs = mr.post.call_args.kwargs["json"]["messages"]
+        self.assertTrue(msgs[1]["content"].startswith("【前情提要】"))
+
+    def test_small_history_untouched(self):
+        history = self._history(5)
+        with self._compress_patch() as mcomp, \
+                mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好")
+            brain.smart_ask("你好", history)
+
+        mcomp.assert_not_called()
+        msgs = mr.post.call_args.kwargs["json"]["messages"]
+        self.assertEqual(len(msgs), 7)
+        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 1)
+
+    def test_memory_injected_after_summary_when_compressed(self):
+        # 集成形态：压缩与记忆注入并存 → 前情提要在前、长期记忆紧随其后
+        self.sm.get_recent_memories.return_value = [("preference", "我喜欢蓝色")]
+        history = self._history(25)
+        with self._compress_patch() as mcomp, \
+                mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好的呀")
+            brain.smart_ask("当前问题", history)
+
+        mcomp.assert_called_once()
+        msgs = mr.post.call_args.kwargs["json"]["messages"]
+        self.assertTrue(msgs[1]["content"].startswith("【前情提要】"))
+        self.assertTrue(msgs[2]["content"].startswith("以下是关于用户的长期记忆"))
+        self.assertEqual(len(msgs), 13)
+
+
+# ---------------------------------------------------------------------------
+# W1 核心功能接线：长期记忆 SQLite（§10 #3）
+# ---------------------------------------------------------------------------
+
+class LongTermMemoryWiringTests(unittest.TestCase):
+    """smart_ask 长期记忆接线：关键词规则落库（preference/event）、回答前
+    get_recent_memories(5) 注入、SQLite 异常静默跳过、与 main 先行注入不
+    重复。经 setUpModule 的进程内 fake 操控，不触碰真实 long_term.db。"""
+
+    def setUp(self):
+        self.sm = _STATE_FAKE.state_manager
+        self._reset_sm()
+        tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
+        tp.start()
+        self.addCleanup(tp.stop)
+
+    def _reset_sm(self):
+        # MagicMock 的重置方法是 reset_mock（reset 会被当作子 mock 属性，清不掉）
+        self.sm.reset_mock(return_value=True, side_effect=True)
+        self.sm.get_recent_memories.return_value = []
+        self.sm.save_memory.return_value = None
+
+    def tearDown(self):
+        # 还原共享 fake 默认口径，避免影响其他用例类
+        self._reset_sm()
+
+    def _chat(self, message, history=None):
+        with mock.patch.object(brain, "requests") as mr, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.return_value = _local_resp("好的呀")
+            result = brain.smart_ask(message, history or [])
+        msgs = mr.post.call_args.kwargs["json"]["messages"]
+        return result, msgs
+
+    @staticmethod
+    def _memory_blocks(msgs):
+        return [m for m in msgs if isinstance(m, dict) and m.get("role") == "system"
+                and str(m.get("content", "")).startswith("以下是关于用户的长期记忆")]
+
+    # ---------- 关键词规则提取落库 ----------
+
+    def test_preference_keyword_saves_memory(self):
+        self._chat("我喜欢蓝色")
+        self.sm.save_memory.assert_called_once_with("preference", "我喜欢蓝色")
+
+    def test_dislike_keyword_saves_memory(self):
+        self._chat("我讨厌下雨天")
+        self.sm.save_memory.assert_called_once_with("preference", "我讨厌下雨天")
+
+    def test_remember_keyword_saves_event(self):
+        self._chat("请记住周三要开会")
+        self.sm.save_memory.assert_called_once_with("event", "请记住周三要开会")
+
+    def test_help_me_remember_saves_event(self):
+        self._chat("帮我记住我的常用端口是5002")
+        self.sm.save_memory.assert_called_once_with(
+            "event", "帮我记住我的常用端口是5002")
+
+    def test_keyword_extracts_matching_sentence_only(self):
+        # 多句消息：提取命中规则的那一句，不是整条消息
+        self._chat("今天天气不错。我讨厌下雨。")
+        self.sm.save_memory.assert_called_once_with("preference", "我讨厌下雨")
+
+    def test_no_keyword_no_save(self):
+        self._chat("今天天气怎么样")
+        self.sm.save_memory.assert_not_called()
+
+    # ---------- 回答前注入 ----------
+
+    def test_recent_memories_injected_into_model_messages(self):
+        self.sm.get_recent_memories.return_value = [
+            ("preference", "我喜欢蓝色"), ("user", "主人叫小张")]
+        result, msgs = self._chat("我今天穿什么好？")
+
+        blocks = self._memory_blocks(msgs)
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("[preference] 我喜欢蓝色", blocks[0]["content"])
+        self.assertIn("[user] 主人叫小张", blocks[0]["content"])
+        self.assertEqual(msgs[0], prompts.SYSTEM_PROMPT)
+        self.assertEqual(msgs[1], blocks[0])   # 紧随置顶提示词
+        self.assertEqual(msgs[-1], {"role": "user", "content": "我今天穿什么好？"})
+        self.assertEqual(result[1], "🏠 本地")
+
+    def test_empty_memories_not_injected(self):
+        result, msgs = self._chat("今天穿什么好？")
+        self.assertEqual(self._memory_blocks(msgs), [])
+        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 1)
+        self.assertEqual(result[1], "🏠 本地")
+
+    def test_no_duplicate_injection_when_history_carries_block(self):
+        # main 链路先行注入形态：历史已带同前缀条目 → 不重复注入
+        block = {"role": "system",
+                 "content": "以下是关于用户的长期记忆，回答时可以参考：\n· [user] 主人叫小张"}
+        history = [block,
+                   {"role": "user", "content": "之前的话"},
+                   {"role": "assistant", "content": "好的"}]
+        self.sm.get_recent_memories.return_value = [("preference", "我喜欢蓝色")]
+        result, msgs = self._chat("继续", history)
+
+        blocks = self._memory_blocks(msgs)
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("[user] 主人叫小张", blocks[0]["content"])
+        self.assertEqual(result[1], "🏠 本地")
+
+    # ---------- SQLite / 模块异常静默 ----------
+
+    def test_sqlite_read_error_skips_silently(self):
+        self.sm.get_recent_memories.side_effect = Exception(
+            "database disk image is malformed")
+        result, msgs = self._chat("今天穿什么好？")
+        self.assertEqual(result, (f"<think>{brain.CHAT_THINKING_PLACEHOLDER}"
+                                  "</think>好的呀", "🏠 本地"))
+        self.assertEqual(self._memory_blocks(msgs), [])
+
+    def test_sqlite_save_error_skips_silently(self):
+        self.sm.save_memory.side_effect = Exception("database is locked")
+        result, msgs = self._chat("我喜欢蓝色")
+        self.sm.save_memory.assert_called_once()          # 落库被调用
+        self.assertEqual(result[1], "🏠 本地")            # 异常被吞，回复链正常
+        self.assertEqual(self._memory_blocks(msgs), [])   # 无记忆 → 不注入
+
+    def test_state_manager_missing_skips_silently(self):
+        # 模块缺席（sys.modules 置 None → ImportError）→ 静默跳过不崩溃
+        with mock.patch.dict(sys.modules, {"agent_state": None,
+                                           "agent_state.state_manager": None}):
+            result, msgs = self._chat("请记住带伞")
+        self.assertEqual(result[1], "🏠 本地")
+        self.sm.save_memory.assert_not_called()
+        self.assertEqual(self._memory_blocks(msgs), [])
 
 
 if __name__ == "__main__":

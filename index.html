@@ -264,9 +264,44 @@
             color: var(--color-text-secondary);
             white-space: pre-wrap;              /* 保留 [思考]/[计划] 的换行结构 */
             word-break: break-word;
+            max-height: 260px;                  /* 展开态内容完整可见：超限滚动（任务 6） */
+            overflow-y: auto;
+            border-left: 3px solid #c9d6f2;     /* 左侧竖线（任务 6） */
         }
         /* 折叠态：正文 display:none（console.js 切换类名即可，无需内联样式） */
         .think-card.think-collapsed .think-card-body { display: none; }
+
+        /* CoT 逐行展示（任务 6，DeepSeek 风格）：[思考]/[计划]/[行动] 每段
+           单独成行，由 console.js 逐个插入并按 THINK_LINE_STEP_MS 淡入 */
+        .think-line {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            margin: 3px 0;
+            opacity: 0;
+            animation: thinkLineFadeIn 0.3s ease forwards;   /* 逐行淡入 */
+        }
+        @keyframes thinkLineFadeIn {
+            from { opacity: 0; transform: translateY(3px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        /* 淡蓝色阶段标签小徽章（[思考]/[计划]/[行动]） */
+        .think-line-tag {
+            flex-shrink: 0;
+            font-size: 11px;
+            line-height: 1;
+            padding: 2px 6px;
+            margin-top: 2px;
+            border-radius: var(--radius-tool);
+            color: #3b82f6;                     /* 淡蓝阶段标签 */
+            background-color: #eff6ff;          /* 淡蓝底 */
+            border: 1px solid #bfdbfe;
+            user-select: none;
+        }
+        .think-line-text {
+            color: #6b7280;                     /* 灰色思考文字 */
+            min-width: 0;
+        }
 
         /* ==================== 轻提示 toast（替代 alert 占位） ==================== */
         #xiaoju3-toast {
@@ -315,6 +350,38 @@
             .chat-input-area { padding: 10px 12px; }
             .chat-input-area input { font-size: 16px; }  /* 16px 防 iOS 聚焦自动放大 */
         }
+
+        /* ==================== 加速球（任务 7：网页内缩略模式） ==================== */
+        /* 最小化：控制台主体（侧栏+聊天区）隐藏，右下角 60px 圆形加速球；
+           由 console.js 切换 body 的 .xiaoju3-minimized 类（互切幂等）。
+           与本地桌宠（desktop-pet.js）不同功能、两者共存互不影响。 */
+        body.xiaoju3-minimized > .sidebar,
+        body.xiaoju3-minimized > .chat-area { display: none; }
+        #xiaoju3-ball {
+            display: none;                      /* 默认隐藏，最小化态显示 */
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            width: 60px;                        /* 直径约 60px */
+            height: 60px;
+            border-radius: 50%;
+            border: 3px solid #d96f2b;          /* 橘色 Q 版圆形边框（狐毛同源） */
+            box-shadow: 0 4px 14px rgba(217, 111, 43, 0.35);
+            overflow: hidden;
+            cursor: pointer;
+            background: var(--color-card);
+            z-index: 99999;                     /* 低于 toast（100000），高于桌宠 */
+            touch-action: none;                 /* 指针拖拽不触发页面手势 */
+            user-select: none;
+        }
+        body.xiaoju3-minimized #xiaoju3-ball { display: block; }
+        #xiaoju3-ball img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            pointer-events: none;               /* 事件落在球容器，拖拽/点击统一处理 */
+        }
     </style>
     <link rel="icon" href="data:,">
 </head>
@@ -348,7 +415,9 @@
             <span class="header-actions">
                 <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
                 <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
+                <button id="auto-tts-toggle" class="header-btn" title="自动朗读开关（AI 回复自动播报，与音效独立）">🔇</button>
                 <button id="theme-toggle" class="header-btn" title="切换橘色主题">🦊</button>
+                <button id="console-minimize" class="header-btn" title="缩成加速球">⌄</button>
             </span>
         </div>
         <div class="chat-history" id="chat-history">
@@ -358,6 +427,11 @@
             <input type="text" id="chat-input" placeholder="输入消息，按回车发送..." onkeypress="if(event.key === 'Enter') sendMessage()">
             <button onclick="sendMessage()">发送</button>
         </div>
+    </div>
+
+    <!-- 加速球（任务 7：网页内缩略模式，最小化时显示；与桌宠共存互不影响） -->
+    <div id="xiaoju3-ball" title="点击展开控制台（可拖拽移动）">
+        <img src="/assets/DSniang1.jpg" alt="小橘3号">
     </div>
 
     <!-- 挂件容器（桌宠注入点） -->

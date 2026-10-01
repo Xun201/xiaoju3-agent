@@ -47,3 +47,4 @@ install_windows.exe
 
 # LLOneBot 插件包（二进制，不入仓库）
 LLBot.zip
+agent_state/context_summary.json

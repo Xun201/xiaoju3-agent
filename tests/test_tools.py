@@ -19,7 +19,8 @@ VisionShortCircuitTests：VISION_MODEL / VISION_KEY 任一为空/None → 直接
 外部模块（home_tools / adb_tools / vision_tools / android_ui_tools）由
 并行开发负责，这里用 sys.modules 注入 mock（且先移除真实模块），保证
 测试离线、确定，不依赖它们真实存在。注入必须发生在 import tools 之前。
-search_tools 为本阶段新增的真实模块（仅依赖 requests），网络一律 mock。
+search_tools 为真实模块（依赖 requests + beautifulsoup4），网络一律 mock，
+对外契约用例在本文件、引擎降级链深度用例在 tests/test_search_engines.py。
 TOTP 用 auth_lv4 RFC 参考密钥（真实时间生成/校验同窗，确定通过）；
 env 键 XIAOJU3_TOTP_SECRET 经 mock.patch.dict 注入，用后自动还原。
 """
@@ -1073,25 +1074,32 @@ class WebSearchDispatchTests(ToolsTestBase):
 
 
 class SearchToolsUnitTests(unittest.TestCase):
-    """search_tools.web_search：HTML 解析、跳转链接还原、异常中文提示。
+    """search_tools.web_search 对外契约：结果清单格式、空结果、空关键词、
+    失败短文案、非法条数回退、必应入口与 5 秒超时。
 
-    网络一律 mock（第二阶段规范：测试离线可跑）。
+    引擎降级链 / 各引擎解析的深度用例见 tests/test_search_engines.py；
+    这里只锁定 web_search 的既有对外契约零回退。网络一律 mock。
     """
 
-    DDG_HTML = """
-    <html><body>
-    <div class="result results_links results_links_deep web-result">
-      <h2 class="result__title">
-        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&rut=abc">小橘3号 <b>官网</b></a>
-      </h2>
-      <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&rut=abc">这是<b>摘要</b>内容</a>
-    </div>
-    <div class="result">
-      <h2><a class="result__a" href="https://direct.example.com/b">直链结果</a></h2>
-      <a class="result__snippet">第二个摘要</a>
-    </div>
-    </body></html>
+    BING_HTML = """
+    <html><body><ol id="b_results">
+    <li class="b_algo">
+      <h2><a href="https://example.com/a">小橘3号 官网</a></h2>
+      <div class="b_caption"><p>这是<b>摘要</b>内容</p></div>
+    </li>
+    <li class="b_algo"><h2><a href="https://direct.example.com/b">直链结果</a></h2>
+      <p>第二个摘要</p></li>
+    </ol></body></html>
     """
+
+    def setUp(self):
+        # 搜索相关 env 一律置空（视为未配置），用后自动还原，
+        # 保证测试不依赖开发者机器上的真实 Key / SEARCH_ENGINE 配置
+        patcher = mock.patch.dict(os.environ, {
+            "SEARCH_ENGINE": "", "SERPER_API_KEY": "", "TAVILY_API_KEY": "",
+        })
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _resp(self, text):
         resp = mock.Mock()
@@ -1099,34 +1107,9 @@ class SearchToolsUnitTests(unittest.TestCase):
         resp.raise_for_status = mock.Mock()
         return resp
 
-    def test_parser_extracts_title_url_snippet(self):
-        parser = search_tools._DDGResultParser()
-        parser.feed(self.DDG_HTML)
-        parser.close()
-        self.assertEqual(len(parser.results), 2)
-        first = parser.results[0]
-        self.assertEqual(first["title"], "小橘3号 官网")
-        self.assertEqual(first["snippet"], "这是摘要内容")
-        self.assertEqual(first["url"], "https://example.com/a")
-        second = parser.results[1]
-        self.assertEqual(second["title"], "直链结果")
-        self.assertEqual(second["url"], "https://direct.example.com/b")
-        self.assertEqual(second["snippet"], "第二个摘要")
-
-    def test_clean_url_unwraps_ddg_redirect(self):
-        self.assertEqual(
-            search_tools._clean_url(
-                "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fx&rut=1"),
-            "https://example.com/x")
-        self.assertEqual(
-            search_tools._clean_url("https://plain.example.com"),
-            "https://plain.example.com")
-        self.assertEqual(search_tools._clean_url(""), "")
-        self.assertEqual(search_tools._clean_url(None), "")
-
     def test_web_search_success_format_and_request(self):
         with mock.patch.object(search_tools, "requests") as mr:
-            mr.get.return_value = self._resp(self.DDG_HTML)
+            mr.get.return_value = self._resp(self.BING_HTML)
             out = search_tools.web_search("小橘3号", max_results=1)
 
         self.assertIn("🔍 联网搜索「小橘3号」的结果：", out)
@@ -1134,11 +1117,11 @@ class SearchToolsUnitTests(unittest.TestCase):
         self.assertNotIn("直链结果", out)          # max_results=1 截断
 
         args, kwargs = mr.get.call_args
-        self.assertEqual(args[0], search_tools.SEARCH_URL)
+        self.assertEqual(args[0], search_tools.BING_URL)   # 免 Key 兜底首选必应
         self.assertEqual(kwargs["params"], {"q": "小橘3号"})
         self.assertIn("Mozilla", kwargs["headers"]["User-Agent"])  # UA 伪装
         self.assertEqual(kwargs["timeout"], search_tools.SEARCH_TIMEOUT)
-        self.assertLessEqual(kwargs["timeout"], 10)
+        self.assertEqual(kwargs["timeout"], 5)             # 10 → 5 秒
 
     def test_web_search_no_results(self):
         with mock.patch.object(search_tools, "requests") as mr:
@@ -1149,23 +1132,23 @@ class SearchToolsUnitTests(unittest.TestCase):
     def test_web_search_empty_query(self):
         self.assertIn("❌", search_tools.web_search("   "))
 
-    def test_web_search_error_returns_chinese_message(self):
-        # 异常不向外抛，返回中文错误串（供工具层直接喂回模型）
+    def test_web_search_error_returns_short_message(self):
+        # 全引擎失败：固定短文案快速返回，不带异常细节长串
         with mock.patch.object(search_tools, "requests") as mr:
             mr.get.side_effect = OSError("timed out")
             out = search_tools.web_search("查询")
-        self.assertTrue(out.startswith("❌ 联网搜索失败"), out)
-        self.assertIn("timed out", out)
+        self.assertEqual(out, "❌ 联网搜索暂不可用，请稍后重试")
+        self.assertNotIn("timed out", out)
 
     def test_web_search_invalid_max_results_falls_back_to_default(self):
         with mock.patch.object(search_tools, "requests") as mr:
-            mr.get.return_value = self._resp(self.DDG_HTML)
+            mr.get.return_value = self._resp(self.BING_HTML)
             out = search_tools.web_search("q", max_results="abc")
         self.assertIn("直链结果", out)              # 非法条数回退默认 5
 
     def test_default_max_results_is_five(self):
         with mock.patch.object(search_tools, "requests") as mr:
-            mr.get.return_value = self._resp(self.DDG_HTML)
+            mr.get.return_value = self._resp(self.BING_HTML)
             out = search_tools.web_search("q")
         self.assertIn("1. 小橘3号 官网", out)
         self.assertIn("2. 直链结果", out)
