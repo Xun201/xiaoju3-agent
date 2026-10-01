@@ -57,6 +57,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import warnings
 from unittest import mock
@@ -1680,6 +1681,46 @@ class PromptEmojiRuleTests(unittest.TestCase):
         self.assertIn("系统内部", self.content)
         self.assertNotIn("[CQ:face", self.content)
         self.assertNotIn("[CQ:image", self.content)
+
+
+
+
+class ConsoleCacheBustingTests(unittest.TestCase):
+    """防缓存终极方案：/console 注入时间戳版本参数（2026-10-01 用户指令）。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_console_html_has_version_params(self):
+        resp = self.client.get("/console")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("console.js?v=", html)
+        self.assertIn("desktop-pet.js?v=", html)
+
+    def test_version_changes_when_file_mtime_changes(self):
+        resp1 = self.client.get("/console")
+        import re as _re
+        m1 = _re.search(r"console\.js\?v=(\d+)", resp1.get_data(as_text=True))
+        self.assertIsNotNone(m1)
+        # 触碰 console.js 的 mtime → 版本号必须变化（浏览器缓存随之失效）
+        path = os.path.join(PROJECT_ROOT, "console.js")
+        new_mtime = int(time.time()) + 100
+        os.utime(path, (new_mtime, new_mtime))
+        try:
+            resp2 = self.client.get("/console")
+            m2 = _re.search(r"console\.js\?v=(\d+)", resp2.get_data(as_text=True))
+            self.assertIsNotNone(m2)
+            self.assertNotEqual(m1.group(1), m2.group(1))
+        finally:
+            os.utime(path, (1000000000, 1000000000))
+
+    def test_static_js_route_still_served(self):
+        # 带版本参数的请求与裸请求都应命中静态路由（query 不参与路由匹配）
+        for qs in ("", "?v=123"):
+            resp = self.client.get("/console/console.js" + qs)
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("no-store", resp.headers.get("Cache-Control", ""))
 
 
 if __name__ == "__main__":
