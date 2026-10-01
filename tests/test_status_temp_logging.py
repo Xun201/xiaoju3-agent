@@ -12,10 +12,11 @@
 - /api/status 契约：temperature 为 "暂无温度"/float 两态、tts_voice 字段下发
   （组 B 前端契约，xiaoju3.TTS_VOICE）。
 - 日志刷屏抑制：
-  - xiaoju3_dashboard._PollAccessFilter：/api/status、/api/balance 访问日志
-    被拦截（filter 返回 False，含带查询串形态），/api/chat、/console、
-    /api/history 与非访问日志（werkzeug 启动信息）保留；werkzeug logger
-    已挂过滤器 + 级别 INFO 保底；经 logger 实发的端到端抑制。
+  - xiaoju3_dashboard._PollAccessFilter：/api/status、/api/balance、
+    /api/history 访问日志被拦截（filter 返回 False，含带查询串形态如
+    ?source=terminal），/api/chat、/console 与非访问日志（werkzeug 启动
+    信息）保留；werkzeug logger 已挂过滤器 + 级别 INFO 保底；经 logger
+    实发的端到端抑制。
   - xiaoju3_dashboard._HeartbeatAccessFilter（原 main.py 过滤器，2026-10-01
     架构合并随 HTTP 层迁入 :5003 宿主）：/onebot 收到 meta_event 打一次性
     线程标记 → 心跳那一次访问日志被拦截、标记消费后不再误拦；/chat 与
@@ -261,12 +262,21 @@ class PollAccessFilterTests(unittest.TestCase):
         line = '127.0.0.1 - - [01/Oct/2026 12:00:00] "GET /api/status?_=1727750400 HTTP/1.1" 200 -'
         self.assertFalse(self._filter().filter(_make_record(line)))
 
-    def test_chat_and_console_and_history_logs_kept(self):
-        """/api/chat、/console、/api/history 等其余访问日志保留（filter True）。"""
+    def test_history_access_log_blocked(self):
+        """/api/history 轮询访问日志拦截（2026-10-02 用户口径）：含
+        ?source=terminal / ?source=web 等任意查询串与 DELETE 清空。"""
+        f = self._filter()
+        for line in ('127.0.0.1 - - [x] "GET /api/history HTTP/1.1" 200 -',
+                     '127.0.0.1 - - [x] "GET /api/history?source=terminal HTTP/1.1" 200 -',
+                     '127.0.0.1 - - [x] "GET /api/history?source=web HTTP/1.1" 200 -',
+                     '127.0.0.1 - - [x] "DELETE /api/history HTTP/1.1" 200 -'):
+            self.assertFalse(f.filter(_make_record(line)), line)
+
+    def test_chat_and_console_logs_kept(self):
+        """/api/chat、/console 等关键访问日志保留（filter True）。"""
         f = self._filter()
         for line in ('127.0.0.1 - - [x] "POST /api/chat HTTP/1.1" 200 -',
                      '127.0.0.1 - - [x] "GET /console HTTP/1.1" 200 -',
-                     '127.0.0.1 - - [x] "GET /api/history HTTP/1.1" 200 -',
                      '127.0.0.1 - - [x] "GET /api/health HTTP/1.1" 200 -'):
             self.assertTrue(f.filter(_make_record(line)), line)
 
