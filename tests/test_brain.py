@@ -3513,6 +3513,8 @@ class LocationHardBlockTests(unittest.TestCase):
     def setUp(self):
         self.real_sm.clear_user_location()
         self.addCleanup(self.real_sm.clear_user_location)
+        brain.clear_waiting_location()
+        self.addCleanup(brain.clear_waiting_location)
 
     def _sm_ctx(self):
         """让 brain 的延迟导入在 patch.dict 生效期间绑定真实 state_manager。"""
@@ -3609,6 +3611,96 @@ class LocationHardBlockTests(unittest.TestCase):
         self.assertTrue(reply.startswith("<think>"), reply)
         self.assertIn("</think>", reply)
 
+    def test_grace_chat_hard_block_skips_model(self):
+        """任务口径用例①：静默期内 + 位置未知 + 消息"今天天气" → 直接返回
+        询问文案，不调用模型（probe/ask_local/ask_cloud 零调用），等待窗口
+        开启（方便用户下一步裸回答）。"""
+        brain.mark_location_cleared()
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        buf = io.StringIO()
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local") as mprobe, \
+                mock.patch.object(brain, "ask_local") as mlocal, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, \
+                contextlib.redirect_stdout(buf):
+            reply, source = brain.smart_ask("今天天气", [])
+        mprobe.assert_not_called()
+        mlocal.assert_not_called()
+        mcloud.assert_not_called()
+        self.assertIn("我还不知道你在哪个城市和区", reply)
+        self.assertEqual(source, "📍 询问位置")
+        self.assertTrue(reply.startswith("<think>"), reply)   # 卡片口径不破坏
+        self.assertIn("🛑 [位置] 静默期内 + 位置未知 + 地点敏感问题 → 强制询问",
+                      buf.getvalue())
+        self.assertTrue(brain._waiting_location_active())
+
+    def test_grace_non_location_question_normal_path(self):
+        """任务口径用例②：静默期内 + 位置未知 + 消息"如何写Python"（非地点
+        敏感类）→ 正常走模型，不误拦截。"""
+        brain.mark_location_cleared()
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local",
+                                  return_value="学 Python 要先装解释器。") as mlocal, \
+                contextlib.redirect_stdout(io.StringIO()):
+            reply, source = brain.smart_ask("如何写Python", [])
+        mlocal.assert_called_once()
+        self.assertIn("Python", reply)
+        self.assertEqual(source, "🏠 本地")
+
+    def test_grace_truncates_history_hiding_location(self):
+        """任务口径用例③：静默期内 + 位置未知 + 历史里有"帮我搜一下长沙市
+        天心区的天气" → 历史被截断，模型看不到位置句（消息列表不含）；
+        【主人位置】未知上下文保留（模型仍被引导询问而非瞎猜）。"""
+        brain.mark_location_cleared()
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        history = [{"role": "user", "content": "帮我搜一下长沙市天心区的天气"},
+                   {"role": "assistant", "content": "好的"},
+                   {"role": "user", "content": "顺便看看新闻"},
+                   {"role": "assistant", "content": "看完了"},
+                   {"role": "user", "content": "聊点别的"},
+                   {"role": "assistant", "content": "好呀"},
+                   {"role": "user", "content": "先这样"},
+                   {"role": "assistant", "content": "嗯"}]
+        buf = io.StringIO()
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local",
+                                  return_value="我不太确定。") as mlocal, \
+                contextlib.redirect_stdout(buf):
+            brain.smart_ask("我该穿什么衣服", history)
+        msgs = mlocal.call_args[0][0]
+        dumped = json.dumps(msgs, ensure_ascii=False)
+        self.assertNotIn("长沙市天心区", dumped)   # 位置句被截断
+        self.assertNotIn("帮我搜一下", dumped)
+        self.assertIn("【主人位置】未知", dumped)   # 询问引导保留
+        self.assertIn("🛑 [位置] 静默期内，截断历史防止位置泄漏", buf.getvalue())
+
+    def test_grace_expired_chat_normal_path(self):
+        """任务口径用例④：静默期已过（6 分钟后）+ 位置未知 → 正常走模型
+        （不拦截、不截断）。"""
+        brain._location_cleared_at = time.time() - 301
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local",
+                                  return_value="今天天气不错哦") as mlocal, \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            reply, source = brain.smart_ask("今天天气", [])
+        mlocal.assert_called_once()
+        self.assertIn("今天天气不错哦", reply)
+        self.assertNotIn("强制询问", buf.getvalue())
+        self.assertNotIn("截断历史", buf.getvalue())
+
     def test_history_location_not_trusted_when_no_record(self):
         """任务口径用例①（严格来源化回归锁）：模型 query 带着历史推断的
         "长沙市天心区"、json 不存在 → query/历史位置不作为来源，硬拦截
@@ -3622,14 +3714,15 @@ class LocationHardBlockTests(unittest.TestCase):
 
     def test_grace_period_after_clear_forces_ask(self):
         """任务口径用例②：历史里有位置 + 刚执行过 /clear_location → 静默
-        期强制询问（🚿 日志、绝不采信历史位置）。"""
+        期强制询问（2026-10-02 起聊天路径硬拦截先行命中——消息含"天气"
+        时在进模型前就被拦，🛑 日志为聊天拦截口径）。"""
         brain.mark_location_cleared()
         self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
         reply, source, out, mexec = self._run_web_search_flow(
             "长沙市天心区的天气", user_message="今天天气怎么样")
         mexec.assert_not_called()
         self.assertIn("我还不知道你在哪个城市和区", reply)
-        self.assertIn("📍 [位置] 已清除后处于静默期，忽略历史位置，强制询问",
+        self.assertIn("🛑 [位置] 静默期内 + 位置未知 + 地点敏感问题 → 强制询问",
                       out)
 
     def test_location_record_works_despite_grace(self):
