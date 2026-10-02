@@ -197,6 +197,170 @@ def import_bundle(zip_path, overwrite=False, base_dir=None):
     return {"restored": restored, "skipped": skipped, "report": report}
 
 
+# ==================== 灵魂备份 v2：/soul_export //soul_import（设备自动迁移最小可用版） ====================
+# 与旧 export_bundle/import_bundle 的差异（按 1.0 冲刺规格）：
+# - 清单升级为 MANIFEST.json（打包时间/文件清单/版本号），导入前强校验，不符拒绝；
+# - .env 配置项快照进包（隔离区 xiaoju3_data/.env 优先，旧根目录 .env 兼容）——
+#   含密钥，包仅落本地 backups/（已 gitignore），聊天回复只说明不引用内容；
+# - 导出默认落 backups/soul_<时间戳>.zip；恢复为覆盖式（以包为准，身份/记忆/配置
+#   全部回到打包那一刻）。
+# 旧 export_bundle/import_bundle 原样保留（PeerWatch 留备份仍走旧口径：密钥不进包）。
+
+SOUL_MANIFEST_NAME = "MANIFEST.json"
+SOUL_BUNDLE_TYPE = "xiaoju3_soul"
+SOUL_BUNDLE_VERSION = "1.0"
+
+# 项目根关键配置文件（存在才打包；config.py 为隔离区私有扩展的可选落点）
+_SOUL_ROOT_FILES = ("config.py",)
+
+
+def _resolve_env_file(env_file=None, project_root=None):
+    """.env 配置快照来源：显式参数 → 隔离区 xiaoju3_data/.env → 旧根目录 .env。"""
+    project_root = project_root or PROJECT_ROOT
+    if env_file:
+        return env_file
+    primary = os.path.join(project_root, "xiaoju3_data", ".env")
+    if os.path.isfile(primary):
+        return primary
+    legacy = os.path.join(project_root, ".env")
+    return legacy if os.path.isfile(legacy) else primary
+
+
+def _soul_v2_members(base_dir, env_file, project_root):
+    """收集灵魂包成员：[(zip 内相对路径, 磁盘绝对路径), ...]。
+
+    zip 内路径以项目根为基准：agent_state/…（复用 _soul_targets 全集：身份/
+    history_*/conversations/long_term.db/emoji_links，兜底补 context_summary.json
+    前情提要缓存）+ .env 实际相对位置 + 项目根关键配置（config.py 如有）。
+    """
+    members, seen = [], set()
+    for rel in _soul_targets(base_dir):
+        arc = f"agent_state/{rel}"
+        members.append((arc, os.path.join(base_dir, *rel.split("/"))))
+        seen.add(arc)
+    cs_arc = "agent_state/context_summary.json"
+    cs_abs = os.path.join(base_dir, "context_summary.json")
+    if os.path.isfile(cs_abs) and cs_arc not in seen:
+        members.append((cs_arc, cs_abs))
+        seen.add(cs_arc)
+    if env_file and os.path.isfile(env_file):
+        env_rel = os.path.relpath(env_file, project_root).replace(os.sep, "/")
+        members.append((env_rel, env_file))
+        seen.add(env_rel)
+    for name in _SOUL_ROOT_FILES:
+        p = os.path.join(project_root, name)
+        if os.path.isfile(p) and name not in seen:
+            members.append((name, p))
+    return members
+
+
+def export_soul_bundle(path=None, base_dir=None, env_file=None, project_root=None):
+    """灵魂备份 v2：核心数据 + MANIFEST.json 打包为 zip，返回 dict。
+
+    返回 {"ok", "path", "files"（zip 内相对路径清单）, "size"（字节）}；
+    默认落 <项目根>/backups/soul_<时间戳>.zip；四个参数均可注入（测试离线）。
+    """
+    base_dir = base_dir or AGENT_STATE_DIR
+    project_root = project_root or PROJECT_ROOT
+    env_file = _resolve_env_file(env_file, project_root)
+    if path is None:
+        backup_dir = os.path.join(project_root, "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        path = os.path.join(backup_dir, f"soul_{time.strftime('%Y%m%d_%H%M%S')}.zip")
+    members = _soul_v2_members(base_dir, env_file, project_root)
+    manifest = {
+        "type": SOUL_BUNDLE_TYPE,
+        "version": SOUL_BUNDLE_VERSION,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "host": socket.gethostname(),
+        "files": [rel for rel, _abs in members],
+        "note": (".env 为配置项快照（可能含密钥），仅限本机/家庭内网迁移使用，"
+                 "请勿外传；恢复后小橘3号的身份、记忆与配置即为主人原样。"),
+    }
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rel, abs_path in members:
+            zf.write(abs_path, arcname=rel)
+        zf.writestr(SOUL_MANIFEST_NAME,
+                    json.dumps(manifest, ensure_ascii=False, indent=2))
+    size = os.path.getsize(path)
+    print(f"💾 [迁移] 灵魂备份完成：{path}（{len(members)} 个文件，{size} 字节）")
+    return {"ok": True, "path": os.path.abspath(path),
+            "files": manifest["files"], "size": size}
+
+
+def _read_soul_manifest(zf):
+    """读 MANIFEST.json 并校验结构：缺失/非 JSON/类型或版本或清单字段不符 → None。"""
+    try:
+        raw = zf.read(SOUL_MANIFEST_NAME)
+    except KeyError:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+    if (not isinstance(data, dict)
+            or data.get("type") != SOUL_BUNDLE_TYPE
+            or not data.get("version")
+            or not isinstance(data.get("files"), list)):
+        return None
+    return data
+
+
+def import_soul_bundle(zip_path, base_dir=None, project_root=None):
+    """灵魂恢复 v2：校验 MANIFEST.json 后覆盖式解包，返回 dict（异常不外抛）。
+
+    - 包不存在/不是有效 zip/MANIFEST 校验不符 → ok=False + 安全拒绝文案；
+    - 成员路径防穿越（复用 _safe_member）；agent_state/ 前缀落 base_dir，
+      其余（xiaoju3_data/.env、config.py）落项目根对应位置；MANIFEST.json
+      本身不落盘；
+    - 返回 {"ok", "restored", "skipped", "report"}。
+    """
+    base_dir = base_dir or AGENT_STATE_DIR
+    project_root = project_root or PROJECT_ROOT
+    if not os.path.isfile(zip_path):
+        return {"ok": False, "restored": [], "skipped": [],
+                "report": f"❌ 灵魂包不存在：{zip_path}"}
+    try:
+        zf = zipfile.ZipFile(zip_path, "r")
+    except Exception:
+        return {"ok": False, "restored": [], "skipped": [],
+                "report": "❌ 无法读取灵魂包（不是有效的 zip 文件），已拒绝导入。"}
+    restored, skipped = [], []
+    with zf:
+        manifest = _read_soul_manifest(zf)
+        if manifest is None:
+            return {"ok": False, "restored": [], "skipped": [],
+                    "report": ("❌ 灵魂包校验失败：缺少 MANIFEST.json 或格式不符"
+                               "（不是小橘3号 /soul_export 导出的灵魂包），已拒绝导入。")}
+        for info in zf.infolist():
+            name = info.filename
+            if name.endswith("/") or name == SOUL_MANIFEST_NAME:
+                continue
+            safe = _safe_member(name)
+            if safe is None:
+                skipped.append(f"{name}（不安全路径，已拒绝）")
+                continue
+            parts = safe.split("/")
+            if parts[0] == "agent_state":
+                target = os.path.join(base_dir, *parts[1:]) if len(parts) > 1 else None
+            else:
+                target = os.path.join(project_root, *parts)
+            if target is None:
+                skipped.append(f"{name}（空路径，已跳过）")
+                continue
+            os.makedirs(os.path.dirname(target) or base_dir, exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            restored.append(safe)
+    report = f"✅ 灵魂恢复完成：共恢复 {len(restored)} 个文件"
+    if skipped:
+        report += f"，跳过 {len(skipped)} 项（{'、'.join(skipped)}）"
+    report += (f"。包版本 v{manifest.get('version')}，"
+               f"打包于 {manifest.get('created_at')}（{manifest.get('host')}）。")
+    print(f"📥 [迁移] {report}")
+    return {"ok": True, "restored": restored, "skipped": skipped, "report": report}
+
+
 # ==================== 多设备互相守望（PeerWatch） ====================
 
 class PeerWatch:
