@@ -49,3 +49,5 @@ install_windows.exe
 # LLOneBot 插件包（二进制，不入仓库）
 LLBot.zip
 agent_state/context_summary.json
+# 项目现状交接摘要（本地供后续会话读取，不入仓库）
+小橘3号项目现状交接摘要.txt
