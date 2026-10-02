@@ -352,6 +352,8 @@ def main(argv=None):
     返回退出码：0 正常（窗口关闭并清理完成）；1 环境不满足（缺 pywebview /
     端口不可用）。
     """
+    from xiaoju3_launcher import _redirect_stdio  # 延迟导入：非 frozen 依赖面零变化
+    _redirect_stdio("desktop")  # frozen 入口重定向（步 3）；非 frozen 空操作
     try:
         import webview   # 延迟导入：缺库时清晰中文提示退出，不甩 traceback
     except Exception:

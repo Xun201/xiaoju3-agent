@@ -169,7 +169,14 @@ DASHBOARD_PORT = 5003
 ALREADY_RUNNING_HINT = ("⚠️ 小橘3号已在运行（5003 已被占用），本次启动取消。"
                         "如需重启，请先停止现有进程。")
 LOG_DIR = os.path.join(paths.DATA_ROOT, "xiaoju3_data")
-LOG_FILE_PREFIX = "dashboard_live_"
+# 日志前缀族（方案步 3）：spawn-self 三角色各自成档——每次启动独占一文件
+# （方案 a）× 每角色一文件（步 3）= 三进程零共写。dashboard 键保名兼容旧口径。
+LOG_FILE_PREFIXES = {
+    "launcher": "launcher_live_",
+    "dashboard": "dashboard_live_",
+    "desktop": "desktop_live_",
+}
+LOG_FILE_PREFIX = LOG_FILE_PREFIXES["dashboard"]
 LOG_KEEP = 10
 
 
@@ -188,22 +195,30 @@ def is_port_in_use(port=DASHBOARD_PORT, host="127.0.0.1", check_fn=None):
         return False
 
 
-def timestamped_log_path(now=None):
-    """带启动时间戳的日志路径：xiaoju3_data/dashboard_live_YYYYMMDD_HHMMSS.log。
-    每次启动独占一个文件——杜绝固定路径的截断与多写者混写（方案 a）。"""
+def timestamped_log_path(now=None, role="dashboard"):
+    """带启动时间戳的日志路径：xiaoju3_data/<role>_live_YYYYMMDD_HHMMSS.log。
+    每次启动独占一个文件——杜绝固定路径的截断与多写者混写（方案 a）；
+    role 前缀族（步 3）：launcher/dashboard/desktop 各自成档，缺省 dashboard
+    保持现行为（restart_clean.bat 的 python -c 调用零改动）。"""
     ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(
         now if now is not None else time.time()))
-    return os.path.join(LOG_DIR, LOG_FILE_PREFIX + ts + ".log")
+    return os.path.join(LOG_DIR, LOG_FILE_PREFIXES[role] + ts + ".log")
 
 
 def prune_dashboard_logs(keep=LOG_KEEP, log_dir=None):
-    """清理旧启动日志：dashboard_live_*.log（含 .err.log）按修改时间排序，
-    保留最近 keep 个。返回 (保留数, 删除数)；目录缺失/删除失败静默兜底
+    """清理旧启动日志：三角色前缀族（launcher/dashboard/desktop_live_*.log）
+    各自按修改时间排序保留最近 keep 个。返回 (保留总数, 删除总数)（聚合值，
+    restart_clean.bat 取删除数打印的口径不变）；目录缺失/删除失败静默兜底
     （日志清理失败绝不能影响启动主流程）。"""
     log_dir = log_dir or LOG_DIR
     try:
-        files = [os.path.join(log_dir, n) for n in os.listdir(log_dir)
-                 if n.startswith(LOG_FILE_PREFIX) and n.endswith(".log")]
+        names = os.listdir(log_dir)
+    except OSError:
+        return 0, 0
+    kept_total = removed_total = 0
+    for prefix in set(LOG_FILE_PREFIXES.values()):
+        files = [os.path.join(log_dir, n) for n in names
+                 if n.startswith(prefix) and n.endswith(".log")]
         files.sort(key=os.path.getmtime, reverse=True)
         removed = files[keep:]
         for path in removed:
@@ -211,9 +226,33 @@ def prune_dashboard_logs(keep=LOG_KEEP, log_dir=None):
                 os.remove(path)
             except OSError:
                 pass
-        return len(files) - len(removed), len(removed)
-    except OSError:
-        return 0, 0
+        kept_total += len(files) - len(removed)
+        removed_total += len(removed)
+    return kept_total, removed_total
+
+
+def _redirect_stdio(role):
+    """frozen 入口重定向（方案步 3，B 路线）：stdout/stderr → 角色专属日志。
+
+    - frozen：开 LOG_DIR/<role>_live_<时间戳>.log（追加、行缓冲、UTF-8、
+      errors=replace）替换 sys.stdout/stderr，并写角色启动横幅——exe(-w) 下
+      sys.stdout 为 None 与子进程 stdio=DEVNULL 两类丢失一并兜住；行缓冲把
+      硬杀丢面压到半行，进程退出由解释器统一 flush。三进程各写各档
+      （timestamped_log_path 前缀族），零共写。
+    - 非 frozen：空操作返回 None——控制台 print 照旧上屏，restart_clean.bat
+      的进程外重定向（fd 层）照旧生效，行为逐字节不变。
+    返回日志路径（非 frozen 返回 None）。
+    """
+    if not paths.FROZEN:
+        return None
+    log_path = timestamped_log_path(role=role)
+    stream = open(log_path, "a", buffering=1,
+                  encoding="utf-8", errors="replace")
+    sys.stdout = stream
+    sys.stderr = stream
+    stream.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
+                 f"[{role}] 启动（pid {os.getpid()}）\n")
+    return log_path
 
 
 def build_launch_plan(python=None, root=None, frozen=False):
@@ -422,6 +461,7 @@ def main(argv=None, frozen=False):
     2. ensure_napcat() 无黑框拉起 QQ 接入层（NapCat，Windows-only、幂等）；
     3. prune_dashboard_logs() 清理旧启动日志（方案 a，只留最近 10 个）。
     """
+    _redirect_stdio("launcher")  # frozen 入口重定向（步 3）；非 frozen 空操作
     args = parse_args(argv)
     plan = build_launch_plan(root=args.root, frozen=frozen)
     if args.dry_run:
