@@ -741,6 +741,8 @@ def serve():
     spawn-self 分流（方案 §2）的 dashboard 角色入口：exe 以
     --xj3-role=dashboard 拉起自身时由 desktop_launcher 调用本函数。
     """
+    from xiaoju3_launcher import _redirect_stdio  # 延迟导入：保持现依赖面
+    _redirect_stdio("dashboard")  # frozen 入口重定向（步 3）；非 frozen 空操作
     print(f"🍊 小橘3号监控仪表盘已启动（端口 {DASHBOARD_PORT}）")
     _creator = main.get_creator_name()
     if _creator:

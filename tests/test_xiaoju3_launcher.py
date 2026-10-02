@@ -16,11 +16,15 @@ atexit / signal 注册一律经构造参数注入 mock（每个用例 setUp 现�
 """
 import io
 import os
+import shutil
 import signal
 import subprocess
+import sys
+import tempfile
 import unittest
 from unittest import mock
 
+import paths  # noqa: E402  # _redirect_stdio 用例 mock 双根标志
 import xiaoju3_launcher as xl
 
 # 假项目根：仅作 cwd/cmd 字符串断言，从不真实执行
@@ -412,6 +416,94 @@ class TestBuildLaunchPlanFrozen(unittest.TestCase):
         self.assertEqual(server["cmd"],
                          [FAKE_PY, os.path.join(FAKE_ROOT, "xiaoju3_dashboard.py")])
         self.assertEqual(server["cwd"], FAKE_ROOT)
+
+
+class TestStdioRedirect(unittest.TestCase):
+    """frozen 入口重定向（方案步 3，B 路线）：_redirect_stdio 三通道。
+
+    mock 注意：paths.FROZEN 与 xl.LOG_DIR 全部 patch；sys.stdout/stderr
+    替换后 tearDown 恢复；日志落 tmp 目录，绝不污染真实 xiaoju3_data。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xj3_stdio_")
+        self._old_out, self._old_err = sys.stdout, sys.stderr
+
+    def tearDown(self):
+        sys.stdout, sys.stderr = self._old_out, self._old_err
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_redirect_noop_when_not_frozen(self):
+        """非 frozen：空操作——返回 None，stdout/stderr 不被替换（行为不变锚）。"""
+        with mock.patch.object(paths, "FROZEN", False):
+            self.assertIsNone(xl._redirect_stdio("launcher"))
+        self.assertIs(sys.stdout, self._old_out)
+        self.assertIs(sys.stderr, self._old_err)
+
+    def test_redirect_frozen_replaces_streams_and_writes_banner(self):
+        """frozen：替换两流为角色日志文件，横幅含角色与 pid，旧流引用不变。"""
+        with mock.patch.object(paths, "FROZEN", True), \
+             mock.patch.object(xl, "LOG_DIR", self.tmp):
+            log_path = xl._redirect_stdio("launcher")
+        self.assertTrue(str(log_path).startswith(
+            os.path.join(self.tmp, "launcher_live_")))
+        self.assertIsNot(sys.stdout, self._old_out)
+        self.assertIsNot(sys.stderr, self._old_err)
+        sys.stdout.write("后续 print 落文件\n")
+        sys.stdout.flush()
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("[launcher] 启动（pid", content)
+        self.assertIn("后续 print 落文件", content)
+
+    def test_redirect_per_role_files(self):
+        """三角色各自成档：同秒调用也因前缀不同而不同路径，零共写。"""
+        with mock.patch.object(paths, "FROZEN", True), \
+             mock.patch.object(xl, "LOG_DIR", self.tmp):
+            p1 = xl._redirect_stdio("launcher")
+            sys.stdout, sys.stderr = self._old_out, self._old_err
+            p2 = xl._redirect_stdio("dashboard")
+        self.assertNotEqual(p1, p2)
+        self.assertTrue(os.path.basename(p1).startswith("launcher_live_"))
+        self.assertTrue(os.path.basename(p2).startswith("dashboard_live_"))
+
+    def test_timestamped_log_path_roles(self):
+        """前缀族：三角色各自前缀；缺省 role=dashboard 保持现行为。"""
+        with mock.patch.object(xl, "LOG_DIR", self.tmp):
+            self.assertTrue(os.path.basename(
+                xl.timestamped_log_path(now=0)).startswith("dashboard_live_"))
+            for role, prefix in (("launcher", "launcher_live_"),
+                                 ("dashboard", "dashboard_live_"),
+                                 ("desktop", "desktop_live_")):
+                self.assertTrue(os.path.basename(
+                    xl.timestamped_log_path(now=0, role=role)).startswith(prefix))
+
+    def test_prune_covers_all_role_prefixes(self):
+        """prune 聚合：三族各自保 keep，返回 (保留总数, 删除总数)。"""
+        keep = 2
+        for prefix in ("launcher_live_", "dashboard_live_", "desktop_live_"):
+            for i in range(keep + 1):  # 每族 keep+1 个，各删 1
+                with open(os.path.join(
+                        self.tmp, f"{prefix}2026010{i}_000000.log"),
+                          "w", encoding="utf-8") as f:
+                    f.write("x")
+        with open(os.path.join(self.tmp, "unrelated.log"), "w",
+                  encoding="utf-8") as f:
+            f.write("x")  # 干扰文件：不匹配任何前缀，不动
+        kept, removed = xl.prune_dashboard_logs(keep=keep, log_dir=self.tmp)
+        self.assertEqual((kept, removed), (keep * 3, 3))
+        self.assertTrue(os.path.exists(
+            os.path.join(self.tmp, "unrelated.log")))
+
+    def test_prune_dashboard_prefix_backcompat(self):
+        """旧口径兼容：dashboard_live_ 单族行为与改造前一致（7b09bea 锚）。"""
+        for i in range(4):
+            with open(os.path.join(
+                    self.tmp, f"dashboard_live_2026010{i}_000000.log"),
+                      "w", encoding="utf-8") as f:
+                f.write("x")
+        kept, removed = xl.prune_dashboard_logs(keep=3, log_dir=self.tmp)
+        self.assertEqual((kept, removed), (3, 1))
 
 
 if __name__ == "__main__":
