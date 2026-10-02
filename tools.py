@@ -1,29 +1,31 @@
 # -*- coding: utf-8 -*-
 """小橘3号 · 工具分发层。
 
-按《架构设计文档》§5 与第二阶段 §7 权限新表：唯一入口 execute_tool，
-if/elif 逐一分发 12 项白名单工具（11 项 + 新增 system_manage 系统组件装卸），
-无注册表；文件读写以 realpath 前缀校验限制在 WORKSPACE 内（防路径逃逸），
-read_file 截断 1000 字符。
+按《架构设计文档》§6（2026-10-02 权限重构定稿）：唯一入口 execute_tool，
+if/elif 逐一分发 14 项白名单工具（13 项 + 新增 restart_service 自身重启，
+Lv.4 专属），无注册表；文件读写以 realpath 前缀校验限制在 WORKSPACE 内
+（防路径逃逸），read_file 截断 1000 字符。
 
 权限门禁（§7 用户指令新表 + 2026-09-30 免逐次动态密码指令）：
 - web_search：Lv.1 不设限（联网搜索属游客能力）；
 - read_file / list_files：Lv.2（旧口径 LV1 可读，用户调整点）；
-- adb_tap / adb_swipe：维持 Lv.3（无逐次动态密码要求）；
+- adb_tap / adb_swipe / adb_screenshot / ui_tap_element / vision_tap_element：
+  Lv.4 主人级门禁（2026-10-02 权限重构：ADB 全套升档，含视觉点击）；
 - write_file：Lv.3 等级门禁保留（等级 < 3 仍拒）。已是 Lv.3 直接放行，
   不再要求逐次动态密码（用户指令 2026-09-30：对已认证 Lv.3 用户免逐次
   /sudo，体验连贯）；permission 层 lv3_operation_ok / open_operation_window
   API 保留（/sudo 仍可主动开窗），仅 tools 层不再强制；
-- control_ha_device：先经 home_tools.is_dangerous_entity 动态分类——普通实体
-  按等级数值判定（level >= 2 即通过，Lv.2/3/4 全放行，见 _level_at_least；
-  不受权限表能力键覆盖度影响），危险实体（门锁/燃气）需 Lv.4 且
-  lv4_mfa_ok（动态密码+生物认证双因子）；
-- system_manage：Lv.4 且 lv4_mfa_ok 且二次确认（credentials["confirmed"]=True）
-  三重门禁，component 名校验防注入，pip 装卸经 subprocess 封装（可 mock）。
+- control_ha_device：domain 自动路由（2026-10-02 权限重构定稿）——
+  home_tools.is_dangerous_entity（lock/valve/阀/gas/DANGER_ENTITIES 自定义）
+  为真 → Lv.4 门禁；六类安全 domain → Lv.3 门禁（安全家居升档）；
+  操作级双因子已删除（/lv4_auth 授权级验证保留）；
+- system_manage / restart_service：Lv.4 等级门禁（操作级双因子与二次确认
+  已删除），component 名校验防注入，pip 装卸经 subprocess 封装（可 mock）；
+  restart_service 语义 = 先答复后 2 秒自尽（threading.Timer + os._exit），
+  复活链 Linux 为 start.sh 守护、Windows 为 desktop_launcher 监督（批次②）。
 
 execute_tool 向后兼容扩展：execute_tool(tool_name, args, permission_manager,
-credentials=None)；credentials 约定键 {"totp", "biometric", "confirmed"}
-（现仅 Lv.4 双因子/系统装卸路径消费；write_file 不再校验操作凭据）。
+credentials=None)；credentials 参数保留（历史签名兼容，当前无消费方）。
 
 视觉回退（用户指令 2026-09-30，代码级强制）：ui_tap_element 经 Lv.3 门禁
 后调用底层 UI 解析，解析失败（返回串以 ❌ 开头：未找到元素/解析异常/
@@ -45,6 +47,7 @@ VISION_KEY 配置检查指引。
 import json
 import os
 import re
+import threading
 import sys
 import subprocess
 import time
@@ -57,24 +60,28 @@ from vision_tools import vision_tap_element
 from android_ui_tools import ui_tap_element
 from search_tools import web_search
 
-# 工具白名单（12 项）：与 prompts.py 工具协议一致。
-# 注意：brain.TOOL_WHITELIST（大脑入口白名单）需由其所有权人同步追加
-# "system_manage" 第 12 项后，system_manage 才可经 smart_ask 链路触发。
+# 工具白名单（14 项，2026-10-02 权限重构 +restart_service）：与
+# prompts.py 工具协议一致。注意：brain.TOOL_WHITELIST（大脑入口白名单）
+# 需同步追加，工具才可经 smart_ask 链路触发。
 TOOL_WHITELIST = [
     "list_files", "read_file", "write_file", "get_ha_devices",
     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
     "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
-    "read_core_memory",
+    "read_core_memory", "restart_service",
 ]
 
 # 高危工具集合（语义更新为 §7 新门禁，逐工具门禁见模块 docstring 与
 # execute_tool 内实现，不再共用单一 LV3 前置门禁）
 DANGER_TOOLS = {"write_file", "adb_tap", "adb_swipe", "control_ha_device"}
 
-# 需 Lv.2 / Lv.3 等级的工具分组（§7 新表）
+# 需 Lv.2 / Lv.3 / Lv.4 等级的工具分组（2026-10-02 权限重构定稿）
 _LV2_TOOLS = {"read_file", "list_files"}
-# ui_tap_element 维持 Lv.3 门禁（视觉回退发生在门禁通过之后）
-_LV3_TOOLS = {"write_file", "adb_tap", "adb_swipe", "ui_tap_element"}
+_LV3_TOOLS = {"write_file"}
+# Lv.4 主人级工具（2026-10-02 定稿：ADB 全套升 Lv4；send_image 能力声明
+# ——其实际门禁在 main.py /send_image 指令（本批不动 main.py，批次②对齐
+# 数值）；restart_service 分支见 execute_tool）
+_LV4_TOOLS = {"adb_screenshot", "adb_tap", "adb_swipe", "ui_tap_element",
+              "vision_tap_element", "send_image", "restart_service"}
 
 # 沙箱越界拒绝文案
 _DENY_OUTSIDE = "❌ 安全拒绝：不允许访问工作区以外的文件！"
@@ -92,10 +99,14 @@ _DENY_LV2_NORMAL_DEVICE = ("❌ 安全拒绝：当前权限不足，控制普通
 _DENY_LV4_DANGER_DEVICE = ("❌ 安全拒绝：{entity} 属高危设备（门锁/燃气等），"
                            "控制它需要 Lv.4（主人级）权限。请联系主人完成"
                            "双因子认证后升级，或改由主人亲自操作。")
+# （2026-10-02 权限重构：操作级双因子已删除——Lv.4 等级即放行，提权路径
+# 只剩 /lv4_auth 授权级验证；本常量保留供既有测试引用，生产路径不再使用）
 _DENY_LV4_MFA = ("❌ 安全拒绝：该操作需 Lv.4 双因子认证（动态密码 + 生物认证）"
                  "全部通过，当前认证未通过。")
+_DENY_LV4_ADB = ("❌ 安全拒绝：当前权限不足，ADB 手机接管全套需要 "
+                 "Lv.4（主人级）权限。请先 /lv4_auth confirm <动态密码> 授权。")
 _DENY_LV4_SYSTEM = ("❌ 安全拒绝：当前权限不足，装卸系统组件需要 "
-                    "Lv.4（主人级）权限。请联系主人完成双因子认证后升级。")
+                    "Lv.4（主人级）权限。请先 /lv4_auth confirm <动态密码> 授权。")
 
 # （2026-09-30 用户指令）视觉回退的"（如持续失败，请检查 .env ...）"指引行
 # 已整段删除：vision_tools 返回什么聊天框就收什么，一字不多（指引文案由
@@ -285,6 +296,12 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
                 not _level_at_least(permission_manager, 3, "write_file"):
             return _DENY_LV3
 
+        # Lv.4 主人级工具门禁（2026-10-02 权限重构：ADB 全套升 Lv4；
+        # send_image 为能力声明——其实际门禁在 main.py /send_image 指令）
+        if tool_name in _LV4_TOOLS and \
+                not _level_at_least(permission_manager, 4, "adb_full"):
+            return _DENY_LV4_ADB
+
         if tool_name == "list_files":
             if _is_private_state_path(WORKSPACE) and \
                     not permission_manager.has_permission("read_private_memory"):
@@ -346,17 +363,15 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
             action = args.get("action")
             if not entity_id or not action:
                 return "❌ 缺少参数：需要提供 entity_id 和 action"
-            # §7 动态分类：普通实体 Lv.2 / 危险实体 Lv.4 + 双因子。
-            # 普通实体按等级数值判定（level >= 2 即通过，Lv.2/3/4 全放行）；
-            # 危险实体维持原能力键门禁（fail-closed 属安全方向），一丝不放松。
+            # 🧭 domain 自动路由（2026-10-02 权限重构定稿）：危险实体
+            # （lock/valve/阀/DANGER_ENTITIES 自定义）→ LV4 门禁；六类安全
+            # domain（input_boolean/light/switch/sensor/climate/media_player）
+            # → LV3 门禁（安全家居升档）。操作级双因子已删除（/lv4_auth
+            # 授权级验证保留；儿童锁确认流批次②接入）。
             if home_tools.is_dangerous_entity(entity_id):
                 if not permission_manager.has_permission("control_dangerous_devices"):
                     return _DENY_LV4_DANGER_DEVICE.format(entity=entity_id)
-                if not permission_manager.lv4_mfa_ok(credentials=credentials):
-                    detail = getattr(permission_manager, "last_lv4_message", "")
-                    return _DENY_LV4_MFA + (f"\n{detail}" if detail else "")
-            elif not _level_at_least(permission_manager, 2,
-                                     "control_normal_devices"):
+            elif not permission_manager.has_permission("control_normal_devices"):
                 return _DENY_LV2_NORMAL_DEVICE
             result = control_ha_device(entity_id, action,
                                        temperature=args.get("temperature"))
@@ -425,7 +440,7 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
                 return "❌ 缺少参数：需要提供 query (搜索关键词)"
             return web_search(query, args.get("max_results", 5))
 
-        # === 系统组件一键装卸（Lv.4 三重门禁：等级 + 双因子 + 二次确认） ===
+        # === 系统组件一键装卸（Lv.4 等级门禁；操作级双因子已删，2026-10-02） ===
         elif tool_name == "system_manage":
             action = args.get("action")
             component = args.get("component")
@@ -438,13 +453,19 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
                         "连字符，且不得以 - 开头），疑似注入已拦截！")
             if not permission_manager.has_permission("system_manage"):
                 return _DENY_LV4_SYSTEM
-            if not permission_manager.lv4_mfa_ok(credentials=credentials):
-                detail = getattr(permission_manager, "last_lv4_message", "")
-                return _DENY_LV4_MFA + (f"\n{detail}" if detail else "")
-            if not credentials.get("confirmed"):
-                return ("❌ 安全拒绝：装卸系统组件属类 Root 高危操作，需二次确认："
-                        "请确认后携带 confirmed=True 重新执行。")
             return _system_manage(action, component)
+
+        # === 重启自身（Lv.4 专属，2026-10-02 新增） ===
+        elif tool_name == "restart_service":
+            # 复活链：Linux start.sh 守护循环 2 秒自动拉起；Windows 形态由
+            # desktop_launcher.py 监督线程负责（批次②）。禁止重启操作系统：
+            # 本工具无任何目标参数、无系统级调用面，只退出自身 Python 进程。
+            result = ("✅ 重启指令已受理，小橘3号将在 2 秒后重启，"
+                      "稍候再叫我哦~")
+            timer = threading.Timer(2.0, os._exit, args=(0,))
+            timer.daemon = False   # 回复先经 Flask 刷出，再执行退出
+            timer.start()
+            return result
 
         return "未知工具"
     except Exception as e:

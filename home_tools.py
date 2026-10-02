@@ -20,6 +20,8 @@ HA_URL / HA_TOKEN 统一来自 xiaoju3 配置（.env → 环境变量优先）�
 凭证不入仓库。未配置 HA_URL 时函数内返回清晰中文错误串，import 本模块零副作用
 （tools.py 顶层 import 本模块）。
 """
+import os
+
 import requests
 
 from xiaoju3 import HA_URL, HA_TOKEN
@@ -89,18 +91,29 @@ def get_ha_states():
 
 
 def is_dangerous_entity(entity_id):
-    """高危实体分类（架构 §10 #8：开锁、燃气阀等高危操作单独二次确认）。
+    """危险实体判定（2026-10-02 权限重构扩展口径）。
 
     - 门锁：entity_id 域名为 lock.*；
-    - 燃气：entity_id 含 "gas"（不区分大小写）或 "燃气" 字样。
-    返回 True 表示高危。二次确认令牌交互流由接线方（main.py/S5）实现：
-    判定为高危 → 向用户索要确认令牌 → 通过后才调用 control_ha_device。
+    - 阀类：entity_id 含 gas / valve（不区分大小写）或 燃气 / 阀 字样；
+    - 自定义：精确命中 DANGER_ENTITIES 环境变量白名单（逗号分隔的自定义
+      危险实体 ID，延迟读取 env，与 HA_URL 同风格，如
+      DANGER_ENTITIES=lock.front_door,switch.induction_cooker）。
+    返回 True 表示危险（LV4 门禁）；其余（六类安全 domain）为安全（LV3）。
     """
     eid = str(entity_id or "")
     if eid.lower().split(".", 1)[0] == "lock":
         return True
     lower = eid.lower()
-    return ("gas" in lower) or ("燃气" in eid)
+    if ("gas" in lower) or ("valve" in lower) or ("燃气" in eid) or ("阀" in eid):
+        return True
+    try:
+        for item in os.environ.get("DANGER_ENTITIES", "").split(","):
+            item = item.strip()
+            if item and eid == item:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def control_ha_device(entity_id, action, temperature=None):
