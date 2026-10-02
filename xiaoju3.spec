@@ -1,0 +1,117 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""小橘3号 · PyInstaller 打包规格（方案 docs/EXE_PACKAGING_PLAN.md 步 4，§4）。
+
+- 入口 desktop_launcher.py（onefile，console=False 即 -w 无控制台）；
+  spawn-self 三角色已由 argv 标志在代码层分流（步 2），spec 无需额外处理：
+  desktop_launcher 顶层 import xiaoju3_dashboard（全链收录），分流分支内
+  延迟 import xiaoju3_launcher——两者均被静态分析收录进 PYZ。
+- datas 只放"运行期只读"资源（资源根 _MEIPASS 口径，步 1b 双根）：
+  assets/、前端三件套、.env.example。plugins 不进 datas——插件为静态
+  import（main.py from plugins.xxx import），列 hiddenimports 进 PYZ
+  （对方案 §4 的一处实施修正）。
+- excludes playwright：link_logger 为延迟导入 + 中文提示优雅降级（既有
+  机制），exe 形态不打 Chromium（约 200MB），/gen_log 首机需另行安装。
+- 产物 dist/xiaoju3.exe 不入库（*.exe 拒绝规则，b8507dc 口径）。
+"""
+
+a = Analysis(
+    ['desktop_launcher.py'],
+    pathex=[],
+    binaries=[],
+    datas=[
+        ('assets', 'assets'),              # 桌宠素材（pet/normal_half|full）+ ASSETS.md
+        ('index.html', '.'),               # 前端三件套（dashboard 从资源根直读）
+        ('console.js', '.'),
+        ('desktop-pet.js', '.'),
+        ('.env.example', '.'),             # 首启配置模板（数据根引导用）
+    ],
+    hiddenimports=[
+        # ── pywebview Windows 后端链（6.x 默认 WinForms + WebView2 via pythonnet）──
+        'webview',
+        'webview.platforms.winforms',
+        'webview.platforms.edgechromium',
+        'webview.platforms.mshtml',
+        'clr',                              # pythonnet（WebView2 绑定）
+        # ── pywin32 / wmi（温度读取、Windows API）──
+        'wmi',
+        'win32api',
+        'win32con',
+        'win32com',
+        'win32com.client',
+        # ── 第三方直接依赖 ──
+        'psutil',
+        'psutil._pswindows',
+        'edge_tts',
+        'openai',
+        'bs4',
+        'flask_cors',
+        'requests',
+        # ── 项目主链与延迟导入模块（显式列防漏收）──
+        'paths',
+        'xiaoju3',
+        'xiaoju3_launcher',                 # spawn-self launcher 角色入口
+        'xiaoju3_dashboard',
+        'main',
+        'brain',
+        'prompts',
+        'tools',
+        'permission',
+        'home_tools',
+        'heartbeat',
+        'migration',
+        'emoji_manager',
+        'run_link_log',
+        'search_tools',
+        'vision_tools',
+        'android_ui_tools',
+        'adb_tools',
+        'auth_lv4',
+        'intent_router',
+        'web_sanitize',
+        'hardware_profiler',
+        'agent_state.state_manager',
+        # ── plugins 包（静态 import，进 PYZ 而非 datas）──
+        'plugins.accounting',
+        'plugins.batch_logger',
+        'plugins.context_manager',
+        'plugins.dev_logger',
+        'plugins.ebook_export',
+        'plugins.help_menu',
+        'plugins.link_logger',
+        'plugins.qq_send_image',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        'playwright',                       # exe 不打 Chromium（优雅降级既有机制）
+        'tkinter',
+        'pytest',
+        'IPython',
+    ],
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='xiaoju3',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,                          # -w 无控制台（桌面窗口即主入口）
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=None,                              # 步 5 可选：assets/pet 转 ico
+)
