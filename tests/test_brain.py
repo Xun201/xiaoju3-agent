@@ -3455,6 +3455,23 @@ class LocationAskTests(unittest.TestCase):
         with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(brain._dedupe_reply(text), text)
 
+    def test_location_marker_variants(self):
+        """四格式标记兼容（2026-10-02 加固口径）：城市/城市-区县/空格分隔/
+        无分隔"市+区县"形态，落库城市统一剥"市"字尾。"""
+        cases = (
+            ("[LOCATION:长沙]", ("长沙", "")),
+            ("[LOCATION:长沙-天心区]", ("长沙", "天心区")),
+            ("[LOCATION:长沙 天心区]", ("长沙", "天心区")),
+            ("[LOCATION:长沙市天心区]", ("长沙", "天心区")),
+        )
+        for marker, expected in cases:
+            with self.subTest(marker=marker):
+                self.real_sm.clear_user_location()
+                with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+                    brain._consume_location_marker("好的。" + marker)
+                got = self.real_sm.get_user_location()
+                self.assertEqual((got["city"], got["district"]), expected)
+
     def test_prompt_contains_ask_and_marker_protocol(self):
         """提示词（2026-10-02 隐私口径）：包含"必须先问"与 [LOCATION:] 协议。"""
         content = brain.SYSTEM_PROMPT["content"]
@@ -3464,6 +3481,124 @@ class LocationAskTests(unittest.TestCase):
         self.assertIn("对主人不可见", content)
         self.assertIn("不要再重复询问", content)
         self.assertIn("直接使用，不要再问", content)
+
+
+class LocationHardBlockTests(unittest.TestCase):
+    """位置未知硬拦截 + 位置回答兜底提取（2026-10-02 用户口径）。
+
+    背景：本地小模型无视提示词"必须先问"约束、自己编了"杭州余杭区"直接
+    调 web_search 返回杭州天气——关键行为必须代码层硬拦截；且用户用完整
+    句式回答位置（"我要的是长沙市天心区的"）时模型漏带 [LOCATION:] 标记。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        # sys.modules 中的 agent_state.state_manager 可能是 fake——按真实
+        # 路径重载（手法同 LocationAskTests）
+        import importlib.util
+        real_path = os.path.join(PROJECT_ROOT, "agent_state", "state_manager.py")
+        spec = importlib.util.spec_from_file_location(
+            "agent_state.state_manager", real_path)
+        cls.real_sm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.real_sm)
+
+    def setUp(self):
+        self.real_sm.clear_user_location()
+        self.addCleanup(self.real_sm.clear_user_location)
+
+    def _sm_ctx(self):
+        """让 brain 的延迟导入在 patch.dict 生效期间绑定真实 state_manager。"""
+        return mock.patch.dict(sys.modules,
+                               {"agent_state.state_manager": self.real_sm})
+
+    def _run_web_search_flow(self, query, user_city="", user_district="",
+                             user_message="今天天气怎么样",
+                             unknown_location=True):
+        """跑一条 web_search 工具流，返回 (reply, source, stdout, mexec)。"""
+        raw = ('[思考] 查询需要联网。\n'
+               '[计划] 调用搜索。\n'
+               '[行动] {"tool": "web_search", "args": {"query": "%s"}}' % query)
+        buf = io.StringIO()
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", user_city), \
+                mock.patch.object(brain, "USER_DISTRICT", user_district), \
+                mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value=None if unknown_location
+                                  else {"city": "长沙",
+                                        "district": "天心区"}), \
+                mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool",
+                                  return_value="1. 搜索结果摘要") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, \
+                contextlib.redirect_stdout(buf):
+            mr.get.return_value = mock.Mock()
+            mr.post.side_effect = [_local_resp(raw), _local_resp("汇总完成")]
+            mcloud.return_value = "汇总完成"
+            reply, source = brain.smart_ask(user_message, [])
+        return reply, source, buf.getvalue(), mexec
+
+    def test_location_unknown_blocks_search(self):
+        """任务口径用例①：位置未知 + query="今天天气" → 不调 web_search，
+        返回固定询问文案（🛑 日志、来源标签 📍 询问位置）。"""
+        reply, source, out, mexec = self._run_web_search_flow("今天天气")
+        mexec.assert_not_called()   # 拦截在 execute_tool 之前，工具绝不执行
+        self.assertIn("我还不知道你在哪个城市和区", reply)
+        self.assertIn("长沙天心区", reply)   # 固定文案含示例
+        self.assertEqual(source, "📍 询问位置")
+        self.assertIn("🛑 [搜索] 位置未知，拦截搜索请求", out)
+
+    def test_non_location_query_passes(self):
+        """任务口径用例②：位置未知 + query="如何写Python"（非地点敏感）
+        → 正常调用 web_search，query 原样透传。"""
+        reply, source, out, mexec = self._run_web_search_flow("如何写Python")
+        mexec.assert_called_once()
+        called_args = mexec.call_args[0][1]
+        self.assertEqual(called_args["query"], "如何写Python")
+        self.assertNotIn("🛑", out)
+
+    def test_location_known_rewrites_and_calls(self):
+        """任务口径用例③：位置已知（.env 配置长沙）+ query="今天天气"
+        → 正常改写为"长沙今天天气"并调用 web_search。"""
+        reply, source, out, mexec = self._run_web_search_flow(
+            "今天天气", user_city="长沙", unknown_location=False)
+        mexec.assert_called_once()
+        called_args = mexec.call_args[0][1]
+        self.assertEqual(called_args["query"], "长沙今天天气")
+        self.assertIn("📍 [搜索] 位置来源: .env", out)
+        self.assertNotIn("🛑", out)
+
+    def test_user_message_location_extracted(self):
+        """任务口径用例④：用户完整句式回答"我要的是长沙市天心区的"
+        → 自动提取"长沙-天心区"写入 user_location.json。"""
+        buf = io.StringIO()
+        with self._sm_ctx(), contextlib.redirect_stdout(buf):
+            saved = brain._extract_location_from_user_message(
+                "我要的是长沙市天心区的")
+        self.assertTrue(saved)
+        self.assertEqual(self.real_sm.get_user_location(),
+                         {"city": "长沙", "district": "天心区"})
+        self.assertIn("从主人回答中提取位置", buf.getvalue())
+
+    def test_user_message_without_combo_not_saved(self):
+        """普通消息（无城市+区县组合）不触发写入（零误伤）。"""
+        with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(brain._extract_location_from_user_message(
+                "今天天气怎么样"))
+        self.assertIsNone(self.real_sm.get_user_location())
+
+    def test_known_city_with_district_extracted(self):
+        """词表城市 + 区县组合（"我在长沙天心区"）同样提取。"""
+        with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(brain._extract_location_from_user_message(
+                "我在长沙天心区"))
+        self.assertEqual(self.real_sm.get_user_location(),
+                         {"city": "长沙", "district": "天心区"})
+
+    def test_hard_block_reply_wrapped_with_think(self):
+        """硬拦截回复同样过 _wrap_think（全对话强制包装口径不破坏）。"""
+        reply, _source, _out, _mexec = self._run_web_search_flow("今天天气")
+        self.assertTrue(reply.startswith("<think>"), reply)
+        self.assertIn("</think>", reply)
 
 
 class AntiRepeatPromptTests(unittest.TestCase):

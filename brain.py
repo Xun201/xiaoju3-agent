@@ -436,8 +436,40 @@ def _strip_self_talk(body):
 
 # 模型询问主人位置后，主人告知 → 模型在回复末尾带 [LOCATION:城市-区县]
 # 或 [LOCATION:城市] 标记（对主人不可见，系统自动记录到本地位置记忆）。
-# 标记内容限 1-50 字符，城市与区县以 "-" 分隔。
+# 标记内容限 1-50 字符。
 _LOCATION_MARKER_RE = re.compile(r'\s*\[LOCATION:([^\]]{1,50})\]')
+
+# 无分隔形态的"市+区县"切分（[LOCATION:长沙市天心区] → 长沙市 / 天心区）
+_MARKER_CITY_DISTRICT_RE = re.compile(r'^(.{1,8}市)(.+[区县])$')
+
+
+def _parse_location_marker(content):
+    """解析 [LOCATION:] 标记内容为 (city, district)。
+
+    兼容四种形态（2026-10-02 用户口径）：[LOCATION:长沙]、
+    [LOCATION:长沙-天心区]、[LOCATION:长沙 天心区]（空格分隔）、
+    [LOCATION:长沙市天心区]（无分隔，城市"市"字收尾切分）；城市末尾
+    "市"字统一剥除（落库存"长沙"而非"长沙市"）。解析不出城市返回
+    (None, None)。
+    """
+    raw = (content or "").strip()
+    raw = raw.replace("－", "-").replace("—", "-").replace("　", "-")
+    raw = re.sub(r'\s+', '-', raw)          # 空格分隔归一为 "-"
+    if "-" in raw:
+        city, _, district = raw.partition("-")
+    else:
+        m = _MARKER_CITY_DISTRICT_RE.match(raw)
+        if m:
+            city, district = m.group(1), m.group(2)
+        else:
+            city, district = raw, ""
+    city = city.strip()
+    district = district.strip()
+    if city.endswith("市"):
+        city = city[:-1]
+    if not city:
+        return None, None
+    return city, district
 
 
 def _consume_location_marker(reply):
@@ -445,8 +477,10 @@ def _consume_location_marker(reply):
 
     - 写入走 agent_state.state_manager.save_user_location（仅本地
       user_location.json，gitignore 不入库、不上传、不传云端）；
+    - 标记内容四格式兼容（见 _parse_location_marker：城市/城市-区县/
+      空格分隔/无分隔的"市+区县"形态）；
     - 首个标记生效（多次出现时后续标记同样剥离、不重复写入）；
-    - 城市/区县两侧空白清洗；城市为空的畸形标记只剥离不写入；
+    - 城市为空的畸形标记只剥离不写入；
     - 剥离后回复剥空（整条回复只有标记）→ 保守返回原文，绝不下发空回复；
     - 无标记 / 任何异常 → 原样返回，绝不影响回复下发。
     """
@@ -455,10 +489,7 @@ def _consume_location_marker(reply):
         matches = _LOCATION_MARKER_RE.findall(text)
         if not matches:
             return text
-        first = matches[0].strip()
-        city, _, district = first.partition("-")
-        city = city.strip()
-        district = district.strip()
+        city, district = _parse_location_marker(matches[0])
         if city:
             try:
                 from agent_state.state_manager import save_user_location
@@ -470,6 +501,61 @@ def _consume_location_marker(reply):
     except Exception as e:
         print(f"⚠️ 位置标记消费异常（原样返回）: {e}")
         return text
+
+
+# 用户消息中的区县片段（区/县收尾，如"天心区""长沙县"）——只允许 1-3 字
+# 城市名 + 区/县（全局贪心搜会吞出"沙市天心区"这类碎片，必须锚定城市之后）
+_USER_DISTRICT_RE = re.compile(r'[\u4e00-\u9fa5]{1,3}(?:区|县)')
+
+
+def _extract_location_from_user_message(message):
+    """从用户消息提取"城市+区县"组合并写入本地位置记忆（兜底层）。
+
+    用户口径（2026-10-02）：位置询问后用户用完整句式回答（"我要的是长沙
+    市天心区的"），本地小模型可能识别不出这是位置回答、漏带 [LOCATION:]
+    标记——凡用户消息里明显同时出现"城市（地点词表命中，或'XX市'形态）+
+    区县（区/县收尾）"组合，直接提取写入 agent_state/user_location.json
+    （全量覆盖；仅本地，不入库不传云端）。与已有记录一致时不重复写盘。
+
+    返回是否发生了写入；任何异常静默返回 False，绝不影响对话。
+    局限（如实标注）：用户提及外地城市+区县（如旅游话题）也会被记录为
+    常用位置——轻量词表口径的已知取舍，可 /clear_location 清除。
+    """
+    try:
+        text = "" if message is None else str(message)
+        if not text.strip():
+            return False
+        city = next((loc for loc in _KNOWN_LOCATIONS if loc in text), "")
+        if not city:
+            m = re.search(r'([\u4e00-\u9fa5]{1,3})市', text)
+            city = m.group(1) if m else ""
+        # 区县必须锚定在城市之后提取（可隔一个"市"字）——全局搜索会贪心
+        # 吞出"沙市天心区"这类碎片（左端起匹配）
+        district = ""
+        idx = text.find(city) if city else -1
+        if idx >= 0:
+            remainder = text[idx + len(city):]
+            if remainder.startswith("市"):
+                remainder = remainder[1:]
+            district_m = _USER_DISTRICT_RE.search(remainder)
+            district = district_m.group(0) if district_m else ""
+        if not city or not district:
+            return False
+        try:
+            from agent_state.state_manager import (get_user_location,
+                                                   save_user_location)
+            current = get_user_location()
+            if current == {"city": city, "district": district}:
+                return False   # 与已有记录一致：不重复写盘
+            save_user_location(city, district)
+        except Exception as e:
+            print(f"⚠️ 用户消息位置提取写入失败: {e}")
+            return False
+        print(f"📍 [搜索] 从主人回答中提取位置: {city}{district}")
+        return True
+    except Exception as e:
+        print(f"⚠️ 用户消息位置提取异常（跳过）: {e}")
+        return False
 
 
 def _dedupe_reply(reply):
@@ -567,6 +653,12 @@ _KNOWN_LOCATIONS = (
 
 # 带行政区划后缀的未知地名（"株洲市""湖南省"等，词表外形态）
 _ADMIN_SUFFIX_RE = re.compile(r'[\u4e00-\u9fa5]{1,6}(?:省|市|自治区|自治州)')
+
+# 位置未知时的固定询问文案（2026-10-02 硬拦截口径）：本地小模型不可靠、
+# "必须先问"的提示词约束靠不住（实测自己编了"杭州余杭区"直接搜索）——
+# 关键行为必须在代码层硬拦截
+LOCATION_ASK_REPLY = ("我还不知道你在哪个城市和区，请先告诉我"
+                      "（例如：长沙天心区），我下次就能直接搜了～")
 
 
 def _resolve_user_location():
@@ -1306,6 +1398,11 @@ def smart_ask(message, history=None, session_key="default"):
     # SQLite 异常静默跳过，绝不影响本轮对话
     _remember_user_facts(message)
 
+    # 📍 位置回答兜底提取（2026-10-02 隐私口径）：小模型可能识别不出完整
+    # 句式的位置回答、漏带 [LOCATION:] 标记——用户消息里明显含"城市+区县"
+    # 组合时直接提取写入本地位置记忆（词表+后缀轻量匹配，异常静默）
+    _extract_location_from_user_message(message)
+
     # === 第一步：如果用户输入里有 URL，先抓网页正文（剔除 script/style） ===
     url_match = re.search(r'(https?://[^\s]+)', message)
     messages = _build_messages(message, history)
@@ -1418,16 +1515,24 @@ def smart_ask(message, history=None, session_key="default"):
                     thinking = _tool_thinking_placeholder(tool_name)
                     print("[CoT] 已注入兜底占位符")
                 try:
-                    # 📍 搜索指代消解（2026-10-02 隐私口径）：web_search 的
-                    # 裸词 query（"今天天气"）会被搜索引擎随机定位——执行
-                    # 前按 .env 配置 / 本地位置记忆补全地点（用户说的地点
-                    # 优先）；无位置返回 None → 不改写，由模型主动询问
+                    # 📍/🛑 搜索指代消解 + 硬拦截（2026-10-02 用户口径）：
+                    # web_search 的裸词 query（"今天天气"）会被搜索引擎随机
+                    # 定位——执行前按 .env 配置 / 本地位置记忆补全地点；位置
+                    # 未知（_inject_location 返回 None）且 query 是地点敏感
+                    # 类时不执行工具、直接返回固定询问文案——本地小模型会
+                    # 无视提示词的"必须先问"约束自己编地点（实测编了"杭州
+                    # 余杭区"直接搜），关键行为必须代码层硬拦截
                     if (tool_name == "web_search" and isinstance(tool_args, dict)
                             and tool_args.get("query")):
-                        located = _inject_location(str(tool_args["query"]))
-                        if located is not None and located != tool_args["query"]:
+                        raw_query = str(tool_args["query"])
+                        located = _inject_location(raw_query)
+                        if located is None:
+                            print("🛑 [搜索] 位置未知，拦截搜索请求，改为询问用户")
+                            return (_wrap_think(thinking, LOCATION_ASK_REPLY),
+                                    "📍 询问位置")
+                        if located != raw_query:
                             print(f"📍 [搜索] 指代消解: "
-                                  f"{tool_args['query']} → {located}")
+                                  f"{raw_query} → {located}")
                             tool_args["query"] = located
                     tool_result = execute_tool(tool_name, tool_args, permission_manager)
                 except Exception as tool_err:
