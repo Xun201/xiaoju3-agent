@@ -699,9 +699,31 @@ _waiting_location_until = 0.0   # 等待位置回答的截止时间戳（0 = 无
 
 
 def _mark_waiting_location():
-    """硬拦截命中（发出位置询问）时开启等待窗口。"""
+    """开启等待位置回答窗口（硬拦截命中 / 自然语言位置询问时调用）。"""
     global _waiting_location_until
     _waiting_location_until = time.time() + WAITING_LOCATION_WINDOW_SECONDS
+    print(f"📍 [位置] 已开启等待回答窗口，截止时间: {int(_waiting_location_until)}")
+
+
+# 位置询问文案特征（自然语言出口开窗判定，2026-10-02 排查修复）：模型按
+# 【主人位置】未知上下文/提示词"必须先问"用自然语言直接询问时**不调
+# web_search**，硬拦截（开窗点）根本不触发——实测窗口从未打开、群聊裸
+# 回答被 @ 规则挡掉。故在自然语言回复出口按文案特征补开窗。
+_LOCATION_ASK_TEXT_RE = re.compile(r'哪个城市|城市和区')
+
+
+def _maybe_mark_waiting_location(final_reply):
+    """最终自然语言回复若为位置询问 → 开启等待窗口（幂等，覆盖模型自发
+    询问路径；判定只看正文——<think> 思考里的同字样不开窗）。异常安全。"""
+    try:
+        text = "" if final_reply is None else str(final_reply)
+        m = _THINK_PAIR_RE.match(text.lstrip())
+        body = text[m.end():] if m else text
+        if _LOCATION_ASK_TEXT_RE.search(body):
+            _mark_waiting_location()
+    except Exception as e:
+        print(f"⚠️ 位置询问开窗判定异常（跳过）: {e}")
+    return final_reply
 
 
 def clear_waiting_location():
@@ -1730,7 +1752,9 @@ def smart_ask(message, history=None, session_key="default"):
                 #（thinking/body 两侧清洗 + 成对校验）。汇总轮模型复读的裸
                 # [思考]/[计划]/[行动] 并入推理卡片，绝不随正文直出（用户
                 # 实测"帮我点击蓝牙"回退分支漏点，2026-10-01 穷举封死）
-                return _seal_tool_summary(thinking, final_reply), tool_source
+                final = _seal_tool_summary(thinking, final_reply)
+                _maybe_mark_waiting_location(final)   # 位置询问 → 开等待窗口
+                return final, tool_source
             else:
                 print(f"⚠️ 工具 {tool_name} 不在白名单内，已拒绝执行。")
         except Exception as e:
@@ -1739,7 +1763,11 @@ def smart_ask(message, history=None, session_key="default"):
     # 🧠 全对话强制包装：JSON 解析失败/工具不在白名单等旁路走到普通回复——
     # 捕获到原生 [思考]/[计划] 用原生思考包装；无任何标记的普通闲聊在
     # _seal_bare_cot 内注入默认占位符，前端必定渲染思维链卡片
-    return _seal_bare_cot(raw_reply), label
+    final = _seal_bare_cot(raw_reply)
+    # 📍 自然语言位置询问开窗（2026-10-02 排查修复）：模型按"必须先问"
+    # 协议自发询问时不调 web_search、硬拦截不触发——出口按文案特征补开窗
+    _maybe_mark_waiting_location(final)
+    return final, label
 
 
 # ==================== 表情包（§5，已接入回复链） ====================

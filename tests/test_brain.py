@@ -3884,6 +3884,57 @@ class WaitingLocationTests(unittest.TestCase):
         self.assertIn("直接回复我或 @ 我都行", brain.LOCATION_ASK_REPLY)
         self.assertIn("长沙天心区", brain.LOCATION_ASK_REPLY)
 
+    def test_natural_ask_reply_opens_window(self):
+        """本 bug 回归锁（2026-10-02 排查修复）：模型按"必须先问"协议用
+        自然语言直接询问（不调 web_search、硬拦截不触发）→ 出口按文案
+        特征补开窗——窗口不再依赖硬拦截路径。"""
+        buf = io.StringIO()
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local",
+                                  return_value="主人，你现在在哪个城市和区？"
+                                               "告诉我一下～"), \
+                contextlib.redirect_stdout(buf):
+            brain.smart_ask("今天天气", [])
+        self.assertTrue(brain._waiting_location_active())
+        self.assertIn("已开启等待回答窗口，截止时间:", buf.getvalue())
+
+    def test_mark_waiting_prints_deadline(self):
+        """任务 1 日志口径：开窗打印"已开启等待回答窗口，截止时间: xxx"。"""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            brain._mark_waiting_location()
+        self.assertIn("已开启等待回答窗口，截止时间:", buf.getvalue())
+
+    def test_normal_reply_does_not_open_window(self):
+        """普通回复（无位置询问字样）不开窗（零误伤）。"""
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local",
+                                  return_value="你好呀！很高兴见到你。"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            brain.smart_ask("你好", [])
+        self.assertFalse(brain._waiting_location_active())
+
+    def test_think_block_mention_does_not_open_window(self):
+        """<think> 思考里提到"哪个城市"但正文不是询问 → 不开窗（判定只看
+        正文，防思考内容误触发）。"""
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(
+                    brain, "ask_local",
+                    return_value="<think>主人在哪个城市来着，不用管，配置里有"
+                                 "</think>今天天气不错哦！"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            brain.smart_ask("你好", [])
+        self.assertFalse(brain._waiting_location_active())
+
 
 class AntiRepeatPromptTests(unittest.TestCase):
     """prompts.py 防复读约束（2026-10-02 用户口径：系统提示词末尾加一句）。"""
