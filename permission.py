@@ -42,6 +42,7 @@ TOTP 密钥读环境变量 XIAOJU3_TOTP_SECRET（Base32，与 Lv.3 动态密码�
 credentials 约定键：{"totp": 动态密码, "biometric": 生物凭据, "confirmed": 二次确认}
 """
 import os
+import re
 import sys
 import json
 import time
@@ -59,19 +60,25 @@ LV3_WINDOW_DEFAULT_TTL = 120
 # 等级序数值（继承语义的比较基准）
 LEVEL_ORDER = {"Lv.1": 1, "Lv.2": 2, "Lv.3": 3, "Lv.4": 4}
 
-# 能力 → 所需最低等级（§7 用户新表）
+# 能力 → 所需最低等级（2026-10-02 权限体系重构定稿矩阵）
+# LV1 路人：基础聊天/联网搜索/读文件；LV2 普通用户：写文件/列目录；
+# LV3 代码编写者：改代码/安全家居（六类 domain）；LV4 主人级：危险设备/
+# ADB 全套/发图/重启自身/装卸组件/核心记忆。
 ACTION_LEVELS = {
     "chat": 1,
     "web_search": 1,                    # 网页搜索维持 Lv.1
-    "read_file": 2,                     # 用户调整点：旧表 LV1 可读 → Lv.2 起可读
+    "read_file": 2,                     # 读文件保持 Lv.2（2026-10-02 定稿）
     "list_files": 2,
-    "control_normal_devices": 2,        # 普通家居（灯/空调/窗帘等非危险设备）
-    "write_file": 3,
+    "write_file": 3,                    # 写文件保持 Lv.3（2026-10-02 定稿）
+    "control_normal_devices": 3,        # 安全家居（六类 domain）升到 Lv.3
     "modify_code": 3,
     "manage_plugins": 3,
-    "control_dangerous_devices": 4,     # 危险家居（门锁/燃气等）
+    "control_dangerous_devices": 4,     # 危险设备（lock/valve/DANGER_ENTITIES）
     "system_manage": 4,                 # 一键装卸系统组件
     "read_private_memory": 4,           # 核心记忆库/私有数据读取（Lv.4 主人独家）
+    "adb_full": 4,                      # ADB 手机接管全套（截图/点击/滑动/UI/视觉）
+    "send_image": 4,                    # QQ 发图（Lv.4 主人级）
+    "restart_service": 4,               # 重启小橘自身进程（Lv.4 主人级专属）
 }
 
 
@@ -94,16 +101,17 @@ def default_master_name():
 
 
 def validate_claim_name(name):
-    """注册/改名时的称呼校验：非空、不得占用创造者保留名（大小写不敏感）。
+    """注册/改名时的称呼校验：非空、不得占用创造者保留名（大小写不敏感、
+    含英文字母 xun 的子串形态一并拒绝——2026-10-02 用户口径；中文谐音如
+    "寻"/"熏"不限制）。
 
     返回 (ok, 称呼或拒绝原因)。
     """
     n = str(name or "").strip()
     if not n:
         return False, "❌ 称呼不能为空。"
-    if n.lower() == CREATOR_NAME.lower():
-        return False, ("❌ 该称呼为创造者专属保留名，任何账号都不允许注册占用，"
-                       "请换一个称呼。")
+    if n.lower() == CREATOR_NAME.lower() or re.search(r"xun", n, re.IGNORECASE):
+        return False, "❌ 该名称已被保留（创作者署名保护），请换一个称呼。"
     return True, n
 
 
@@ -120,6 +128,7 @@ class PermissionManager:
         self.owner = None           # Lv.4 主人级标记（identity.json "owner" 字段）
         self.display_name = ""      # 用户自选称呼（命名防重校验后落盘）
         self._op_windows = {}       # {user_id: 过期时间戳}——Lv.3 操作窗口，仅内存
+        self._is_adults = {}        # {user_id: bool}——儿童锁成人标记（identity 持久化）
         self.last_lv4_message = ""  # 最近一次 lv4_mfa_check 明细（含未接入提示）
         # Lv.4 双因子链：TOTP 动态密码 + 生物认证（默认未接入，明确降级提示）
         self._lv4 = auth_lv4.LV4AuthManager(
@@ -136,6 +145,11 @@ class PermissionManager:
                     self.current_level = data.get("current_level", "Lv.1")
                     self.owner = data.get("owner") or None
                     self.display_name = data.get("display_name") or ""
+                    # 儿童锁（批次②启用，本批先落数据结构）：user_id → 是否
+                    # 成人映射；旧文件缺字段 → 空映射（is_adult 缺省 True，
+                    # 向后兼容，绝不因旧身份文件把现有用户判成儿童）
+                    adults = data.get("is_adults")
+                    self._is_adults = dict(adults) if isinstance(adults, dict) else {}
             except Exception:
                 pass
 
@@ -146,10 +160,26 @@ class PermissionManager:
                     "current_level": self.current_level,
                     "owner": self.owner,
                     "display_name": self.display_name,
+                    "is_adults": self._is_adults,
                     "updated_at": time.time()
                 }, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"⚠️ 保存身份状态失败: {e}")
+
+    # ==================== 儿童锁数据层（2026-10-02，批次②启用判定） ====================
+
+    def is_adult(self, user_id):
+        """查询用户是否成人（儿童锁判定用）。
+
+        未登记的用户缺省视为成人（True）——只有显式登记为 False 的用户
+        才受儿童锁约束，绝不因数据缺失把现有用户锁在外面。
+        """
+        return bool(self._is_adults.get(str(user_id or ""), True))
+
+    def set_is_adult(self, user_id, value):
+        """登记/更新用户成人标记并落盘（批次②的管理指令调用）。"""
+        self._is_adults[str(user_id or "")] = bool(value)
+        self.save_identity()
 
     # ==================== 称呼命名（创造者保留名防重） ====================
 

@@ -147,7 +147,7 @@ TOOL_WHITELIST = [
     "list_files", "read_file", "write_file", "get_ha_devices",
     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
     "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
-    "read_core_memory",
+    "read_core_memory", "restart_service",
 ]
 
 
