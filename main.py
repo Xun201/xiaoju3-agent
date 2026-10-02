@@ -557,13 +557,26 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         else:
             is_at_me = "[CQ:at" in raw_message
         has_trigger_word = any(word in message for word in TRIGGER_WORDS)
+        # 📍 等待位置回答窗口判定（2026-10-02 排查加固：判定与组合提取
+        # 全程 try/except，任何异常不阻塞原 @ 规则）
+        waiting_active = False
+        city, district = "", ""
+        try:
+            waiting_active = brain._waiting_location_active()
+            if waiting_active:
+                city, district = brain._find_city_district(message)
+        except Exception as loc_err:
+            print(f"⚠️ [位置] 等待窗口/位置组合判定异常: {loc_err}")
+        print(f"📨 [群聊] 收到消息: 内容={message[:50]}, "
+              f"是否在等待窗口内={waiting_active}, "
+              f"是否含位置组合={bool(city)}, 是否含区县={bool(district)}")
         if not (is_at_me or has_trigger_word):
-            # 📍 等待位置回答窗口（2026-10-02 群聊体验修复）：AI 刚问过
-            # "你在哪个城市和区"（5 分钟窗口内），用户自然回答"长沙天心区"
-            # （没 @）不再被防刷屏规则挡掉——消息含"城市+区县"完整组合即
-            # 放行进正常处理链路（smart_ask 起步提取写入并自动关窗）；
-            # 无组合的普通聊天仍按原规则忽略
-            if brain._waiting_location_active() and brain.message_has_location(message):
+            # 📍 等待位置回答窗口（群聊体验修复）：AI 刚问过位置（5 分钟
+            # 窗口内），用户自然回答（"长沙天心区"/只回"长沙"）不再被防
+            # 刷屏规则挡掉——消息含城市（区县可选）即放行进正常处理链路
+            #（smart_ask 起步提取写入；只回城市时模型会继续追问区县）。
+            # 已在 handle_message 内：不 return "" 即为放行（等效递归）
+            if waiting_active and city:
                 print("📍 [位置] 等待回答窗口内，绕过 @ 判断，尝试提取位置")
             else:
                 return ""

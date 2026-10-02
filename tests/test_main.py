@@ -26,6 +26,8 @@ main.onebot_event 一字未改）；指令族用例直接调 main.handle_message
   long_term.db 均经 patch 隔离）；TOTP 用固定测试密钥现场生成；mock 全部经
   unittest.mock.patch + addCleanup 自动还原，不向 sys.modules 注入任何伪模块。
 """
+import contextlib
+import io
 import json
 import os
 import re
@@ -1313,6 +1315,50 @@ class TestWaitingLocationWindow(_MainCase):
         self.assertTrue(self.brain._waiting_location_active())
         main.handle_message('web', 'admin', None, "/clear_location")
         self.assertFalse(self.brain._waiting_location_active())
+
+    def test_webhook_bypass_extracts_and_writes(self):
+        """任务 4 端到端（webhook 夹具）：窗口内群聊裸回答"长沙天心区"
+        → handle_message 链路被调用 + 位置写入 user_location.json
+        （生产链路中提取在 smart_ask 起步执行——smart_ask mock 的
+        side_effect 显式走真实提取补偿，验证写入闭环）。"""
+        from agent_state import state_manager as sm_module
+        sm_module.clear_user_location()
+        self.addCleanup(sm_module.clear_user_location)
+        self.brain._mark_waiting_location()
+
+        def fake_smart_ask(msg, hist, session_key="default"):
+            self.brain._extract_location_from_user_message(msg)
+            return ("好的，已记录你的位置！", "🏠 本地")
+
+        self.smart_ask.side_effect = fake_smart_ask
+        resp = self._onebot_group("长沙天心区")
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+        self.napcat.post.assert_called_once()
+        self.assertEqual(sm_module.get_user_location(),
+                         {"city": "长沙", "district": "天心区"})
+        # 窗口已关闭（提取成功即关窗）
+        self.assertFalse(self.brain._waiting_location_active())
+
+    def test_window_city_only_answer_bypasses(self):
+        """窗口内只回城市（"长沙"，无区县）→ 同样放行（spec 伪代码口径：
+        city 命中即 bypass；模型会继续追问区县，比挡掉体验好）。"""
+        self.brain._mark_waiting_location()
+        resp = self._onebot_group("长沙")
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+
+    def test_per_message_debug_log_printed(self):
+        """任务 2 日志口径：每条群聊消息打 📨 调试行（内容/窗口/组合三态）。"""
+        self.brain._mark_waiting_location()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._onebot_group("长沙天心区")
+        self.assertIn("📨 [群聊] 收到消息: 内容=长沙天心区", buf.getvalue())
+        self.assertIn("是否在等待窗口内=True", buf.getvalue())
+        self.assertIn("是否含位置组合=True", buf.getvalue())
+        self.assertIn("📍 [位置] 等待回答窗口内，绕过 @ 判断，尝试提取位置",
+                      buf.getvalue())
 
 
 if __name__ == "__main__":
