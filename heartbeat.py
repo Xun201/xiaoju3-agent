@@ -359,7 +359,8 @@ def apply_scene_rules(prev_states, curr_states, humidity_threshold=None):
             for h in curr:
                 hid = str(h.get("entity_id", ""))
                 if _is_humidifier(h) and str(h.get("state")) == "off" \
-                        and not hid.startswith(("sensor.", "climate.", "media_player.")):
+                        and not hid.startswith(("sensor.", "climate.", "media_player.",
+                                                "input_number.")):
                     actions.append({"tool": "control_ha_device",
                                     "args": {"entity_id": hid, "action": "turn_on"}})
 

@@ -351,5 +351,32 @@ class ImportSafetyTests(unittest.TestCase):
         self.assertTrue(callable(home_tools.get_ha_states))
 
 
+class InputNumberDomainTests(HomeToolsTestBase):
+    """input_number 第七类（2026-10-02）：模拟湿度等数值实体纳入感知白名单。"""
+
+    SAMPLE = [
+        _state("input_number.mo_ni_shi_du", "45.5", "模拟湿度"),
+        _state("sun.sun", "above_horizon", "太阳"),   # 非白名单仍剔除
+    ]
+
+    def test_domains_contains_input_number(self):
+        self.assertIn("input_number", home_tools.HA_DOMAINS)
+        self.assertEqual(len(home_tools.HA_DOMAINS), 7)
+
+    def test_get_ha_devices_includes_input_number(self):
+        with mock.patch.object(home_tools.requests, "get") as mget:
+            mget.return_value.json.return_value = self.SAMPLE
+            result = home_tools.get_ha_devices()
+        self.assertIn("模拟湿度 (ID: input_number.mo_ni_shi_du) 当前状态: 45.5", result)
+        self.assertNotIn("sun.sun", result)
+
+    def test_get_ha_states_includes_input_number(self):
+        with mock.patch.object(home_tools.requests, "get") as mget:
+            mget.return_value.json.return_value = self.SAMPLE
+            states = home_tools.get_ha_states()
+        self.assertIn("input_number.mo_ni_shi_du",
+                      [e["entity_id"] for e in states])
+
+
 if __name__ == "__main__":
     unittest.main()

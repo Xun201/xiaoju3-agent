@@ -785,5 +785,27 @@ class SunTimestampNoiseTests(HeartbeatBase):
         self.assertIn("检测到环境变化", buf3.getvalue())
 
 
+    def test_input_number_change_triggers_brain(self):
+        """input_number（模拟湿度）数值变化 → 正常参与快照对比（不被时间型
+        过滤误伤），数值漂移触发决策；同值轮静默。"""
+        import contextlib
+        import io
+        ask = mock.MagicMock(return_value=("无需干预", "🏠 本地"))
+        humid = "- 模拟湿度 (ID: input_number.mo_ni_shi_du) 当前状态: {v}"
+        texts = [humid.format(v="45.5"), humid.format(v="45.5"),
+                 humid.format(v="38.2")]
+        with mock.patch.object(heartbeat, "get_ha_devices", side_effect=texts), \
+                mock.patch.object(heartbeat, "get_ha_states", return_value=[
+                    _state("input_number.mo_ni_shi_du", "38.2", "模拟湿度")]), \
+                mock.patch.object(heartbeat, "_ha_configured", return_value=True):
+            heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+            heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+            with contextlib.redirect_stdout(io.StringIO()) as buf3:
+                third = heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+        self.assertEqual(ask.call_count, 2)   # 基线 + 数值变化；同值轮判等静默
+        self.assertEqual(third, "无需干预")
+        self.assertIn("检测到环境变化", buf3.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
