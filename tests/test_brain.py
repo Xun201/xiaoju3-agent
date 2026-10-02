@@ -69,6 +69,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -3805,6 +3806,83 @@ class LocationHardBlockTests(unittest.TestCase):
             out = search_tools.web_search("如何写Python")
         self.assertIn("Python 教程", out)
         self.assertIn("Python 官方文档", out)
+
+
+class WaitingLocationTests(unittest.TestCase):
+    """等待位置回答窗口（2026-10-02 群聊体验修复）。
+
+    群聊里 AI 问完位置、用户裸回答"长沙天心区"（没 @）被防刷屏规则挡掉
+    ——硬拦截命中（发出询问）时开 5 分钟窗口，窗口内群聊消息含"城市+区县"
+    组合由 main 绕过 @ 判断放行；提取成功//clear_location/超时三种关窗。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        # 手法同 LocationAskTests：sys.modules 可能是 fake，按真实路径重载
+        import importlib.util
+        real_path = os.path.join(PROJECT_ROOT, "agent_state", "state_manager.py")
+        spec = importlib.util.spec_from_file_location(
+            "agent_state.state_manager", real_path)
+        cls.real_sm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.real_sm)
+
+    def setUp(self):
+        brain.clear_waiting_location()
+        self.real_sm.clear_user_location()
+        self.addCleanup(brain.clear_waiting_location)
+        self.addCleanup(self.real_sm.clear_user_location)
+
+    def _sm_ctx(self):
+        return mock.patch.dict(sys.modules,
+                               {"agent_state.state_manager": self.real_sm})
+
+    def test_hard_block_opens_window(self):
+        """硬拦截命中（发出询问）→ 等待窗口开启（5 分钟内有效）。"""
+        raw = ('[思考] 查天气。\n[计划] 搜索。\n'
+               '[行动] {"tool": "web_search", "args": {"query": "今天天气"}}')
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "requests") as mr, \
+                contextlib.redirect_stdout(io.StringIO()):
+            mr.get.return_value = mock.Mock()
+            mr.post.side_effect = [_local_resp(raw), _local_resp("x")]
+            reply, source = brain.smart_ask("今天天气", [])
+        self.assertEqual(source, "📍 询问位置")
+        self.assertIn("直接回复我或 @ 我都行", reply)   # 任务 3 文案口径
+        self.assertTrue(brain._waiting_location_active())
+
+    def test_message_has_location_combo(self):
+        """放行判定：完整"城市+区县"组合命中；普通聊天 / 只有城市不命中。"""
+        self.assertTrue(brain.message_has_location("长沙天心区"))
+        self.assertTrue(brain.message_has_location("我在长沙市天心区"))
+        self.assertFalse(brain.message_has_location("今天怎么样"))
+        self.assertFalse(brain.message_has_location("北京"))
+        self.assertFalse(brain.message_has_location(""))
+
+    def test_extraction_clears_window(self):
+        """位置提取成功 → 窗口关闭（含"与已有记录一致"路径）。"""
+        brain._mark_waiting_location()
+        with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(brain._extract_location_from_user_message(
+                "我在长沙市天心区"))
+        self.assertFalse(brain._waiting_location_active())
+        # 已记录一致（本次返回 False）同样关窗
+        brain._mark_waiting_location()
+        with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(brain._extract_location_from_user_message(
+                "我要的是长沙市天心区的"))
+        self.assertFalse(brain._waiting_location_active())
+
+    def test_window_expires(self):
+        """窗口超时（5 分钟）读取时自动失效。"""
+        brain._waiting_location_until = time.time() - 1
+        self.assertFalse(brain._waiting_location_active())
+
+    def test_ask_reply_text_guides_user(self):
+        """询问文案（任务 3）：给"直接回复或 @"双通道指引 + 位置示例。"""
+        self.assertIn("直接回复我或 @ 我都行", brain.LOCATION_ASK_REPLY)
+        self.assertIn("长沙天心区", brain.LOCATION_ASK_REPLY)
 
 
 class AntiRepeatPromptTests(unittest.TestCase):

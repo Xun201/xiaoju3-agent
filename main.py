@@ -381,6 +381,7 @@ def handle_location_command(message):
         try:
             import brain
             brain.mark_location_cleared()
+            brain.clear_waiting_location()   # 遗留的等待回答窗口一并关闭
         except Exception as mark_err:
             print(f"⚠️ 位置静默期标记失败（不影响清除）: {mark_err}")
         return "✅ 位置记录已清除（本地 agent_state/user_location.json）"
@@ -557,7 +558,15 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             is_at_me = "[CQ:at" in raw_message
         has_trigger_word = any(word in message for word in TRIGGER_WORDS)
         if not (is_at_me or has_trigger_word):
-            return ""
+            # 📍 等待位置回答窗口（2026-10-02 群聊体验修复）：AI 刚问过
+            # "你在哪个城市和区"（5 分钟窗口内），用户自然回答"长沙天心区"
+            # （没 @）不再被防刷屏规则挡掉——消息含"城市+区县"完整组合即
+            # 放行进正常处理链路（smart_ask 起步提取写入并自动关窗）；
+            # 无组合的普通聊天仍按原规则忽略
+            if brain._waiting_location_active() and brain.message_has_location(message):
+                print("📍 [位置] 等待回答窗口内，绕过 @ 判断，尝试提取位置")
+            else:
+                return ""
 
     # 3. 长期记忆"记住"触发词（架构 §10 #3）：落 SQLite 并回复确认
     remember_match = re.search(r"(?:帮我|请|麻烦|你)*记住[:：,，、]?\s*(.+)", _strip_cq(raw_message))
