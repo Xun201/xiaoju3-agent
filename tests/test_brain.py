@@ -1183,7 +1183,12 @@ class ThinkWrapTests(unittest.TestCase):
         # 剥除 [思考] 前缀后的内容提升为正文，思考卡同时保留）
         with _quiet():
             out2 = brain._wrap_think("<THINK >x</THINK>y", None)
-            self.assertEqual(out2, "<think>xy</think>xy")
+            # 2026-10-02 出口去重口径：回补后思考与正文完全相同（无 [思考]
+            # 标记前缀的裸形态，think==body）→ 思考卡降级默认占位符，正文
+            # 保留一份——绝不再产出"卡片与正文同文"的重复显示
+            self.assertEqual(
+                out2,
+                f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>xy")
             self._assert_single_think_pair(out2)
             self.assertEqual(brain._wrap_think(None, "正文"),
                              f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>正文")
@@ -2975,6 +2980,186 @@ class LongTermMemoryWiringTests(unittest.TestCase):
         self.assertEqual(result[1], "🏠 本地")
         self.sm.save_memory.assert_not_called()
         self.assertEqual(self._memory_blocks(msgs), [])
+
+
+# ---------------------------------------------------------------------------
+# 回复出口去重 + 历史轻量清洗（2026-10-02 用户口径，修复本地模型复读）
+# ---------------------------------------------------------------------------
+
+class ReplyDedupeTests(unittest.TestCase):
+    """_dedupe_reply / _wrap_think ⑥ 出口去重 / _seal_bare_cot 透传收口。
+
+    背景：本地模型（qwen2.5:7b）多相似消息后复读——实测 WRAPPED_TEXT 显示
+    正文与 <think> 块内容完全相同（模型把回复原文同时塞进思考块与正文），
+    网页上显示两遍。去重三原则：think==body 收敛为"占位卡+正文一份"、
+    正文句级连续重复塌缩、去重后正文为空注入 DEDUPE_BODY_PLACEHOLDER。
+    """
+
+    def _seal(self, raw):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return brain._seal_bare_cot(raw)
+
+    def _wrap(self, thinking, body):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return brain._wrap_think(thinking, body)
+
+    def test_think_equals_body_collapsed(self):
+        """模型自吐 <think>X</think>X（思考与正文完全相同）→ 占位卡 + 正文
+        一份（用户实测例句，经 _seal_bare_cot 防重入透传收口）。"""
+        raw = ("<think>我在呢，在呢，有啥需要帮忙的吗？😊</think>"
+               "我在呢，在呢，有啥需要帮忙的吗？😊")
+        sealed = self._seal(raw)
+        self.assertEqual(
+            sealed,
+            "<think>" + brain.CHAT_THINKING_PLACEHOLDER + "</think>"
+            + "我在呢，在呢，有啥需要帮忙的吗？😊")
+
+    def test_body_consecutive_duplicate_sentences(self):
+        """正文句级连续重复（同一句 3 遍）塌缩为一份。"""
+        sealed = self._seal("在吗？在吗？在吗？")
+        self.assertEqual(
+            sealed,
+            "<think>" + brain.CHAT_THINKING_PLACEHOLDER + "</think>在吗？")
+
+    def test_emoji_tail_run_collapsed(self):
+        """重复句之间被收尾表情（😊）隔断同样塌缩（粘连段 ≤4 字非文字）；
+        第二份的收尾表情保留（重组后恰为单份原句形态）。"""
+        raw = ("我在呢，在呢，有啥需要帮忙的吗？😊"
+               "我在呢，在呢，有啥需要帮忙的吗？😊")
+        sealed = self._seal(raw)
+        self.assertEqual(
+            sealed,
+            "<think>" + brain.CHAT_THINKING_PLACEHOLDER + "</think>"
+            + "我在呢，在呢，有啥需要帮忙的吗？😊")
+
+    def test_plain_text_without_think_dedup(self):
+        """退化形态（无成对 think 前缀的纯文本）：只做句级连续去重。"""
+        self.assertEqual(brain._dedupe_reply("在吗？在吗？"), "在吗？")
+
+    def test_recovery_form_not_collapsed(self):
+        """设计形态零回退：正文回补"<think>[思考] X</think>X"（思考含标记
+        前缀、比较保留标记差异）不命中 think==body 去重。"""
+        out = self._wrap("[思考] 我在呢", "")
+        self.assertEqual(out, "<think>[思考] 我在呢</think>我在呢")
+
+    def test_no_duplicate_body_byte_identical(self):
+        """无重复文本逐字节原样返回（零改动零回归）。"""
+        text = "<think>[思考] 今天天气不错</think>适合出去散步，要一起吗？"
+        self.assertEqual(brain._dedupe_reply(text), text)
+
+    def test_card_only_form_preserved(self):
+        """设计形态零回退：占位思考 + 空正文的"只有卡片"孤标签修复形态
+        （_wrap_think ④ 既有设计）不被去重填占位，保持原样输出。"""
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = brain._wrap_think(brain.CHAT_THINKING_PLACEHOLDER,
+                                    "（操作已执行）")
+        self.assertEqual(out, f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>")
+        # 空白正文的直喂同样保持原样（未被去重改动 → 逐字节返回）
+        self.assertEqual(brain._dedupe_reply("<think>[思考] x</think>   "),
+                         "<think>[思考] x</think>   ")
+
+    def test_empty_body_after_dedupe_placeholder(self):
+        """去重确实剥空正文 → 注入"我在呢～"占位（用户口径示例文案；
+        用桩把句级塌缩模拟为剥空以直达该防御分支）。"""
+        with mock.patch.object(brain, "_collapse_duplicate_sentences",
+                               return_value=""):
+            out = brain._dedupe_reply("<think>[思考] x</think>正文")
+        self.assertEqual(out,
+                         "<think>[思考] x</think>" + brain.DEDUPE_BODY_PLACEHOLDER)
+
+    def test_none_input_safe(self):
+        """None 输入按空串处理，原样返回不抛错。"""
+        self.assertEqual(brain._dedupe_reply(None), "")
+
+
+class HistoryCollapseTests(unittest.TestCase):
+    """_collapse_repeated_user_history / _build_messages 接线（历史轻量清洗）。
+
+    用户口径：连续 3 条及以上完全相同的用户消息（QQ 连发"@小橘3号 在吗"）
+    只保留 1 条，防止模型被重复输入带偏复读；"连续"指用户消息序列相邻
+    （中间可夹助手回复——连发场景每条之间实际都有回复）。
+    """
+
+    def _user_contents(self, messages):
+        return [m["content"] for m in messages if m["role"] == "user"]
+
+    def test_three_identical_collapsed_to_one(self):
+        """连续 3 条相同用户消息（夹助手回复）只保留 1 条 + 当前消息。"""
+        history = [{"role": "user", "content": "在吗"},
+                   {"role": "assistant", "content": "我在"},
+                   {"role": "user", "content": "在吗"},
+                   {"role": "assistant", "content": "在的呢"},
+                   {"role": "user", "content": "在吗"}]
+        msgs = brain._build_messages("在吗", history)
+        self.assertEqual(self._user_contents(msgs).count("在吗"), 2)
+
+    def test_two_identical_kept(self):
+        """仅 2 条相同不收敛（阈值 ≥3，保留用户有意的补充强调）。"""
+        history = [{"role": "user", "content": "在吗"},
+                   {"role": "assistant", "content": "我在"},
+                   {"role": "user", "content": "在吗"}]
+        msgs = brain._build_messages("睡了吗", history)
+        self.assertEqual(self._user_contents(msgs).count("在吗"), 2)
+        self.assertIn("睡了吗", self._user_contents(msgs))
+
+    def test_different_user_messages_not_collapsed(self):
+        """互不相同的用户消息原样保留，不受清洗影响。"""
+        history = [{"role": "user", "content": "天气如何"},
+                   {"role": "assistant", "content": "晴"},
+                   {"role": "user", "content": "明天呢"},
+                   {"role": "assistant", "content": "多云"},
+                   {"role": "user", "content": "后天呢"}]
+        msgs = brain._build_messages("那大后天呢", history)
+        self.assertEqual(len(self._user_contents(msgs)), 4)
+
+    def test_strictly_adjacent_run_collapsed(self):
+        """连发无回复穿插的 3 条相同消息同样收敛；收敛后末条与当前消息
+        相同时不重复追加（_build_messages 既有去重口径）。"""
+        history = [{"role": "user", "content": "在吗"},
+                   {"role": "user", "content": "在吗"},
+                   {"role": "user", "content": "在吗"}]
+        msgs = brain._build_messages("在吗", history)
+        self.assertEqual(msgs, [brain.SYSTEM_PROMPT,
+                                {"role": "user", "content": "在吗"}])
+
+    def test_short_history_passthrough(self):
+        """历史不足阈值原样返回（不清洗）。"""
+        history = [{"role": "user", "content": "在吗"},
+                   {"role": "assistant", "content": "我在"}]
+        msgs = brain._build_messages("在吗", history)
+        self.assertEqual(len(self._user_contents(msgs)), 2)
+
+    def test_whitespace_only_difference_counts_as_same(self):
+        """"完全相同"按去首尾空白比较（QQ 尾随空格连发同样命中）。"""
+        history = [{"role": "user", "content": "在吗"},
+                   {"role": "user", "content": "在吗 "},
+                   {"role": "user", "content": " 在吗"}]
+        msgs = brain._build_messages("在吗", history)
+        self.assertEqual(len(msgs), 2)   # sys + 收敛后的 1 条（当前不再追加）
+
+    def test_history_not_mutated(self):
+        """清洗返回新列表，绝不改动调用方传入的 history（_build_messages 契约）。"""
+        history = [{"role": "user", "content": "在吗"},
+                   {"role": "user", "content": "在吗"},
+                   {"role": "user", "content": "在吗"}]
+        brain._build_messages("在吗", history)
+        self.assertEqual(len(history), 3)
+
+    def test_limit_constant(self):
+        """阈值常量为 3（用户口径"连续 3 条以上"）。"""
+        self.assertEqual(brain.REPEAT_USER_HISTORY_LIMIT, 3)
+
+
+class AntiRepeatPromptTests(unittest.TestCase):
+    """prompts.py 防复读约束（2026-10-02 用户口径：系统提示词末尾加一句）。"""
+
+    def test_system_prompt_contains_anti_repeat_rule(self):
+        content = brain.SYSTEM_PROMPT["content"]
+        self.assertIn("【防复读规则】", content)
+        self.assertIn("严禁重复同一句话或同一段话", content)
+        self.assertIn("我刚才已经回复过了", content)
+        # 约束位于系统提示词末尾（用户口径"在系统提示词末尾加一句约束"）
+        self.assertTrue(content.rstrip().endswith("我刚才已经回复过了”。"))
 
 
 if __name__ == "__main__":

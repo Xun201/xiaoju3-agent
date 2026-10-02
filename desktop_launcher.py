@@ -29,8 +29,9 @@
     拉起 xiaoju3_launcher.py。子进程 stdin/out/err 全部 DEVNULL（pythonw
     下无控制台句柄也稳，杜绝 print 崩溃与管道缓冲死锁）；Windows
     creationflags=CREATE_NO_WINDOW 防闪黑窗；POSIX start_new_session=True
-    独立成组便于整组回收；解释器优先控制台版 python.exe（pythonw 场景
-    解析同目录孪生解释器），与启动器的控制台形态保持一致。
+    独立成组便于整组回收；解释器为 pythonw 无窗口形态（2026-10-02 用户
+    指令：pythonw 场景原样用 sys.executable，控制台场景解析同目录孪生
+    pythonw.exe，缺席回退原解释器——全程无黑框）。
   关闭（窗口关闭 → 自动停止全部后台进程，finally 兜底）：
     先停本进程内置服务线程（M4 既有 stop_local_server，防僵尸端口驻留），
     再整树终止 xiaoju3_launcher.py（stop_backend_launcher）：优先 psutil
@@ -75,9 +76,11 @@ DEFAULT_HOST = "127.0.0.1"           # 内置服务只听回环地址（离线�
 DASHBOARD_APP_PORT = 5003
 # xiaoju3_dashboard.py 控制台固定端口，用于后台服务复用检测
 DASHBOARD_PORT = 5003
-# 统一后台启动器（S2 交付：拉起 main/dashboard，心跳宿主于 main 进程）
+# xiaoju3_launcher.py 的解释器（后台子树口径，2026-10-02 用户指令：pythonw
+# 无窗口形态）——见 _windowless_python()
 LAUNCHER_SCRIPT = "xiaoju3_launcher.py"
-_WIN_CREATE_NO_WINDOW = 0x08000000   # Windows creationflags：CREATE_NO_WINDOW
+# Windows creationflags：CREATE_NO_WINDOW（防闪黑窗；POSIX 无此常量，回退同值）
+_WIN_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 MAIN_NOT_RUNNING_HINT = "⚠️ 主程序未启动，聊天功能受限（界面仍可打开）"
 LAUNCHER_REUSE_HINT = "ℹ️ 控制台(5003)已在运行，复用现有进程"
@@ -159,13 +162,18 @@ def _is_main_running(port=DASHBOARD_APP_PORT, timeout=1.0):
     return _is_port_listening(port, timeout=timeout)
 
 
-def _console_python():
-    """解析后台子进程用解释器：pythonw 场景取同目录控制台版 python.exe
-    （后台服务子树与 xiaoju3_launcher.py 的控制台形态保持一致）；其余
-    （含找不到孪生时）原样返回 sys.executable。"""
+def _windowless_python():
+    """后台子进程用解释器（2026-10-02 用户口径：pythonw 无窗口形态）。
+
+    pythonw 场景（双击 bat 主链路，sys.executable 即 pythonw）直接原样使用
+    ——xiaoju3_launcher.py 内部以 sys.executable 拉起 xiaoju3_dashboard.py，
+    pythonw 形态沿子树自动传导，全程无控制台；控制台 python 场景（开发者
+    CLI 跑 python desktop_launcher.py）解析同目录 pythonw.exe 孪生，孪生
+    缺席（精简发行版等）时回退 sys.executable——此时子进程仍有
+    CREATE_NO_WINDOW 兜底防黑窗。"""
     exe = sys.executable or "python"
-    if os.path.basename(exe).lower().startswith("pythonw"):
-        twin = os.path.join(os.path.dirname(exe), "python.exe")
+    if not os.path.basename(exe).lower().startswith("pythonw"):
+        twin = os.path.join(os.path.dirname(exe), "pythonw.exe")
         if os.path.isfile(twin):
             return twin
     return exe
@@ -194,7 +202,7 @@ def start_backend_launcher():
         # POSIX：独立进程组，关闭时 killpg 整组回收（见 stop_backend_launcher）
         kwargs["start_new_session"] = True
     try:
-        proc = subprocess.Popen([_console_python(), script], **kwargs)
+        proc = subprocess.Popen([_windowless_python(), script], **kwargs)
     except OSError as e:
         _print(f"⚠️ 后台服务拉起失败（{LAUNCHER_SCRIPT}）: {e}", err=True)
         return None
