@@ -246,8 +246,14 @@ def _redirect_stdio(role):
     if not paths.FROZEN:
         return None
     log_path = timestamped_log_path(role=role)
-    stream = open(log_path, "a", buffering=1,
-                  encoding="utf-8", errors="replace")
+    try:
+        # exe 首跑目录可能尚无 xiaoju3_data/（数据根惰性创建不覆盖日志路径）
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        stream = open(log_path, "a", buffering=1,
+                      encoding="utf-8", errors="replace")
+    except OSError:
+        # 重定向失败绝不影响启动主流程（与 prune 同口径）：退化为不重定向
+        return None
     sys.stdout = stream
     sys.stderr = stream
     stream.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
