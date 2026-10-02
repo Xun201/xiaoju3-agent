@@ -63,7 +63,7 @@ from brain import load_memory, reset_tool_fuse, save_memory, smart_ask
 from emoji_manager import save_emoji_link
 from heartbeat import start_heartbeat
 from intent_router import dispatch, route
-from migration import PeerWatch
+from migration import PeerWatch, export_soul_bundle, import_soul_bundle
 from permission import permission_manager
 from plugins.context_manager import compress_context
 from prompts import SYSTEM_PROMPT
@@ -324,6 +324,59 @@ def handle_creator_command():
     if name:
         return f"🦊 小橘3号 · 由 {name} 创造与维护"
     return "🦊 小橘3号 · 开源项目（https://github.com/Xun201/xiaoju3-agent）"
+
+
+# ================= 灵魂备份指令（设备自动迁移最小可用版，migration.py v2） =================
+def handle_soul_command(command_text, raw_message):
+    """/soul_export [路径]（Lv.3+）/ /soul_import <zip路径>（Lv.4）灵魂备份。
+
+    - 导出：调 migration.export_soul_bundle，默认落 backups/soul_<时间戳>.zip
+      （identity / 双通道记忆 / 长期记忆库 / 前情提要缓存 / .env 配置项快照 /
+      项目根关键配置）；回复含路径、大小、包含项摘要，绝不含密钥内容；
+    - 导入：调 migration.import_soul_bundle，覆盖式恢复（MANIFEST.json 校验
+      不符拒绝）；回复先给 [安全警告] 再给结果，建议重启生效；
+    - 命中返回回复文本；非本命令返回 None（调用方继续走正常链路）。
+    """
+    if command_text.startswith("/soul_export"):
+        if permission_manager.level_value() < 3:
+            return ("❌ 安全拒绝：灵魂备份需要 Lv.3（代码编写者）权限。"
+                    "请先 /coder_auth <动态密码> 升级。")
+        arg = _arg_after(raw_message, "/soul_export").strip().strip('"')
+        try:
+            result = export_soul_bundle(arg or None)
+        except Exception as e:
+            print(f"⚠️ [指令路由] /soul_export 执行失败: {e}")
+            return f"❌ 灵魂备份失败：{e}"
+        files = result["files"]
+        shown = "、".join(files[:8])
+        if len(files) > 8:
+            shown += f" 等 {len(files)} 项"
+        return (f"💾 灵魂备份完成！\n"
+                f"📦 文件：{result['path']}\n"
+                f"📏 大小：{result['size'] / 1024:.1f} KB，共 {len(files)} 项\n"
+                f"🧩 包含：{shown}\n"
+                "⚠️ 包内 .env 为配置项快照（可能含密钥），仅限家庭内网迁移，请勿外传。")
+    if command_text.startswith("/soul_import"):
+        if permission_manager.level_value() < 4:
+            return ("❌ 安全拒绝：灵魂恢复需要 Lv.4（主人级）权限。"
+                    "请先 /lv4_auth confirm <动态密码> 授权。")
+        arg = _arg_after(raw_message, "/soul_import").strip().strip('"')
+        if not arg:
+            return "❌ 请提供灵魂包路径，格式：/soul_import <zip 路径>"
+        if not os.path.isfile(arg):
+            return f"❌ 灵魂包不存在：{arg}"
+        try:
+            result = import_soul_bundle(arg)
+        except Exception as e:
+            print(f"⚠️ [指令路由] /soul_import 执行失败: {e}")
+            return f"❌ 灵魂恢复失败：{e}"
+        if not result.get("ok"):
+            return result.get("report", "❌ 灵魂包校验失败，已拒绝导入。")
+        return ("⚠️ [安全警告] 灵魂恢复为覆盖式导入：identity（身份与等级）、"
+                "对话记忆、长期记忆、.env 配置快照均以包内版本为准。\n"
+                f"✅ 恢复成功：{result['report']}\n"
+                "💡 建议重启小橘3号，让恢复的身份与记忆完整生效。")
+    return None
 
 
 # ================= 大脑链路编排（架构 §10 #2/#3/#4） =================
@@ -634,6 +687,11 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
 
         # CQ 码发图：随回复链路交回 OneBot 实现端解析发送
         return f"[CQ:image,file=file://{img_path}]"
+
+    # === 💾 灵魂备份（/soul_export Lv.3+ / /soul_import Lv.4，设备自动迁移最小版） ===
+    soul_reply = handle_soul_command(command_text, raw_message)
+    if soul_reply is not None:
+        return soul_reply
 
     # 1. 收集图片表情包（拦截非 @ 的图片消息，仅存链接不下载——文档 §5 口径）
     if "[CQ:image" in raw_message and "[CQ:at" not in raw_message:
