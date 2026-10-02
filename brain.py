@@ -670,6 +670,10 @@ LOCATION_ASK_REPLY = ("我还不知道你在哪个城市和区，直接回复我
 LOCATION_CLEAR_GRACE_SECONDS = 300
 _location_cleared_at = 0.0   # 最近一次 /clear_location 的时间戳（0 = 未清除过）
 
+# 静默期历史截断保留条数（2026-10-02 任务 2）：清除后 5 分钟内且位置未知
+# 时，历史只保留最近 5 条——模型无法从久远对话推断位置
+GRACE_HISTORY_KEEP = 5
+
 
 def mark_location_cleared():
     """/clear_location 指令调用（main.handle_location_command）：记录清除
@@ -1531,7 +1535,19 @@ def _build_messages(message, history):
     - 返回新列表，不修改调用方传入的 history。
     """
     messages = [SYSTEM_PROMPT]
-    for m in _collapse_repeated_user_history(history):
+    history_msgs = _collapse_repeated_user_history(history)
+    # 🛑 静默期防位置泄漏截断（2026-10-02 任务 2）：清除后 5 分钟内且位置
+    # 未知 → 历史只保留最近 5 条，模型无法从久远对话推断位置（配合聊天
+    # 路径硬拦截双保险——非地点敏感措辞的天气问题不触发拦截，靠截断兜底）
+    try:
+        if _location_in_clear_grace():
+            _tc, _td, _ts = _resolve_user_location()
+            if not (_tc or _td) and len(history_msgs) > GRACE_HISTORY_KEEP:
+                print("🛑 [位置] 静默期内，截断历史防止位置泄漏")
+                history_msgs = history_msgs[-GRACE_HISTORY_KEEP:]
+    except Exception as e:
+        print(f"⚠️ 静默期历史截断判定异常（跳过）: {e}")
+    for m in history_msgs:
         if not isinstance(m, dict):
             continue
         role, content = m.get("role"), m.get("content") or ""
@@ -1566,6 +1582,23 @@ def smart_ask(message, history=None, session_key="default"):
     # 句式的位置回答、漏带 [LOCATION:] 标记——用户消息里明显含"城市+区县"
     # 组合时直接提取写入本地位置记忆（词表+后缀轻量匹配，异常静默）
     _extract_location_from_user_message(message)
+
+    # 🛑 静默期聊天路径硬拦截（2026-10-02 用户口径）：静默期检查原先只挂
+    # search 路径（_inject_location），模型不搜、直接从历史推断位置"聊天式"
+    # 答天气时静默期形同虚设（实测还凭空编造了天气数据）——凡地点敏感
+    # 问题，静默期内 + 位置未知一律不进模型，代码层强制询问。位置兜底
+    # 提取在上面已先行：主人本轮重新告知位置则 json 已写入、此拦截自然
+    # 放行（重新告知立即生效语义不变）
+    try:
+        _chat_city, _chat_district, _chat_source = _resolve_user_location()
+        if (not (_chat_city or _chat_district)
+                and _location_in_clear_grace()
+                and any(k in message for k in LOCATION_SENSITIVE_KEYWORDS)):
+            print("🛑 [位置] 静默期内 + 位置未知 + 地点敏感问题 → 强制询问，跳过模型")
+            _mark_waiting_location()
+            return _force_chat_think(LOCATION_ASK_REPLY), "📍 询问位置"
+    except Exception as e:
+        print(f"⚠️ 静默期聊天拦截判定异常（跳过）: {e}")
 
     # === 第一步：如果用户输入里有 URL，先抓网页正文（剔除 script/style） ===
     url_match = re.search(r'(https?://[^\s]+)', message)
