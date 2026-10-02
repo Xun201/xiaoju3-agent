@@ -3214,6 +3214,91 @@ class HistoryCollapseTests(unittest.TestCase):
         self.assertEqual(brain.REPEAT_USER_HISTORY_LIMIT, 3)
 
 
+class LocationInjectTests(unittest.TestCase):
+    """搜索指代消解（2026-10-02 用户口径）：裸地点词搜索补全配置位置。
+
+    背景：QQ 群问"今天天气怎么样"，web_search 收到裸 query"今天天气"被
+    搜索引擎随机定位（返回杭州余杭，用户实际在长沙天心）。
+    """
+
+    def test_bare_weather_query_rewritten_with_city(self):
+        """任务口径用例①："今天天气" + USER_CITY=长沙 → "长沙今天天气"。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", ""):
+            self.assertEqual(brain._inject_location("今天天气"), "长沙今天天气")
+
+    def test_query_with_city_untouched(self):
+        """任务口径用例②："北京天气" 已含地点 → 不改写。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", "天心区"):
+            self.assertEqual(brain._inject_location("北京天气"), "北京天气")
+
+    def test_bare_news_query_rewritten(self):
+        """任务口径用例③："今天新闻" + USER_CITY=长沙 → "长沙今天新闻"。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", ""):
+            self.assertEqual(brain._inject_location("今天新闻"), "长沙今天新闻")
+
+    def test_unconfigured_keeps_original(self):
+        """任务口径用例④：USER_CITY 未配置 → 保持原 query 不改写。"""
+        with mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""):
+            self.assertEqual(brain._inject_location("今天天气"), "今天天气")
+
+    def test_non_location_query_untouched(self):
+        """任务口径用例⑤：非天气/本地类 query"如何写Python" → 不改写。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", "天心区"):
+            self.assertEqual(brain._inject_location("如何写Python"),
+                             "如何写Python")
+
+    def test_city_and_district_both_injected(self):
+        """城市+区县都配置 → 按"长沙天心区"完整位置改写（任务 2 示例口径）。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", "天心区"):
+            self.assertEqual(brain._inject_location("今天天气"),
+                             "长沙天心区今天天气")
+
+    def test_configured_location_in_query_untouched(self):
+        """query 已含配置的地点（自定义区县不在词表）→ 不改写不叠加。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", "天心区"):
+            self.assertEqual(brain._inject_location("天心区下雨吗"), "天心区下雨吗")
+
+    def test_administrative_suffix_untouched(self):
+        """词表外地名带行政区划后缀（"株洲市天气"）→ 视为已含地点不改写。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", ""):
+            self.assertEqual(brain._inject_location("株洲市天气"), "株洲市天气")
+
+    def test_web_search_query_location_injected_before_execute(self):
+        """接线：smart_ask 工具路径在 execute_tool 之前对 web_search 的
+        query 做 _inject_location 改写（其余参数透传）。"""
+        raw = ('[思考] 查天气需要联网。\n'
+               '[计划] 调用搜索。\n'
+               '[行动] {"tool": "web_search", "args": {"query": "今天天气"}}')
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool",
+                                  return_value="1. 长沙今天晴，25 度") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, _quiet():
+            mr.get.return_value = mock.Mock()
+            mr.post.side_effect = [_local_resp(raw), _local_resp("今天长沙晴")]
+            mcloud.return_value = "不会走到这"
+            reply, source = brain.smart_ask("今天天气怎么样", [])
+        called_args = mexec.call_args[0][1]
+        self.assertEqual(called_args["query"], "长沙今天天气")
+
+    def test_prompts_search_rule_contains_location_constraint(self):
+        """提示词约束（2026-10-02 用户口径）：联网搜索规则含地点条款。"""
+        content = brain.SYSTEM_PROMPT["content"]
+        self.assertIn("query 必须包含具体地点", content)
+        self.assertIn("USER_CITY 和 USER_DISTRICT", content)
+        self.assertIn("以主人说的为准", content)
+        self.assertIn("不含地点的裸词去搜索", content)
+
+
 class AntiRepeatPromptTests(unittest.TestCase):
     """prompts.py 防复读约束（2026-10-02 用户口径：系统提示词末尾加一句）。"""
 

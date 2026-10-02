@@ -100,7 +100,7 @@ import requests.packages.urllib3.util.connection as urllib3_cn
 import xiaoju3
 from xiaoju3 import (AGENT_STATE_DIR, CLOUD_KEY, CLOUD_URL, CLOUD_MODEL,
                      MAX_MESSAGES, LOCAL_URL, LOCAL_MODEL, LOCAL_MODEL_SMALL,
-                     LOCAL_PROBE_URL, LOCAL_TIMEOUT)
+                     LOCAL_PROBE_URL, LOCAL_TIMEOUT, USER_CITY, USER_DISTRICT)
 from permission import permission_manager
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool
@@ -490,6 +490,68 @@ def _dedupe_reply(reply):
     except Exception as e:
         print(f"⚠️ 回复去重异常（原样返回）: {e}")
         return text
+
+
+# ==================== 搜索指代消解（2026-10-02 用户口径） ====================
+
+# 地点敏感的搜索意图关键词（天气/新闻/交通/本地服务类）——裸词（如"今天
+# 天气"）交给搜索引擎会被随机定位（用户实测：问天气返回了杭州余杭，实际
+# 在长沙天心）
+LOCATION_SENSITIVE_KEYWORDS = (
+    "天气", "气温", "气候", "下雨", "降雨", "下雪", "降雪", "温度", "多少度",
+    "新闻", "资讯", "要闻", "交通", "路况", "限行", "地铁", "公交",
+    "附近", "周边", "本地", "美食", "外卖",
+)
+
+# 常见地点词表（省级短名 + 直辖市/主要城市，轻量口径）：命中即认为 query
+# 已含地点、不再改写；自定义中小城市由 USER_CITY/USER_DISTRICT 配置兜底
+_KNOWN_LOCATIONS = (
+    "北京", "上海", "天津", "重庆",
+    "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建",
+    "江西", "山东", "河南", "湖北", "湖南", "广东", "海南", "四川", "贵州",
+    "云南", "陕西", "甘肃", "青海", "台湾", "内蒙古", "广西", "西藏", "宁夏",
+    "新疆", "香港", "澳门",
+    "广州", "深圳", "杭州", "南京", "苏州", "武汉", "成都", "西安", "长沙",
+    "郑州", "济南", "青岛", "合肥", "福州", "厦门", "南昌", "哈尔滨", "长春",
+    "沈阳", "大连", "昆明", "贵阳", "南宁", "海口", "太原", "石家庄", "兰州",
+    "西宁", "银川", "呼和浩特", "乌鲁木齐", "拉萨",
+)
+
+# 带行政区划后缀的未知地名（"株洲市""湖南省"等，词表外形态）
+_ADMIN_SUFFIX_RE = re.compile(r'[\u4e00-\u9fa5]{1,6}(?:省|市|自治区|自治州)')
+
+
+def _inject_location(query):
+    """搜索指代消解：地点敏感类 query 不含地点时补全配置位置。
+
+    用户口径（2026-10-02）：query="今天天气"（USER_CITY=长沙、
+    USER_DISTRICT=天心区）→ "长沙天心区今天天气"；只配城市 →
+    "长沙今天天气"。不改写的情形：
+    - query 已含地点（词表命中 / 带省市后缀 / 含配置的 USER_CITY 或
+      USER_DISTRICT——用户说的地点优先，且避免二次叠加）；
+    - 非地点敏感类 query（如"如何写Python"）；
+    - 位置未配置（USER_CITY 与 USER_DISTRICT 均为空）。
+    纯函数 + 异常安全（任何异常原样返回）。
+    """
+    try:
+        q = "" if query is None else str(query)
+        if not q.strip():
+            return q
+        if not any(k in q for k in LOCATION_SENSITIVE_KEYWORDS):
+            return q
+        if (USER_CITY and USER_CITY in q) or (USER_DISTRICT and USER_DISTRICT in q):
+            return q
+        if any(loc in q for loc in _KNOWN_LOCATIONS):
+            return q
+        if _ADMIN_SUFFIX_RE.search(q):
+            return q
+        location = (str(USER_CITY) + str(USER_DISTRICT)).strip()
+        if not location:
+            return q
+        return location + q
+    except Exception as e:
+        print(f"⚠️ 搜索指代消解异常（原样返回）: {e}")
+        return query
 
 
 def _extract_tool_json(raw_reply):
@@ -1251,6 +1313,17 @@ def smart_ask(message, history=None, session_key="default"):
                     thinking = _tool_thinking_placeholder(tool_name)
                     print("[CoT] 已注入兜底占位符")
                 try:
+                    # 📍 搜索指代消解（2026-10-02 用户口径）：web_search 的
+                    # 裸词 query（"今天天气"）会被搜索引擎随机定位——执行
+                    # 前按 .env 配置的 USER_CITY/USER_DISTRICT 补全地点
+                    #（用户说的地点优先，_inject_location 已含地点则原样）
+                    if (tool_name == "web_search" and isinstance(tool_args, dict)
+                            and tool_args.get("query")):
+                        located = _inject_location(str(tool_args["query"]))
+                        if located != tool_args["query"]:
+                            print(f"📍 [搜索] 指代消解: "
+                                  f"{tool_args['query']} → {located}")
+                            tool_args["query"] = located
                     tool_result = execute_tool(tool_name, tool_args, permission_manager)
                 except Exception as tool_err:
                     # 🛡️ 工具执行抛异常（依赖缺失/子进程崩溃等）同样按 ❌ 切断
