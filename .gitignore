@@ -51,3 +51,5 @@ agent_state/context_summary.json
 小橘3号项目现状交接摘要.txt
 # 开发日志（本地叙事文档，永久不入仓库，本地保留）
 开发日志.md
+# 本地一次性诊断工具（HA 连通性验证，读隔离区 .env，不入仓库）
+_dev/ha_check.py
