@@ -525,20 +525,9 @@ def _extract_location_from_user_message(message):
         text = "" if message is None else str(message)
         if not text.strip():
             return False
-        city = next((loc for loc in _KNOWN_LOCATIONS if loc in text), "")
-        if not city:
-            m = re.search(r'([\u4e00-\u9fa5]{1,3})市', text)
-            city = m.group(1) if m else ""
-        # 区县必须锚定在城市之后提取（可隔一个"市"字）——全局搜索会贪心
-        # 吞出"沙市天心区"这类碎片（左端起匹配）
-        district = ""
-        idx = text.find(city) if city else -1
-        if idx >= 0:
-            remainder = text[idx + len(city):]
-            if remainder.startswith("市"):
-                remainder = remainder[1:]
-            district_m = _USER_DISTRICT_RE.search(remainder)
-            district = district_m.group(0) if district_m else ""
+        # 城市+区县组合提取（词表/市后缀 + 锚定区县，_find_city_district
+        # 共享实现——区县锚定城市之后，防"沙市天心区"碎片）
+        city, district = _find_city_district(text)
         if not city or not district:
             return False
         try:
@@ -551,7 +540,9 @@ def _extract_location_from_user_message(message):
         except Exception as e:
             print(f"⚠️ 用户消息位置提取写入失败: {e}")
             return False
-        print(f"📍 [搜索] 从主人回答中提取位置: {city}{district}")
+        # 当轮即刻生效：写入发生在 smart_ask 起步、工具路径的
+        # _resolve_user_location 每次现读文件，本轮 web_search 即用新位置
+        print(f"📍 [位置] 从用户消息提取: {city}-{district}，已写入并生效")
         return True
     except Exception as e:
         print(f"⚠️ 用户消息位置提取异常（跳过）: {e}")
@@ -637,6 +628,12 @@ LOCATION_SENSITIVE_KEYWORDS = (
     "附近", "周边", "本地", "美食", "外卖",
 )
 
+# 天气/新闻子类（精度增强口径，2026-10-02：宽泛 query——如"长沙市天心区
+# 的天气"——会被搜索引擎混入旅游攻略/百科等无关内容，需规范化精准词组）
+_WEATHER_KEYWORDS = ("天气", "气温", "气候", "下雨", "降雨", "下雪", "降雪",
+                     "温度", "多少度")
+_NEWS_KEYWORDS = ("新闻", "资讯", "要闻")
+
 # 常见地点词表（省级短名 + 直辖市/主要城市，轻量口径）：命中即认为 query
 # 已含地点、不再改写；自定义中小城市由配置/本地位置记忆兜底
 _KNOWN_LOCATIONS = (
@@ -686,19 +683,61 @@ def _resolve_user_location():
     return "", "", "未知"
 
 
-def _inject_location(query):
-    """搜索指代消解：地点敏感类 query 不含地点时补全用户位置。
+def _find_city_district(text):
+    """从文本提取"城市+区县"组合（词表命中或"XX市"形态 + 锚定其后的区县）。
 
-    位置三级回退（2026-10-02 隐私口径改造）：.env USER_CITY/USER_DISTRICT
-    优先 → 本地位置记忆 agent_state/user_location.json → 都没有返回 None
-    （调用方不改写搜索词，模型侧由系统上下文引导主动询问主人）。
-    不改写的情形：
-    - query 已含地点（位置串/城市/区县任一出现——用户说的地点优先，且
-      避免二次叠加；词表命中；带省市行政区划后缀的词表外地名）；
-    - 非地点敏感类 query（如"如何写Python"）；
-    - 无可用位置（返回 None，调用方跳过改写）。
-    每次判定打一行 📍 [搜索] 位置来源 日志（.env / user_location.json /
-    未知），便于部署侧确认位置来源。异常安全（任何异常原样返回）。
+    返回 (city, district)，城市或区县缺失时相应为空串。区县必须锚定在
+    城市之后提取（可隔一个"市"字）——全局贪心搜会吞出"沙市天心区"这类
+    碎片（左端起匹配）。纯函数。
+    """
+    t = "" if text is None else str(text)
+    city = next((loc for loc in _KNOWN_LOCATIONS if loc in t), "")
+    if not city:
+        m = re.search(r'([\u4e00-\u9fa5]{1,3})市', t)
+        city = m.group(1) if m else ""
+    district = ""
+    idx = t.find(city) if city else -1
+    if idx >= 0:
+        remainder = t[idx + len(city):]
+        if remainder.startswith("市"):
+            remainder = remainder[1:]
+        m = _USER_DISTRICT_RE.search(remainder)
+        district = m.group(0) if m else ""
+    return city, district
+
+
+def _enhance_query_precision(city, district, original_query):
+    """天气/新闻类 query 精度增强（2026-10-02 用户口径）。
+
+    - 天气类 → 规范化为 "{城市}{区县} 今日天气预报 气温 降水"（"长沙市
+      天心区的天气"这类宽泛词组会被搜索引擎混入旅游攻略/百科，规范化后
+      命中天气数据源的概率最高）；
+    - 新闻类 → 追加 " 最新 今日"；
+    - 其他地点敏感类（交通/附近/美食等）→ 原样（仅位置改写）。
+    纯函数。
+    """
+    q = str(original_query or "")
+    if any(k in q for k in _WEATHER_KEYWORDS):
+        base = (str(city or "") + str(district or "")).strip()
+        return f"{base} 今日天气预报 气温 降水".strip()
+    if any(k in q for k in _NEWS_KEYWORDS):
+        return f"{q} 最新 今日"
+    return q
+
+
+def _inject_location(query):
+    """搜索指代消解 + 精度增强（2026-10-02 隐私口径 + 精度口径）。
+
+    位置三级回退：.env USER_CITY/USER_DISTRICT 优先 → 本地位置记忆
+    agent_state/user_location.json → 都没有返回 None（调用方硬拦截转询问
+    主人）。改写与增强规则：
+    - query 自带完整"城市+区县"组合 → 主人点名的位置优先（天气类规范化
+      为精准 query，其余原样）；
+    - query 已含解析位置（城市或区县出现）→ 天气类规范化、其余原样；
+    - query 带词表外地名/行政区划后缀 → 原样（不叠加配置位置）；
+    - 裸地点敏感 query → 用解析位置改写 + 精度增强；
+    - 无位置 → None。
+    每次判定打一行 📍 [搜索] 位置来源 日志。异常安全（任何异常原样返回）。
     """
     try:
         q = "" if query is None else str(query)
@@ -707,16 +746,28 @@ def _inject_location(query):
         if not any(k in q for k in LOCATION_SENSITIVE_KEYWORDS):
             return q
         city, district, source = _resolve_user_location()
+
+        # ① query 自带完整"城市+区县"组合：主人点名的位置优先
+        q_city, q_district = _find_city_district(q)
+        if q_city and q_district:
+            print(f"📍 [搜索] 位置来源: 主人指定（{q_city}{q_district}）")
+            return _enhance_query_precision(q_city, q_district, q)
+
         location = (city + district).strip()
+        # ② query 已含解析位置（城市或区县出现）：天气类规范化，不叠加
+        if location and ((city and city in q) or (district and district in q)):
+            print(f"📍 [搜索] 位置来源: {source}（{location}）")
+            return _enhance_query_precision(city, district, q)
+        # ③ query 带词表外地名/行政区划后缀（他人城市等）：原样
+        if any(loc in q for loc in _KNOWN_LOCATIONS) or _ADMIN_SUFFIX_RE.search(q):
+            return q
+        # ④ 无位置：不改写（None → 调用方硬拦截转询问主人）
         if not location:
             print("📍 [搜索] 位置来源: 未知（不改写，待主动询问主人）")
             return None
-        if ((city and city in q) or (district and district in q)
-                or any(loc in q for loc in _KNOWN_LOCATIONS)
-                or _ADMIN_SUFFIX_RE.search(q)):
-            return q
+        # ⑤ 裸地点敏感 query：用解析位置改写 + 精度增强
         print(f"📍 [搜索] 位置来源: {source}（{location}）")
-        return location + q
+        return _enhance_query_precision(city, district, location + q)
     except Exception as e:
         print(f"⚠️ 搜索指代消解异常（原样返回）: {e}")
         return query

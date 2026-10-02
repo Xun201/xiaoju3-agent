@@ -190,6 +190,44 @@ def _format_results(query, results):
     return "\n".join(lines)
 
 
+# ==================== 天气类搜索结果过滤（2026-10-02 用户口径） ====================
+# "长沙市天心区的天气"这类 query 会混入旅游攻略/百科/介绍/历史等无关内容
+# ——天气类 query 下按白名单只保留天气数据源特征结果；全部被过滤 → 固定
+# 提示。仅天气类 query 生效，普通搜索不受影响。
+# （关键词独立定义、不 import brain——brain 延迟导入本模块，避免循环导入）
+
+# 天气类 query 判定（与 brain._WEATHER_KEYWORDS 同口径）
+_WEATHER_QUERY_KEYWORDS = ("天气", "气温", "气候", "下雨", "降雨", "下雪",
+                           "降雪", "温度", "多少度")
+
+# 天气结果白名单：标题/摘要命中其一才保留（天气数据源特征词）
+_WEATHER_RESULT_KEYWORDS = ("天气", "气温", "降水", "预报", "温度", "湿度",
+                            "降雨", "降雪", "下雨", "下雪", "降温", "升温",
+                            "晴", "多云", "阵雨", "雷雨", "小雨", "大雨",
+                            "暴雨", "小雪", "中雪", "大雪", "℃", "°")
+
+# 天气类结果全被过滤时的固定提示
+NO_WEATHER_RESULT_MSG = "未找到相关天气信息，请稍后重试"
+
+
+def _is_weather_query(query):
+    """query 是否天气类（天气/气温/下雨/温度等）。"""
+    q = str(query or "")
+    return any(k in q for k in _WEATHER_QUERY_KEYWORDS)
+
+
+def _filter_weather_results(results):
+    """天气类结果白名单过滤：只保留标题/摘要含天气特征词的条目。"""
+    kept = []
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        text = f"{item.get('title', '')} {item.get('snippet', '')}"
+        if any(k in text for k in _WEATHER_RESULT_KEYWORDS):
+            kept.append(item)
+    return kept
+
+
 def web_search(query, max_results=5):
     """联网搜索：按引擎降级链检索，返回中文清单文本（不抛异常）。
 
@@ -228,6 +266,12 @@ def web_search(query, max_results=5):
             continue    # 自动链：静默试下一个引擎
         connected = True
         if results:
+            # 🌦️ 天气类结果过滤（2026-10-02 用户口径）：白名单只留天气数据
+            # 源特征结果，全被过滤 → 固定提示；普通搜索不过滤
+            if _is_weather_query(query):
+                results = _filter_weather_results(results)
+                if not results:
+                    return NO_WEATHER_RESULT_MSG
             return _format_results(query, results)
 
     if connected:  # 有引擎响应但全部零结果 → 保持既有"未搜到"口径
