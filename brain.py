@@ -432,6 +432,46 @@ def _strip_self_talk(body):
         return body
 
 
+# ==================== [LOCATION:] 位置标记消费（2026-10-02 隐私口径） ====================
+
+# 模型询问主人位置后，主人告知 → 模型在回复末尾带 [LOCATION:城市-区县]
+# 或 [LOCATION:城市] 标记（对主人不可见，系统自动记录到本地位置记忆）。
+# 标记内容限 1-50 字符，城市与区县以 "-" 分隔。
+_LOCATION_MARKER_RE = re.compile(r'\s*\[LOCATION:([^\]]{1,50})\]')
+
+
+def _consume_location_marker(reply):
+    """消费回复中的 [LOCATION:] 标记：写入本地位置记忆并从回复剥离。
+
+    - 写入走 agent_state.state_manager.save_user_location（仅本地
+      user_location.json，gitignore 不入库、不上传、不传云端）；
+    - 首个标记生效（多次出现时后续标记同样剥离、不重复写入）；
+    - 城市/区县两侧空白清洗；城市为空的畸形标记只剥离不写入；
+    - 剥离后回复剥空（整条回复只有标记）→ 保守返回原文，绝不下发空回复；
+    - 无标记 / 任何异常 → 原样返回，绝不影响回复下发。
+    """
+    text = "" if reply is None else str(reply)
+    try:
+        matches = _LOCATION_MARKER_RE.findall(text)
+        if not matches:
+            return text
+        first = matches[0].strip()
+        city, _, district = first.partition("-")
+        city = city.strip()
+        district = district.strip()
+        if city:
+            try:
+                from agent_state.state_manager import save_user_location
+                save_user_location(city, district or None)
+            except Exception as e:
+                print(f"⚠️ 位置标记写入失败（不影响回复）: {e}")
+        stripped = _LOCATION_MARKER_RE.sub("", text).strip()
+        return stripped if stripped else text.strip()
+    except Exception as e:
+        print(f"⚠️ 位置标记消费异常（原样返回）: {e}")
+        return text
+
+
 def _dedupe_reply(reply):
     """回复出口去重（_wrap_think 产出与 _seal_bare_cot 防重入透传统一收口）。
 
@@ -448,7 +488,10 @@ def _dedupe_reply(reply):
        _collapse_duplicate_sentences）；
     4. 去重确实发生（有内容被塌缩/收敛/剥离）且正文被剥空 → 注入
        DEDUPE_BODY_PLACEHOLDER（"我在呢～"）占位；输入本就空正文的
-       "只有卡片"孤标签修复形态（_wrap_think ④ 既有设计）保持原样零回退。
+       "只有卡片"孤标签修复形态（_wrap_think ④ 既有设计）保持原样零回退；
+    5. [LOCATION:] 位置标记消费（2026-10-02 隐私口径）：模型询问主人位置、
+       主人告知后模型在回复末尾带的标记写入本地位置记忆并从回复剥离
+       （对主人不可见，见 _consume_location_marker）。
     纯函数 + 异常安全：任何环节异常原样返回输入，绝不影响回复下发。
     """
     text = "" if reply is None else str(reply)
@@ -461,7 +504,7 @@ def _dedupe_reply(reply):
             new_text = _collapse_duplicate_sentences(new_text)
             if new_text != text and not new_text.strip():
                 new_text = DEDUPE_BODY_PLACEHOLDER
-            return new_text
+            return _consume_location_marker(new_text)
         body = stripped[m.end():]
         think_inner = m.group(1)
         changed = False
@@ -484,15 +527,20 @@ def _dedupe_reply(reply):
             new_body = DEDUPE_BODY_PLACEHOLDER
             changed = True
         if not changed:
-            return text   # 零改动：原样返回（逐字节不变，零回归）
-        return text[:len(text) - len(stripped)] \
-            + f"<think>{think_inner}</think>{new_body}"
+            return _consume_location_marker(text)   # 零改动：仅消费位置标记
+        return _consume_location_marker(
+            text[:len(text) - len(stripped)]
+            + f"<think>{think_inner}</think>{new_body}")
     except Exception as e:
         print(f"⚠️ 回复去重异常（原样返回）: {e}")
         return text
 
 
 # ==================== 搜索指代消解（2026-10-02 用户口径） ====================
+# 位置隐私口径（2026-10-02 隐私改造）：位置信息优先 .env 的 USER_CITY/
+# USER_DISTRICT，其次本地位置记忆 agent_state/user_location.json（AI 主动
+# 询问后由 [LOCATION:] 标记或 /set_location 指令写入；已 gitignore，不上传
+# GitHub、不传给云端）——都没有则不改写，由模型侧主动询问主人。
 
 # 地点敏感的搜索意图关键词（天气/新闻/交通/本地服务类）——裸词（如"今天
 # 天气"）交给搜索引擎会被随机定位（用户实测：问天气返回了杭州余杭，实际
@@ -504,7 +552,7 @@ LOCATION_SENSITIVE_KEYWORDS = (
 )
 
 # 常见地点词表（省级短名 + 直辖市/主要城市，轻量口径）：命中即认为 query
-# 已含地点、不再改写；自定义中小城市由 USER_CITY/USER_DISTRICT 配置兜底
+# 已含地点、不再改写；自定义中小城市由配置/本地位置记忆兜底
 _KNOWN_LOCATIONS = (
     "北京", "上海", "天津", "重庆",
     "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建",
@@ -521,17 +569,44 @@ _KNOWN_LOCATIONS = (
 _ADMIN_SUFFIX_RE = re.compile(r'[\u4e00-\u9fa5]{1,6}(?:省|市|自治区|自治州)')
 
 
-def _inject_location(query):
-    """搜索指代消解：地点敏感类 query 不含地点时补全配置位置。
+def _resolve_user_location():
+    """解析用户位置（三级来源，2026-10-02 隐私口径）。
 
-    用户口径（2026-10-02）：query="今天天气"（USER_CITY=长沙、
-    USER_DISTRICT=天心区）→ "长沙天心区今天天气"；只配城市 →
-    "长沙今天天气"。不改写的情形：
-    - query 已含地点（词表命中 / 带省市后缀 / 含配置的 USER_CITY 或
-      USER_DISTRICT——用户说的地点优先，且避免二次叠加）；
+    返回 (city, district, source)：.env 的 USER_CITY/USER_DISTRICT 优先
+    （source=".env"），其次本地位置记忆 agent_state/user_location.json
+    （source="user_location.json"，AI 主动询问 / [LOCATION:] 标记 /
+    /set_location 指令写入）；都没有返回 ("", "", "未知")。
+    异常安全（记忆层损坏按未知处理，绝不影响对话）。
+    """
+    env_city = str(USER_CITY or "").strip()
+    env_district = str(USER_DISTRICT or "").strip()
+    if env_city or env_district:
+        return env_city, env_district, ".env"
+    try:
+        from agent_state.state_manager import get_user_location
+        loc = get_user_location()
+    except Exception:
+        loc = None
+    if isinstance(loc, dict) and str(loc.get("city", "")).strip():
+        return (str(loc.get("city", "")).strip(),
+                str(loc.get("district", "") or "").strip(),
+                "user_location.json")
+    return "", "", "未知"
+
+
+def _inject_location(query):
+    """搜索指代消解：地点敏感类 query 不含地点时补全用户位置。
+
+    位置三级回退（2026-10-02 隐私口径改造）：.env USER_CITY/USER_DISTRICT
+    优先 → 本地位置记忆 agent_state/user_location.json → 都没有返回 None
+    （调用方不改写搜索词，模型侧由系统上下文引导主动询问主人）。
+    不改写的情形：
+    - query 已含地点（位置串/城市/区县任一出现——用户说的地点优先，且
+      避免二次叠加；词表命中；带省市行政区划后缀的词表外地名）；
     - 非地点敏感类 query（如"如何写Python"）；
-    - 位置未配置（USER_CITY 与 USER_DISTRICT 均为空）。
-    纯函数 + 异常安全（任何异常原样返回）。
+    - 无可用位置（返回 None，调用方跳过改写）。
+    每次判定打一行 📍 [搜索] 位置来源 日志（.env / user_location.json /
+    未知），便于部署侧确认位置来源。异常安全（任何异常原样返回）。
     """
     try:
         q = "" if query is None else str(query)
@@ -539,19 +614,46 @@ def _inject_location(query):
             return q
         if not any(k in q for k in LOCATION_SENSITIVE_KEYWORDS):
             return q
-        if (USER_CITY and USER_CITY in q) or (USER_DISTRICT and USER_DISTRICT in q):
-            return q
-        if any(loc in q for loc in _KNOWN_LOCATIONS):
-            return q
-        if _ADMIN_SUFFIX_RE.search(q):
-            return q
-        location = (str(USER_CITY) + str(USER_DISTRICT)).strip()
+        city, district, source = _resolve_user_location()
+        location = (city + district).strip()
         if not location:
+            print("📍 [搜索] 位置来源: 未知（不改写，待主动询问主人）")
+            return None
+        if ((city and city in q) or (district and district in q)
+                or any(loc in q for loc in _KNOWN_LOCATIONS)
+                or _ADMIN_SUFFIX_RE.search(q)):
             return q
+        print(f"📍 [搜索] 位置来源: {source}（{location}）")
         return location + q
     except Exception as e:
         print(f"⚠️ 搜索指代消解异常（原样返回）: {e}")
         return query
+
+
+def _inject_location_context(messages):
+    """向模型注入主人位置状态（搜索指代消解配套，2026-10-02 隐私口径）。
+
+    模型自身无法读配置与本地文件——由系统上下文告知"位置已知（直接使用）
+    /未知（先询问主人，告知后回 [LOCATION:城市-区县] 标记）"，与 prompts
+    联网搜索规则的主动询问协议配套。注入为 system 上下文（位置插在置顶
+    提示词之后，与长期记忆/前情提要同机制、每轮现算不落历史）；异常静默
+    跳过，绝不影响对话主链路。
+    """
+    try:
+        city, district, _source = _resolve_user_location()
+        if city or district:
+            content = (f"【主人位置】{city}{district}（本地记录的常用位置，"
+                       "主人问天气/本地信息时直接使用，无需再询问）")
+        else:
+            content = ("【主人位置】未知。主人问天气/本地信息时，先自然询问"
+                       "主人在哪个城市和区，主人告知后在回复末尾加 "
+                       "[LOCATION:城市-区县] 标记（如 [LOCATION:长沙-天心区]，"
+                       "主人只说了城市就写 [LOCATION:城市]）；主人未告知前"
+                       "绝对不用不含地点的裸词搜索。")
+        messages.insert(1, {"role": "system", "content": content})
+    except Exception as e:
+        print(f"⚠️ 位置上下文注入失败（已静默跳过）: {e}")
+    return messages
 
 
 def _extract_tool_json(raw_reply):
@@ -1212,6 +1314,9 @@ def smart_ask(message, history=None, session_key="default"):
     messages = _compress_history(messages, session_key)
     # 🧠 长期记忆注入（§10 #3）：最近 5 条记忆以系统上下文形态并入模型消息
     messages = _inject_memory_context(messages)
+    # 📍 主人位置状态注入（搜索指代消解配套，2026-10-02 隐私口径）：告知
+    # 模型位置已知（直接使用）/未知（先询问主人 + [LOCATION:] 标记协议）
+    messages = _inject_location_context(messages)
     if url_match:
         url = url_match.group(1)
         try:
@@ -1313,14 +1418,14 @@ def smart_ask(message, history=None, session_key="default"):
                     thinking = _tool_thinking_placeholder(tool_name)
                     print("[CoT] 已注入兜底占位符")
                 try:
-                    # 📍 搜索指代消解（2026-10-02 用户口径）：web_search 的
+                    # 📍 搜索指代消解（2026-10-02 隐私口径）：web_search 的
                     # 裸词 query（"今天天气"）会被搜索引擎随机定位——执行
-                    # 前按 .env 配置的 USER_CITY/USER_DISTRICT 补全地点
-                    #（用户说的地点优先，_inject_location 已含地点则原样）
+                    # 前按 .env 配置 / 本地位置记忆补全地点（用户说的地点
+                    # 优先）；无位置返回 None → 不改写，由模型主动询问
                     if (tool_name == "web_search" and isinstance(tool_args, dict)
                             and tool_args.get("query")):
                         located = _inject_location(str(tool_args["query"]))
-                        if located != tool_args["query"]:
+                        if located is not None and located != tool_args["query"]:
                             print(f"📍 [搜索] 指代消解: "
                                   f"{tool_args['query']} → {located}")
                             tool_args["query"] = located

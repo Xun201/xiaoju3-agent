@@ -7,6 +7,7 @@ agent_state/history_qq.json
 agent_state/history_web.json
 agent_state/history_cli.json
 agent_state/history_*.json
+agent_state/user_location.json
 agent_state/emoji_links.json
 agent_state/conversations/
 agent_state/long_term.db

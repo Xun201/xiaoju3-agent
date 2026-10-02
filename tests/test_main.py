@@ -897,6 +897,8 @@ class TestMemoryAndCompression(_MainCase):
         with patch.object(main.state_manager, "get_recent_memories", return_value=[]):
             main.handle_message('web', 'admin', None, "你好")
         args, _ = self.smart_ask.call_args
+        # 【主人位置】上下文由真实 brain.smart_ask 注入；本用例 mock 了
+        # smart_ask，消息形状仍由 main 组装——只有置顶系统提示词一条
         self.assertEqual(len([m for m in args[1] if m.get("role") == "system"]), 1)
 
 
@@ -1023,12 +1025,12 @@ class TestRecentActionsInjection(_MainCase):
         self.assertIn("adb_tap: 点击 (10, 20)", blocks[0]["content"])
 
     def test_empty_records_no_injection(self):
-        # 记录文件不存在（夹具默认）→ 不注入，只有置顶系统提示词
+        # 记录文件不存在（夹具默认）→ 不注入；2026-10-02 起额外有【主人位置】
         self.assertFalse(os.path.exists(self.actions_file))
         main.handle_message('web', 'admin', None, "你好")
         args, _ = self.smart_ask.call_args
-        systems = [m for m in args[1] if m.get("role") == "system"]
-        self.assertEqual(systems, [main.SYSTEM_PROMPT])
+        self.assertEqual([m for m in args[1] if m.get("role") == "system"],
+                         [main.SYSTEM_PROMPT])
 
     def test_corrupted_records_no_injection_and_no_crash(self):
         with open(self.actions_file, "w", encoding="utf-8") as f:
@@ -1172,6 +1174,83 @@ class TestMigrationWiring(_MainCase):
         """XIAOJU3_PEERS 非空且 XIAOJU3_WATCH=1 时开启。"""
         self.set_env(XIAOJU3_PEERS="http://peer.example.com:5002", XIAOJU3_WATCH="1")
         self.assertTrue(main._peer_watch_enabled())
+
+
+class TestLocationCommands(unittest.TestCase):
+    """位置指令（2026-10-02 隐私口径）：/set_location / /clear_location，
+    QQ 与网页共用 main.handle_location_command；位置只存本地
+    agent_state/user_location.json（gitignore），测试后清理。"""
+
+    def setUp(self):
+        from agent_state import state_manager
+        self.sm = state_manager
+        self.sm.clear_user_location()   # 起点干净
+
+    def tearDown(self):
+        self.sm.clear_user_location()
+
+    def test_set_location_with_district(self):
+        """/set_location 长沙 天心区 → 写入成功（城市+区县）。"""
+        reply = main.handle_message('web', 'admin', None,
+                                    "/set_location 长沙 天心区")
+        self.assertIn("位置已记录", reply)
+        self.assertIn("长沙", reply)
+        self.assertIn("天心区", reply)
+        self.assertEqual(self.sm.get_user_location(),
+                         {"city": "长沙", "district": "天心区"})
+
+    def test_set_location_city_only(self):
+        """/set_location 长沙 → 只写城市、区县为空。"""
+        reply = main.handle_message('qq', 'user1', None, "/set_location 长沙")
+        self.assertIn("位置已记录", reply)
+        self.assertEqual(self.sm.get_user_location(),
+                         {"city": "长沙", "district": ""})
+
+    def test_set_location_usage_hint(self):
+        """/set_location 无参数 → 返回用法提示，不写入。"""
+        reply = main.handle_location_command("/set_location")
+        self.assertIn("用法", reply)
+        self.assertIsNone(self.sm.get_user_location())
+
+    def test_clear_location(self):
+        """/clear_location → 清除成功（记录文件删除）。"""
+        self.sm.save_user_location("长沙", "天心区")
+        reply = main.handle_message('web', 'admin', None, "/clear_location")
+        self.assertIn("已清除", reply)
+        self.assertIsNone(self.sm.get_user_location())
+
+    def test_clear_location_when_absent_still_ok(self):
+        """/clear_location 无记录时同样返回成功文案（幂等）。"""
+        reply = main.handle_location_command("/clear_location")
+        self.assertIn("已清除", reply)
+
+    def test_normal_message_not_intercepted(self):
+        """普通对话（含"位置"字样）不被位置指令误拦截。"""
+        self.assertIsNone(main.handle_location_command("你住什么位置呀"))
+
+    def test_dashboard_api_chat_set_location(self):
+        """网页端：/api/chat 走同一 helper（命中即系统消息返回，不进大脑）。"""
+        from xiaoju3_dashboard import app
+        client = app.test_client()
+        resp = client.post("/api/chat",
+                           json={"message": "/set_location 长沙 天心区"})
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertIn("位置已记录", payload["data"]["reply"])
+        self.assertEqual(payload["data"]["source"], "⚙️ 系统")
+        self.assertEqual(self.sm.get_user_location(),
+                         {"city": "长沙", "district": "天心区"})
+
+    def test_dashboard_api_chat_clear_location(self):
+        """网页端 /clear_location：与 QQ 通道同效。"""
+        self.sm.save_user_location("长沙", "天心区")
+        from xiaoju3_dashboard import app
+        client = app.test_client()
+        resp = client.post("/api/chat", json={"message": "/clear_location"})
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertIn("已清除", payload["data"]["reply"])
+        self.assertIsNone(self.sm.get_user_location())
 
 
 if __name__ == "__main__":
