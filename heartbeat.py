@@ -5,7 +5,7 @@
 （传感器场景联动）与 #14（心跳决策本地化）：
 
 1. 状态感知：每 60 秒（xiaoju3.HEARTBEAT_INTERVAL）轮询 Home Assistant
-   /api/states（经 home_tools.get_ha_devices 六类过滤），与上次快照比对
+   /api/states（经 home_tools.get_ha_devices 八类过滤），与上次快照比对
    ——无变化直接跳过，不消耗 token（延续原文档省 token 哲学）。
 2. 场景规则优先（§10 #10，先规则后大模型——规则命中就不耗 token）：
    apply_scene_rules 纯函数（上一轮结构化快照 diff 本轮快照 → 动作列表）：

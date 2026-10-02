@@ -361,7 +361,7 @@ class InputNumberDomainTests(HomeToolsTestBase):
 
     def test_domains_contains_input_number(self):
         self.assertIn("input_number", home_tools.HA_DOMAINS)
-        self.assertEqual(len(home_tools.HA_DOMAINS), 7)
+        self.assertEqual(len(home_tools.HA_DOMAINS), 8)
 
     def test_get_ha_devices_includes_input_number(self):
         with mock.patch.object(home_tools.requests, "get") as mget:
@@ -375,6 +375,39 @@ class InputNumberDomainTests(HomeToolsTestBase):
             mget.return_value.json.return_value = self.SAMPLE
             states = home_tools.get_ha_states()
         self.assertIn("input_number.mo_ni_shi_du",
+                      [e["entity_id"] for e in states])
+
+
+class BinarySensorDomainTests(HomeToolsTestBase):
+    """binary_sensor 第八类（2026-10-02）：场景规则①与紧急豁免的状态源。
+
+    注：binary_sensor 含 "sensor" 子串、旧子串匹配口径下本已放行——本组
+    测试把显式白名单登记与过滤行为锁定，防将来匹配方式重构走样。
+    """
+
+    SAMPLE = [
+        _state("binary_sensor.door_front", "off", "门磁"),
+        _state("binary_sensor.gas_leak", "off", "燃气泄漏"),
+        _state("sun.sun", "above_horizon", "太阳"),   # 非白名单仍剔除
+    ]
+
+    def test_domains_contains_binary_sensor(self):
+        self.assertIn("binary_sensor", home_tools.HA_DOMAINS)
+        self.assertEqual(len(home_tools.HA_DOMAINS), 8)
+
+    def test_get_ha_devices_includes_binary_sensor(self):
+        with mock.patch.object(home_tools.requests, "get") as mget:
+            mget.return_value.json.return_value = self.SAMPLE
+            result = home_tools.get_ha_devices()
+        self.assertIn("门磁 (ID: binary_sensor.door_front) 当前状态: off", result)
+        self.assertIn("燃气泄漏 (ID: binary_sensor.gas_leak) 当前状态: off", result)
+        self.assertNotIn("sun.sun", result)
+
+    def test_get_ha_states_includes_binary_sensor(self):
+        with mock.patch.object(home_tools.requests, "get") as mget:
+            mget.return_value.json.return_value = self.SAMPLE
+            states = home_tools.get_ha_states()
+        self.assertIn("binary_sensor.door_front",
                       [e["entity_id"] for e in states])
 
 
