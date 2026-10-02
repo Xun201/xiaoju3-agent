@@ -30,7 +30,9 @@
 - HA_URL 未配置（离线降级模式）且走默认管线：心跳完全跳过，不打印任何
   日志（heartbeat_once 直接返回 None、heartbeat_loop 不启动不打印；
   注入自定义感知/结构化函数的测试与定制场景不拦截）；
-- 快照被抖动传感器（时间/温湿度小数等）高频判变时，连续 QUIET_LIMIT 轮
+- 时间型传感器（state 为 ISO 日期/时间戳，如 sun.next_* 系列）不参与
+  快照对比：它们是"时钟"不是"环境"，漂移不再触发"检测到环境变化"；
+- 快照被其余抖动传感器（温湿度小数等）高频判变时，连续 QUIET_LIMIT 轮
   （默认 5，env XIAOJU3_HEARTBEAT_QUIET_LIMIT 可覆盖）"无需干预"后进入
   静默模式——"检测到环境变化 / 大脑决策"两类日志不再打印，仅真正执行
   动作（场景规则 / 主动执行 / 紧急豁免）时打印完整日志并复位计数。
@@ -71,6 +73,37 @@ QUIET_LIMIT = max(1, int(os.environ.get("XIAOJU3_HEARTBEAT_QUIET_LIMIT", "5")))
 _no_action_rounds = 0
 
 
+# ==================== 时间型传感器抖动过滤（2026-10-02 用户口径） ====================
+# sensor.sun_next_* 等"下次事件时刻"类实体的 state 本身是 ISO 日期/时间戳，
+# 随时间推进与 HA 重算而漂移，快照对比把它们当"环境变化"造成反复唤醒决策。
+# 过滤原则：state 是日期/时间戳（ISO 形态）的实体不参与快照对比——它们是
+# "时钟"，不是"环境"；真实设备状态（on/off、数值温湿度等）不受影响。
+# 不按 domain/entity_id 硬编码黑名单：time_date/uptime 等同类实体自动免疫。
+
+# ISO 日期（2026-10-03）/ 日期时间（2026-10-03T05:10:28 / 2026-10-03 05:10）前缀
+_ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?")
+
+
+def _is_volatile_state(state):
+    """state 是否时间型易变值（ISO 日期/日期时间形态）——不参与快照对比。"""
+    s = str(state or "").strip()
+    return bool(_ISO_TIMESTAMP_RE.match(s))
+
+
+def _filter_volatile_lines(text):
+    """从 get_ha_devices 的文本快照中剔除时间型实体行（其余行原样保留）。
+
+    只处理 "- friendly_name (ID: entity_id) 当前状态: state" 形态的行；
+    错误提示串、"当前没有发现可控设备。"等非快照文本原样透传。
+    """
+    if not text:
+        return text
+    kept = [ln for ln in text.split("\n")
+            if not (ln.startswith("- ") and "当前状态: " in ln
+                    and _is_volatile_state(ln.split("当前状态: ", 1)[1]))]
+    return "\n".join(kept)
+
+
 def _ha_configured():
     """HA 是否已配置（HA_URL 非空；延迟导入 home_tools 便于测试注入）。"""
     try:
@@ -95,15 +128,27 @@ def reset_snapshot():
 
 
 def _default_sense():
-    """感知：获取 HA 六类实体状态摘要（文本）。"""
-    return get_ha_devices()
+    """感知：获取 HA 六类实体状态摘要（文本）——时间型易变实体行已剔除。
+
+    HA 探测失败（get_ha_devices 返回 ❌ 开头错误串）时归一为常量：错误串
+    内嵌异常细节（超时/拒绝等每次漂移），原样对比会让链路抖动连续触发
+    "环境变化"；归一后连续失败互相判等，只有 可达↔不可达 的真实边沿
+    才唤醒一次决策。"""
+    text = get_ha_devices()
+    if str(text or "").startswith("❌"):
+        return "❌ [心跳] HA 暂不可达（错误详情不参与快照对比）"
+    return _filter_volatile_lines(text)
 
 
 def _default_sense_states():
-    """感知：获取 HA 六类实体结构化状态（场景规则 diff 用），异常返回 []。"""
+    """感知：获取 HA 六类实体结构化状态（场景规则 diff 用），异常返回 []。
+    时间型易变实体（state 为 ISO 日期/时间戳）一并剔除——它们不参与任何
+    场景规则（规则只关心 binary_sensor 在离/灯/湿度/加湿器）。"""
     try:
         states = get_ha_states()
-        return states if isinstance(states, list) else []
+        if not isinstance(states, list):
+            return []
+        return [e for e in states if not _is_volatile_state(e.get("state"))]
     except Exception:
         return []
 

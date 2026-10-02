@@ -673,5 +673,117 @@ class EmergencyExemptionTests(unittest.TestCase):
                          "http://127.0.0.1:3000/send_private_msg")
 
 
+class SunTimestampNoiseTests(HeartbeatBase):
+    """时间型传感器抖动过滤（2026-10-02 用户口径）：state 为 ISO 日期/时间戳
+    的实体（sun.next_* 等）不参与快照对比——漂移不再唤醒决策；真实设备
+    （input_boolean 开关）变化仍照常触发。全部离线 mock。"""
+
+    LIGHT_ON = "- 小橘测试灯 (ID: input_boolean.xiao_ju_ce_shi_deng) 当前状态: on"
+    LIGHT_OFF = "- 小橘测试灯 (ID: input_boolean.xiao_ju_ce_shi_deng) 当前状态: off"
+    SUN_DAWN = "- 下个黎明 (ID: sensor.sun_next_dawn) 当前状态: 2026-10-03T05:10:28+00:00"
+
+    def test_is_volatile_state_truth_table(self):
+        for ts in ("2026-10-03T05:10:28+00:00", "2026-10-03T05:10:28",
+                   "2026-10-03 05:10", "2026-10-03"):
+            self.assertTrue(heartbeat._is_volatile_state(ts), ts)
+        for s in ("on", "off", "23.5", "unknown", "idle", "sunny", "",
+                  "normal 2026-10-03（嵌在句中不算纯时间戳）"):
+            self.assertFalse(heartbeat._is_volatile_state(s), s)
+
+    def test_filter_volatile_lines_keeps_devices_drops_sun(self):
+        text = self.LIGHT_ON + "\n" + self.SUN_DAWN
+        self.assertEqual(heartbeat._filter_volatile_lines(text), self.LIGHT_ON)
+        # 非快照文本（错误提示 / 空设备提示）原样透传
+        for raw in ("当前没有发现可控设备。", "❌ 获取HA设备列表失败: timeout", ""):
+            self.assertEqual(heartbeat._filter_volatile_lines(raw), raw)
+
+    def test_default_sense_filters_volatile_lines(self):
+        with mock.patch.object(heartbeat, "get_ha_devices",
+                               return_value=self.LIGHT_ON + "\n" + self.SUN_DAWN):
+            self.assertEqual(heartbeat._default_sense(), self.LIGHT_ON)
+
+    def test_default_sense_states_filters_volatile_entities(self):
+        with mock.patch.object(heartbeat, "get_ha_states", return_value=[
+                _state("input_boolean.xiao_ju_ce_shi_deng", "on", "小橘测试灯"),
+                _state("sensor.sun_next_dawn", "2026-10-03T05:10:28+00:00", "下个黎明")]):
+            states = heartbeat._default_sense_states()
+        self.assertEqual([e["entity_id"] for e in states],
+                         ["input_boolean.xiao_ju_ce_shi_deng"])
+
+    def test_sun_timestamp_change_does_not_trigger_brain(self):
+        """sun.* 时间戳漂移（其余不变）→ 快照判等，不唤醒决策、零日志。"""
+        import contextlib
+        import io
+        ask = mock.MagicMock(return_value=("无需干预", "🏠 本地"))
+        execute = mock.MagicMock()
+        texts = [
+            self.LIGHT_ON + "\n" + self.SUN_DAWN,
+            self.LIGHT_ON + "\n" + self.SUN_DAWN.replace("05:10:28", "05:12:28"),
+        ]
+        with mock.patch.object(heartbeat, "get_ha_devices",
+                               side_effect=list(texts)), \
+                mock.patch.object(heartbeat, "get_ha_states",
+                                  return_value=[_state("input_boolean.xiao_ju_ce_shi_deng",
+                                                       "on", "小橘测试灯")]), \
+                mock.patch.object(heartbeat, "_ha_configured", return_value=True):
+            with contextlib.redirect_stdout(io.StringIO()) as buf1:
+                first = heartbeat.heartbeat_once(ask_fn=ask, execute_fn=execute)
+            with contextlib.redirect_stdout(io.StringIO()) as buf2:
+                second = heartbeat.heartbeat_once(ask_fn=ask, execute_fn=execute)
+        # 首轮基线正常触发；第二轮 sun 时间戳漂移被过滤 → 快照判等 → 静默
+        self.assertEqual(first, "无需干预")
+        self.assertIsNone(second)
+        ask.assert_called_once()
+        self.assertIn("检测到环境变化", buf1.getvalue())
+        self.assertNotIn("检测到环境变化", buf2.getvalue())
+
+    def test_input_boolean_change_still_triggers(self):
+        """真实设备变化（测试灯 on→off）→ 照常唤醒决策。"""
+        import contextlib
+        import io
+        ask = mock.MagicMock(return_value=("无需干预", "🏠 本地"))
+        base_on = self.LIGHT_ON + "\n" + self.SUN_DAWN
+        texts = [base_on, base_on,
+                 self.LIGHT_OFF + "\n" + self.SUN_DAWN.replace("05:10:28", "05:12:28")]
+        with mock.patch.object(heartbeat, "get_ha_devices", side_effect=texts), \
+                mock.patch.object(heartbeat, "get_ha_states",
+                                  return_value=[_state("input_boolean.xiao_ju_ce_shi_deng",
+                                                       "off", "小橘测试灯")]), \
+                mock.patch.object(heartbeat, "_ha_configured", return_value=True):
+            heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+            heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+            with contextlib.redirect_stdout(io.StringIO()) as buf3:
+                third = heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+        self.assertEqual(third, "无需干预")
+        self.assertEqual(ask.call_count, 2)   # 第 1 轮基线 + 第 3 轮真实变化；第 2 轮被过滤跳过
+        self.assertIn("检测到环境变化", buf3.getvalue())
+
+
+    def test_ha_error_text_normalized_not_flapping(self):
+        """HA 链路抖动：不同错误串互相判等 → 连续失败只触发基线一次；
+        恢复可达后真实边沿再触发一次。"""
+        import contextlib
+        import io
+        ask = mock.MagicMock(return_value=("无需干预", "🏠 本地"))
+        ok_text = self.LIGHT_ON
+        errors = ["❌ 获取HA设备列表失败: Read timed out. (read timeout=10)",
+                  "❌ 获取HA设备列表失败: Max retries exceeded with url: /api/states"]
+        with mock.patch.object(heartbeat, "get_ha_devices",
+                               side_effect=errors + [ok_text]), \
+                mock.patch.object(heartbeat, "get_ha_states", return_value=[]), \
+                mock.patch.object(heartbeat, "_ha_configured", return_value=True):
+            with contextlib.redirect_stdout(io.StringIO()) as buf1:
+                heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+            with contextlib.redirect_stdout(io.StringIO()) as buf2:
+                second = heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+            with contextlib.redirect_stdout(io.StringIO()) as buf3:
+                third = heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+        self.assertEqual(ask.call_count, 2)   # 仅 基线失败 + 恢复边沿 两次
+        self.assertIsNone(second)             # 两种错误串互相判等 → 静默
+        self.assertNotIn("检测到环境变化", buf2.getvalue())
+        self.assertEqual(third, "无需干预")   # 恢复可达 → 真实边沿唤醒
+        self.assertIn("检测到环境变化", buf3.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
