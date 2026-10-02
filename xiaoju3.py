@@ -126,6 +126,11 @@ WEB_API_KEY = os.environ.get("WEB_API_KEY", "changeme-xiaoju3")
 HA_URL = os.environ.get("HA_URL", "")
 HA_TOKEN = os.environ.get("HA_TOKEN", "")
 
+# 用户默认位置（搜索指代消解用，2026-10-02：weather/新闻等裸词 query 补全
+# 地点，brain._inject_location 消费；用户在对话里说的地点优先于本配置）
+USER_CITY = os.environ.get("USER_CITY", "")
+USER_DISTRICT = os.environ.get("USER_DISTRICT", "")
+
 # 心跳轮询间隔（秒），文档 §7：60 秒
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "60"))
 
