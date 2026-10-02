@@ -53,3 +53,6 @@ agent_state/context_summary.json
 开发日志.md
 # 本地一次性诊断工具（HA 连通性验证，读隔离区 .env，不入仓库）
 _dev/ha_check.py
+# PyInstaller 构建产物（步 4：spec 与 build_exe.bat 入库，产物留本地）
+build/
+dist/
