@@ -679,6 +679,17 @@ class ServingTests(unittest.TestCase):
                 resp = self.client.get(path)
             self.assertEqual(resp.status_code, 200, path)
 
+    def test_console_loads_desktop_pet(self):
+        """桌宠完整形态回归（2026-10-02）：/console 页面重新挂载
+        desktop-pet.js（2026-10-01 曾注释停载，加速球仅最小化态显示；
+        script 带 mtime 防缓存 ?v= 参数，与 console.js 同机制）。"""
+        resp = self.client.get("/console")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertRegex(
+            html, r'<script src="/console/desktop-pet\.js(\?v=\d+)"></script>')
+        self.assertNotIn("<!-- <script src=\"/console/desktop-pet.js\">", html)
+
     def test_mascot_asset_served(self):
         """素材已补齐：/assets/DSniang1.jpg 可达（修复界面文档 §5.1 的 404 已知问题）。"""
         with warnings.catch_warnings():
