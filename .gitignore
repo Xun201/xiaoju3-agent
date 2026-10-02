@@ -38,13 +38,11 @@ platform-tools/
 adb.exe
 AdbWinApi.dll
 AdbWinUsbApi.dll
-nul
 agent_state/recent_actions.json
 agent_state/recent_actions.json.tmp
 
 # 拒绝任何可执行文件入库
 *.exe
-install_windows.exe
 
 # LLOneBot 插件包（二进制，不入仓库）
 LLBot.zip
