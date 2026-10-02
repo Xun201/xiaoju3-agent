@@ -136,6 +136,10 @@ USER_DISTRICT = os.environ.get("USER_DISTRICT", "")
 # 各段不受档位影响）
 XIAOJU3_PERSONALITY = os.environ.get("XIAOJU3_PERSONALITY", "medium")
 
+# NapCat 安装目录（2026-10-02：统一启动器无黑框静默拉起 QQ 接入层用；
+# Windows-only——POSIX（香橙派）NapCat 由部署侧另行管理）
+NAPCAT_DIR = os.environ.get("NAPCAT_DIR", "D:\\NapCat")
+
 # 心跳轮询间隔（秒），文档 §7：60 秒
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "60"))
 

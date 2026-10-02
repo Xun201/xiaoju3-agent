@@ -63,6 +63,96 @@ HEARTBEAT_REASON = (
     "会双心跳（同一变化两次决策、两次控设备、双倍 token），故不单独拉起。"
 )
 
+# ==================== NapCat 后台拉起（2026-10-02 用户口径） ====================
+# 目标：一个命令拉起全部——QQ（NapCat）也随 launcher 静默启动，无黑框；
+# NapCat 是常驻服务形态：launcher 退出不杀它（不纳入 shutdown 进程树，
+# 用户口径"关掉任何窗口 NapCat 仍继续运行"）。
+# Windows-only：香橙派（POSIX）NapCat 由部署侧另行管理，launcher 静默跳过。
+
+NAPCAT_STARTED_HINT = "✅ NapCat 已后台启动（无窗口）"
+NAPCAT_RUNNING_HINT = "ℹ️ NapCat 已在运行，跳过"
+
+
+def _napcat_running():
+    """探测 NapCat 是否已在运行：psutil 可用则按进程名扫描（napcat 大小写
+    不敏感，覆盖 NapCatWinBootMain.exe / NapCat.Shell.exe 等），psutil 缺席
+    或扫描异常回退探测 WebUI 端口 6099；仍不可判定按未运行处理。"""
+    try:
+        import psutil
+        for proc in psutil.process_iter(["name"]):
+            name = str((proc.info or {}).get("name") or "").lower()
+            if "napcat" in name:
+                return True
+    except Exception:
+        pass
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 6099), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _is_windows_admin():
+    """当前进程是否以 Windows 管理员身份运行（非 Windows 返回 False）。"""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def ensure_napcat(napcat_dir=None, popen=None, out=None, running_fn=None,
+                  is_admin_fn=None, os_name=None):
+    """拉起 NapCat（Windows-only，幂等可重复调用）。返回是否执行了拉起。
+
+    - 已在运行 / launcher.bat 缺失 / 非 Windows（香橙派部署侧自管）：跳过；
+    - 管理员身份：cmd /c 直接拉 launcher.bat（CREATE_NO_WINDOW 全程无黑框）；
+    - 非管理员：launcher.bat 自带管理员自检（net session + UAC 自重启），
+      这里经 PowerShell Start-Process -Verb runAs -WindowStyle Hidden 以
+      隐藏窗口发起——用户点一次 UAC【是】，之后无窗口常驻；
+    - Popen 句柄刻意不返回/不纳入 launcher 生命周期：NapCat 常驻后台，
+      launcher 退出后继续运行。
+    全部依赖可注入（popen/out/running_fn/is_admin_fn/os_name），离线可测。
+    """
+    popen = popen or subprocess.Popen
+    out = out or print
+    running_fn = running_fn or _napcat_running
+    is_admin_fn = is_admin_fn or _is_windows_admin
+    if os_name is None:
+        os_name = os.name
+    if os_name != "nt":
+        return False   # POSIX（香橙派）：NapCat 由部署侧管理，静默跳过
+    if napcat_dir is None:
+        try:
+            from xiaoju3 import NAPCAT_DIR as napcat_dir
+        except Exception:
+            napcat_dir = "D:\\NapCat"
+    bat = os.path.join(napcat_dir, "launcher.bat")
+    if running_fn():
+        out(NAPCAT_RUNNING_HINT)
+        return False
+    if not os.path.isfile(bat):
+        out(f"ℹ️ 未找到 {bat}，跳过 NapCat 拉起")
+        return False
+    if is_admin_fn():
+        popen(["cmd", "/c", f'cd /d "{napcat_dir}" && launcher.bat'],
+              creationflags=subprocess.CREATE_NO_WINDOW,
+              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        out(NAPCAT_STARTED_HINT)
+        return True
+    # 非管理员：经 PowerShell 隐藏窗口发起 runAs（launcher.bat 自带管理员
+    # 自检，直接跑会弹可见的 wt.exe 黑框——隐藏 runAs 全程无黑框）
+    ps_cmd = (f"Start-Process cmd -ArgumentList '/c','cd /d {napcat_dir} "
+              f"&& launcher.bat' -Verb runAs -WindowStyle Hidden")
+    popen(["powershell", "-NoProfile", "-Command", ps_cmd],
+          creationflags=subprocess.CREATE_NO_WINDOW,
+          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    out("✅ NapCat 已后台启动（无窗口）——首次会弹一次 UAC 授权，点【是】即可")
+    return True
+
 
 def build_launch_plan(python=None, root=None):
     """构造统一启动计划（纯函数，离线可测）。
@@ -249,7 +339,11 @@ class XiaojuLauncher:
 
 
 def main(argv=None):
-    """入口：--dry-run 只打印计划（零副作用）；否则前台拉起并守护。"""
+    """入口：--dry-run 只打印计划（零副作用）；否则前台拉起并守护。
+
+    非 dry-run 时先经 ensure_napcat() 无黑框拉起 QQ 接入层（NapCat，
+    Windows-only、幂等、已运行跳过——NapCat 常驻后台，launcher 退出不杀）。
+    """
     args = parse_args(argv)
     plan = build_launch_plan(root=args.root)
     if args.dry_run:
@@ -260,6 +354,7 @@ def main(argv=None):
             print(f"      {entry.get('reason') or entry.get('desc', '')}")
         print(QQ_WEBHOOK_MIGRATION_HINT)
         return 0
+    ensure_napcat()
     launcher = XiaojuLauncher(plan)
     return launcher.run()
 

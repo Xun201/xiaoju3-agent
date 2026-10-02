@@ -96,6 +96,16 @@ bash backup.sh 权限体系调整     # 生成 backups/backup_YYYYMMDD_HHMMSS_�
 
 项目分为两个版本分支，代码完全同源，仅依赖组合不同（install.sh 按 Python 版本自动选择）：
 
+### NapCat 静默启动（QQ 接入，Windows）
+
+QQ 接入依赖 NapCat（默认 `D:\NapCat`，可在 .env 用 `NAPCAT_DIR` 自定义）。三种启动方式任选：
+
+- **推荐**：直接运行 `python xiaoju3_launcher.py`（或双击 启动小橘3号.bat）——统一启动器会检测 NapCat，未运行时自动无窗口后台拉起（launcher.bat 需要管理员权限，首次会弹一次 UAC，点【是】即可）；
+- 双击 `start_napcat_silent.vbs` 单独静默启动 NapCat；
+- 手动双击 `D:\NapCat\launcher.bat`（传统方式，需保持黑框开启）。
+
+NapCat 是常驻服务：小橘3号退出后它继续在后台运行，下次启动检测到已在运行会自动跳过。
+
 ### 版本一：PC/最新版（`main` 分支）
 
 - **目标**：面向 Windows/Linux 开发者，使用最新版依赖。
