@@ -3249,10 +3249,12 @@ class LocationInjectTests(unittest.TestCase):
         spec.loader.exec_module(cls.real_sm)
 
     def test_bare_weather_query_rewritten_with_city(self):
-        """任务口径用例①："今天天气" + USER_CITY=长沙 → "长沙今天天气"。"""
+        """任务口径用例①："今天天气" + USER_CITY=长沙 → 精准天气 query
+        （2026-10-02 精度增强口径：规范化为"城市 今日天气预报 气温 降水"）。"""
         with mock.patch.object(brain, "USER_CITY", "长沙"), \
                 mock.patch.object(brain, "USER_DISTRICT", ""):
-            self.assertEqual(brain._inject_location("今天天气"), "长沙今天天气")
+            self.assertEqual(brain._inject_location("今天天气"),
+                             "长沙 今日天气预报 气温 降水")
 
     def test_query_with_city_untouched(self):
         """任务口径用例②："北京天气" 已含地点 → 不改写。"""
@@ -3261,10 +3263,12 @@ class LocationInjectTests(unittest.TestCase):
             self.assertEqual(brain._inject_location("北京天气"), "北京天气")
 
     def test_bare_news_query_rewritten(self):
-        """任务口径用例③："今天新闻" + USER_CITY=长沙 → "长沙今天新闻"。"""
+        """任务口径用例③："今天新闻" + USER_CITY=长沙 → 改写 + 追加"最新
+        今日"精度词（2026-10-02 新闻类增强口径）。"""
         with mock.patch.object(brain, "USER_CITY", "长沙"), \
                 mock.patch.object(brain, "USER_DISTRICT", ""):
-            self.assertEqual(brain._inject_location("今天新闻"), "长沙今天新闻")
+            self.assertEqual(brain._inject_location("今天新闻"),
+                             "长沙今天新闻 最新 今日")
 
     def test_unconfigured_keeps_original(self):
         """任务口径用例④：USER_CITY 未配置且无本地位置记忆 → 返回 None
@@ -3285,17 +3289,20 @@ class LocationInjectTests(unittest.TestCase):
                              "如何写Python")
 
     def test_city_and_district_both_injected(self):
-        """城市+区县都配置 → 按"长沙天心区"完整位置改写（任务 2 示例口径）。"""
+        """城市+区县都配置 → 裸 query 规范化为"长沙天心区 今日天气预报
+        气温 降水"（任务 2 示例口径）。"""
         with mock.patch.object(brain, "USER_CITY", "长沙"), \
                 mock.patch.object(brain, "USER_DISTRICT", "天心区"):
             self.assertEqual(brain._inject_location("今天天气"),
-                             "长沙天心区今天天气")
+                             "长沙天心区 今日天气预报 气温 降水")
 
-    def test_configured_location_in_query_untouched(self):
-        """query 已含配置的地点（自定义区县不在词表）→ 不改写不叠加。"""
+    def test_configured_district_in_query_canonicalized(self):
+        """query 已含配置的区县（"天心区下雨吗"）→ 天气类规范化为精准
+        query（2026-10-02 精度口径：不再原样放行宽泛词组）。"""
         with mock.patch.object(brain, "USER_CITY", "长沙"), \
                 mock.patch.object(brain, "USER_DISTRICT", "天心区"):
-            self.assertEqual(brain._inject_location("天心区下雨吗"), "天心区下雨吗")
+            self.assertEqual(brain._inject_location("天心区下雨吗"),
+                             "长沙天心区 今日天气预报 气温 降水")
 
     def test_administrative_suffix_untouched(self):
         """词表外地名带行政区划后缀（"株洲市天气"）→ 视为已含地点不改写。"""
@@ -3320,7 +3327,7 @@ class LocationInjectTests(unittest.TestCase):
             mcloud.return_value = "不会走到这"
             reply, source = brain.smart_ask("今天天气怎么样", [])
         called_args = mexec.call_args[0][1]
-        self.assertEqual(called_args["query"], "长沙今天天气")
+        self.assertEqual(called_args["query"], "长沙 今日天气预报 气温 降水")
 
     def test_prompts_search_rule_contains_location_constraint(self):
         """提示词约束（2026-10-02 用户口径）：联网搜索规则含地点条款。"""
@@ -3377,7 +3384,7 @@ class LocationAskTests(unittest.TestCase):
                                   return_value={"city": "长沙",
                                                 "district": "天心区"}),                 self._sm_ctx(), contextlib.redirect_stdout(buf):
             result = brain._inject_location("今天天气")
-        self.assertEqual(result, "长沙天心区今天天气")
+        self.assertEqual(result, "长沙天心区 今日天气预报 气温 降水")
         self.assertIn("user_location.json", buf.getvalue())
 
     def test_env_location_takes_priority_over_memory(self):
@@ -3387,7 +3394,7 @@ class LocationAskTests(unittest.TestCase):
                                   return_value={"city": "北京",
                                                 "district": "朝阳区"}) as mget,                 self._sm_ctx(), contextlib.redirect_stdout(buf):
             result = brain._inject_location("今天天气")
-        self.assertEqual(result, "长沙天心区今天天气")
+        self.assertEqual(result, "长沙天心区 今日天气预报 气温 降水")
         self.assertIn(".env", buf.getvalue())
         mget.assert_not_called()   # .env 命中即短路，不触达本地记忆
 
@@ -3563,7 +3570,7 @@ class LocationHardBlockTests(unittest.TestCase):
             "今天天气", user_city="长沙", unknown_location=False)
         mexec.assert_called_once()
         called_args = mexec.call_args[0][1]
-        self.assertEqual(called_args["query"], "长沙今天天气")
+        self.assertEqual(called_args["query"], "长沙 今日天气预报 气温 降水")
         self.assertIn("📍 [搜索] 位置来源: .env", out)
         self.assertNotIn("🛑", out)
 
@@ -3577,7 +3584,8 @@ class LocationHardBlockTests(unittest.TestCase):
         self.assertTrue(saved)
         self.assertEqual(self.real_sm.get_user_location(),
                          {"city": "长沙", "district": "天心区"})
-        self.assertIn("从主人回答中提取位置", buf.getvalue())
+        self.assertIn("📍 [位置] 从用户消息提取: 长沙-天心区，已写入并生效",
+                      buf.getvalue())
 
     def test_user_message_without_combo_not_saved(self):
         """普通消息（无城市+区县组合）不触发写入（零误伤）。"""
@@ -3599,6 +3607,86 @@ class LocationHardBlockTests(unittest.TestCase):
         reply, _source, _out, _mexec = self._run_web_search_flow("今天天气")
         self.assertTrue(reply.startswith("<think>"), reply)
         self.assertIn("</think>", reply)
+
+    def test_user_message_same_turn_rewrite(self):
+        """任务口径用例①：用户消息"帮我搜一下长沙市天心区的天气" + 位置
+        未知 → 提取写入 user_location.json + 当轮就改写 query 为精准天气
+        词组（提取在 smart_ask 起步、工具路径现读文件，不等下一轮）。"""
+        raw = ('[思考] 查询天气。\n[计划] 搜索。\n'
+               '[行动] {"tool": "web_search", '
+               '"args": {"query": "长沙市天心区的天气"}}')
+        buf = io.StringIO()
+        with self._sm_ctx(), \
+                mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "requests") as mr, \
+                mock.patch.object(brain, "execute_tool",
+                                  return_value="1. 天气结果") as mexec, \
+                mock.patch.object(brain, "ask_cloud") as mcloud, \
+                contextlib.redirect_stdout(buf):
+            mr.get.return_value = mock.Mock()
+            mr.post.side_effect = [_local_resp(raw), _local_resp("汇总完成")]
+            mcloud.return_value = "汇总完成"
+            brain.smart_ask("帮我搜一下长沙市天心区的天气", [])
+        called_args = mexec.call_args[0][1]
+        self.assertEqual(called_args["query"],
+                         "长沙天心区 今日天气预报 气温 降水")
+        self.assertEqual(self.real_sm.get_user_location(),
+                         {"city": "长沙", "district": "天心区"})
+        self.assertIn("📍 [位置] 从用户消息提取: 长沙-天心区，已写入并生效",
+                      buf.getvalue())
+
+    def test_weather_results_filtered(self):
+        """任务口径用例②：天气类结果含"旅游攻略/百科/介绍/历史"等 → 被
+        白名单过滤，只留天气特征条目。"""
+        import search_tools
+        results = [
+            {"title": "长沙旅游攻略", "snippet": "必去景点介绍", "url": "u1"},
+            {"title": "长沙百科", "snippet": "长沙历史沿革", "url": "u2"},
+            {"title": "长沙今日天气预报", "snippet": "气温 25 度 降水 0mm",
+             "url": "u3"},
+        ]
+        kept = search_tools._filter_weather_results(results)
+        self.assertEqual([r["url"] for r in kept], ["u3"])
+
+    def test_weather_search_all_filtered_msg(self):
+        """任务口径用例③：天气类结果全被过滤 → 返回"未找到相关天气信息，
+        请稍后重试"。"""
+        import search_tools
+        noise = [{"title": "长沙旅游攻略", "snippet": "景点介绍", "url": "u1"}]
+        with mock.patch.dict(os.environ, {"SEARCH_ENGINE": "bing"}), \
+                mock.patch.dict(search_tools._ENGINES,
+                                {"bing": lambda q, n: list(noise)}):
+            out = search_tools.web_search("长沙天心区 今日天气预报 气温 降水")
+        self.assertEqual(out, search_tools.NO_WEATHER_RESULT_MSG)
+
+    def test_weather_search_keeps_weather_results(self):
+        """天气类搜索：混合结果过滤后只留天气条目（既有清单格式返回）。"""
+        import search_tools
+        mixed = [
+            {"title": "长沙旅游攻略", "snippet": "景点", "url": "u1"},
+            {"title": "长沙天气预报", "snippet": "今天多云 18 度", "url": "u2"},
+        ]
+        with mock.patch.dict(os.environ, {"SEARCH_ENGINE": "bing"}), \
+                mock.patch.dict(search_tools._ENGINES,
+                                {"bing": lambda q, n: list(mixed)}):
+            out = search_tools.web_search("长沙天心区 今日天气预报 气温 降水")
+        self.assertIn("长沙天气预报", out)
+        self.assertNotIn("旅游攻略", out)
+
+    def test_non_weather_search_not_filtered(self):
+        """任务口径用例④：非天气类搜索 → 不过滤（结果原样返回）。"""
+        import search_tools
+        results = [
+            {"title": "Python 教程", "snippet": "入门介绍", "url": "u1"},
+            {"title": "Python 官方文档", "snippet": "语法参考", "url": "u2"},
+        ]
+        with mock.patch.dict(os.environ, {"SEARCH_ENGINE": "bing"}), \
+                mock.patch.dict(search_tools._ENGINES,
+                                {"bing": lambda q, n: list(results)}):
+            out = search_tools.web_search("如何写Python")
+        self.assertIn("Python 教程", out)
+        self.assertIn("Python 官方文档", out)
 
 
 class AntiRepeatPromptTests(unittest.TestCase):
