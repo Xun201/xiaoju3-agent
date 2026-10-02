@@ -102,7 +102,7 @@ prompt_content = f"""你叫小橘3号，是由{MASTER_NAME}的专属私人助理
 9. ui_tap_element - 通过系统底层 UI 解析精准点击屏幕元素。参数：element_name (要点击的元素的文字，如 "设置"、"确认")
 10. vision_tap_element - 视觉识别点击（仅在 ui_tap_element 失效时备用）。参数：element_name
 11. web_search - 联网搜索，检索互联网上的公开信息。参数：query (搜索关键词), max_results (可选，结果条数，默认 5)
-12. system_manage - 一键安装/卸载系统组件（仅 Lv.4 主人级可用，需动态密码+生物认证双因子与二次确认）。参数：action (install/uninstall), component (组件名，仅允许字母数字._-)
+12. system_manage - 一键安装/卸载系统组件（仅 Lv.4 主人级可用）。参数：action (install/uninstall), component (组件名，仅允许字母数字._-)
 13. read_core_memory - 读取核心记忆库（仅 Lv.4 主人级可用）。参数：limit (可选，条数，默认 5)
 14. restart_service - 重启小橘3号自身进程（LV4 主人级专属，重启后需等待守护进程拉起，期间会短暂离线）。参数：无
 

@@ -90,8 +90,9 @@ class _MainCase(unittest.TestCase):
             self.pm._op_windows.clear()
 
         self.addCleanup(_restore_pm)
-        self.addCleanup(main._mfa_sessions.clear)
-        self.addCleanup(main._pending_confirms.clear)
+        # 2026-10-02 批次②：/confirm 令牌流删除，儿童锁内存表替代
+        self.addCleanup(main._last_seen.clear)
+        self.addCleanup(main._pending_child_requests.clear)
 
         # identity.json 一律指向临时目录：任何测试都不读写真实 agent_state 隔离区
         self.identity = os.path.join(self.tmp, "identity.json")
@@ -494,10 +495,13 @@ class TestHandleMessageRouting(_MainCase):
         """help_menu 展示新指令与 Lv.4 菜单段（§7）。"""
         from plugins.help_menu import get_help_menu
         lv4_menu = get_help_menu("Lv.4")
-        for item in ["/register", "/sudo", "/lv4_auth", "/lv4_revoke",
-                     "/confirm", "/reset_fuse", "/gen_log", "/send_image",
-                     "主人级"]:
+        for item in ["/register", "/lv4_auth", "/lv4_revoke",
+                     "/reset_fuse", "/gen_log", "/send_image",
+                     "主人级", "安全家居", "restart_service"]:
             self.assertIn(item, lv4_menu)
+        # 2026-10-02 权限重构：/sudo 与 /confirm 旧口径条目移除
+        self.assertNotIn("/sudo", lv4_menu)
+        self.assertNotIn("/confirm", lv4_menu)
         # /coder_auth 升级指引对未达 Lv.3 的用户可见
         self.assertIn("/coder_auth", get_help_menu("Lv.2"))
         # 低等级看不到 Lv.4 段
@@ -613,7 +617,8 @@ class TestHandleMessageRouting(_MainCase):
         self.assertTrue(reply.startswith("✅"))
         self.assertEqual(self.pm.current_level, "Lv.4")
         self.assertTrue(self.pm.is_owner())
-        self.assertIn("admin", main._mfa_sessions)   # 双因子会话已记录
+        # 2026-10-02 批次②：操作级 MFA 会话随 /confirm 令牌流删除
+        self.assertFalse(hasattr(main, "_mfa_sessions"))
 
     def test_lv4_auth_confirm_without_biometric_fails_with_detail(self):
         """生物认证器未接入时透传"生物认证器未接入"明细（lv4_mfa_check）。"""
@@ -636,7 +641,6 @@ class TestHandleMessageRouting(_MainCase):
         self.assertTrue(reply.startswith("✅"))
         self.assertEqual(self.pm.current_level, "Lv.3")
         self.assertFalse(self.pm.is_owner())
-        self.assertNotIn("admin", main._mfa_sessions)   # 双因子会话一并失效
 
     # ---------- /reset_fuse（Lv.2+ 熔断重置） ----------
     def test_reset_fuse_requires_lv2(self):
@@ -664,13 +668,17 @@ class TestHandleMessageRouting(_MainCase):
             reset_mock.assert_not_called()
 
     # ---------- /send_image（等级 ≥ Lv.3，修复 Lv.4 主人被拒） ----------
-    def test_send_image_requires_lv3(self):
-        self.pm.current_level = "Lv.1"
+    def test_send_image_requires_lv4(self):
+        # 2026-10-02 权限重构：发图升 LV4（Lv.1/Lv.2/Lv.3 一律拒绝）
         ws = self.make_ws()
         img = self.touch(os.path.join(ws, "pic.png"))
-        with patch("main.WORKSPACE", ws):
-            reply = main.handle_message('qq', 123, None, f"/send_image {img}")
-        self.assertTrue(reply.startswith("❌ 权限不足"))
+        for level in ("Lv.1", "Lv.2", "Lv.3"):
+            self.pm.current_level = level
+            with patch("main.WORKSPACE", ws):
+                reply = main.handle_message('qq', 123, None,
+                                            f"/send_image {img}")
+            self.assertTrue(reply.startswith("❌ 权限不足"), (level, reply))
+            self.assertIn("Lv.4", reply)
 
     def test_send_image_allows_lv4_owner(self):
         self.pm.current_level = "Lv.4"
@@ -682,7 +690,7 @@ class TestHandleMessageRouting(_MainCase):
         self.smart_ask.assert_not_called()
 
     def test_send_image_outside_workspace_denied(self):
-        self.pm.current_level = "Lv.3"
+        self.pm.current_level = "Lv.4"
         ws = self.make_ws()
         outside = os.path.join(self.tmp, "outside")
         os.makedirs(outside, exist_ok=True)
@@ -692,7 +700,7 @@ class TestHandleMessageRouting(_MainCase):
         self.assertEqual(reply, "❌ 只能发送项目工作区内的图片。")
 
     def test_send_image_missing_file(self):
-        self.pm.current_level = "Lv.3"
+        self.pm.current_level = "Lv.4"
         ws = self.make_ws()
         missing = os.path.join(ws, "nope.png")
         with patch("main.WORKSPACE", ws):
@@ -700,7 +708,7 @@ class TestHandleMessageRouting(_MainCase):
         self.assertTrue(reply.startswith("❌ 图片不存在"))
 
     def test_send_image_in_workspace_returns_cq(self):
-        self.pm.current_level = "Lv.3"
+        self.pm.current_level = "Lv.4"
         ws = self.make_ws()
         img = self.touch(os.path.join(ws, "pic.png"))
         with patch("main.WORKSPACE", ws):
@@ -1054,106 +1062,6 @@ class TestRecentActionsInjection(_MainCase):
         self.assertIn("长期记忆", hist[2]["content"])   # 长期记忆块次序不被破坏
 
 
-class TestDangerConfirmFlow(_MainCase):
-    """高危设备二次确认令牌流（§7 + 架构 §6/§10 #8）：全流程 / 过期 / 一次性。"""
-
-    def _grant_lv4_via_command(self):
-        """经真实指令流完成 Lv.4 授权（同时建立双因子会话）。"""
-        self.fresh_lv4()
-        self.set_env(XIAOJU3_TOTP_SECRET=self.totp_secret, XIAOJU3_BIOMETRIC_SIM="1")
-        reply = main.handle_message('web', 'admin', None,
-                                    f"/lv4_auth confirm {self.totp_code()}")
-        self.assertTrue(reply.startswith("✅"))
-
-    @staticmethod
-    def _denying_smart_ask():
-        """模拟 brain 工具链路：execute_tool 对高危实体（门锁）返回拒绝。"""
-        def fake_smart_ask(msg, hist, session_key="default"):
-            brain.execute_tool("control_ha_device",
-                               {"entity_id": "lock.front_door", "action": "unlock"},
-                               main.permission_manager)
-            return ("❌ 安全拒绝：该操作需 Lv.4 双因子认证（动态密码 + 生物认证）"
-                    "全部通过，当前认证未通过。")
-        return fake_smart_ask
-
-    def test_full_flow_token_issued_confirmed_and_burned(self):
-        self._grant_lv4_via_command()
-        with patch("brain.execute_tool",
-                   return_value="❌ 安全拒绝：该操作需 Lv.4 双因子认证全部通过。"), \
-                patch("main.smart_ask", side_effect=self._denying_smart_ask()):
-            reply = main.handle_message('web', 'admin', None, "帮我开一下前门锁")
-        # 回复确认引导 + 6 位令牌已挂起
-        self.assertIn("/confirm", reply)
-        match = re.search(r"/confirm (\d{6})", reply)
-        self.assertIsNotNone(match)
-        token = match.group(1)
-        self.assertIn(token, main._pending_confirms)
-        self.assertEqual(main._pending_confirms[token]["args"]["entity_id"],
-                         "lock.front_door")
-
-        # /confirm 核销：携二次确认凭据重新执行工具
-        with patch("tools.control_ha_device", return_value="✅ 前门锁已打开") as ctrl:
-            reply2 = main.handle_message('web', 'admin', None, f"/confirm {token}")
-        self.assertEqual(reply2, "✅ 前门锁已打开")
-        # 重执行的是挂起的原操作参数
-        args_, _kw = ctrl.call_args
-        self.assertEqual(args_, ("lock.front_door", "unlock"))
-
-        # 一次性：令牌用后即焚，二次核销无效
-        self.assertNotIn(token, main._pending_confirms)
-        with patch("tools.control_ha_device", return_value="✅ x"):
-            reply3 = main.handle_message('web', 'admin', None, f"/confirm {token}")
-        self.assertTrue(reply3.startswith("❌"))
-
-    def test_danger_rejection_without_lv4_issues_no_token(self):
-        """非 Lv.4 用户：拒绝文案原样返回，不发放令牌（无绕过路径）。"""
-        self.pm.current_level = "Lv.1"
-        with patch("brain.execute_tool",
-                   return_value="❌ 安全拒绝：该操作需 Lv.4 双因子认证全部通过。"), \
-                patch("main.smart_ask", side_effect=self._denying_smart_ask()):
-            reply = main.handle_message('web', 'admin', None, "帮我开一下前门锁")
-        self.assertTrue(reply.startswith("❌"))
-        self.assertNotIn("/confirm", reply)
-        self.assertEqual(len(main._pending_confirms), 0)
-
-    def test_danger_rejection_lv4_without_mfa_session_no_token(self):
-        """有 Lv.4 等级但无双因子会话：同样不发放令牌。"""
-        self.pm.current_level = "Lv.4"
-        with patch("brain.execute_tool",
-                   return_value="❌ 安全拒绝：该操作需 Lv.4 双因子认证全部通过。"), \
-                patch("main.smart_ask", side_effect=self._denying_smart_ask()):
-            reply = main.handle_message('web', 'admin', None, "帮我开一下前门锁")
-        self.assertTrue(reply.startswith("❌"))
-        self.assertEqual(len(main._pending_confirms), 0)
-
-    def test_confirm_token_expired(self):
-        main._pending_confirms["123456"] = {
-            "user_id": "admin", "tool_name": "control_ha_device",
-            "args": {"entity_id": "lock.a", "action": "unlock"},
-            "expires": time.time() - 5,
-        }
-        reply = main.handle_message('web', 'admin', None, "/confirm 123456")
-        self.assertIn("过期", reply)
-        self.assertNotIn("123456", main._pending_confirms)   # 过期令牌同样焚毁
-
-    def test_confirm_rejects_other_user_token(self):
-        main._pending_confirms["654321"] = {
-            "user_id": "someone-else", "tool_name": "control_ha_device",
-            "args": {"entity_id": "lock.a", "action": "unlock"},
-            "expires": time.time() + 60,
-        }
-        reply = main.handle_message('web', 'admin', None, "/confirm 654321")
-        self.assertTrue(reply.startswith("❌"))
-        # 他人误触不焚毁令牌：真实主人的合法确认仍可用（防冒名核销/DoS）
-        self.assertIn("654321", main._pending_confirms)
-
-    def test_confirm_invalid_format(self):
-        reply = main.handle_message('web', 'admin', None, "/confirm abc")
-        self.assertIn("用法", reply)
-        reply2 = main.handle_message('web', 'admin', None, "/confirm 999999")
-        self.assertTrue(reply2.startswith("❌"))
-
-
 class TestMigrationWiring(_MainCase):
     """迁移守望接入（架构 §8）：health_bp 注册（宿主 :5003）+ PeerWatch 默认不开。"""
 
@@ -1361,5 +1269,128 @@ class TestWaitingLocationWindow(_MainCase):
                       buf.getvalue())
 
 
+class TestChildLockFlow(_MainCase):
+    """儿童锁（2026-10-02 批次②）：儿童危险家电操作 → 在线成人确认流。
+
+    覆盖：挂起+通知 / 无在线成人直接拒绝 / approve 代执行（主人级提权后
+    还原）/ deny / 超时 / 成人直行 / 儿童锁关闭不拦截。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._lock_flag = patch("main.CHILD_LOCK_ENABLED", True)
+        self._lock_flag.start()
+        self.addCleanup(self._lock_flag.stop)
+        # 登记 child 为儿童（is_adult=False）；admin 为在线成人 LV4
+        #（等级设 Lv.4：handle_message 每次交互会用当前等级刷新 _last_seen）
+        self.pm._is_adults["child"] = False
+        self.addCleanup(self.pm._is_adults.pop, "child", None)
+        self.pm.current_level = "Lv.4"
+        main._last_seen["admin"] = {"ts": time.time(), "level": "Lv.4"}
+        self.addCleanup(main._last_seen.pop, "admin", None)
+
+    def _child_ask(self):
+        """儿童发危险家电请求：smart_ask mock 内模拟模型发起工具调用，
+        并把工具结果作为模型回复返回（贴近真实链路）。"""
+        def fake_smart_ask(msg, hist, session_key="default"):
+            result = brain.execute_tool(
+                "control_ha_device",
+                {"entity_id": "lock.front_door", "action": "unlock"},
+                main.permission_manager)
+            return (result, "🏠 本地")
+        self.smart_ask.side_effect = fake_smart_ask
+        return main.handle_message('qq', 'child', None, "帮我把前门锁打开")
+
+    def _create_pending(self, expires_in=300):
+        main._pending_child_requests["000001"] = {
+            "user_id": "child", "tool_name": "control_ha_device",
+            "args": {"entity_id": "lock.front_door", "action": "unlock"},
+            "desc": "unlock lock.front_door",
+            "expires": time.time() + expires_in}
+
+    def test_child_request_pends_and_notifies_adults(self):
+        with patch("main.execute_tool", return_value="✅ mock") as mexe:
+            reply = self._child_ask()
+        mexe.assert_not_called()   # 工具挂起未执行
+        self.assertIn("已通知在线成人", reply)
+        self.assertEqual(len(main._pending_child_requests), 1)
+        self.napcat.post.assert_called()   # QQ 私聊通知在线成人
+
+    def test_no_online_adult_direct_reject(self):
+        main._last_seen.clear()   # 无在线成人
+        self.pm.current_level = "Lv.1"   # 儿童交互刷新后等级不达标
+        with patch("main.execute_tool", return_value="✅ mock") as mexe:
+            reply = self._child_ask()
+        mexe.assert_not_called()
+        self.assertIn("❌ 儿童锁已开启，且无成人 LV4 在线确认，操作已拒绝。",
+                      reply)
+        self.assertEqual(main._pending_child_requests, {})
+
+    def test_approve_executes_with_owner_level(self):
+        self._create_pending()
+        with patch("main.execute_tool",
+                   return_value="✅ 已执行（mock）") as mexe:
+            reply = main.handle_message('qq', 'admin', None, "/approve")
+        self.assertTrue(reply.startswith("✅ 成人已确认"), reply)
+        mexe.assert_called_once()
+        args, _ = mexe.call_args
+        self.assertEqual(args[0], "control_ha_device")
+        self.assertEqual(args[1],
+                         {"entity_id": "lock.front_door", "action": "unlock"})
+        # 临时提权后还原到成人原等级（本类 admin 即 Lv.4，无残留变化）
+        self.assertEqual(self.pm.current_level, "Lv.4")
+        self.assertEqual(main._pending_child_requests, {})
+
+    def test_approve_requires_online_adult(self):
+        self._create_pending()
+        # 裁决者交互会被 _last_seen 以"当时等级"刷新——把全局等级降为
+        # Lv.1 模拟"无在线成人 LV4"（请求者交互后等级不达标）
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('qq', 'someone', None, "/approve")
+        self.assertTrue(reply.startswith("❌ 只有在线成人 LV4"), reply)
+        self.assertEqual(len(main._pending_child_requests), 1)   # 请求保留
+
+    def test_deny_rejects_request(self):
+        self._create_pending()
+        reply = main.handle_message('qq', 'admin', None, "/deny")
+        self.assertIn("已拒绝该儿童操作请求", reply)
+        self.assertEqual(main._pending_child_requests, {})
+
+    def test_timeout_rejects(self):
+        self._create_pending(expires_in=-1)   # 已超时
+        reply = main.handle_message('qq', 'admin', None, "/approve")
+        self.assertIn("已超时", reply)
+        self.assertEqual(main._pending_child_requests, {})
+
+    def test_adult_dangerous_request_bypasses_lock(self):
+        """成人（is_adult 缺省 True）发起危险操作 → 不拦截、直接执行。"""
+        self.pm.current_level = "Lv.4"
+
+        def fake_smart_ask(msg, hist, session_key="default"):
+            brain.execute_tool(
+                "control_ha_device",
+                {"entity_id": "lock.front_door", "action": "unlock"},
+                main.permission_manager)
+            return ("已执行", "🏠 本地")
+
+        self.smart_ask.side_effect = fake_smart_ask
+        with patch.object(brain, "execute_tool",
+                          return_value="✅ 已执行（mock）") as mexe:
+            reply = main.handle_message('qq', 'admin', None, "帮我开个门锁")
+        mexe.assert_called_once()
+        self.assertEqual(main._pending_child_requests, {})
+        self.assertIn("已执行", reply)
+
+    def test_child_lock_off_no_interception(self):
+        """儿童锁关闭：儿童危险请求照常执行（按等级门禁，不进确认流）。"""
+        self._lock_flag.stop()
+        with patch.object(brain, "execute_tool",
+                          return_value="✅ mock") as mexe:
+            reply = self._child_ask()
+        mexe.assert_called_once()
+        self.assertEqual(main._pending_child_requests, {})
+
+
 if __name__ == "__main__":
+
     unittest.main()

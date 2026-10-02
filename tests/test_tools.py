@@ -172,17 +172,17 @@ class ToolsTestBase(unittest.TestCase):
 
 
 class WhitelistTests(ToolsTestBase):
-    """白名单 12 项与 DANGER_TOOLS 集合语义。"""
+    """白名单 14 项与 DANGER_TOOLS 集合语义。"""
 
-    def test_whitelist_has_thirteen_tools(self):
-        # §7：12 项 + 新增 read_core_memory = 13 项
-        self.assertEqual(len(tools.TOOL_WHITELIST), 13)
+    def test_whitelist_has_fourteen_tools(self):
+        # 13 项 + 新增 restart_service = 14 项（2026-10-02 权限重构）
+        self.assertEqual(len(tools.TOOL_WHITELIST), 14)
         self.assertEqual(
             sorted(tools.TOOL_WHITELIST),
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
                     "vision_tap_element", "ui_tap_element", "web_search",
-                    "system_manage", "read_core_memory"]))
+                    "system_manage", "read_core_memory", "restart_service"]))
 
     def test_danger_tools_constant(self):
         # 旧集合成员不变，门禁语义升级为 §7 新表（见各专项测试）
@@ -284,40 +284,36 @@ class UserMandatedGateTests(ToolsTestBase):
                 self._lv4_credentials())
         self.assertIn("已对 lock.front_door 执行 turn_on", r)
 
-    def test_case4_lv4_dangerous_device_missing_biometric_rejected(self):
-        # ④ 缺生物因子（未注册认证器）→ 拒绝且提示"生物认证器未接入"
+    def test_case4_lv4_dangerous_device_without_credentials_succeeds(self):
+        # ④（2026-10-02 权限重构）操作级双因子删除：Lv.4 等级即放行，
+        # 无任何凭据直接成功
         pm = self._pm("Lv.4")  # 不注册生物认证器
-        with mock.patch.dict(os.environ, TOTP_ENV):
-            r = tools.execute_tool(
-                "control_ha_device",
-                {"entity_id": "lock.front_door", "action": "turn_on"}, pm,
-                {"totp": _totp_now()})
-        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("双因子", r)
-        self.assertIn("生物认证器未接入", r)
+        r = tools.execute_tool(
+            "control_ha_device",
+            {"entity_id": "lock.front_door", "action": "turn_on"}, pm)
+        self.assertIn("已对 lock.front_door 执行 turn_on", r)
 
-    def test_case4_lv4_dangerous_device_wrong_totp_rejected(self):
-        # ④ 动态密码错误（生物 mock 通过）→ 拒绝
+    def test_case4_lv4_dangerous_device_stale_credentials_ignored(self):
+        # ④ 回归锁：历史凭据（错码 TOTP/未注册生物）不再被消费——
+        # 等级是唯一门槛，凭据仅作历史签名兼容保留
         pm = self._pm4_with_bio(bio_ok=True)
-        with mock.patch.dict(os.environ, TOTP_ENV):
-            r = tools.execute_tool(
-                "control_ha_device",
-                {"entity_id": "lock.front_door", "action": "turn_on"}, pm,
-                {"totp": "000000", "biometric": "face-id-ok"})
-        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("双因子", r)
+        r = tools.execute_tool(
+            "control_ha_device",
+            {"entity_id": "lock.front_door", "action": "turn_on"}, pm,
+            {"totp": "000000", "biometric": "face-id-ok"})
+        self.assertIn("已对 lock.front_door 执行 turn_on", r)
 
 
 class Lv3SudoFreeGateTests(ToolsTestBase):
-    """【根治回归锁】Lv.3 免 /sudo（2026-09-30 用户指令）。
+    """【根治回归锁 + 2026-10-02 重构迁移】免逐次凭据口径。
 
-    - adb_tap / ui_tap_element / write_file 在 Lv.3 时：等级数值 >= 3 即直接
-      放行——无 /sudo 窗口、无凭据、无任何动态密码校验（lv3_operation_ok
-      零调用，用"被调用即失败"的绊线 mock 锁定）；
-    - 门禁按等级数值判定，权限表缺键 fail-closed 也不会把 Lv.3 拦下
-      （与 control_ha_device 普通设备门禁同口径的病灶免疫）；
-    - Lv.2 三者全部拒绝，且拒绝文案不含任何 /sudo 字样、只引导
-      /coder_auth 升级（文案口径锁定：不给模型复读旧口径的机会）。
+    - write_file 在 Lv.3：等级数值 >= 3 直接放行（2026-09-30 口径保留，
+      lv3_operation_ok 零调用，用"被调用即失败"的绊线 mock 锁定）；
+    - adb_tap / ui_tap_element 已升 Lv.4（2026-10-02）：Lv.3 一律拒绝
+      （_DENY_LV4_ADB），Lv.4 无窗口无凭据直接放行；
+    - Lv.4 工具门禁按等级数值判定，权限表缺键 fail-closed 也不会把
+      Lv.4 拦下（病灶免疫同款）；
+    - Lv.2 write_file 拒绝文案不含任何 /sudo 字样、只引导 /coder_auth。
     """
 
     def _no_lv3_operation_check(self):
@@ -327,17 +323,17 @@ class Lv3SudoFreeGateTests(ToolsTestBase):
             PermissionManager, "lv3_operation_ok",
             side_effect=AssertionError("Lv.3 不应校验动态密码"))
 
-    def test_lv3_adb_tap_direct_success(self):
-        # Lv.3 + 无窗口 + 无凭据 → adb_tap 直接成功
-        pm = self._pm("Lv.3")
+    def test_lv4_adb_tap_direct_success(self):
+        # Lv.4 + 无窗口 + 无凭据 → adb_tap 直接成功（2026-10-02 升档）
+        pm = self._pm("Lv.4")
         self.assertFalse(pm.operation_window_active())
         with self._no_lv3_operation_check():
             r = tools.execute_tool("adb_tap", {"x": 3, "y": 9}, pm)
         self.assertIn("点击 3,9", r)
 
-    def test_lv3_ui_tap_element_direct_success(self):
-        # Lv.3 + 无窗口 + 无凭据 → ui_tap_element 直接成功（回退链可达）
-        pm = self._pm("Lv.3")
+    def test_lv4_ui_tap_element_direct_success(self):
+        # Lv.4 + 无窗口 + 无凭据 → ui_tap_element 直接成功（回退链可达）
+        pm = self._pm("Lv.4")
         self.assertFalse(pm.operation_window_active())
         with self._no_lv3_operation_check(), \
                 mock.patch.object(tools, "ui_tap_element",
@@ -345,6 +341,18 @@ class Lv3SudoFreeGateTests(ToolsTestBase):
             r = tools.execute_tool(
                 "ui_tap_element", {"element_name": "设置"}, pm)
         self.assertEqual(r, "✅ 已点击【设置】")
+
+    def test_lv3_adb_and_ui_now_lv4_rejected(self):
+        # 2026-10-02 升档回归锁：Lv.3 调 adb/ui 一律拒绝（_DENY_LV4_ADB）
+        pm = self._pm("Lv.3")
+        r1 = tools.execute_tool("adb_tap", {"x": 3, "y": 9}, pm)
+        self.assertTrue(r1.startswith("❌ 安全拒绝"), r1)
+        self.assertIn("Lv.4", r1)
+        self.assertIn("/lv4_auth", r1)
+        r2 = tools.execute_tool(
+            "ui_tap_element", {"element_name": "设置"}, pm)
+        self.assertTrue(r2.startswith("❌ 安全拒绝"), r2)
+        self.assertIn("Lv.4", r2)
 
     def test_lv3_write_file_direct_success(self):
         # Lv.3 + 无窗口 + 无凭据 → write_file 直接成功（既有口径的绊线版）
@@ -372,16 +380,21 @@ class Lv3SudoFreeGateTests(ToolsTestBase):
             def has_permission(self, action):
                 return False   # 旧表缺键 → 一律 False（fail-closed）
 
+        # 2026-10-02 迁移：write_file 维持 Lv.3 数值语义（表键缺失免疫）；
+        # adb/ui 已升 Lv.4——Lv.3 拒绝、Lv.4 数值语义放行
         pm = _BrokenTablePM("Lv.3")
-        self.assertIn("点击 7,7",
-                      tools.execute_tool("adb_tap", {"x": 7, "y": 7}, pm))
         r = tools.execute_tool(
             "write_file", {"filename": "n.txt", "content": "x"}, pm)
         self.assertTrue(r.startswith("✅"), r)
+        r_lv3_adb = tools.execute_tool("adb_tap", {"x": 7, "y": 7}, pm)
+        self.assertTrue(r_lv3_adb.startswith("❌ 安全拒绝"), r_lv3_adb)
+        pm4 = _BrokenTablePM("Lv.4")
+        self.assertIn("点击 7,7",
+                      tools.execute_tool("adb_tap", {"x": 7, "y": 7}, pm4))
         with mock.patch.object(tools, "ui_tap_element",
                                return_value="✅ UI 点击"):
             r2 = tools.execute_tool(
-                "ui_tap_element", {"element_name": "设置"}, pm)
+                "ui_tap_element", {"element_name": "设置"}, pm4)
         self.assertEqual(r2, "✅ UI 点击")
         # 数值不达门槛（Lv.1）仍拒绝
         r3 = tools.execute_tool(
@@ -389,8 +402,8 @@ class Lv3SudoFreeGateTests(ToolsTestBase):
         self.assertTrue(r3.startswith("❌ 安全拒绝"), r3)
 
     def test_lv2_rejections_carry_no_sudo_wording(self):
-        # Lv.2 三者全部拒绝；文案口径锁定：只引导 /coder_auth 升级，
-        # 拒绝文案不含任何 /sudo 字样
+        # Lv.2 三者全部拒绝；文案口径锁定：write_file 引导 /coder_auth，
+        # adb/ui（Lv.4）引导 /lv4_auth；拒绝文案不含任何 /sudo 字样
         pm = self._pm("Lv.2")
         with mock.patch.object(tools, "ui_tap_element") as mui:
             results = [
@@ -401,10 +414,13 @@ class Lv3SudoFreeGateTests(ToolsTestBase):
                     "ui_tap_element", {"element_name": "设置"}, pm),
             ]
         mui.assert_not_called()   # 门禁先于 UI 解析
-        for r in results:
+        self.assertIn("Lv.3", results[0])
+        self.assertIn("/coder_auth", results[0])
+        for r in results[1:]:
             self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-            self.assertIn("Lv.3", r)
-            self.assertIn("/coder_auth", r)
+            self.assertIn("Lv.4", r)
+            self.assertIn("/lv4_auth", r)
+        for r in results:
             self.assertNotIn("/sudo", r)
 
 
@@ -431,21 +447,22 @@ class LevelGateTests(ToolsTestBase):
         r2 = tools.execute_tool("list_files", {}, self._pm("Lv.2"))
         self.assertEqual(r2, "（工作区为空）")
 
-    def test_adb_stays_lv3_without_operation_totp(self):
-        # adb_tap / adb_swipe 维持 Lv.3，无逐次动态密码要求
-        pm = self._pm("Lv.3")
+    def test_adb_lv4_without_operation_totp(self):
+        # adb_tap / adb_swipe 升 Lv.4（2026-10-02），无逐次凭据要求
+        pm = self._pm("Lv.4")
         self.assertIn("点击 10,20",
                       tools.execute_tool("adb_tap", {"x": 10, "y": 20}, pm))
         self.assertIn("滑动 1,2->3,4",
                       tools.execute_tool(
                           "adb_swipe", {"x1": 1, "y1": 2, "x2": 3, "y2": 4}, pm))
 
-    def test_adb_below_lv3_rejected(self):
-        for level in ("Lv.1", "Lv.2"):
+    def test_adb_below_lv4_rejected(self):
+        # 2026-10-02 升档：Lv.1/Lv.2/Lv.3 一律拒绝（_DENY_LV4_ADB）
+        for level in ("Lv.1", "Lv.2", "Lv.3"):
             pm = self._pm(level)
             r = tools.execute_tool("adb_tap", {"x": 1, "y": 2}, pm)
             self.assertTrue(r.startswith("❌ 安全拒绝：当前权限不足"), (level, r))
-            self.assertIn("Lv.3", r)
+            self.assertIn("Lv.4", r)
 
     def test_gate_precedes_param_check(self):
         # 门禁优先于参数校验：Lv.1 传空参数也应先吃安全拒绝
@@ -465,34 +482,37 @@ class LevelGateTests(ToolsTestBase):
 class DeviceControlGateTests(ToolsTestBase):
     """control_ha_device 动态分类门禁与 temperature 透传。"""
 
-    def test_normal_device_requires_lv2(self):
-        # 普通实体：Lv.1 拒绝（Lv.2 门槛），Lv.2 放行
-        pm = self._pm("Lv.1")
+    def test_normal_device_requires_lv3(self):
+        # 2026-10-02 定稿：安全家居六类升 LV3——Lv.1/Lv.2 拒绝，Lv.3 放行
         r = tools.execute_tool(
             "control_ha_device",
-            {"entity_id": "light.test", "action": "turn_on"}, pm)
+            {"entity_id": "light.test", "action": "turn_on"}, self._pm("Lv.1"))
         self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("Lv.2", r)
-        self.assertIn("/register", r)
+        self.assertIn("Lv.3", r)
+        self.assertIn("/coder_auth", r)
         r2 = tools.execute_tool(
             "control_ha_device",
             {"entity_id": "light.test", "action": "turn_on"}, self._pm("Lv.2"))
-        self.assertIn("已对 light.test 执行 turn_on", r2)
+        self.assertTrue(r2.startswith("❌ 安全拒绝"), r2)
+        r3 = tools.execute_tool(
+            "control_ha_device",
+            {"entity_id": "light.test", "action": "turn_on"}, self._pm("Lv.3"))
+        self.assertIn("已对 light.test 执行 turn_on", r3)
 
-    def test_normal_device_lv2_lv3_lv4_all_allowed(self):
-        # §7 继承语义回归：普通实体 Lv.2/Lv.3/Lv.4 全放行（语义等价
-        # "if level < 2: reject"）——用户报告的 "Lv.3 控制普通设备被拒" 用例
-        for level in ("Lv.2", "Lv.3", "Lv.4"):
+    def test_normal_device_lv3_lv4_all_allowed(self):
+        # 2026-10-02 定稿：安全家居 Lv.3/Lv.4 放行（Lv.2 已升出门）
+        for level in ("Lv.3", "Lv.4"):
             r = tools.execute_tool(
                 "control_ha_device",
                 {"entity_id": "light.test", "action": "turn_on"},
                 self._pm(level))
             self.assertIn("已对 light.test 执行 turn_on", r, level)
 
-    def test_normal_device_gate_is_numeric_level_semantics(self):
-        # 病灶回归：has_permission 对未知能力键 fail-closed（permission.py
-        # ACTION_LEVELS 缺键/旧表时返回 False），曾把 Lv.3/Lv.4 一并拦在
-        # 普通设备门外。门禁改为按等级数值判定后不受表键缺失影响。
+    def test_normal_device_gate_is_capability_key_semantics(self):
+        # 2026-10-02 迁移：安全家居门禁改走能力键 has_permission（与危险
+        # 分支同口径，不再走数值判定）——表键缺失时 fail-closed 拒绝
+        #（安全方向，含 Lv.4；等级达标路径由 test_normal_device_requires_lv3
+        # 用真实 PermissionManager 覆盖）。
         class _BrokenTablePM:
             """模拟 ACTION_LEVELS 缺 control_normal_devices 键的 manager。"""
             _ORDER = {"Lv.1": 1, "Lv.2": 2, "Lv.3": 3, "Lv.4": 4}
@@ -506,18 +526,12 @@ class DeviceControlGateTests(ToolsTestBase):
             def has_permission(self, action):
                 return False   # 旧表无该能力键 → 一律 False（fail-closed）
 
-        for level in ("Lv.2", "Lv.3", "Lv.4"):
+        for level in ("Lv.3", "Lv.4"):
             r = tools.execute_tool(
                 "control_ha_device",
                 {"entity_id": "light.test", "action": "turn_on"},
                 _BrokenTablePM(level))
-            self.assertIn("已对 light.test 执行 turn_on", r, level)
-        # Lv.1 仍拒绝（数值门槛未放松）
-        r = tools.execute_tool(
-            "control_ha_device",
-            {"entity_id": "light.test", "action": "turn_on"},
-            _BrokenTablePM("Lv.1"))
-        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
+            self.assertTrue(r.startswith("❌ 安全拒绝"), (level, r))
 
     def test_normal_device_gate_falls_back_to_capability(self):
         # 向后兼容：仅暴露 has_permission 的旧式 manager（无 level_value）
@@ -570,16 +584,14 @@ class DeviceControlGateTests(ToolsTestBase):
                 {"entity_id": entity, "action": "toggle"}, pm)
             self.assertIn("Lv.4", r, entity)
 
-    def test_dangerous_device_lv4_without_mfa_rejected(self):
-        # 危险实体 + Lv.4 但双因子未通过（未注册生物认证器）→ 拒绝
+    def test_dangerous_device_lv4_without_mfa_succeeds(self):
+        # 2026-10-02 权限重构：操作级双因子删除——Lv.4 + 无凭据直接放行
         pm = self._pm("Lv.4")
-        with mock.patch.dict(os.environ, TOTP_ENV):
-            r = tools.execute_tool(
-                "control_ha_device",
-                {"entity_id": "lock.front_door", "action": "turn_on"}, pm,
-                {"totp": _totp_now()})
-        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("双因子", r)
+        r = tools.execute_tool(
+            "control_ha_device",
+            {"entity_id": "lock.front_door", "action": "turn_on"}, pm,
+            {"totp": _totp_now()})
+        self.assertIn("已对 lock.front_door 执行 turn_on", r)
 
     def test_control_ha_device_missing_args(self):
         r = tools.execute_tool("control_ha_device", {}, self._pm("Lv.3"))
@@ -587,7 +599,8 @@ class DeviceControlGateTests(ToolsTestBase):
 
     def test_temperature_passthrough(self):
         # 补 S3 待办：args 中的 temperature 透传给 home_tools.control_ha_device
-        pm = self._pm("Lv.2")
+        # （2026-10-02：安全家居升 LV3，桩等级同步 Lv.3）
+        pm = self._pm("Lv.3")
         with mock.patch.object(tools, "control_ha_device") as mctrl:
             mctrl.return_value = "✅ ok"
             tools.execute_tool(
@@ -598,7 +611,7 @@ class DeviceControlGateTests(ToolsTestBase):
                                       temperature=26)
 
     def test_temperature_omitted_passes_none(self):
-        pm = self._pm("Lv.2")
+        pm = self._pm("Lv.3")
         with mock.patch.object(tools, "control_ha_device") as mctrl:
             mctrl.return_value = "✅ ok"
             tools.execute_tool(
@@ -608,7 +621,7 @@ class DeviceControlGateTests(ToolsTestBase):
 
 
 class SystemManageTests(ToolsTestBase):
-    """system_manage：三重门禁（Lv.4 + 双因子 + 二次确认）与 component 防注入。"""
+    """system_manage：Lv.4 等级门禁（操作级双因子/二次确认已删）与 component 防注入。"""
 
     def test_missing_params(self):
         pm = self._pm("Lv.4")
@@ -651,26 +664,25 @@ class SystemManageTests(ToolsTestBase):
         self.assertTrue(r.startswith("❌ 安全拒绝：当前权限不足"), r)
         self.assertIn("Lv.4", r)
 
-    def test_requires_mfa(self):
-        # 第二重门禁：双因子（Lv.4 但认证未通过）
+    def test_lv4_without_credentials_succeeds(self):
+        # 2026-10-02 权限重构：操作级双因子与二次确认删除——Lv.4 无凭据
+        # 直接放行（凭据仅历史签名兼容，不再消费）
         pm = self._pm("Lv.4")
         r = tools.execute_tool(
             "system_manage",
             {"action": "install", "component": "flask"}, pm,
             {"totp": "000000"})
-        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("双因子", r)
+        self.assertEqual(r, "✅ 组件 flask 安装完成！")
 
-    def test_requires_confirmation(self):
-        # 第三重门禁：二次确认标记 credentials["confirmed"]=True
-        pm = self._pm4_with_bio(bio_ok=True)
+    def test_lv4_unconfirmed_credentials_succeeds(self):
+        # 回归锁：confirmed=False 也不再阻断（凭据不消费）
+        pm = self._pm("Lv.4")
         creds = self._lv4_credentials(confirmed=False)
         with mock.patch.dict(os.environ, TOTP_ENV):
             r = tools.execute_tool(
                 "system_manage",
                 {"action": "install", "component": "flask"}, pm, creds)
-        self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("二次确认", r)
+        self.assertEqual(r, "✅ 组件 flask 安装完成！")
 
     def test_install_success_maps_pip_command(self):
         # 三重门禁全通过 → pip install（subprocess 封装，mock 校验命令构造）
@@ -844,27 +856,28 @@ class ToolBehaviorTests(ToolsTestBase):
         self.assertIn("设备列表", r)
 
     def test_adb_screenshot_passthrough(self):
-        r = tools.execute_tool("adb_screenshot", {}, self._pm("Lv.3"))
+        # 2026-10-02：ADB 全套升 Lv.4
+        r = tools.execute_tool("adb_screenshot", {}, self._pm("Lv.4"))
         self.assertIn("截图", r)
 
     def test_adb_tap_missing_args(self):
-        r = tools.execute_tool("adb_tap", {"x": 1}, self._pm("Lv.3"))
+        r = tools.execute_tool("adb_tap", {"x": 1}, self._pm("Lv.4"))
         self.assertEqual(r, "❌ 缺少参数：需要提供 x 和 y 坐标")
 
     def test_adb_tap_coerces_int(self):
         r = tools.execute_tool(
-            "adb_tap", {"x": "12", "y": "34"}, self._pm("Lv.3"))
+            "adb_tap", {"x": "12", "y": "34"}, self._pm("Lv.4"))
         self.assertIn("点击 12,34", r)
 
     def test_adb_swipe_coerces_int(self):
         r = tools.execute_tool(
             "adb_swipe",
             {"x1": "500", "y1": "1500", "x2": "500", "y2": "500"},
-            self._pm("Lv.3"))
+            self._pm("Lv.4"))
         self.assertIn("滑动 500,1500->500,500", r)
 
     def test_vision_tap_element(self):
-        pm = self._pm("Lv.3")
+        pm = self._pm("Lv.4")
         self.assertEqual(
             tools.execute_tool(
                 "vision_tap_element", {}, pm),
@@ -874,7 +887,7 @@ class ToolBehaviorTests(ToolsTestBase):
                           "vision_tap_element", {"element_name": "设置"}, pm))
 
     def test_ui_tap_element(self):
-        pm = self._pm("Lv.3")
+        pm = self._pm("Lv.4")
         self.assertEqual(
             tools.execute_tool("ui_tap_element", {}, pm),
             "❌ 缺少参数：需要提供 element_name (要点击的按钮或图标名称)")
@@ -915,7 +928,7 @@ class VisionFallbackTests(ToolsTestBase):
     VISION_OK = "✅ 已通过视觉识别点击【设置】"
     VISION_FAIL = "❌ 视觉模型调用失败: 403 Forbidden"
 
-    def _run(self, ui_return, vision_return, level="Lv.3", args=None):
+    def _run(self, ui_return, vision_return, level="Lv.4", args=None):
         """打桩 ui/vision 后执行 ui_tap_element，返回 (结果, ui mock, vision mock)。
 
         同时注入非空 VISION_MODEL / VISION_KEY，避免被未配置短路拦住。
@@ -959,12 +972,13 @@ class VisionFallbackTests(ToolsTestBase):
         self.assertNotIn("VISION_API_URL", r)
         mvis.assert_not_called()
 
-    def test_lv3_gate_precedes_fallback(self):
-        # Lv.2 直接拒（门禁先于回退），ui 与 vision 都不被调用
-        r, mui, mvis = self._run(self.UI_FAIL, self.VISION_OK, level="Lv.2")
+    def test_lv4_gate_precedes_fallback(self):
+        # 2026-10-02 升档：Lv.3 直接拒（门禁先于回退，_DENY_LV4_ADB），
+        # ui 与 vision 都不被调用
+        r, mui, mvis = self._run(self.UI_FAIL, self.VISION_OK, level="Lv.3")
         self.assertTrue(r.startswith("❌ 安全拒绝"), r)
-        self.assertIn("Lv.3", r)
-        self.assertIn("/coder_auth", r)
+        self.assertIn("Lv.4", r)
+        self.assertIn("/lv4_auth", r)
         mui.assert_not_called()
         mvis.assert_not_called()
 
@@ -999,7 +1013,7 @@ class VisionShortCircuitTests(ToolsTestBase):
 
     def _run(self, vision_model="", vision_key=""):
         """UI 必失败 + vision 打桩 + 注入空/None 视觉配置后执行 ui_tap_element。"""
-        pm = self._pm("Lv.3")
+        pm = self._pm("Lv.4")
         with contextlib.redirect_stdout(io.StringIO()), \
                 mock.patch.object(tools, "ui_tap_element",
                                   return_value=self.UI_FAIL) as mui, \
@@ -1036,7 +1050,7 @@ class VisionShortCircuitTests(ToolsTestBase):
 
     def test_configured_vision_still_falls_back(self):
         # 对照：配置齐全时不会被短路拦住，照常走视觉回退
-        pm = self._pm("Lv.3")
+        pm = self._pm("Lv.4")
         with contextlib.redirect_stdout(io.StringIO()), \
                 mock.patch.object(tools, "ui_tap_element",
                                   return_value=self.UI_FAIL), \
@@ -1219,6 +1233,48 @@ class PrivateDataGateTests(unittest.TestCase):
         self.assertTrue(result.startswith("🧠 核心记忆") or "暂无记录" in result)
 
 
+class RestartServiceTests(ToolsTestBase):
+    """restart_service（2026-10-02 新增，LV4 专属）：先答复后 2 秒自尽。
+
+    自尽路径 threading.Timer + os._exit 由 mock 拦截（绝不真退出）；
+    无参数设计 = 结构上不存在重启操作系统的调用面。
+    """
+
+    def setUp(self):
+        super().setUp()
+        # 拦截 os._exit 与 Timer（不真启动 2 秒定时器）
+        self._exit_patcher = mock.patch.object(tools.os, "_exit")
+        self._exit_mock = self._exit_patcher.start()
+        self.addCleanup(self._exit_patcher.stop)
+        self._timer_patcher = mock.patch.object(tools.threading, "Timer")
+        self._timer_mock = self._timer_patcher.start()
+        self.addCleanup(self._timer_patcher.stop)
+
+    def test_lv4_restarts_with_delayed_exit(self):
+        # Lv.4：返回受理文案 + 2 秒定时 os._exit(0)（daemon=False）
+        r = tools.execute_tool("restart_service", {}, self._pm("Lv.4"))
+        self.assertIn("✅ 重启指令已受理", r)
+        self.assertIn("2 秒后重启", r)
+        self._timer_mock.assert_called_once_with(2.0, tools.os._exit,
+                                                 args=(0,))
+        self.assertFalse(self._timer_mock.return_value.daemon)
+
+    def test_below_lv4_rejected(self):
+        # Lv.3 及以下拒绝（_DENY_LV4_ADB 口径），定时器不启动、进程不死
+        for level in ("Lv.1", "Lv.2", "Lv.3"):
+            r = tools.execute_tool("restart_service", {}, self._pm(level))
+            self.assertTrue(r.startswith("❌ 安全拒绝"), (level, r))
+            self.assertIn("Lv.4", r)
+        self._timer_mock.assert_not_called()
+        self._exit_mock.assert_not_called()
+
+    def test_args_are_ignored_no_os_surface(self):
+        # 即使传入多余参数也无 OS 级调用面（工具只 os._exit 自身进程）
+        r = tools.execute_tool("restart_service", {"target": "windows"}, self._pm("Lv.4"))
+        self.assertIn("✅ 重启指令已受理", r)
+        self._timer_mock.assert_called_once()
+
+
 class RecentActionRecorderTests(ToolsTestBase):
     """最近设备操作记录（上下文记忆/指代消解基座）：成功写入并裁到 5 条、
     失败操作不写、记录器异常不影响工具返回值、损坏文件自愈重建、
@@ -1237,7 +1293,7 @@ class RecentActionRecorderTests(ToolsTestBase):
         return entries
 
     def test_successful_control_ha_device_recorded(self):
-        pm = self._pm("Lv.2")
+        pm = self._pm("Lv.3")   # 2026-10-02：安全家居升 LV3
         result = tools.execute_tool(
             "control_ha_device", {"entity_id": "light.living", "action": "turn_on"}, pm)
         self.assertIn("turn_on", result)
@@ -1250,7 +1306,7 @@ class RecentActionRecorderTests(ToolsTestBase):
         self.assertTrue(entries[0]["ts"])
 
     def test_successful_adb_tap_and_swipe_recorded(self):
-        pm = self._pm("Lv.3")
+        pm = self._pm("Lv.4")   # 2026-10-02：ADB 全套升 LV4
         tools.execute_tool("adb_tap", {"x": 100, "y": 200}, pm)
         tools.execute_tool("adb_swipe", {"x1": 1, "y1": 2, "x2": 3, "y2": 4}, pm)
         entries = self._read_entries()
@@ -1261,7 +1317,7 @@ class RecentActionRecorderTests(ToolsTestBase):
 
     def test_keeps_only_latest_five(self):
         self._seed(5)
-        tools.execute_tool("adb_tap", {"x": 9, "y": 9}, self._pm("Lv.3"))
+        tools.execute_tool("adb_tap", {"x": 9, "y": 9}, self._pm("Lv.4"))
         entries = self._read_entries()
         self.assertEqual(len(entries), 5)
         # 超出裁掉最旧：旧记录0 被裁，旧记录1 成为最旧
@@ -1288,13 +1344,13 @@ class RecentActionRecorderTests(ToolsTestBase):
         # 工具返回值与不装记录器时完全一致
         with mock.patch.object(tools.os, "replace",
                                side_effect=OSError("disk full")):
-            result = tools.execute_tool("adb_tap", {"x": 5, "y": 6}, self._pm("Lv.3"))
+            result = tools.execute_tool("adb_tap", {"x": 5, "y": 6}, self._pm("Lv.4"))
         self.assertEqual(result, "【mock】点击 5,6")
 
     def test_corrupted_file_self_heals(self):
         with open(self.actions_file, "w", encoding="utf-8") as f:
             f.write("{这不是JSON")
-        result = tools.execute_tool("adb_tap", {"x": 7, "y": 8}, self._pm("Lv.3"))
+        result = tools.execute_tool("adb_tap", {"x": 7, "y": 8}, self._pm("Lv.4"))
         self.assertEqual(result, "【mock】点击 7,8")   # 工具照常成功
         entries = self._read_entries()
         self.assertEqual(len(entries), 1)              # 损坏表重置重建
@@ -1305,7 +1361,7 @@ class RecentActionRecorderTests(ToolsTestBase):
         self.assertFalse(os.path.exists(self.actions_file))
 
     def test_atomic_write_leaves_no_tmp_file(self):
-        tools.execute_tool("adb_tap", {"x": 1, "y": 1}, self._pm("Lv.3"))
+        tools.execute_tool("adb_tap", {"x": 1, "y": 1}, self._pm("Lv.4"))
         self.assertTrue(os.path.exists(self.actions_file))
         self.assertFalse(os.path.exists(self.actions_file + ".tmp"))
 

@@ -33,7 +33,7 @@
 
 大脑链路编排（架构 §10）：意图路由（命中直达，未命中透传 smart_ask）→
 长期记忆注入系统上下文 → 最近设备操作记录注入（指代消解，空记录不注入）→
-smart_ask（危险实体拒绝捕获 → Lv.4+MFA 发确认令牌）→
+smart_ask（儿童锁：儿童用户危险家电控制拦截 → 在线成人确认）→
 前情提要压缩（>20 条浓缩为 ≤50 字前情提要并入历史头部，50 条硬上限，失败回退
 纯截断）→ 双通道落盘。
 
@@ -46,6 +46,7 @@ smart_ask（危险实体拒绝捕获 → Lv.4+MFA 发确认令牌）→
   execute_tool 完整门禁——无任何绕过权限门的路径。
 - /gen_log 后台线程执行 run_link_log，不阻塞聊天。
 """
+import json
 import os
 import random
 import re
@@ -67,8 +68,8 @@ from permission import permission_manager
 from plugins.context_manager import compress_context
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool, get_recent_actions
-from xiaoju3 import (AGENT_STATE_DIR, ONEBOT_API_URL, ONEBOT_TOKEN,
-                     TRIGGER_WORDS, WORKSPACE)
+from xiaoju3 import (AGENT_STATE_DIR, CHILD_LOCK_ENABLED, ONEBOT_API_URL,
+                     ONEBOT_TOKEN, TRIGGER_WORDS, WORKSPACE)
 
 # ================= 配置（环境变量优先 → 中立默认值兜底） =================
 # OneBot 11 HTTP API（LLOneBot，标准正向 HTTP 端口 3001；NapCat 用户改回
@@ -81,13 +82,12 @@ SHARE_PREFIX = "https://chat.deepseek.com/share/"
 # 生物认证模拟开关（§7：仅供测试/演示的恒真验证器，生产保持关闭）
 BIOMETRIC_SIM_ENV = "XIAOJU3_BIOMETRIC_SIM"
 
-# ================= 高危设备二次确认令牌流（§7 + 架构 §6/§10 #8） =================
-CONFIRM_TOKEN_TTL = 300   # 确认令牌有效期（秒，5 分钟），一次性用后即焚
-MFA_SESSION_TTL = 300     # Lv.4 双因子会话有效期（秒）：窗口内已验的动态密码可复用
+# ================= 儿童锁（2026-10-02 权限重构批次②） =================
+CHILD_LOCK_REQUEST_TTL = 300   # 儿童操作请求有效期（秒，5 分钟），超时自动拒绝
+ONLINE_ADULT_WINDOW = 300      # "在线成人"判定窗口：最近 5 分钟内有过交互
 
-# 内存态（均不落盘、不含任何密钥明文——totp 为用户输入的 6 位动态密码本身）
-_pending_confirms = {}    # {token: {"user_id","tool_name","args","expires"}}
-_mfa_sessions = {}        # {user_id: {"totp": 动态密码, "ts": 校验通过时间}}
+_last_seen = {}                # {user_id: {"ts": 交互时间, "level": 当时等级}}
+_pending_child_requests = {}   # 单队列：同一时刻最多一个待确认请求（内存态）
 
 # ================= 记忆库隔离（双通道，§4） =================
 MEMORY_FILE_WEB = os.path.join(AGENT_STATE_DIR, "history_web.json")
@@ -158,89 +158,145 @@ def _ensure_biometric_sim():
         permission_manager.register_biometric_verifier(lambda credential: True)
 
 
-def _mfa_session_ok(user_id):
-    """Lv.4 双因子会话是否有效：5 分钟内完成过 TOTP 校验且当前 MFA 复验通过。"""
-    sess = _mfa_sessions.get(user_id)
-    if not sess or time.time() - sess["ts"] > MFA_SESSION_TTL:
+# ================= 儿童锁（2026-10-02 权限重构批次②） =================
+# 口径：儿童锁开启（CHILD_LOCK_ENABLED=true）时，被登记为儿童的用户
+# （is_adult=False）触发危险家电控制 → 不执行工具，挂起请求并通知在线
+# 成人 LV4（最近 5 分钟内有过交互且当时等级 ≥4）；/approve 代为执行（以
+# 主人级权限），/deny 或 5 分钟超时 → 拒绝；无在线成人 → 直接拒绝。
+# 网页控制台视为成人设备（is_console=True，不适用儿童锁等待）。
+
+def _is_online_adult_lv4(user_id):
+    """在线成人 LV4：最近 5 分钟内有过交互且当时等级 ≥ Lv.4。"""
+    info = _last_seen.get(str(user_id or ""))
+    if not info or time.time() - info.get("ts", 0) > ONLINE_ADULT_WINDOW:
         return False
-    return permission_manager.lv4_mfa_ok(
-        user_id, {"totp": sess["totp"], "biometric": "biometric"})
+    try:
+        return permission_manager.level_value(info.get("level")) >= 4
+    except Exception:
+        return False
 
 
-def _issue_confirm_token(user_id, tool_name, args):
-    """生成一次性 6 位确认令牌并挂起操作（内存表，5 分钟过期）。"""
-    while True:
-        token = f"{random.randint(0, 999999):06d}"
-        if token not in _pending_confirms:
-            break
-    _pending_confirms[token] = {
-        "user_id": user_id,
-        "tool_name": tool_name,
-        "args": dict(args or {}),
-        "expires": time.time() + CONFIRM_TOKEN_TTL,
-    }
-    return token
+def _online_adult_lv4_ids():
+    """全部在线成人 LV4 的 user_id 列表。"""
+    return [uid for uid in list(_last_seen) if _is_online_adult_lv4(uid)]
 
 
-def _handle_confirm(user_id, token):
-    """高危设备操作二次确认：令牌校验 → 一次性焚毁 → 携凭据重新执行。
+def _notify_online_adults(text):
+    """QQ 私聊所有在线成人 LV4（OneBot send_private_msg；失败仅日志）。"""
+    for uid in _online_adult_lv4_ids():
+        try:
+            payload_uid = int(uid) if str(uid).isdigit() else uid
+            requests.post(f"{ONEBOT_API_URL}/send_private_msg",
+                          json={"user_id": payload_uid, "message": text},
+                          timeout=5)
+        except Exception as e:
+            print(f"⚠️ [儿童锁] 成人通知失败（{uid}）: {e}")
 
-    安全口径：挂起动作在创建时已通过"等级 + 双因子"门禁；/confirm 只对
-    挂起表内的动作生效，且 execute_tool 会重新走完整权限门禁（等级、
-    双因子、实体危险分类）——不存在绕过权限门的路径。
+
+def _smart_ask_with_child_lock(message, history, session_key, user_id):
+    """smart_ask 包装：儿童锁开启时拦截儿童用户的危险家电控制调用。
+
+    - 儿童锁关闭 / 操作者是成人 → 原样走 smart_ask（零开销零改动）；
+    - 儿童用户触发危险 domain 控制（control_ha_device 危险实体）→ 工具
+      不执行：有在线成人则挂起请求并 QQ 私聊通知（/approve //deny），
+      无在线成人则直接返回拒绝文案（模型如实转告主人）；
+    - 批准后由 /approve 以主人级权限代为执行（heartbeat 同款临时提权
+      模式，执行完恢复）。
     """
-    token = str(token or "").strip()
-    if not re.fullmatch(r"\d{6}", token):
-        return "用法：/confirm <6位数字令牌>——确认执行高危设备操作。"
-    entry = _pending_confirms.get(token)
-    if entry is None:
-        return "❌ 确认令牌无效或已被使用，请重新发起高危设备操作。"
-    if entry["user_id"] != user_id:
-        return "❌ 该确认令牌不属于当前用户，已忽略。"
-    _pending_confirms.pop(token, None)   # 一次性：校验通过即焚毁（过期同样焚毁）
-    if time.time() > entry["expires"]:
-        return "❌ 确认令牌已过期（有效期 5 分钟），请重新发起高危设备操作。"
-    credentials = {"confirmed": True, "biometric": "biometric"}
-    sess = _mfa_sessions.get(user_id)
-    if sess:
-        credentials["totp"] = sess["totp"]   # 窗口内已验动态密码
-    return execute_tool(entry["tool_name"], entry["args"], permission_manager,
-                        credentials=credentials)
+    if not CHILD_LOCK_ENABLED or permission_manager.is_adult(user_id):
+        res = smart_ask(message, history, session_key=session_key)
+        return res[0] if isinstance(res, tuple) else res
 
-
-def _smart_ask_with_danger_confirm(message, history, session_key, user_id):
-    """smart_ask 包装：捕获本轮被拒的危险实体（门锁/燃气）控制调用。
-
-    brain 的工具链路不携带凭据，高危设备控制在 execute_tool 处必然被拒；
-    若用户已是 Lv.4 且双因子会话有效，则挂起该操作并发放一次性确认令牌，
-    用户 /confirm 后携凭据重执行；其余情况原样返回拒绝文案（不发放令牌）。
-    """
-    captured = {}
     original_execute = brain.execute_tool
 
-    def _capturing_execute(tool_name, args, pm, credentials=None):
-        result = original_execute(tool_name, args, pm, credentials)
-        if (tool_name == "control_ha_device" and isinstance(result, str)
-                and result.startswith("❌")
+    def _child_lock_execute(tool_name, args, pm, credentials=None):
+        if (tool_name == "control_ha_device"
                 and home_tools.is_dangerous_entity((args or {}).get("entity_id"))):
-            captured["tool_name"] = tool_name
-            captured["args"] = dict(args or {})
-        return result
+            desc = (f"{(args or {}).get('action', '控制')} "
+                    f"{(args or {}).get('entity_id', '危险设备')}")
+            if not _online_adult_lv4_ids():
+                print("🛑 [儿童锁] 无在线成人 LV4，直接拒绝儿童危险操作。")
+                return "❌ 儿童锁已开启，且无成人 LV4 在线确认，操作已拒绝。"
+            token = f"{random.randint(0, 999999):06d}"
+            while token in _pending_child_requests:
+                token = f"{random.randint(0, 999999):06d}"
+            _pending_child_requests.clear()   # 单队列：同一时刻一个请求
+            _pending_child_requests[token] = {
+                "user_id": user_id,
+                "tool_name": tool_name,
+                "args": dict(args or {}),
+                "desc": desc,
+                "expires": time.time() + CHILD_LOCK_REQUEST_TTL,
+            }
+            _notify_online_adults(f"🔒 儿童操作请求：{desc}，"
+                                  "5 分钟内回复 /approve 或 /deny")
+            return "🔒 儿童锁已开启：该操作需成人确认，已通知在线成人，请稍等。"
+        return original_execute(tool_name, args, pm, credentials)
 
-    brain.execute_tool = _capturing_execute
+    brain.execute_tool = _child_lock_execute
     try:
         res = smart_ask(message, history, session_key=session_key)
     finally:
         brain.execute_tool = original_execute
+    return res[0] if isinstance(res, tuple) else res
 
-    reply = res[0] if isinstance(res, tuple) else res
-    if "tool_name" in captured and \
-            permission_manager.level_value() >= 4 and _mfa_session_ok(user_id):
-        token = _issue_confirm_token(user_id, captured["tool_name"], captured["args"])
-        entity = (captured["args"] or {}).get("entity_id", "该设备")
-        reply = (f"🔐 {entity} 属高危设备（门锁/燃气类），已按主人级权限挂起该操作。\n"
-                 f"回复 /confirm {token} 执行（令牌 5 分钟内有效，一次性使用）。")
-    return reply
+
+def handle_child_command(message, user_id, is_console=False):
+    """/approve //deny 儿童锁裁决（QQ 与网页控制台共用同一处理逻辑）。
+
+    - 网页控制台视为成人设备（is_console=True，跳过在线成人资格校验）；
+    - /approve：以主人级权限代为执行挂起操作（heartbeat 同款临时提权）；
+    - /deny：拒绝并清空请求；超时请求同样拒绝（懒式判定）。
+    返回回复文本；非本命令返回 None。
+    """
+    text = (message or "").strip()
+    if text not in ("/approve", "/deny"):
+        return None
+    if not is_console and not _is_online_adult_lv4(user_id):
+        return "❌ 只有在线成人 LV4 可以裁决儿童操作请求。"
+    entry = next(iter(_pending_child_requests.values()), None)         if _pending_child_requests else None
+    if entry is None:
+        return "ℹ️ 当前没有待确认的儿童操作请求。"
+    _pending_child_requests.clear()   # 单队列：裁决即清空（过期同样清空）
+    if text == "/deny":
+        print("🔒 [儿童锁] 成人已拒绝儿童操作请求。")
+        return "✅ 已拒绝该儿童操作请求。"
+    if time.time() > entry["expires"]:
+        return "❌ 儿童操作请求已超时（5 分钟），已自动拒绝。"
+    pm = permission_manager
+    prev = pm.current_level
+    try:
+        pm.current_level = "Lv.4"   # 成人批准 → 以主人级权限代为执行
+        result = execute_tool(entry["tool_name"], entry["args"], pm)
+    finally:
+        pm.current_level = prev
+    print(f"🔒 [儿童锁] 成人已批准儿童操作请求：{entry['desc']}")
+    return f"✅ 成人已确认，操作已执行：{result}"
+
+
+def get_creator_name():
+    """创作者署名（xiaoju3_data/creator.json 存在即激活；缺省返回 ""）。
+
+    只表现署名，不授予任何权限（权限由 LV4 决定）。公开版（无隔离区
+    文件）返回空串，所有署名位置自动隐藏。
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "xiaoju3_data", "creator.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return str((data or {}).get("name") or "").strip()
+    except Exception:
+        return ""
+
+
+def handle_creator_command():
+    """/creator 命令：返回创作者署名卡（QQ 与网页控制台共用）。"""
+    name = get_creator_name()
+    if not name:
+        return ('ℹ️ 本实例未配置创作者署名（部署者可在 xiaoju3_data/creator.json '
+                '写入 {"name": "你的名字"}）。')
+    return f"🦊 小橘3号 · 由 {name} 创造与维护"
 
 
 # ================= 大脑链路编排（架构 §10 #2/#3/#4） =================
@@ -339,7 +395,7 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
 
     history = _inject_long_term_memories(messages)
     history = _inject_recent_actions(history)
-    return _smart_ask_with_danger_confirm(message, history, session_key, user_id)
+    return _smart_ask_with_child_lock(message, history, session_key, user_id)
 
 
 # ================= 核心内核（统一入口） =================
@@ -422,6 +478,10 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
 
     user_key = str(user_id)
+    # 🔒 儿童锁在线判定数据源：每次交互刷新最近活跃时间与当时等级（在线
+    # 成人 = 最近 5 分钟内有过交互且当时等级 ≥ Lv.4）
+    _last_seen[user_key] = {"ts": time.time(),
+                            "level": permission_manager.current_level}
 
     # === 📍 位置指令（/set_location /clear_location，QQ 与网页共用逻辑） ===
     # 2026-10-02 隐私口径：位置存本地 agent_state/user_location.json（不写
@@ -429,6 +489,15 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     location_reply = handle_location_command(raw_message)
     if location_reply is not None:
         return location_reply
+
+    # === ✍️ 创作者署名命令（/creator，QQ 与网页共用，批次②） ===
+    if message == "/creator":
+        return handle_creator_command()
+
+    # === 🔒 儿童锁裁决（/approve /deny，QQ 与网页共用，批次②） ===
+    child_reply = handle_child_command(raw_message, user_key)
+    if child_reply is not None:
+        return child_reply
 
     # === 🛡️ 指令菜单 ===
     if message in ["/help", "菜单", "帮助", "指令"]:
@@ -474,24 +543,14 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             if not ok:
                 return f"❌ Lv.4 双因子认证未通过：\n{detail}"
             credentials = {"confirmed": True, "totp": totp, "biometric": "biometric"}
-            result = permission_manager.grant_lv4(user_key, credentials)
-            if result.startswith("✅"):
-                # 记录双因子会话（供高危设备确认令牌流复用"窗口内已验"动态密码）
-                _mfa_sessions[user_key] = {"totp": totp, "ts": time.time()}
-            return result
+            # （2026-10-02 权限重构）授权级验证保留；授权后操作不再逐次
+            # 验证，操作级双因子会话已随 /confirm 令牌流一并删除
+            return permission_manager.grant_lv4(user_key, credentials)
         return "用法：/lv4_auth 查看类 Root 警告；/lv4_auth confirm <6位动态密码> 完成授权。"
 
     # === 🛡️ /lv4_revoke：撤销主人级权限（立即生效） ===
     if message.startswith("/lv4_revoke"):
-        result = permission_manager.revoke_lv4(user_key)
-        if result.startswith("✅"):
-            # 撤销立即生效：双因子会话一并失效（确认令牌流随之不可用）
-            _mfa_sessions.pop(user_key, None)
-        return result
-
-    # === 🛡️ /confirm：高危设备二次确认令牌核销 ===
-    if message.startswith("/confirm"):
-        return _handle_confirm(user_key, _arg_after(raw_message, "/confirm"))
+        return permission_manager.revoke_lv4(user_key)
 
     # === ⛔ /reset_fuse：防死循环熔断重置（Lv.2+，管理员口径全通道清零） ===
     if message.startswith("/reset_fuse"):
@@ -522,10 +581,10 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         threading.Thread(target=run_log_extraction, args=(log_url,), daemon=True).start()
         return "🔄 收到链接啦！小橘3号正在后台努力阅读和总结（大约需要1分钟）。完成后日志会自动保存到 dev_logs 文件夹里！"
 
-    # === 🛡️ 发送图片指令（§7：等级 ≥ Lv.3 即通过，修复 Lv.4 主人被拒） ===
+    # === 🛡️ 发送图片指令（2026-10-02 权限重构：LV4 主人级专属） ===
     if message.startswith("/send_image"):
-        if permission_manager.level_value() < 3:
-            return "❌ 权限不足，请先发送 /coder_auth <6位动态密码> 升级到 Lv.3（代码编写者）。"
+        if permission_manager.level_value() < 4:
+            return "❌ 权限不足，发图需要 Lv.4（主人级）权限。请先 /lv4_auth confirm <6位动态密码> 授权。"
         # 从清洗前原文提取路径（清洗会剥掉盘符冒号与扩展名里的点）
         img_path = raw_message.split("/send_image", 1)[-1].strip()
         if not img_path:

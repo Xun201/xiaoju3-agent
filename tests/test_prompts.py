@@ -27,7 +27,7 @@ TOOLS = [
     "get_ha_devices", "control_ha_device",
     "adb_screenshot", "adb_tap", "adb_swipe",
     "vision_tap_element", "ui_tap_element",
-    "web_search", "system_manage",
+    "web_search", "system_manage", "restart_service",
 ]
 
 
@@ -83,7 +83,14 @@ class PromptsTests(unittest.TestCase):
         # §7 权限拒绝口径：如实转告拒绝原因与升级指引，禁止重试/伪造成功
         self.assertIn("【权限与拒绝口径】", self.content)
         self.assertIn("Lv.2", self.content)
-        self.assertIn("Lv.3 代码编写者可写文件", self.content)  # 逐次动态密码要求已取消
+        # 2026-10-02 权限重构：新矩阵口径（安全家居 LV3 / LV4 清单 /
+        # 儿童锁 / lv4_auth 授权后不逐次验证）
+        self.assertIn("Lv.3 代码编写者可改代码并控制安全家居", self.content)
+        self.assertIn("若儿童锁开启，危险家电操作需在线成人 LV4 确认",
+                      self.content)
+        self.assertIn("/lv4_auth 为主人级授权验证，授权后操作不再逐次验证",
+                      self.content)
+        self.assertIn("14. restart_service", self.content)
         self.assertIn("绝对不要反复重试同一被拒操作", self.content)
         self.assertIn("绝对不要伪造执行成功的结果", self.content)
 

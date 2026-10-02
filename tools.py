@@ -94,8 +94,8 @@ _DENY_LV3 = ("❌ 安全拒绝：当前权限不足，该操作需要 Lv.3（代
 # （2026-09-30 用户指令）原 write_file 逐次动态密码拒绝文案 _DENY_LV3_OPERATION
 # 已随门禁一并移除：Lv.3 等级门禁保留，已是 Lv.3 直接写入；permission 层
 # lv3_operation_ok / open_operation_window（/sudo）API 保留、仅 tools 层不再强制。
-_DENY_LV2_NORMAL_DEVICE = ("❌ 安全拒绝：当前权限不足，控制普通家居设备需要 "
-                           "Lv.2（普通用户）权限。请先 /register <密码> 注册升级。")
+_DENY_LV2_NORMAL_DEVICE = ("❌ 安全拒绝：当前权限不足，控制安全家居设备需要 "
+                           "Lv.3（代码编写者）权限。请先 /coder_auth <动态密码> 升级。")
 _DENY_LV4_DANGER_DEVICE = ("❌ 安全拒绝：{entity} 属高危设备（门锁/燃气等），"
                            "控制它需要 Lv.4（主人级）权限。请联系主人完成"
                            "双因子认证后升级，或改由主人亲自操作。")

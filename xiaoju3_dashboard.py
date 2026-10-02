@@ -532,6 +532,7 @@ def api_status():
             "temperature": get_cpu_temp(),   # 三平台读取链，失败 "暂无温度"
             "timestamp": int(time.time()),
             "tts_voice": TTS_VOICE,          # 前端 TTS 音色（组 B 前端消费）
+            "creator": main.get_creator_name() or None,   # 创作者署名（批次②）
         }
     })
 
@@ -591,6 +592,23 @@ def api_chat():
             return jsonify({
                 "code": 200,
                 "data": {"reply": sanitize_for_web(location_reply),
+                         "source": "⚙️ 系统"}
+            })
+
+        # 🔒 儿童锁裁决 + ✍️ 创作者署名（2026-10-02 批次②）：与 QQ 通道
+        # 同一 main 函数；网页控制台视为成人设备（is_console=True）
+        child_reply = main.handle_child_command(user_msg, user_id="console",
+                                                is_console=True)
+        if child_reply is not None:
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(child_reply),
+                         "source": "⚙️ 系统"}
+            })
+        if user_msg.strip() == "/creator":
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(main.handle_creator_command()),
                          "source": "⚙️ 系统"}
             })
 
@@ -717,6 +735,9 @@ def api_tts():
 
 if __name__ == "__main__":
     print(f"🍊 小橘3号监控仪表盘已启动（端口 {DASHBOARD_PORT}）")
+    _creator = main.get_creator_name()
+    if _creator:
+        print(f"✍️ 创作者署名：{_creator}")
     print("🔌 QQ 接入层已并入本进程（5002 端口废弃）：webhook 地址 "
           "http://127.0.0.1:5003/onebot，请同步修改 LLOneBot 的 HTTP 上报地址")
 

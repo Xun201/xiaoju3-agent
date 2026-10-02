@@ -140,6 +140,10 @@ XIAOJU3_PERSONALITY = os.environ.get("XIAOJU3_PERSONALITY", "medium")
 # Windows-only——POSIX（香橙派）NapCat 由部署侧另行管理）
 NAPCAT_DIR = os.environ.get("NAPCAT_DIR", "D:\\NapCat")
 
+# 儿童锁（2026-10-02 权限重构批次②）：true 时被登记为儿童的用户
+# （identity.json is_adults）执行危险家电操作需在线成人 LV4 确认
+CHILD_LOCK_ENABLED = os.environ.get("CHILD_LOCK_ENABLED", "false").lower() == "true"
+
 # 心跳轮询间隔（秒），文档 §7：60 秒
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "60"))
 
