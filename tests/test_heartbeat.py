@@ -806,6 +806,52 @@ class SunTimestampNoiseTests(HeartbeatBase):
         self.assertEqual(third, "无需干预")
         self.assertIn("检测到环境变化", buf3.getvalue())
 
+    def test_binary_sensor_presence_rule_fires_end_to_end(self):
+        """binary_sensor 门磁 off→on + 灯 off → 场景规则①命中开灯（0 token，
+        不调大脑）；基线轮 prev 为空不触发（防重启误开）。"""
+        import contextlib
+        import io
+        ask = mock.MagicMock(return_value=("无需干预", "🏠 本地"))
+        execute = mock.MagicMock(return_value="✅ 执行成功")
+        r1 = ("- 门磁 (ID: binary_sensor.door_front) 当前状态: off\n"
+              "- 客厅灯 (ID: light.living_room) 当前状态: off")
+        r2 = ("- 门磁 (ID: binary_sensor.door_front) 当前状态: on\n"
+              "- 客厅灯 (ID: light.living_room) 当前状态: off")
+        with mock.patch.object(heartbeat, "get_ha_devices", side_effect=[r1, r2]), \
+                mock.patch.object(heartbeat, "get_ha_states", side_effect=[
+                    [_state("binary_sensor.door_front", "off", "门磁"),
+                     _state("light.living_room", "off", "客厅灯")],
+                    [_state("binary_sensor.door_front", "on", "门磁"),
+                     _state("light.living_room", "off", "客厅灯")]]), \
+                mock.patch.object(heartbeat, "_ha_configured", return_value=True):
+            heartbeat.heartbeat_once(ask_fn=ask, execute_fn=execute)   # 基线轮
+            with contextlib.redirect_stdout(io.StringIO()) as buf2:
+                second = heartbeat.heartbeat_once(ask_fn=ask, execute_fn=execute)
+        self.assertIn("✅ 执行成功", second)
+        execute.assert_called_once_with(
+            "control_ha_device",
+            {"entity_id": "light.living_room", "action": "turn_on"})
+        self.assertEqual(ask.call_count, 1)   # 仅基线轮；规则命中 0 token
+        self.assertIn("场景规则命中", buf2.getvalue())
+
+    def test_binary_sensor_state_change_triggers_decision(self):
+        """binary_sensor 状态变化（无人回家、无规则命中）→ 正常触发决策。"""
+        import contextlib
+        import io
+        ask = mock.MagicMock(return_value=("无需干预", "🏠 本地"))
+        motion = "- 人体传感器 (ID: binary_sensor.motion_living) 当前状态: {v}"
+        texts = [motion.format(v="on"), motion.format(v="on"), motion.format(v="off")]
+        with mock.patch.object(heartbeat, "get_ha_devices", side_effect=texts), \
+                mock.patch.object(heartbeat, "get_ha_states", return_value=[
+                    _state("binary_sensor.motion_living", "off", "人体传感器")]), \
+                mock.patch.object(heartbeat, "_ha_configured", return_value=True):
+            heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+            heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+            with contextlib.redirect_stdout(io.StringIO()) as buf3:
+                heartbeat.heartbeat_once(ask_fn=ask, execute_fn=mock.MagicMock())
+        self.assertEqual(ask.call_count, 2)   # 基线 + on→off 变化；同值轮判等静默
+        self.assertIn("检测到环境变化", buf3.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
