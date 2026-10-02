@@ -735,7 +735,12 @@ def api_tts():
     return Response(audio, mimetype="audio/mpeg")
 
 
-if __name__ == "__main__":
+def serve():
+    """5003 服务主函数（原 __main__ 逻辑原样抽函数，行为不变）。
+
+    spawn-self 分流（方案 §2）的 dashboard 角色入口：exe 以
+    --xj3-role=dashboard 拉起自身时由 desktop_launcher 调用本函数。
+    """
     print(f"🍊 小橘3号监控仪表盘已启动（端口 {DASHBOARD_PORT}）")
     _creator = main.get_creator_name()
     if _creator:
@@ -748,3 +753,10 @@ if __name__ == "__main__":
     main.start_background_services()
 
     app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False)
+
+
+if __name__ == "__main__":
+    import multiprocessing
+    # PyInstaller 冻结形态安全阀（方案 §2.2）：onefile 子进程引导必需
+    multiprocessing.freeze_support()
+    serve()

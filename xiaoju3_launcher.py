@@ -48,6 +48,10 @@ import time
 
 import paths  # 双根路径锚（方案 §1）：资源根=程序自带文件基准，数据根=可写运行数据
 
+# spawn-self 角色标志（方案 §2.1）：exe 单一入口按 argv 分流三角色；
+# 与 desktop_launcher.ROLE_DASHBOARD_FLAG 保持字面一致（测试锁定）
+ROLE_DASHBOARD_FLAG = "--xj3-role=dashboard"
+
 # ✅ 三行确认日志 + ⚠️ 改址提醒（文案口径固定，测试断言）
 BANNER_QQ = "✅ QQ 接入层已启动 (5003)"
 BANNER_HEARTBEAT = "✅ 心跳已启动"
@@ -212,7 +216,7 @@ def prune_dashboard_logs(keep=LOG_KEEP, log_dir=None):
         return 0, 0
 
 
-def build_launch_plan(python=None, root=None):
+def build_launch_plan(python=None, root=None, frozen=False):
     """构造统一启动计划（纯函数，离线可测）。
 
     条目字段：
@@ -221,15 +225,25 @@ def build_launch_plan(python=None, root=None):
     顺序（用户口径）：QQ 接入层行先、心跳次之、控制台行最后，三行 ✅ 按此
     顺序打印——三者实为同一 5003 子进程（subprocess 条目 Popen 一次，
     hosted 条目只打印）。
+
+    frozen=True（exe 形态，方案 §2）：spawn-self——server 条目 cmd 为
+    [exe 自身, --xj3-role=dashboard]，cwd 取 exe 所在目录（数据根，可写）；
+    缺省 frozen=False 走现行 .py 路径，行为逐字节不变。
     """
     py = python or sys.executable or "python"
     base = root or paths.RESOURCE_ROOT
+    if frozen:
+        server_cmd = [py, ROLE_DASHBOARD_FLAG]
+        server_cwd = os.path.dirname(os.path.abspath(py))
+    else:
+        server_cmd = [py, os.path.join(base, "xiaoju3_dashboard.py")]
+        server_cwd = base
     return [
         {
             "name": "server",
             "kind": "subprocess",
-            "cmd": [py, os.path.join(base, "xiaoju3_dashboard.py")],
-            "cwd": base,
+            "cmd": server_cmd,
+            "cwd": server_cwd,
             "banner": BANNER_QQ,
             "desc": "统一服务进程（:5003：QQ webhook /onebot + 心跳宿主；5002 已废弃）",
         },
@@ -396,8 +410,11 @@ class XiaojuLauncher:
         self.procs = []
 
 
-def main(argv=None):
+def main(argv=None, frozen=False):
     """入口：--dry-run 只打印计划（零副作用）；否则前台拉起并守护。
+
+    frozen=True（exe spawn-self，方案 §2）：由 desktop_launcher 分流调用，
+    启动计划生成 exe 自 spawn 形态；缺省 False 走现行 .py 拉起，行为不变。
 
     非 dry-run 时按序执行三步前置：
     1. 单实例防重（方案 b）：探测 5003 已被监听 → 打印提示并以 0 优雅退出
@@ -406,7 +423,7 @@ def main(argv=None):
     3. prune_dashboard_logs() 清理旧启动日志（方案 a，只留最近 10 个）。
     """
     args = parse_args(argv)
-    plan = build_launch_plan(root=args.root)
+    plan = build_launch_plan(root=args.root, frozen=frozen)
     if args.dry_run:
         print("📋 小橘3号启动计划（--dry-run，未实际拉起）：")
         for entry in plan:
@@ -425,4 +442,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    # PyInstaller 冻结形态安全阀（方案 §2.2）：onefile 子进程引导必需
+    multiprocessing.freeze_support()
     sys.exit(main())

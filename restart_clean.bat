@@ -9,7 +9,8 @@ rem 日志路径由 xiaoju3_launcher 生成（timestamped_log_path / prune_dashb
 rem 与 restart_clean.sh 共用同一实现）。2026-10-02 稳定性排查方案 d。
 
 echo [1/4] 清杀全部小橘3号 python 进程...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -like '*xiaoju3*' } | ForEach-Object { Write-Host ('  清杀 PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }"
+rem 进程名过滤放宽（方案 §2）：python.exe（脚本形态）+ xiaoju3*.exe（frozen exe 形态）
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name LIKE 'xiaoju3%'\" | Where-Object { $_.CommandLine -like '*xiaoju3*' } | ForEach-Object { Write-Host ('  清杀 PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }"
 
 echo [2/4] 等待 2 秒并确认 5003 释放...
 timeout /t 2 /nobreak >nul
