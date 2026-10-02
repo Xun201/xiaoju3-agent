@@ -1488,47 +1488,48 @@ class ThinkPairGuaranteeTests(unittest.TestCase):
 
     def test_wrap_think_prints_wrapped_text_log_of_final_output(self):
         # WRAPPED_TEXT 日志 = 最终产出本体：含成对 <think> 且紧贴正文，
-        # 日志行逐字等于函数返回值（部署侧据此与网页形态对账）
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        # 日志行逐字等于函数返回值（部署侧据此与网页形态对账）；
+        # 2026-10-02 降噪：改走 "xiaoju3.brain" logger 的 DEBUG 级别
+        # （默认终端不输出，assertLogs 开 DEBUG 捕获验证）
+        with self.assertLogs("xiaoju3.brain", level="DEBUG") as captured:
             out = brain._wrap_think("[思考] 想想", "正文")
-        self.assertIn(f"WRAPPED_TEXT: {out}", buf.getvalue())
-        self.assertIn("WRAPPED_TEXT: <think>", buf.getvalue())
+        log_text = "\n".join(captured.output)
+        self.assertIn(f"WRAPPED_TEXT: {out}", log_text)
+        self.assertIn("WRAPPED_TEXT: <think>", log_text)
 
     def test_wrap_think_wrapped_text_log_truncated_at_300_chars(self):
         # 防刷屏截断：超 300 字符截断加 "..."（载荷恰为 300+3 字符），
         # 开头 <think> 成对标签仍保留在行首
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with self.assertLogs("xiaoju3.brain", level="DEBUG") as captured:
             brain._wrap_think("[思考] 想想", "字" * 400)
-        payload = buf.getvalue().split("WRAPPED_TEXT: ", 1)[1].rstrip("\n")
+        payload = "\n".join(captured.output).split("WRAPPED_TEXT: ", 1)[1].rstrip("\n")
         self.assertTrue(payload.endswith("..."), repr(payload[-10:]))
         self.assertEqual(len(payload), 303)
         self.assertTrue(payload.startswith("<think>[思考] 想想</think>"), payload)
 
     def test_wrap_think_degraded_plain_text_log_has_no_tags(self):
-        # 兜底退化路径（门禁永不匹配）打印的最终产出同样逐字对账：
+        # 兜底退化路径（门禁永不匹配）记录的最终产出同样逐字对账：
         # 纯文本无任何 think 标签（"宁可无标签"口径在日志里可见）
         never = re.compile(r"(?!x)x")
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with self.assertLogs("xiaoju3.brain", level="DEBUG") as captured:
             with mock.patch.object(brain, "_THINK_HAS_PAIR_RE", never):
                 out = brain._wrap_think("[思考] 想想", "正文")
-        self.assertNotIn("<think>", buf.getvalue())
-        self.assertIn(f"WRAPPED_TEXT: {out}", buf.getvalue())
+        log_text = "\n".join(captured.output)
+        self.assertNotIn("<think>", log_text)
+        self.assertIn(f"WRAPPED_TEXT: {out}", log_text)
 
     def test_smart_ask_hello_wrapped_text_log_matches_reply(self):
-        # 端到端对账（用户报障"你好"口径）：smart_ask 终端打印的 WRAPPED_TEXT
+        # 端到端对账（用户报障"你好"口径）：smart_ask 记录的 WRAPPED_TEXT
         # 与返回给前端的 reply 逐字一致——后端下发的 <think> 包装完好，
         # "网页只显示纯文本"嫌疑收敛到前端渲染分支或剥标出口（见
         # WebExitThinkTagContractTests 的通道实测）
         with mock.patch.object(brain, "requests") as mr:
             mr.get.return_value = mock.Mock()
             mr.post.return_value = _local_resp("你好呀，很高兴见到你！")
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
+            with self.assertLogs("xiaoju3.brain", level="DEBUG") as captured:
                 reply, _source = brain.smart_ask("你好", [])
-        self.assertIn(f"WRAPPED_TEXT: {reply}", buf.getvalue())
+        log_text = "\n".join(captured.output)
+        self.assertIn(f"WRAPPED_TEXT: {reply}", log_text)
         self.assertTrue(
             reply.startswith(f"<think>{brain.CHAT_THINKING_PLACEHOLDER}</think>"),
             reply)
@@ -3072,6 +3073,69 @@ class ReplyDedupeTests(unittest.TestCase):
         self.assertEqual(brain._dedupe_reply(None), "")
 
 
+class SelfTalkStripTests(unittest.TestCase):
+    """自说自话剥离（2026-10-02 用户口径，QQ 实测模型把心路历程写进正文）。
+
+    用户实测："又是呼唤我，看来他挺关心我！这次我直接回应，别再问了！
+    在呢在呢，有啥需要帮忙的吗？"——前两句是内心独白漏出，QQ 里像在
+    自说自话；剥离后只留对用户说的话。
+    """
+
+    def test_user_example_stripped(self):
+        """用户实测例句：开头连续心路历程句剥离，只留实际回复。"""
+        body = ("又是呼唤我，看来他挺关心我！这次我直接回应，别再问了！"
+                "在呢在呢，有啥需要帮忙的吗？")
+        self.assertEqual(brain._strip_self_talk(body),
+                         "在呢在呢，有啥需要帮忙的吗？")
+
+    def test_full_pipeline_with_think(self):
+        """端到端（防重入透传收口）：<think>块 + 自说自话正文 → 卡片保留、
+        正文只留对用户说的话。"""
+        raw = ("<think>用户又在呼唤我，直接回应即可。</think>"
+               "又是呼唤我，看来他挺关心我！这次我直接回应，别再问了！"
+               "在呢在呢，有啥需要帮忙的吗？")
+        with contextlib.redirect_stdout(io.StringIO()):
+            sealed = brain._seal_bare_cot(raw)
+        self.assertEqual(
+            sealed,
+            "<think>用户又在呼唤我，直接回应即可。</think>"
+            "在呢在呢，有啥需要帮忙的吗？")
+
+    def test_each_marker_strips(self):
+        """各句式逐个命中（任务清单列举 + 同族第三人称指代）。"""
+        cases = [
+            ("这次我直接回应，别再问了！在呢。", "在呢。"),
+            ("看来他挺关心我！你好呀。", "你好呀。"),
+            ("他问我怎么了。我回答了。", "我回答了。"),
+            ("看来主人在忙。需要我做什么吗？", "需要我做什么吗？"),
+            ("主人又在呼唤我。在呢。", "在呢。"),
+        ]
+        for body, expected in cases:
+            with self.subTest(body=body):
+                self.assertEqual(brain._strip_self_talk(body), expected)
+
+    def test_no_self_talk_byte_identical(self):
+        """无自说自话逐字节原样返回（零改动零回归）。"""
+        body = "在呢在呢，有啥需要帮忙的吗？😊"
+        self.assertEqual(brain._strip_self_talk(body), body)
+
+    def test_mid_text_marker_untouched(self):
+        """只剥开头连续段：正文中部的同字样（转述等场景）不误伤。"""
+        body = "在呢在呢，有啥需要帮忙的吗？这次我记住了。"
+        self.assertEqual(brain._strip_self_talk(body), body)
+
+    def test_all_sentences_matching_kept_conservative(self):
+        """全部句子都是心路历程（无法区分哪句是回复）→ 保守原样返回，
+        绝不把真回复剥没。"""
+        body = "又是呼唤我，看来他挺关心我！这次我直接回应，别再问了！"
+        self.assertEqual(brain._strip_self_talk(body), body)
+
+    def test_empty_and_none_safe(self):
+        """空串/None 原样返回，不抛错。"""
+        self.assertEqual(brain._strip_self_talk(""), "")
+        self.assertIsNone(brain._strip_self_talk(None))
+
+
 class HistoryCollapseTests(unittest.TestCase):
     """_collapse_repeated_user_history / _build_messages 接线（历史轻量清洗）。
 
@@ -3158,8 +3222,13 @@ class AntiRepeatPromptTests(unittest.TestCase):
         self.assertIn("【防复读规则】", content)
         self.assertIn("严禁重复同一句话或同一段话", content)
         self.assertIn("我刚才已经回复过了", content)
+        # 心路历程约束（2026-10-02 用户口径）：正文只含对主人说的话 +
+        # ❌/✅ 反例正例
+        self.assertIn("不要把心路历程写进正文", content)
+        self.assertIn("又是呼唤我，看来他挺关心我", content)   # 错误示例
+        self.assertIn("<think>用户又在呼唤我，直接回应即可。</think>", content)  # 正确示例
         # 约束位于系统提示词末尾（用户口径"在系统提示词末尾加一句约束"）
-        self.assertTrue(content.rstrip().endswith("我刚才已经回复过了”。"))
+        self.assertTrue(content.rstrip().endswith("有啥需要帮忙的吗？）"))
 
 
 if __name__ == "__main__":

@@ -16,7 +16,9 @@ brain 未就绪时用 patch.dict(sys.modules) 注入 FakeBrain（自动还原）
 unittest discover 按字母序导入，本模块可能晚于它们被导入，故先按真实
 文件路径加载 home_tools / heartbeat，保证被测对象与依赖绑定真实实现。
 """
+import contextlib
 import importlib.util
+import io
 import os
 import sys
 import types
@@ -386,7 +388,9 @@ class DefaultWiringTests(HeartbeatBase):
     """默认链路：感知走 get_ha_devices / get_ha_states；brain 延迟导入。"""
 
     def test_default_sense_uses_get_ha_devices(self):
-        with mock.patch.object(heartbeat, "get_ha_devices",
+        # 2026-10-02 降噪 guard：默认管线要求 HA 已配置（测试显式声明）
+        with mock.patch.object(heartbeat, "_ha_configured", return_value=True), \
+             mock.patch.object(heartbeat, "get_ha_devices",
                                return_value="- 灯 (ID: light.a) 当前状态: on") as msense, \
              mock.patch.object(heartbeat, "get_ha_states", return_value=[]), \
              mock.patch.object(heartbeat, "_default_ask", return_value="无需干预") as mask, \
@@ -399,7 +403,9 @@ class DefaultWiringTests(HeartbeatBase):
         self.assertEqual(result, "无需干预")
 
     def test_default_sense_states_uses_get_ha_states(self):
-        with mock.patch.object(heartbeat, "get_ha_devices", return_value="变化"), \
+        # 2026-10-02 降噪 guard：默认管线要求 HA 已配置（测试显式声明）
+        with mock.patch.object(heartbeat, "_ha_configured", return_value=True), \
+             mock.patch.object(heartbeat, "get_ha_devices", return_value="变化"), \
              mock.patch.object(heartbeat, "get_ha_states",
                                return_value=[_state("sensor.humidity", "35"),
                                              _state("switch.humidifier", "off")]) as mstates, \
@@ -423,6 +429,100 @@ class DefaultWiringTests(HeartbeatBase):
             "control_ha_device",
             {"entity_id": "input_boolean.xiao_ju_ce_shi_deng", "action": "turn_on"})
         self.assertEqual(result, "✅ 执行成功")
+
+
+class HeartbeatNoiseTests(HeartbeatBase):
+    """日志降噪（2026-10-02 用户口径）：未配置 HA 完全跳过 + 连续无动作静默。"""
+
+    def test_unconfigured_ha_default_pipeline_skips_silently(self):
+        """HA_URL 未配置且未注入任何感知/结构化函数：heartbeat_once 直接
+        返回 None——不感知、不决策、不打印任何日志（离线降级模式）。"""
+        with mock.patch.object(heartbeat, "_ha_configured", return_value=False), \
+                mock.patch.object(heartbeat, "_default_sense") as msense, \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            result = heartbeat.heartbeat_once()
+        self.assertIsNone(result)
+        msense.assert_not_called()
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_unconfigured_ha_loop_no_start_log(self):
+        """未配置 HA 且未注入自定义感知：heartbeat_loop 不启动、不打印
+        "引擎已启动"（完全跳过口径）。"""
+        with mock.patch.object(heartbeat, "_ha_configured", return_value=False), \
+                mock.patch.object(heartbeat.time, "sleep") as msleep, \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            heartbeat.heartbeat_loop(max_rounds=1)
+        msleep.assert_not_called()
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_injected_sense_bypasses_unconfigured_guard(self):
+        """注入自定义感知的测试/定制场景不受未配置 guard 拦截（离线可测）。"""
+        with mock.patch.object(heartbeat, "_ha_configured", return_value=False), \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = heartbeat.heartbeat_once(
+                sense_fn=lambda: "自定义感知",
+                ask_fn=lambda m: "无需干预")
+        self.assertEqual(result, "无需干预")
+
+    def test_configured_ha_default_pipeline_still_runs(self):
+        """已配置 HA：默认管线照常感知决策（guard 不拦截）。"""
+        with mock.patch.object(heartbeat, "_ha_configured", return_value=True), \
+                mock.patch.object(heartbeat, "get_ha_devices",
+                                  return_value="- 灯 (ID: light.a) 当前状态: on"), \
+                mock.patch.object(heartbeat, "get_ha_states", return_value=[]), \
+                mock.patch.object(heartbeat, "_default_ask",
+                                  return_value="无需干预"), \
+                mock.patch.object(heartbeat, "_default_execute") as mexe, \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = heartbeat.heartbeat_once()
+        self.assertEqual(result, "无需干预")
+        mexe.assert_not_called()
+
+    def test_quiet_after_consecutive_no_action_rounds(self):
+        """连续 QUIET_LIMIT 轮"无需干预"后静默：环境变化/大脑决策日志不再
+        打印；真正执行动作时完整打印并复位计数。"""
+        seq = iter(f"快照{i}" for i in range(100))
+        decision = ('{"tool": "control_ha_device", "args": '
+                    '{"entity_id": "light.a", "action": "turn_on"}}')
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            # 前 QUIET_LIMIT 轮"无需干预"：每轮都打印（含决策行）
+            for _ in range(heartbeat.QUIET_LIMIT):
+                heartbeat.heartbeat_once(sense_fn=lambda: next(seq),
+                                         ask_fn=lambda m: "无需干预",
+                                         sense_states_fn=lambda: [])
+            normal_rounds = buf.getvalue().count("[心跳] 大脑决策")
+            self.assertEqual(normal_rounds, heartbeat.QUIET_LIMIT - 1)
+            # 第 QUIET_LIMIT+1 轮起静默：计数行不再增长
+            heartbeat.heartbeat_once(sense_fn=lambda: next(seq),
+                                     ask_fn=lambda m: "无需干预",
+                                     sense_states_fn=lambda: [])
+            self.assertEqual(buf.getvalue().count("[心跳] 大脑决策"),
+                             heartbeat.QUIET_LIMIT - 1)
+            self.assertEqual(buf.getvalue().count("检测到环境变化"),
+                             heartbeat.QUIET_LIMIT)
+            # 真正执行动作：完整打印（决策 + 主动执行 + 结果），静默计数复位
+            heartbeat.heartbeat_once(sense_fn=lambda: next(seq),
+                                     ask_fn=lambda m: decision,
+                                     execute_fn=lambda t, a: "✅ OK",
+                                     sense_states_fn=lambda: [])
+            self.assertIn("[心跳] 主动执行", buf.getvalue())
+            self.assertIn("[心跳] 结果：✅ OK", buf.getvalue())
+            # 动作轮决策行按"执行动作时打印完整日志"口径照常打印
+            self.assertEqual(buf.getvalue().count("[心跳] 大脑决策"),
+                             heartbeat.QUIET_LIMIT)
+            # 复位后下一轮"无需干预"恢复打印（计数从 0 重新累积）
+            heartbeat.heartbeat_once(sense_fn=lambda: next(seq),
+                                     ask_fn=lambda m: "无需干预",
+                                     sense_states_fn=lambda: [])
+            self.assertEqual(buf.getvalue().count("[心跳] 大脑决策"),
+                             heartbeat.QUIET_LIMIT + 1)
+            self.assertEqual(buf.getvalue().count("检测到环境变化"),
+                             heartbeat.QUIET_LIMIT + 1)
+
+    def test_quiet_limit_default(self):
+        """静默阈值默认 5（env XIAOJU3_HEARTBEAT_QUIET_LIMIT 导入期可覆盖）。"""
+        self.assertEqual(heartbeat.QUIET_LIMIT, 5)
 
 
 class LoopTests(HeartbeatBase):

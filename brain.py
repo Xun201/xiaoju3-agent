@@ -89,6 +89,7 @@
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import socket
@@ -103,6 +104,11 @@ from xiaoju3 import (AGENT_STATE_DIR, CLOUD_KEY, CLOUD_URL, CLOUD_MODEL,
 from permission import permission_manager
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool
+
+# 模块日志器：WRAPPED_TEXT 诊断日志走 DEBUG 级别（2026-10-02 用户口径降噪——
+# 默认终端不再输出；排查时 logging.getLogger("xiaoju3.brain").setLevel(
+# logging.DEBUG) 即可恢复逐条对账）
+_LOG = logging.getLogger("xiaoju3.brain")
 
 
 # 与参考实现一致：强制 IPv4 解析，避免部分主机的 IPv6 解析卡顿
@@ -288,8 +294,9 @@ def _wrap_think(thinking, body):
        → 从干净的 thinking + body 强制重拼一次；重拼后仍不匹配 → 退化为剥离
        全部 think 标签的纯文本（宁可无标签也不出畸形）；
     6. 出口去重（2026-10-02 用户口径，修复本地模型复读）：思考与正文完全
-       相同收敛为"占位卡+正文一份"、正文句级连续重复塌缩、剥空以
-       DEDUPE_BODY_PLACEHOLDER 兜底（详见 _dedupe_reply）。
+       相同收敛为"占位卡+正文一份"、正文开头自说自话句剥离、正文句级
+       连续重复塌缩、剥空以 DEDUPE_BODY_PLACEHOLDER 兜底（详见
+       _dedupe_reply）。
     纯函数：同等输入必有同等输出，可直接单测；None 输入按空串处理。
 
     出口形态实测口径（2026-10-01，排查"你好"网页只显示纯文本无思维链卡片，
@@ -347,14 +354,16 @@ def _wrap_think(thinking, body):
         # 重拼仍不成对：退化为剥离全部 think 标签的纯文本（宁可无标签）
         reply = _strip_think_tags(f"{thinking_text}\n{body_text}").strip()
     # ⑥ 出口去重（2026-10-02 用户口径，修复本地模型复读）：思考与正文完全
-    # 相同收敛为"占位卡+正文一份"、正文句级连续重复塌缩、剥空占位兜底
-    #（详见 _dedupe_reply；零改动时逐字节原样返回）
+    # 相同收敛为"占位卡+正文一份"、正文开头自说自话句剥离、正文句级连续
+    # 重复塌缩、剥空占位兜底（详见 _dedupe_reply；零改动时逐字节原样返回）
     reply = _dedupe_reply(reply)
-    # 输出诊断日志（2026-10-01 用户口径）：放在所有清洗/校验/重拼之后、最终
-    # return 之前，打印的即后端实际下发给前端的最终产出（每条 reply 一行、
-    # 超 300 字符截断加 "..." 防刷屏）。部署侧据此直接确认 <think> 标签是否
-    # 成对出现且紧贴正文（排查"网页只显示纯文本无卡片"时与前端对账）。
-    print("WRAPPED_TEXT:", reply[:300] + ("..." if len(reply) > 300 else ""))
+    # 输出诊断日志（2026-10-01 用户口径；2026-10-02 降噪改 DEBUG 级别——
+    # 默认终端不再输出，排查时对 "xiaoju3.brain" logger 开 DEBUG 即恢复）：
+    # 放在所有清洗/校验/重拼/去重之后、最终 return 之前，记录的即后端实际
+    # 下发给前端的最终产出（每条 reply 一行、超 300 字符截断加 "..." 防刷屏）。
+    # 部署侧据此直接确认 <think> 标签是否成对出现且紧贴正文。
+    _LOG.debug("WRAPPED_TEXT: %s",
+               reply[:300] + ("..." if len(reply) > 300 else ""))
     return reply
 
 
@@ -383,6 +392,46 @@ def _collapse_duplicate_sentences(text):
     return _SENT_RUN_RE.sub(r'\1', text)
 
 
+# 自说自话句式（2026-10-02 用户口径，QQ 实测模型把心路历程写进正文：
+# "又是呼唤我，看来他挺关心我！这次我直接回应，别再问了！在呢在呢..."）。
+# 仅匹配句首——正文中部出现同字样（如转述用户原话）不误伤；"他在"这类
+# 过宽模式不收（故事型回复开头误伤风险）。
+_SELF_TALK_RE = re.compile(
+    r'^(?:又是|这次我|看来他|看来她|看来主人|他问我|他挺|主人又在|主人这是'
+    r'|既然主人|既然他)')
+
+# 句子切分（自说自话剥离用）：内容 + 句末标点（可有连跑）；收尾无标点的
+# 碎片（emoji/尾句）一并成句。findall 全覆盖原文本，"".join 可原样还原。
+_SENTENCE_SPLIT_RE = re.compile(r'[^。！？!?；;\n…～~]+[。！？!?；;\n…～~]*')
+
+
+def _strip_self_talk(body):
+    """剥离正文开头的"自说自话"句（心路历程/第三人称指代用户），保留实际回复。
+
+    用户口径（2026-10-02）：正文以"又是/这次我/看来他/他问我/他挺"等句式
+    开头的句子是模型内心独白漏出，剥离后只留对用户说的话；按句切分后从
+    首句起连续剥离命中句。保守边界：
+    - 至少保留一句——全部句子命中（无法区分回复）时原样返回，绝不把真
+      回复剥没；
+    - 无命中原样返回（逐字节零回归）；只剥开头连续段，正文中部的同字样
+      不动。
+    纯函数 + 异常安全。
+    """
+    if not body:
+        return body
+    try:
+        sentences = _SENTENCE_SPLIT_RE.findall(body)
+        idx = 0
+        while idx < len(sentences) and _SELF_TALK_RE.match(sentences[idx].strip()):
+            idx += 1
+        if idx == 0 or idx >= len(sentences):
+            return body   # 无自说自话 / 全部命中（保守原样）
+        return "".join(sentences[idx:])
+    except Exception as e:
+        print(f"⚠️ 自说自话剥离异常（原样返回）: {e}")
+        return body
+
+
 def _dedupe_reply(reply):
     """回复出口去重（_wrap_think 产出与 _seal_bare_cot 防重入透传统一收口）。
 
@@ -393,9 +442,11 @@ def _dedupe_reply(reply):
        "[思考] "标记前缀差异，_wrap_think 正文回补设计的
        "<think>[思考] X</think>X"形态（思考含标记、不含标记的正文）不命中，
        零回退；
-    2. 正文句级连续重复（同一句 2 次及以上）塌缩为一份（见
+    2. 自说自话剥离：正文开头连续的"又是/这次我/看来他/他问我/他挺"等
+       心路历程句剥离，只留对用户说的话（见 _strip_self_talk）；
+    3. 正文句级连续重复（同一句 2 次及以上）塌缩为一份（见
        _collapse_duplicate_sentences）；
-    3. 去重确实发生（有内容被塌缩/收敛）且正文被剥空 → 注入
+    4. 去重确实发生（有内容被塌缩/收敛/剥离）且正文被剥空 → 注入
        DEDUPE_BODY_PLACEHOLDER（"我在呢～"）占位；输入本就空正文的
        "只有卡片"孤标签修复形态（_wrap_think ④ 既有设计）保持原样零回退。
     纯函数 + 异常安全：任何环节异常原样返回输入，绝不影响回复下发。
@@ -405,8 +456,9 @@ def _dedupe_reply(reply):
         stripped = text.lstrip()
         m = _THINK_PAIR_RE.match(stripped)
         if m is None:
-            # 退化形态（无成对 think 前缀的纯文本）：只做句级连续去重
-            new_text = _collapse_duplicate_sentences(text)
+            # 退化形态（无成对 think 前缀的纯文本）：自说自话剥离 + 句级去重
+            new_text = _strip_self_talk(text)
+            new_text = _collapse_duplicate_sentences(new_text)
             if new_text != text and not new_text.strip():
                 new_text = DEDUPE_BODY_PLACEHOLDER
             return new_text
@@ -417,11 +469,16 @@ def _dedupe_reply(reply):
         if body.strip() and re.sub(r'\s+', '', think_inner) == re.sub(r'\s+', '', body):
             think_inner = CHAT_THINKING_PLACEHOLDER
             changed = True
-        # ② 正文句级连续去重
+        # ② 自说自话剥离（QQ 实测模型把心路历程写进正文）
+        new_body = _strip_self_talk(body)
+        if new_body != body:
+            changed = True
+        # ③ 正文句级连续去重
+        body = new_body
         new_body = _collapse_duplicate_sentences(body)
         if new_body != body:
             changed = True
-        # ③ 仅当去重确实发生且正文被剥空才注入占位（输入本就空正文的
+        # ④ 仅当去重确实发生且正文被剥空才注入占位（输入本就空正文的
         #    "只有卡片"形态保持原样）
         if changed and not new_body.strip():
             new_body = DEDUPE_BODY_PLACEHOLDER

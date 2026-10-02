@@ -26,6 +26,15 @@
 - 独立运行：python heartbeat.py
 - 线程宿主：start_heartbeat() 以 daemon 线程拉起 heartbeat_loop
 
+日志降噪（2026-10-02 用户口径）：
+- HA_URL 未配置（离线降级模式）且走默认管线：心跳完全跳过，不打印任何
+  日志（heartbeat_once 直接返回 None、heartbeat_loop 不启动不打印；
+  注入自定义感知/结构化函数的测试与定制场景不拦截）；
+- 快照被抖动传感器（时间/温湿度小数等）高频判变时，连续 QUIET_LIMIT 轮
+  （默认 5，env XIAOJU3_HEARTBEAT_QUIET_LIMIT 可覆盖）"无需干预"后进入
+  静默模式——"检测到环境变化 / 大脑决策"两类日志不再打印，仅真正执行
+  动作（场景规则 / 主动执行 / 紧急豁免）时打印完整日志并复位计数。
+
 感知（文本 / 结构化）/ 决策 / 执行四个环节均可注入替换（sense_fn /
 sense_states_fn / ask_fn / execute_fn），heartbeat_once 支持单轮离线单测；
 注入自定义文本感知而未注入结构化感知时跳过规则引擎（保持离线可测）。
@@ -50,13 +59,39 @@ last_decision_source = ""
 DEFAULT_HUMIDITY_THRESHOLD = 40.0
 HUMIDITY_THRESHOLD_ENV = "XIAOJU3_HUMIDITY_THRESHOLD"
 
+# ==================== 日志降噪（2026-10-02 用户口径） ====================
+
+# 连续"无需干预"达到该轮数后进入静默模式：[心跳] 检测到环境变化 / 大脑决策
+# 两类日志不再打印（HA 已配置但快照被时间/温湿度等抖动传感器高频判变的
+# 场景终端不再刷屏），仅真正执行动作（场景规则 / 主动执行 / 紧急豁免）时
+# 打印完整日志并复位计数。env XIAOJU3_HEARTBEAT_QUIET_LIMIT 可覆盖（默认 5）。
+QUIET_LIMIT = max(1, int(os.environ.get("XIAOJU3_HEARTBEAT_QUIET_LIMIT", "5")))
+
+# 连续"无需干预"轮数（模块级计数，reset_snapshot 一并复位）
+_no_action_rounds = 0
+
+
+def _ha_configured():
+    """HA 是否已配置（HA_URL 非空；延迟导入 home_tools 便于测试注入）。"""
+    try:
+        import home_tools
+        return bool(str(getattr(home_tools, "HA_URL", "") or "").strip())
+    except Exception:
+        return False
+
+
+def _quiet_active():
+    """静默模式判定：连续"无需干预"轮数达到 QUIET_LIMIT。"""
+    return _no_action_rounds >= QUIET_LIMIT
+
 
 def reset_snapshot():
     """清空快照（测试 / 重置用）。"""
-    global last_sensors, last_states, last_decision_source
+    global last_sensors, last_states, last_decision_source, _no_action_rounds
     last_sensors = ""
     last_states = []
     last_decision_source = ""
+    _no_action_rounds = 0
 
 
 def _default_sense():
@@ -332,8 +367,14 @@ def heartbeat_once(sense_fn=None, ask_fn=None, execute_fn=None,
     else:
         states_fn = None  # 注入文本感知但未给结构化感知：跳过规则引擎
 
-    global last_sensors, last_states, last_decision_source
+    global last_sensors, last_states, last_decision_source, _no_action_rounds
     try:
+        # 🛡️ HA 未配置（离线降级模式）：默认管线完全跳过，不打印任何日志
+        # （2026-10-02 用户口径；注入自定义感知/结构化函数的测试与定制场景
+        # 不拦截，保持离线可测）
+        if sense_fn is None and sense_states_fn is None and not _ha_configured():
+            return None
+
         # 1. 感知：获取 HA 环境状态
         sensors = sense()
 
@@ -342,7 +383,7 @@ def heartbeat_once(sense_fn=None, ask_fn=None, execute_fn=None,
             return None
 
         last_sensors = sensors
-        if verbose:
+        if verbose and not _quiet_active():
             print("💓 [心跳] 检测到环境变化，唤醒决策...")
 
         # 2. 场景规则优先：命中直接执行，不耗 token（§10 #10）
@@ -354,10 +395,12 @@ def heartbeat_once(sense_fn=None, ask_fn=None, execute_fn=None,
                 emergency = emergency_check(states, verbose=verbose)
                 if emergency:
                     last_decision_source = "🚨 紧急豁免"
+                    _no_action_rounds = 0   # 真正执行动作：复位静默计数
                     return emergency
                 actions = apply_scene_rules(last_states, states)
                 last_states = states
                 if actions:
+                    _no_action_rounds = 0   # 真正执行动作：复位静默计数
                     if verbose:
                         print(f"📋 [心跳] 场景规则命中 {len(actions)} 条动作"
                               "（本地规则，0 token），直接执行...")
@@ -377,12 +420,19 @@ def heartbeat_once(sense_fn=None, ask_fn=None, execute_fn=None,
         else:
             decision, source = decision_raw, ""
         last_decision_source = source
-        if verbose:
-            print(f"🧠 [心跳] 大脑决策[{source or '来源未知'}]：{str(decision)[:50]}...")
 
-        # 4. 执行
+        # 🔇 静默计数（2026-10-02 用户口径）：连续"无需干预"达 QUIET_LIMIT
+        # 后，环境变化/大脑决策两类日志不再打印（真正执行动作在上方各分支
+        # 复位计数；未解析到 JSON 属异常照常打印）
         decision = str(decision)
-        if "无需干预" in decision:
+        no_action = "无需干预" in decision
+        if no_action:
+            _no_action_rounds += 1
+        else:
+            _no_action_rounds = 0
+        if verbose and not (no_action and _quiet_active()):
+            print(f"🧠 [心跳] 大脑决策[{source or '来源未知'}]：{decision[:50]}...")
+        if no_action:
             return "无需干预"
 
         match = re.search(r'\{.*"tool".*\}', decision, re.DOTALL)
@@ -414,6 +464,10 @@ def heartbeat_loop(interval=None, sense_fn=None, ask_fn=None, execute_fn=None,
     """
     if interval is None:
         interval = HEARTBEAT_INTERVAL
+    # 🛡️ HA 未配置（离线降级模式）且未注入自定义感知：循环不启动、不打印
+    # 任何日志（2026-10-02 用户口径"完全跳过"）
+    if sense_fn is None and sense_states_fn is None and not _ha_configured():
+        return
     print("💓 [心跳] 引擎已启动，正在监听家庭环境...")
     rounds = 0
     while True:
