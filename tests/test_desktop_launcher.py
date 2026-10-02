@@ -141,17 +141,23 @@ class EnsureBackendServicesTests(unittest.TestCase):
         self.assertIn("xiaoju3_launcher.py", out.getvalue())
         self.assertIn("4321", out.getvalue())
 
-    def test_console_python_resolves_pythonw_twin(self):
-        """pythonw 场景解析同目录控制版 python.exe（子树控制台形态一致）。"""
+    def test_windowless_python_prefers_pythonw(self):
+        """后台子树解释器（2026-10-02 用户口径：pythonw 无窗口形态）：
+        pythonw 场景原样返回（bat 主链路 sys.executable 即 pythonw，无窗口
+        形态沿子树传导）；控制台 python 场景解析同目录 pythonw.exe 孪生；
+        孪生缺席回退 sys.executable（CREATE_NO_WINDOW 仍防黑窗）。"""
         fake_pyw = os.path.join("some", "dir", "pythonw.exe")
         fake_py = os.path.join("some", "dir", "python.exe")
-        with mock.patch.object(launcher.sys, "executable", fake_pyw), \
+        with mock.patch.object(launcher.sys, "executable", fake_pyw):
+            self.assertEqual(launcher._windowless_python(), fake_pyw)
+        with mock.patch.object(launcher.sys, "executable", fake_py), \
                 mock.patch.object(launcher.os.path, "isfile",
                                   return_value=True):
-            self.assertEqual(launcher._console_python(), fake_py)
-        # 非pythonw 解释器原样返回
-        with mock.patch.object(launcher.sys, "executable", fake_py):
-            self.assertEqual(launcher._console_python(), fake_py)
+            self.assertEqual(launcher._windowless_python(), fake_pyw)
+        with mock.patch.object(launcher.sys, "executable", fake_py), \
+                mock.patch.object(launcher.os.path, "isfile",
+                                  return_value=False):
+            self.assertEqual(launcher._windowless_python(), fake_py)
 
     def test_script_missing_skips_launch(self):
         """xiaoju3_launcher.py 缺失：提示跳过，不 Popen、返回 None 不报错。"""
@@ -518,7 +524,7 @@ class StaticContractTests(unittest.TestCase):
         """主入口职责：subprocess Popen 拉起 xiaoju3_launcher.py；端口复用
         检测（5002/5003）；taskkill /T 整树终止兜底。"""
         self.assertIn('LAUNCHER_SCRIPT = "xiaoju3_launcher.py"', self.src)
-        self.assertIn("subprocess.Popen([_console_python(), script]", self.src)
+        self.assertIn("subprocess.Popen([_windowless_python(), script]", self.src)
         self.assertIn("_is_port_listening(DASHBOARD_APP_PORT)", self.src)
         self.assertIn("_is_port_listening(DASHBOARD_APP_PORT)", self.src)
         self.assertIn('"taskkill", "/T", "/F", "/PID"', self.src)

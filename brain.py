@@ -165,6 +165,11 @@ BARE_COT_BODY_PLACEHOLDER = "（操作已执行）"
 # 的简短正文，取代"（操作已执行）"的正文兜底角色
 DEFAULT_BODY_PLACEHOLDER = "操作已完成。"
 
+# 回复出口去重（2026-10-02 用户口径，修复本地模型复读）：思考与正文完全相同
+# 收敛为"占位卡 + 正文一份"、正文句级连续重复塌缩；句级去重后正文为空时的
+# 正文占位符（用户口径示例文案）
+DEDUPE_BODY_PLACEHOLDER = "我在呢～"
+
 
 def _tool_thinking_placeholder(tool_name):
     """无 CoT 时的 [思考] 占位符：按本轮实际解析出的工具名动态生成。
@@ -261,7 +266,7 @@ def _is_placeholder_thinking(thinking_text):
 def _wrap_think(thinking, body):
     """统一 <think> 包装点：smart_ask 全部文本回复一律经此拼装（消灭手写拼接）。
 
-    产出 f"<think>{thinking}</think>{body}"，五重保证（2026-10-01 用户口径
+    产出 f"<think>{thinking}</think>{body}"，六重保证（2026-10-01 用户口径
     两轮强化：绝不允许空 <think>、残缺/游离标签或"（操作已执行）"顶替真实
     正文直出网页）：
     1. 两侧彻底清洗：thinking/body 的 <think>/</think> 标签字面量与上游注入
@@ -281,7 +286,10 @@ def _wrap_think(thinking, body):
        其余一切游离标签一律剥除；再按用户指定正则
        re.search(r'<think>.*?</think>', final_text, re.DOTALL) 校验，不匹配
        → 从干净的 thinking + body 强制重拼一次；重拼后仍不匹配 → 退化为剥离
-       全部 think 标签的纯文本（宁可无标签也不出畸形）。
+       全部 think 标签的纯文本（宁可无标签也不出畸形）；
+    6. 出口去重（2026-10-02 用户口径，修复本地模型复读）：思考与正文完全
+       相同收敛为"占位卡+正文一份"、正文句级连续重复塌缩、剥空以
+       DEDUPE_BODY_PLACEHOLDER 兜底（详见 _dedupe_reply）。
     纯函数：同等输入必有同等输出，可直接单测；None 输入按空串处理。
 
     出口形态实测口径（2026-10-01，排查"你好"网页只显示纯文本无思维链卡片，
@@ -338,12 +346,93 @@ def _wrap_think(thinking, body):
     if not _THINK_HAS_PAIR_RE.search(reply):
         # 重拼仍不成对：退化为剥离全部 think 标签的纯文本（宁可无标签）
         reply = _strip_think_tags(f"{thinking_text}\n{body_text}").strip()
+    # ⑥ 出口去重（2026-10-02 用户口径，修复本地模型复读）：思考与正文完全
+    # 相同收敛为"占位卡+正文一份"、正文句级连续重复塌缩、剥空占位兜底
+    #（详见 _dedupe_reply；零改动时逐字节原样返回）
+    reply = _dedupe_reply(reply)
     # 输出诊断日志（2026-10-01 用户口径）：放在所有清洗/校验/重拼之后、最终
     # return 之前，打印的即后端实际下发给前端的最终产出（每条 reply 一行、
     # 超 300 字符截断加 "..." 防刷屏）。部署侧据此直接确认 <think> 标签是否
     # 成对出现且紧贴正文（排查"网页只显示纯文本无卡片"时与前端对账）。
     print("WRAPPED_TEXT:", reply[:300] + ("..." if len(reply) > 300 else ""))
     return reply
+
+
+# ==================== 回复出口去重（2026-10-02 用户口径，修复复读） ====================
+
+# 句级连续重复塌缩正则：捕获"内容 + 句末标点"单元（单元内句末标点可有连跑，
+# 如"？？"、"……"），其后的"粘连段 + 空白 + 完全相同单元"重复 2 次及以上
+# 塌缩为一份。句末标点集：中英句号/问号/感叹号、分号、省略号、波浪号与换行
+# （"等标点"口径）；不含 ASCII 句点——保护小数与代码片段不被切句。粘连段
+# 限长 4 字且不含文字/数字/空白/句末标点（emoji、装饰符号等收尾表情）——
+# 用户实测例句"我在呢，在呢，有啥需要帮忙的吗？😊"连发两遍（表情隔在两次
+# 重复之间）据此塌缩；文字/数字不能作粘连段，防止跨句误并。
+_SENT_RUN_RE = re.compile(
+    r'([^。！？!?；;\n…～~]+[。！？!?；;\n…～~]+)'
+    r'(?:[^\w\s。！？!?；;\n…～~]{0,4}\s*\1)+')
+
+
+def _collapse_duplicate_sentences(text):
+    """正文句级连续去重：同一句话（句末标点切分）连续重复 2 次及以上只留一份。
+
+    纯函数：无连续重复的文本逐字节原样返回（零回归保证）；只处理"连续"
+    重复——间隔出现的重复句（A…B…A…B）是有意修辞，不塌缩。
+    """
+    if not text:
+        return text
+    return _SENT_RUN_RE.sub(r'\1', text)
+
+
+def _dedupe_reply(reply):
+    """回复出口去重（_wrap_think 产出与 _seal_bare_cot 防重入透传统一收口）。
+
+    用户口径（2026-10-02，修复本地模型 qwen2.5:7b 复读）：
+    1. <think> 块内文本与正文完全相同（去空白比较）→ 思考卡降级为
+       CHAT_THINKING_PLACEHOLDER 默认占位符，正文保留一份真实回复——修复
+       "正文和 <think> 块内的内容完全相同"在网页上显示两遍的问题；比较保留
+       "[思考] "标记前缀差异，_wrap_think 正文回补设计的
+       "<think>[思考] X</think>X"形态（思考含标记、不含标记的正文）不命中，
+       零回退；
+    2. 正文句级连续重复（同一句 2 次及以上）塌缩为一份（见
+       _collapse_duplicate_sentences）；
+    3. 去重确实发生（有内容被塌缩/收敛）且正文被剥空 → 注入
+       DEDUPE_BODY_PLACEHOLDER（"我在呢～"）占位；输入本就空正文的
+       "只有卡片"孤标签修复形态（_wrap_think ④ 既有设计）保持原样零回退。
+    纯函数 + 异常安全：任何环节异常原样返回输入，绝不影响回复下发。
+    """
+    text = "" if reply is None else str(reply)
+    try:
+        stripped = text.lstrip()
+        m = _THINK_PAIR_RE.match(stripped)
+        if m is None:
+            # 退化形态（无成对 think 前缀的纯文本）：只做句级连续去重
+            new_text = _collapse_duplicate_sentences(text)
+            if new_text != text and not new_text.strip():
+                new_text = DEDUPE_BODY_PLACEHOLDER
+            return new_text
+        body = stripped[m.end():]
+        think_inner = m.group(1)
+        changed = False
+        # ① 思考与正文完全相同（去空白比较）→ 思考卡降级默认占位符
+        if body.strip() and re.sub(r'\s+', '', think_inner) == re.sub(r'\s+', '', body):
+            think_inner = CHAT_THINKING_PLACEHOLDER
+            changed = True
+        # ② 正文句级连续去重
+        new_body = _collapse_duplicate_sentences(body)
+        if new_body != body:
+            changed = True
+        # ③ 仅当去重确实发生且正文被剥空才注入占位（输入本就空正文的
+        #    "只有卡片"形态保持原样）
+        if changed and not new_body.strip():
+            new_body = DEDUPE_BODY_PLACEHOLDER
+            changed = True
+        if not changed:
+            return text   # 零改动：原样返回（逐字节不变，零回归）
+        return text[:len(text) - len(stripped)] \
+            + f"<think>{think_inner}</think>{new_body}"
+    except Exception as e:
+        print(f"⚠️ 回复去重异常（原样返回）: {e}")
+        return text
 
 
 def _extract_tool_json(raw_reply):
@@ -442,7 +531,10 @@ def _seal_bare_cot(raw_reply):
         text = translate_emoji(raw_reply)
         pair = _THINK_PAIR_RE.match(text.lstrip())
         if pair and pair.group(1).strip():
-            return text
+            # 防重入透传（模型自吐完整包装）：出口去重统一收口——模型把
+            # 回复原文同时塞进 <think> 和正文（think==body，本地模型复读
+            # 实测形态）在此收敛为"占位卡+正文一份"
+            return _dedupe_reply(text)
         if pair:
             # 成对但思考为空白（qwen3 非思考形态 <think>\n\n</think>）：
             # 空卡片同样不允许——剥净标签并去掉标签间残留空白后重新包装
@@ -460,7 +552,7 @@ def _seal_bare_cot(raw_reply):
         # 标签字面量按捕获思考重新包装，绝不直出畸形 <think>
         pair = _THINK_PAIR_RE.match(body)
         if pair and pair.group(1).strip():
-            return translate_emoji(body)
+            return _dedupe_reply(translate_emoji(body))
         body = _strip_think_tags(body).lstrip()
     if not body:
         # 历史口径剥空占位：占位符由 _wrap_think 清洗剥除（真实回复回补回
@@ -904,6 +996,51 @@ def _local_model_for(tier):
     return LOCAL_MODEL if tier == "high" else LOCAL_MODEL_SMALL
 
 
+# ==================== 历史轻量清洗（2026-10-02 用户口径，防复读输入） ====================
+
+# 连续相同用户消息收敛阈值：≥3 条才收敛为 1 条（偶发 2 条重复保留，
+# 避免误伤用户有意的补充强调）
+REPEAT_USER_HISTORY_LIMIT = 3
+
+
+def _collapse_repeated_user_history(history):
+    """历史清洗：连续相同用户消息 ≥REPEAT_USER_HISTORY_LIMIT 条只保留首条。
+
+    用户口径（2026-10-02，修复本地模型被连发重复输入带偏复读）：QQ 里
+    "@小橘3号 在吗" 连发多条时，历史里逐条喂给模型会把模型带偏（回复
+    同一句话复读）。"连续"指用户消息序列中相邻——中间可夹助手回复
+    （连发场景每条之间实际都有回复，严格相邻则规则永不命中）；"完全
+    相同"按去首尾空白比较。只剔除多余副本，绝不改动消息内容与顺序；
+    历史不足阈值直接原样返回；异常安全（任何异常回退原始历史，绝不
+    影响对话主链路）。
+    """
+    try:
+        msgs = list(history or [])
+        if len(msgs) < REPEAT_USER_HISTORY_LIMIT:
+            return msgs
+        user_idx = [i for i, m in enumerate(msgs)
+                    if isinstance(m, dict) and m.get("role") == "user"]
+        if len(user_idx) < REPEAT_USER_HISTORY_LIMIT:
+            return msgs
+        drop = set()
+        run_start = 0
+        for k in range(1, len(user_idx) + 1):
+            if (k < len(user_idx)
+                    and str(msgs[user_idx[k]].get("content") or "").strip()
+                    == str(msgs[user_idx[run_start]].get("content") or "").strip()):
+                continue
+            # 运行中断（或扫尾）：本次运行长度达阈值 → 只保留首条
+            if k - run_start >= REPEAT_USER_HISTORY_LIMIT:
+                drop.update(user_idx[run_start + 1:k])
+            run_start = k
+        if not drop:
+            return msgs
+        return [m for i, m in enumerate(msgs) if i not in drop]
+    except Exception as e:
+        print(f"⚠️ 历史去重异常（原样返回）: {e}")
+        return list(history or [])
+
+
 def _build_messages(message, history):
     """组装模型消息：system 提示词置顶 + 历史 + 本条用户消息。
 
@@ -912,10 +1049,12 @@ def _build_messages(message, history):
       （架构 §10 #2/#3 接线）以特定前缀标识，允许通过并在去掉前缀后保留；
     - 兼容参考实现口径：调用方可能已把本条用户消息追加进 history 再调用
       （参考 main.py 先 append 再调 smart_ask），此时去重，避免重复；
+    - 历史轻量清洗（2026-10-02 用户口径）：连续相同用户消息 ≥3 条只保留
+      首条（_collapse_repeated_user_history），防止模型被连发输入带偏复读；
     - 返回新列表，不修改调用方传入的 history。
     """
     messages = [SYSTEM_PROMPT]
-    for m in history or []:
+    for m in _collapse_repeated_user_history(history):
         if not isinstance(m, dict):
             continue
         role, content = m.get("role"), m.get("content") or ""

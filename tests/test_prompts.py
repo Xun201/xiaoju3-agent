@@ -234,9 +234,11 @@ class PromptsTests(unittest.TestCase):
         # 回退链彻底失败的收尾场景一律以本条为准
         self.assertIn("工具失败后的后续动作", self.content)
         self.assertIn("以本条为准", self.content)
-        # 新段追加为系统提示词最后一段
+        # 新段追加为系统提示词段落之一；2026-10-02 用户口径"系统提示词末尾
+        # 加防复读约束"起，末段为【防复读规则】，静默回退铁律保持在其前
         paragraphs = [p.strip() for p in self.content.split("\n\n") if p.strip()]
-        self.assertTrue(paragraphs[-1].startswith("【静默回退铁律】"))
+        self.assertTrue(paragraphs[-1].startswith("【防复读规则】"))
+        self.assertTrue(any(p.startswith("【静默回退铁律】") for p in paragraphs))
 
 
 if __name__ == "__main__":

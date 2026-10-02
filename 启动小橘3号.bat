@@ -42,10 +42,15 @@ if exist "desktop_launcher.py" (
 )
 
 rem ⑥ 启动结果（后台服务由桌面窗口拉起，稍候数秒就绪；与 start.sh 日志口径一致）
+rem 2026-10-02 用户口径"去掉黑框框"：启动路径不 pause——bat 控制台拉起
+rem 桌面窗口后立即自动退出（黑框仅闪现约 1 秒，双击 bat 必然有此控制台），
+rem 桌面窗口独立存活、关窗自动停服。
+rem ⚠️ 勿改用 start /B 拉起 pythonw：/B 会把子进程绑定到本 bat 控制台，
+rem 控制台退出时桌面窗口会被连带终止（实测教训，见记忆 9425d69 批次）。
 echo ✅ 主程序已启动 (5003)（由桌面窗口后台拉起，稍候数秒就绪；5002 端口已废弃）
 echo ✅ 控制台已启动 (5003/console)（原生桌面窗口内打开，不再开浏览器）
 echo ⚠️ QQ webhook 已迁移至 5003：请将 LLOneBot 的 HTTP 上报地址改为 http://127.0.0.1:5003/onebot，否则 QQ 会断连
 
 echo 提示：关闭桌面窗口即自动停止全部小橘3号后台进程；也可运行 停止小橘3号.bat 一键关闭
-pause >nul
 endlocal
+exit /b 0
