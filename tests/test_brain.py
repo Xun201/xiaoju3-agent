@@ -3643,7 +3643,7 @@ class LocationHardBlockTests(unittest.TestCase):
         self.assertEqual(called_args["query"],
                          "长沙天心区 今日天气预报 气温 降水")
         self.assertNotIn("🛑", out)
-        self.assertNotIn("静默期", out)
+        self.assertNotIn("强制询问", out)   # 静默期检查调试行常驻，断言看拦截语义
 
     def test_grace_expires_after_window(self):
         """静默期超时（5 分钟）自动失效：届时无位置仍走常规未知路径。"""
@@ -3651,6 +3651,80 @@ class LocationHardBlockTests(unittest.TestCase):
         brain._location_cleared_at = _time.time() - 301   # 恰好超出窗口
         self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
         self.assertFalse(brain._location_in_clear_grace())
+
+    def test_grace_blocks_immediately_after_clear(self):
+        """任务口径用例①：mark_location_cleared() 后立刻 _inject_location
+        （无 .env / 无 json）→ None，日志含"静默期"（含前置调试行）。"""
+        buf = io.StringIO()
+        with mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value=None), \
+                mock.patch.dict(sys.modules,
+                                {"agent_state.state_manager": self.real_sm}), \
+                contextlib.redirect_stdout(buf):
+            brain.mark_location_cleared()
+            self.assertIsNone(brain._inject_location("今天天气"))
+        self.assertIn("📍 [位置] 静默期检查:", buf.getvalue())
+        self.assertIn("在静默期内=True", buf.getvalue())
+        self.assertIn("静默期", buf.getvalue())
+
+    def test_grace_blocks_query_location_words(self):
+        """任务口径用例②：静默期内 query 带完整位置词（模型从历史带回的
+        "长沙市天心区的天气"）→ 同样 None，位置词不绕过静默期。"""
+        buf = io.StringIO()
+        with mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value=None), \
+                mock.patch.dict(sys.modules,
+                                {"agent_state.state_manager": self.real_sm}), \
+                contextlib.redirect_stdout(buf):
+            brain.mark_location_cleared()
+            self.assertIsNone(brain._inject_location("长沙市天心区的天气"))
+
+    def test_grace_blocks_env_location(self):
+        """本 bug 回归锁（2026-10-02 实测：/clear 后立刻问天气仍搜旧位置
+        ——.env 配置位置绕过静默期）：静默期内 .env 有位置也强制 None
+        询问（主人刚清除，明确表达位置不对/不要用）。"""
+        buf = io.StringIO()
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", "天心区"), \
+                contextlib.redirect_stdout(buf):
+            brain.mark_location_cleared()
+            self.assertIsNone(brain._inject_location("今天天气"))
+        self.assertIn("静默期内忽略 .env 配置位置，强制询问", buf.getvalue())
+
+    def test_grace_expired_env_location_resumes(self):
+        """任务口径用例③：5 分钟后静默期已过 → 正常判定（.env 位置恢复
+        改写为精准天气 query）。"""
+        import time as _time
+        brain._location_cleared_at = _time.time() - 301
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        buf = io.StringIO()
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", "天心区"), \
+                contextlib.redirect_stdout(buf):
+            result = brain._inject_location("今天天气")
+        self.assertEqual(result, "长沙天心区 今日天气预报 气温 降水")
+        self.assertIn("在静默期内=False", buf.getvalue())
+
+    def test_grace_allows_newly_told_json_location(self):
+        """任务口径用例④：静默期内主人重新回答位置（user_location.json
+        新写入）→ 新位置立即生效，不受静默期影响。"""
+        buf = io.StringIO()
+        with mock.patch.object(brain, "USER_CITY", ""), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value={"city": "长沙",
+                                                "district": "天心区"}), \
+                mock.patch.dict(sys.modules,
+                                {"agent_state.state_manager": self.real_sm}), \
+                contextlib.redirect_stdout(buf):
+            brain.mark_location_cleared()
+            result = brain._inject_location("今天天气")
+        self.assertEqual(result, "长沙天心区 今日天气预报 气温 降水")
+        self.assertNotIn("强制询问", buf.getvalue())
 
     def test_user_message_same_turn_rewrite(self):
         """任务口径用例①：用户消息"帮我搜一下长沙市天心区的天气" + 位置

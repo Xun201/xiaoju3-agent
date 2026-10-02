@@ -775,18 +775,36 @@ def _inject_location(query):
             return q
         if not any(k in q for k in LOCATION_SENSITIVE_KEYWORDS):
             return q
+
+        # 🚿 静默期检查前置（2026-10-02 用户口径：必须先于 .env/json 一切
+        # 位置判定——上一版放在"位置为空"分支内，.env 配置位置直接绕过
+        # 了静默期，实测 /clear_location 后立刻问天气仍搜出旧位置）。
+        # 调试日志（用户口径）：每次地点敏感判定打一行判定依据，部署侧
+        # 可直接对账 cleared_at/now/是否在窗口内
+        in_grace = _location_in_clear_grace()
+        print(f"📍 [位置] 静默期检查: cleared_at={_location_cleared_at:.0f}, "
+              f"now={time.time():.0f}, 在静默期内={'True' if in_grace else 'False'}")
+
         city, district, source = _resolve_user_location()
         location = (city + district).strip()
 
-        # 🚿 清除静默期（任务 2）：/clear_location 后 5 分钟内强制视为位置
-        # 未知——历史消息里的位置仍会把小模型带偏，json 已删也不采纳
-        if not location and _location_in_clear_grace():
-            print("📍 [位置] 已清除后处于静默期，忽略历史位置，强制询问")
-            return None
-        # 🚫 位置来源严格化（任务 1）：历史/query 里的位置不作为来源——
-        # 无位置一律 None（调用方硬拦截转询问主人）。注意：query 里哪怕
-        # 带着完整的"长沙天心区"（模型从历史推断）也不采信——主人重新
-        # 告知位置后 user_location.json 会有新记录，届时自然放行
+        if in_grace:
+            if location and source == "user_location.json":
+                pass   # 清除后主人重新告知的新位置（json 必为清除后新写入，
+                       # 清除时文件已删）：立即生效，静默期不误伤
+            elif location:
+                # .env 配置位置在静默期内不采纳——主人刚清除，明确表达
+                # "位置不对/不要用"（本 bug 泄漏口：上一版 .env 绕过静默期）
+                print("📍 [位置] 静默期内忽略 .env 配置位置，强制询问")
+                return None
+            else:
+                print("📍 [位置] 已清除后处于静默期，忽略历史位置，强制询问")
+                return None
+
+        # 🚫 位置来源严格化：历史/query 里的位置不作为来源——无位置一律
+        # None（调用方硬拦截转询问主人）。query 里哪怕带着完整的"长沙
+        # 天心区"（模型从历史推断）也不采信——主人重新告知位置后
+        # user_location.json 会有新记录，届时自然放行
         if not location:
             print("📍 [搜索] 位置来源: 未知（不改写，待主动询问主人）")
             return None
