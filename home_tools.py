@@ -3,7 +3,7 @@
 
 按《架构设计文档》§7 / 功能文档 §8.1 / §8.4：
 - get_ha_devices()：拉取 /api/states，只保留 input_boolean / light / switch /
-  sensor / climate / media_player 六类实体，输出文本摘要供大脑感知设备。
+  sensor / climate / media_player / input_number 七类实体，输出文本摘要供大脑感知设备。
 - get_ha_states()：同一份数据的结构化版本（[{entity_id, state,
   friendly_name}]），供心跳场景规则引擎做快照 diff（架构 §10 #10）。
 - control_ha_device(entity_id, action, temperature=None)：turn_on / turn_off /
@@ -26,8 +26,11 @@ import requests
 
 from xiaoju3 import HA_URL, HA_TOKEN
 
-# 可控/可读实体六类（参考实现口径：域名与 entity_id 做子串匹配）
-HA_DOMAINS = ["input_boolean", "light", "switch", "sensor", "climate", "media_player"]
+# 可感知实体七类（参考实现口径：域名与 entity_id 做子串匹配）；
+# input_number 为 2026-10-02 新增第七类（模拟湿度 input_number.mo_ni_shi_du
+# 等数值实体供心跳感知与场景规则读取；仅感知，control_ha_device 无该域控制）
+HA_DOMAINS = ["input_boolean", "light", "switch", "sensor", "climate",
+              "media_player", "input_number"]
 
 _UNSET_HA = "❌ 未配置 HA_URL（Home Assistant 地址），无法{0}。请先在 .env 或环境变量中设置 HA_URL 与 HA_TOKEN。"
 
