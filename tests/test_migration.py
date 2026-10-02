@@ -678,5 +678,110 @@ class SoulCommandTests(unittest.TestCase):
         self.assertIn("[指令路由] 收到指令: /soul_export", buf.getvalue())
 
 
+class PeerWatchWiringTests(unittest.TestCase):
+    """多设备守望接线（main 层，最小可用版）：_peer_urls 配置解析 +
+    start_background_services 生命周期（启动/单机静默）+ 掉线日志口径。
+    全部 mock 网络与线程，离线可跑。"""
+
+    def setUp(self):
+        import main as main_mod
+        self.main = main_mod
+
+    def test_peer_urls_empty_means_single_machine(self):
+        with mock.patch.dict(os.environ, {"PEER_DEVICE_URL": "",
+                                          "XIAOJU3_PEERS": "", "XIAOJU3_WATCH": ""},
+                             clear=False):
+            self.assertEqual(self.main._peer_urls(), [])
+
+    def test_peer_url_alone_enables_watch(self):
+        """PEER_DEVICE_URL 单独配置即启用（无需 XIAOJU3_WATCH）。"""
+        with mock.patch.dict(os.environ,
+                             {"PEER_DEVICE_URL": "http://192.168.1.4:5003",
+                              "XIAOJU3_PEERS": "", "XIAOJU3_WATCH": ""},
+                             clear=False):
+            self.assertEqual(self.main._peer_urls(), ["http://192.168.1.4:5003"])
+
+    def test_peer_urls_union_dedup(self):
+        """双入口并集去重保序：PEER_DEVICE_URL + XIAOJU3_PEERS（WATCH=1）。"""
+        env = {"PEER_DEVICE_URL": "http://a:5003",
+               "XIAOJU3_PEERS": "http://a:5003, http://b:5003 ,",
+               "XIAOJU3_WATCH": "1"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(self.main._peer_urls(),
+                             ["http://a:5003", "http://b:5003"])
+
+    def test_legacy_multi_peers_require_watch_flag(self):
+        """旧多对端口径不变：XIAOJU3_PEERS 无 XIAOJU3_WATCH=1 不纳入。"""
+        env = {"PEER_DEVICE_URL": "", "XIAOJU3_PEERS": "http://b:5003",
+               "XIAOJU3_WATCH": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(self.main._peer_urls(), [])
+
+    def test_services_silent_without_peers(self):
+        """单机模式：不配对端 → PeerWatch 不构造、守望线程不启动、零守望日志。"""
+        import contextlib
+        import io
+        env = {"PEER_DEVICE_URL": "", "XIAOJU3_PEERS": "", "XIAOJU3_WATCH": ""}
+        with mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.object(self.main, "start_heartbeat"), \
+                mock.patch.object(self.main, "PeerWatch") as mwatch, \
+                mock.patch.object(self.main, "threading") as mthreading, \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            self.main.start_background_services()
+        mwatch.assert_not_called()
+        mthreading.Thread.assert_not_called()
+        self.assertNotIn("[守望]", buf.getvalue())
+
+    def test_services_start_watch_with_peer_url(self):
+        """配置 PEER_DEVICE_URL → PeerWatch(对端+离线回调) 守护线程启动。"""
+        import contextlib
+        import io
+        env = {"PEER_DEVICE_URL": "http://192.168.1.4:5003",
+               "XIAOJU3_PEERS": "", "XIAOJU3_WATCH": ""}
+        with mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.object(self.main, "start_heartbeat"), \
+                mock.patch.object(self.main, "PeerWatch") as mwatch, \
+                mock.patch.object(self.main, "threading") as mthreading, \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            self.main.start_background_services()
+        mwatch.assert_called_once_with(peers=["http://192.168.1.4:5003"],
+                                       on_peer_down=self.main._on_peer_down)
+        kwargs = mthreading.Thread.call_args.kwargs
+        self.assertTrue(kwargs.get("daemon"))
+        self.assertEqual(kwargs.get("name"), "xiaoju3-peer-watch")
+        self.assertIs(kwargs["target"], mwatch.return_value.watch_loop)  # 绑定 watch_loop
+        mthreading.Thread.return_value.start.assert_called_once()
+        self.assertIn("[守望] 多设备互相守望已启动", buf.getvalue())
+        self.assertIn("http://192.168.1.4:5003", buf.getvalue())
+
+    def test_on_peer_down_log_format(self):
+        """掉线日志口径：🚨 [守望] 对端 xxx 离线。"""
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.main._on_peer_down("http://192.168.1.4:5003")
+        self.assertIn("🚨 [守望] 对端 http://192.168.1.4:5003 离线", buf.getvalue())
+
+    def test_wired_callback_fires_on_unreachable_peer(self):
+        """端到端（mock 网络）：可达不触发回调；连续失联达阈值 → 接线回调打离线日志。"""
+        import contextlib
+        import io
+        watch = migration.PeerWatch(peers=["http://peer.example:5003"],
+                                    on_peer_down=self.main._on_peer_down)
+        with mock.patch.object(migration.requests, "get",
+                               return_value=mock.MagicMock(status_code=200)):
+            snaps = watch.check_peers()
+        self.assertTrue(snaps[0]["alive"])
+        # 记账直接置阈值-1，下一轮失联即达阈值（等价连续 3 次失败的最后一轮）
+        watch._fail_counts["http://peer.example:5003"] = watch.fail_threshold - 1
+        buf = io.StringIO()
+        with mock.patch.object(migration.requests, "get",
+                               side_effect=ConnectionError("down")), \
+                contextlib.redirect_stdout(buf):
+            watch.check_peers()
+        self.assertIn("🚨 [守望] 对端 http://peer.example:5003 离线", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

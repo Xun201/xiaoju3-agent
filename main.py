@@ -104,10 +104,31 @@ def _onebot_headers():
 
 
 def _peer_watch_enabled():
-    """多设备互相守望开关（架构 §8，默认关闭）：
+    """多设备互相守望开关（多对端扩展口径，保持不变）：
     env XIAOJU3_PEERS 配置了对端 且 XIAOJU3_WATCH=1 时才开启。"""
     return bool(os.environ.get("XIAOJU3_PEERS", "").strip()) and \
         os.environ.get("XIAOJU3_WATCH", "").strip() == "1"
+
+
+def _peer_urls():
+    """守望对端清单（多设备守望最小可用版）：
+    - PEER_DEVICE_URL：单对端主入口（.env 配置即启用，空=单机模式）；
+    - XIAOJU3_PEERS + XIAOJU3_WATCH=1：多对端扩展（口径不变）。
+    去重保序；空列表 = 单机模式，PeerWatch 静默不启动。"""
+    urls = []
+    single = os.environ.get("PEER_DEVICE_URL", "").strip()
+    if single:
+        urls.append(single)
+    if _peer_watch_enabled():
+        urls.extend(p.strip() for p in os.environ.get("XIAOJU3_PEERS", "").split(",")
+                    if p.strip())
+    seen = set()
+    return [u for u in urls if not (u in seen or seen.add(u))]
+
+
+def _on_peer_down(peer):
+    """对端掉线最小感知：本地终端日志（不做自动接管/双向同步/广播，冲刺口径）。"""
+    print(f"🚨 [守望] 对端 {peer} 离线")
 
 
 def _is_in_workspace(filepath):
@@ -879,15 +900,18 @@ def start_background_services():
     移交 :5003 dashboard 进程在启动时调用；重复调用会重复拉心跳，勿多次调用）。
 
     - 💓 主动心跳引擎（heartbeat.start_heartbeat daemon 线程）；
-    - 👀 多设备互相守望（架构 §8，默认关闭）：env XIAOJU3_PEERS 配置对端
-      且 XIAOJU3_WATCH=1 时才启动守护线程（migration.PeerWatch）。
+    - 👀 多设备互相守望（架构 §8 最小可用版）：PEER_DEVICE_URL 配置即启用
+      （多对端扩展 XIAOJU3_PEERS+XIAOJU3_WATCH=1 口径不变）；无对端=单机
+      模式静默不启动；掉线仅打 [守望] 离线日志（不自动接管）。
     """
     start_heartbeat()
 
-    if _peer_watch_enabled():
-        threading.Thread(target=PeerWatch().watch_loop, daemon=True,
-                         name="xiaoju3-peer-watch").start()
-        print(f"👀 多设备互相守望已启动（对端：{os.environ['XIAOJU3_PEERS'].strip()}）")
+    peers = _peer_urls()
+    if peers:
+        threading.Thread(
+            target=PeerWatch(peers=peers, on_peer_down=_on_peer_down).watch_loop,
+            daemon=True, name="xiaoju3-peer-watch").start()
+        print(f"👀 [守望] 多设备互相守望已启动（对端：{'、'.join(peers)}）")
 
 
 if __name__ == '__main__':
