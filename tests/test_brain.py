@@ -3608,6 +3608,50 @@ class LocationHardBlockTests(unittest.TestCase):
         self.assertTrue(reply.startswith("<think>"), reply)
         self.assertIn("</think>", reply)
 
+    def test_history_location_not_trusted_when_no_record(self):
+        """任务口径用例①（严格来源化回归锁）：模型 query 带着历史推断的
+        "长沙市天心区"、json 不存在 → query/历史位置不作为来源，硬拦截
+        询问（修复 /clear_location 后仍搜旧位置的 bug）。"""
+        reply, source, out, mexec = self._run_web_search_flow(
+            "长沙市天心区的天气", user_message="今天天气怎么样")
+        mexec.assert_not_called()
+        self.assertIn("我还不知道你在哪个城市和区", reply)
+        self.assertEqual(source, "📍 询问位置")
+        self.assertIn("🛑 [搜索] 位置未知，拦截搜索请求", out)
+
+    def test_grace_period_after_clear_forces_ask(self):
+        """任务口径用例②：历史里有位置 + 刚执行过 /clear_location → 静默
+        期强制询问（🚿 日志、绝不采信历史位置）。"""
+        brain.mark_location_cleared()
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        reply, source, out, mexec = self._run_web_search_flow(
+            "长沙市天心区的天气", user_message="今天天气怎么样")
+        mexec.assert_not_called()
+        self.assertIn("我还不知道你在哪个城市和区", reply)
+        self.assertIn("📍 [位置] 已清除后处于静默期，忽略历史位置，强制询问",
+                      out)
+
+    def test_location_record_works_despite_grace(self):
+        """任务口径用例③：历史里无位置 + user_location.json 存在（主人
+        静默期内重新告知）→ 正常使用位置，静默期不误伤新写入的记录。"""
+        brain.mark_location_cleared()
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        reply, source, out, mexec = self._run_web_search_flow(
+            "今天天气", unknown_location=False)
+        mexec.assert_called_once()
+        called_args = mexec.call_args[0][1]
+        self.assertEqual(called_args["query"],
+                         "长沙天心区 今日天气预报 气温 降水")
+        self.assertNotIn("🛑", out)
+        self.assertNotIn("静默期", out)
+
+    def test_grace_expires_after_window(self):
+        """静默期超时（5 分钟）自动失效：届时无位置仍走常规未知路径。"""
+        import time as _time
+        brain._location_cleared_at = _time.time() - 301   # 恰好超出窗口
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        self.assertFalse(brain._location_in_clear_grace())
+
     def test_user_message_same_turn_rewrite(self):
         """任务口径用例①：用户消息"帮我搜一下长沙市天心区的天气" + 位置
         未知 → 提取写入 user_location.json + 当轮就改写 query 为精准天气
