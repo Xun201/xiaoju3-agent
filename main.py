@@ -274,14 +274,16 @@ def handle_child_command(message, user_id, is_console=False):
     return f"✅ 成人已确认，操作已执行：{result}"
 
 
-def get_creator_name():
+def get_creator_name(base_dir=None):
     """创作者署名（xiaoju3_data/creator.json 存在即激活；缺省返回 ""）。
 
     只表现署名，不授予任何权限（权限由 LV4 决定）。公开版（无隔离区
-    文件）返回空串，所有署名位置自动隐藏。
+    文件）返回空串，所有署名位置自动隐藏。base_dir 仅供测试注入临时
+    目录（缺省 = 项目根下 xiaoju3_data）。
     """
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "xiaoju3_data", "creator.json")
+    base = base_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "xiaoju3_data")
+    path = os.path.join(base, "creator.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -291,12 +293,15 @@ def get_creator_name():
 
 
 def handle_creator_command():
-    """/creator 命令：返回创作者署名卡（QQ 与网页控制台共用）。"""
+    """/creator 命令：返回创作者署名卡（QQ 与网页控制台共用）。
+
+    creator.json 存在 → 署名卡；缺失 → 开源项目链接。不要求任何权限
+    （LV1 也可查）。
+    """
     name = get_creator_name()
-    if not name:
-        return ('ℹ️ 本实例未配置创作者署名（部署者可在 xiaoju3_data/creator.json '
-                '写入 {"name": "你的名字"}）。')
-    return f"🦊 小橘3号 · 由 {name} 创造与维护"
+    if name:
+        return f"🦊 小橘3号 · 由 {name} 创造与维护"
+    return "🦊 小橘3号 · 开源项目（https://github.com/Xun201/xiaoju3-agent）"
 
 
 # ================= 大脑链路编排（架构 §10 #2/#3/#4） =================
@@ -491,7 +496,10 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return location_reply
 
     # === ✍️ 创作者署名命令（/creator，QQ 与网页共用，批次②） ===
-    if message == "/creator":
+    # 2026-10-02 修复：QQ 群 @ 消息清洗后残留 "CQ:at,qq=xxx" 前缀，
+    # 清洗文本精确匹配失效（实测落模型瞎编）——改用去 CQ 码后的
+    # raw_message 精确匹配，群内 @/creator 与私聊 /creator 均命中
+    if _strip_cq(raw_message).strip() == "/creator":
         return handle_creator_command()
 
     # === 🔒 儿童锁裁决（/approve /deny，QQ 与网页共用，批次②） ===

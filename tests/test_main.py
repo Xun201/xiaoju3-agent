@@ -30,6 +30,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import re
 import tempfile
 import time
@@ -1389,6 +1390,64 @@ class TestChildLockFlow(_MainCase):
             reply = self._child_ask()
         mexe.assert_called_once()
         self.assertEqual(main._pending_child_requests, {})
+
+
+class TestCreatorCommand(_MainCase):
+    """/creator 创作者署名命令（2026-10-02 修复：QQ 群 @ 前缀失效）。"""
+
+    def setUp(self):
+        super().setUp()
+        import tempfile as _tempfile
+        self.creator_dir = _tempfile.mkdtemp(prefix="xiaoju3_creator_")
+        self.addCleanup(shutil.rmtree, self.creator_dir, ignore_errors=True)
+
+    def _write_creator(self, name="XUN"):
+        with open(os.path.join(self.creator_dir, "creator.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({"name": name}, f, ensure_ascii=False)
+
+    def _patch_name(self, name):
+        p = patch("main.get_creator_name", return_value=name)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_get_creator_name_reads_json(self):
+        """get_creator_name 读 creator.json 的 name 字段（base_dir 注入隔离）。"""
+        self._write_creator("XUN")
+        self.assertEqual(main.get_creator_name(self.creator_dir), "XUN")
+
+    def test_get_creator_name_missing_returns_empty(self):
+        self.assertEqual(main.get_creator_name(self.creator_dir), "")
+
+    def test_qq_group_at_creator_returns_card(self):
+        """任务口径用例：QQ 群 @小橘3号 /creator（raw 带 CQ:at 前缀）→
+        署名卡；不进模型（smart_ask 零调用）——本批修复回归锁。"""
+        self._patch_name("XUN")
+        reply = main.handle_message(
+            'qq', 123, 456,
+            "[CQ:at,qq=10000] /creator", self_qq="10000")
+        self.assertEqual(reply, "🦊 小橘3号 · 由 XUN 创造与维护")
+        self.smart_ask.assert_not_called()
+
+    def test_qq_private_creator_without_json_returns_oss_link(self):
+        """任务口径用例：creator.json 不存在 → 开源项目链接。"""
+        self._patch_name("")   # 本机真实 creator.json 存在，patch 为缺失口径
+        reply = main.handle_message('qq', 123, None, "/creator")
+        self.assertEqual(
+            reply, "🦊 小橘3号 · 开源项目（https://github.com/Xun201/xiaoju3-agent）")
+        self.smart_ask.assert_not_called()
+
+    def test_web_channel_creator_card(self):
+        """网页端 /creator → 同样返回署名卡（dashboard 分流共用 main 函数）。"""
+        self._patch_name("XUN")
+        from xiaoju3_dashboard import app
+        client = app.test_client()
+        resp = client.post("/api/chat", json={"message": "/creator"})
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"]["reply"],
+                         "🦊 小橘3号 · 由 XUN 创造与维护")
+        self.smart_ask.assert_not_called()
 
 
 if __name__ == "__main__":
