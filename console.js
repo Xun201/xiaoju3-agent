@@ -301,17 +301,10 @@
                     // 字段 tts_voice；localStorage 为空时采用并写回）
                     adoptBackendTTSVoice(d.tts_voice);
 
-                    // ✍️ 创作者署名（2026-10-02 批次②）：后端下发 creator
-                    // （xiaoju3_data/creator.json）时更新标题，同值不重复写
-                    if (d.creator && d.creator !== fetchStatus._creatorShown) {
-                        fetchStatus._creatorShown = d.creator;
-                        document.title = `小橘3号控制台 · 为 ${d.creator} 而建`;
-                        const headerTitle = document.querySelector('.header-title');
-                        if (headerTitle) {
-                            headerTitle.textContent =
-                                `小橘3号 · 控制台｜为 ${d.creator} 而建`;
-                        }
-                    }
+                    // ✍️ 创作者署名（2026-10-02）：不再写入页面标题/顶栏
+                    //（2026-10-02 用户口径：标题栏隐藏"为 XUN 而建"，保持
+                    // "小橘3号 · 控制台" 原样）；/creator 命令与启动日志
+                    // 署名不受影响。creator 字段仍随 /api/status 下发。
                 }
             })
             .catch(err => console.error('获取系统状态失败', err));
