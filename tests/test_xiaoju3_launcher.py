@@ -292,5 +292,96 @@ class TestMainDryRun(unittest.TestCase):
         self.assertNotIn("main.py", out)   # 旧 5002 入口不再出现在计划中
 
 
+class TestSingleInstanceAndLogRotation(unittest.TestCase):
+    """单实例防重（方案 b）与日志轮换（方案 a，2026-10-02 稳定性排查）：
+    5003 探测、时间戳日志路径、旧日志清理。全部离线（check_fn / tmp 注入）。"""
+
+    def test_is_port_in_use_with_injected_check(self):
+        self.assertTrue(xl.is_port_in_use(check_fn=lambda h, p: True))
+        self.assertFalse(xl.is_port_in_use(check_fn=lambda h, p: False))
+        # 注入的 check_fn 收到默认 host/port
+        seen = {}
+        xl.is_port_in_use(check_fn=lambda h, p: (seen.update(h=h, p=p), False)[1])
+        self.assertEqual(seen, {"h": "127.0.0.1", "p": xl.DASHBOARD_PORT})
+
+    def test_is_port_in_use_swallows_probe_oserror(self):
+        def boom(_h, _p):
+            raise OSError("探测失败")
+        self.assertFalse(xl.is_port_in_use(check_fn=boom))   # 探测异常按未占用处理
+
+    def test_timestamped_log_path_format_and_dir(self):
+        path = xl.timestamped_log_path(now=1780000000)   # 固定时刻
+        self.assertRegex(os.path.basename(path),
+                         r"dashboard_live_\d{8}_\d{6}\.log")
+        self.assertTrue(os.path.isabs(path))
+        self.assertIn("xiaoju3_data", path)
+
+    def test_prune_keeps_newest_ten(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as log_dir:
+            paths = []
+            for i in range(12):
+                p = os.path.join(log_dir,
+                                 xl.LOG_FILE_PREFIX + f"2026090{i % 10}0000_{i}.log")
+                open(p, "w").close()
+                os.utime(p, (1700000000 + i, 1700000000 + i))
+                paths.append(p)
+            kept, removed = xl.prune_dashboard_logs(log_dir=log_dir)
+            self.assertEqual((kept, removed), (10, 2))
+            survivors = set(os.listdir(log_dir))
+            self.assertNotIn(os.path.basename(paths[0]), survivors)   # 最旧被删
+            self.assertNotIn(os.path.basename(paths[1]), survivors)
+            for p in paths[2:]:
+                self.assertIn(os.path.basename(p), survivors)
+
+    def test_prune_keeps_legacy_fixed_name_log(self):
+        """旧固定名 dashboard_live.log（无下划线后缀）不在轮换范围。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as log_dir:
+            legacy = os.path.join(log_dir, "dashboard_live.log")
+            open(legacy, "w").close()
+            kept, removed = xl.prune_dashboard_logs(log_dir=log_dir)
+            self.assertEqual((kept, removed), (0, 0))
+            self.assertTrue(os.path.exists(legacy))
+
+    def test_prune_missing_dir_safe(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            kept, removed = xl.prune_dashboard_logs(
+                log_dir=os.path.join(tmp, "no_such_dir"))
+        self.assertEqual((kept, removed), (0, 0))
+
+
+class TestMainSingleInstanceGuard(unittest.TestCase):
+    """方案 b 接线：5003 已被监听 → 打印提示以 0 优雅退出，
+    NapCat 与 launcher 均不启动；空闲 → 正常 prune + 拉起。"""
+
+    def test_main_cancels_when_port_in_use(self):
+        import io
+        with mock.patch.object(xl, "is_port_in_use", return_value=True), \
+                mock.patch.object(xl, "ensure_napcat") as mnap, \
+                mock.patch.object(xl, "XiaojuLauncher") as mlauncher:
+            buf = io.StringIO()
+            with mock.patch("sys.stdout", buf):
+                code = xl.main([])
+        self.assertEqual(code, 0)
+        mnap.assert_not_called()
+        mlauncher.assert_not_called()
+        self.assertIn(xl.ALREADY_RUNNING_HINT, buf.getvalue())
+
+    def test_main_probes_prunes_then_runs_when_free(self):
+        with mock.patch.object(xl, "is_port_in_use", return_value=False), \
+                mock.patch.object(xl, "ensure_napcat") as mnap, \
+                mock.patch.object(xl, "prune_dashboard_logs") as mprune, \
+                mock.patch.object(xl, "XiaojuLauncher") as mlauncher:
+            mlauncher.return_value.run.return_value = 0
+            code = xl.main([])
+        self.assertEqual(code, 0)
+        mnap.assert_called_once_with()
+        mprune.assert_called_once_with()
+        mlauncher.assert_called_once()
+        mlauncher.return_value.run.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()

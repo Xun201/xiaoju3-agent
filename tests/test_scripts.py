@@ -24,6 +24,7 @@ SCRIPTS = [
     "restart_all.sh",
     "push.sh",
     "make_manifest.sh",
+    "restart_clean.sh",
 ]
 
 
@@ -564,6 +565,42 @@ class InstallerLegacyDepsTests(unittest.TestCase):
             req = f.read()
         for pin in ('Flask==3.1.3', 'requests==2.34.2', 'playwright==1.63.0', 'psutil==7.2.2'):
             self.assertIn(pin, req, f"requirements.txt 缺少最新钉版 {pin}")
+
+
+class RestartCleanTests(unittest.TestCase):
+    """一键干净重启脚本（2026-10-02 稳定性排查·方案 d）：
+    清杀 → 等 2 秒 → 确认 5003 释放 → 清旧日志（留 10）→ 时间戳日志启动。"""
+
+    def test_restart_clean_bat_exists_with_crlf(self):
+        raw = (ROOT / "restart_clean.bat").read_bytes()
+        self.assertTrue(raw, "restart_clean.bat 缺失")
+        self.assertIn(b"\r\n", raw)          # bat 必须 CRLF（LF+中文+goto 会错位）
+        self.assertNotIn(b"goto ", raw)      # 线性无跳转设计锁定
+
+    def test_restart_clean_bat_key_steps(self):
+        content = (ROOT / "restart_clean.bat").read_text(encoding="utf-8")
+        for frag in ("Stop-Process",                     # 清杀进程
+                     "LocalPort 5003",                   # 端口确认
+                     "timeout /t 2",                     # 等待 2 秒
+                     "prune_dashboard_logs",             # 旧日志清理（共用实现）
+                     "timestamped_log_path",             # 时间戳日志（共用实现）
+                     "%LOGPATH:.log=.err.log%"):         # err 同名加时间戳
+            self.assertIn(frag, content, frag)
+
+    def test_restart_clean_sh_key_steps(self):
+        content = read_script("restart_clean.sh")
+        for frag in ("pgrep -f",                         # 清杀进程
+                     "/dev/tcp/127.0.0.1/5003",          # 端口确认
+                     "nohup python3 xiaoju3_launcher.py",
+                     "prune_dashboard_logs",
+                     "timestamped_log_path"):
+            self.assertIn(frag, content, frag)
+
+    def test_scripts_share_launcher_log_helpers(self):
+        """bat 与 sh 都经 launcher 的同一实现取时间戳路径与清理（单一事实源）。"""
+        for name in ("restart_clean.bat", "restart_clean.sh"):
+            content = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("xiaoju3_launcher", content, name)
 
 
 if __name__ == "__main__":

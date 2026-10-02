@@ -125,7 +125,10 @@ class MainHookTests(unittest.TestCase):
     """main() 集成点：非 dry-run 调 ensure_napcat；--dry-run 零副作用。"""
 
     def test_main_calls_ensure_napcat(self):
-        with mock.patch.object(xl, "ensure_napcat") as mensure, \
+        # 单实例防重（方案 b）：探测空闲才走到 ensure_napcat（patch 掉真实端口探测，
+        # 测试不依赖当前 5003 是否有服务在跑）
+        with mock.patch.object(xl, "is_port_in_use", return_value=False), \
+                mock.patch.object(xl, "ensure_napcat") as mensure, \
                 mock.patch.object(xl.subprocess, "Popen"), \
                 mock.patch.object(xl, "XiaojuLauncher") as mlauncher:
             mlauncher.return_value.run.return_value = 0

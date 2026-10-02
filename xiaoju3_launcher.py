@@ -154,6 +154,64 @@ def ensure_napcat(napcat_dir=None, popen=None, out=None, running_fn=None,
     return True
 
 
+# ==================== 单实例防重 + 日志轮换（2026-10-02 稳定性排查·方案 a/b） ====================
+# 排查结论：并发启动的 pair 经 werkzeug SO_REUSEADDR 在 Windows 静默抢绑 5003，
+# 败者 exit=1、固定日志文件被多写者混写。对策：
+# - 方案 b：启动前探测 5003 已被监听 → 取消本次启动（exit 0 不报错）；
+# - 方案 a：日志文件名带启动时间戳（每次启动独占一个文件，杜绝截断与混写），
+#   并自动清理旧日志只留最近 10 个。
+
+DASHBOARD_PORT = 5003
+ALREADY_RUNNING_HINT = ("⚠️ 小橘3号已在运行（5003 已被占用），本次启动取消。"
+                        "如需重启，请先停止现有进程。")
+LOG_DIR = os.path.join(PROJECT_ROOT, "xiaoju3_data")
+LOG_FILE_PREFIX = "dashboard_live_"
+LOG_KEEP = 10
+
+
+def is_port_in_use(port=DASHBOARD_PORT, host="127.0.0.1", check_fn=None):
+    """探测端口是否已被监听（TCP connect_ex==0 即有实例在跑）。
+    check_fn(host, port) -> bool 可注入（离线测试 mock）；探测异常按未占用
+    处理（宁可让后续绑定报错给出真实原因，也不误报"已在运行"挡住启动）。"""
+    import socket
+    if check_fn is None:
+        def check_fn(h, p):
+            with socket.socket() as s:
+                return s.connect_ex((h, p)) == 0
+    try:
+        return bool(check_fn(host, port))
+    except OSError:
+        return False
+
+
+def timestamped_log_path(now=None):
+    """带启动时间戳的日志路径：xiaoju3_data/dashboard_live_YYYYMMDD_HHMMSS.log。
+    每次启动独占一个文件——杜绝固定路径的截断与多写者混写（方案 a）。"""
+    ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(
+        now if now is not None else time.time()))
+    return os.path.join(LOG_DIR, LOG_FILE_PREFIX + ts + ".log")
+
+
+def prune_dashboard_logs(keep=LOG_KEEP, log_dir=None):
+    """清理旧启动日志：dashboard_live_*.log（含 .err.log）按修改时间排序，
+    保留最近 keep 个。返回 (保留数, 删除数)；目录缺失/删除失败静默兜底
+    （日志清理失败绝不能影响启动主流程）。"""
+    log_dir = log_dir or LOG_DIR
+    try:
+        files = [os.path.join(log_dir, n) for n in os.listdir(log_dir)
+                 if n.startswith(LOG_FILE_PREFIX) and n.endswith(".log")]
+        files.sort(key=os.path.getmtime, reverse=True)
+        removed = files[keep:]
+        for path in removed:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return len(files) - len(removed), len(removed)
+    except OSError:
+        return 0, 0
+
+
 def build_launch_plan(python=None, root=None):
     """构造统一启动计划（纯函数，离线可测）。
 
@@ -341,8 +399,11 @@ class XiaojuLauncher:
 def main(argv=None):
     """入口：--dry-run 只打印计划（零副作用）；否则前台拉起并守护。
 
-    非 dry-run 时先经 ensure_napcat() 无黑框拉起 QQ 接入层（NapCat，
-    Windows-only、幂等、已运行跳过——NapCat 常驻后台，launcher 退出不杀）。
+    非 dry-run 时按序执行三步前置：
+    1. 单实例防重（方案 b）：探测 5003 已被监听 → 打印提示并以 0 优雅退出
+       （在 ensure_napcat 之前——取消时连 NapCat 也不动）；
+    2. ensure_napcat() 无黑框拉起 QQ 接入层（NapCat，Windows-only、幂等）；
+    3. prune_dashboard_logs() 清理旧启动日志（方案 a，只留最近 10 个）。
     """
     args = parse_args(argv)
     plan = build_launch_plan(root=args.root)
@@ -354,7 +415,11 @@ def main(argv=None):
             print(f"      {entry.get('reason') or entry.get('desc', '')}")
         print(QQ_WEBHOOK_MIGRATION_HINT)
         return 0
+    if is_port_in_use():
+        print(ALREADY_RUNNING_HINT)
+        return 0
     ensure_napcat()
+    prune_dashboard_logs()
     launcher = XiaojuLauncher(plan)
     return launcher.run()
 
