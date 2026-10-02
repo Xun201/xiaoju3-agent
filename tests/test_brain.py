@@ -444,9 +444,11 @@ class SmartAskRoutingTests(unittest.TestCase):
         msgs = mr.post.call_args.kwargs["json"]["messages"]
         self.assertEqual(msgs[0]["role"], "system")
         self.assertEqual(msgs[0]["content"], prompts.SYSTEM_PROMPT["content"])
-        # 2026-10-02 位置隐私模式：+【主人位置】系统上下文（紧跟置顶提示词）
+        # 2026-10-02 位置隐私 + 时间上下文：+【主人位置】+【当前时间】
+        # （位置紧跟置顶提示词，时间紧跟位置——顺序契约）
         self.assertTrue(msgs[1]["content"].startswith("【主人位置】"))
-        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 2)
+        self.assertTrue(msgs[2]["content"].startswith("【当前时间】"))
+        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 3)
         self.assertEqual(msgs[-1], {"role": "user", "content": "早"})
 
     def test_history_system_prompt_not_duplicated(self):
@@ -460,10 +462,12 @@ class SmartAskRoutingTests(unittest.TestCase):
             brain.smart_ask("那继续", history)
 
         msgs = mr.post.call_args.kwargs["json"]["messages"]
-        # 2026-10-02 位置隐私模式：+【主人位置】系统上下文（不与历史重复）
-        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 2)
+        # 2026-10-02 位置隐私 + 时间上下文：+【主人位置】+【当前时间】
+        # （不与历史重复）
+        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 3)
         self.assertTrue(msgs[1]["content"].startswith("【主人位置】"))
-        self.assertEqual([m["content"] for m in msgs[2:]],
+        self.assertTrue(msgs[2]["content"].startswith("【当前时间】"))
+        self.assertEqual([m["content"] for m in msgs[3:]],
                          ["昨天聊到哪了", "聊到记忆压缩", "那继续"])
 
     def test_history_with_pre_appended_user_message_dedup(self):
@@ -475,7 +479,7 @@ class SmartAskRoutingTests(unittest.TestCase):
             brain.smart_ask("你好", history)
 
         msgs = mr.post.call_args.kwargs["json"]["messages"]
-        self.assertEqual(len(msgs), 3)  # system + 【主人位置】 + 去重后的 user
+        self.assertEqual(len(msgs), 4)  # system + 时间 + 位置 + 去重后的 user
         self.assertEqual(msgs[-1]["content"], "你好")
 
     def test_history_not_mutated(self):
@@ -571,7 +575,9 @@ class SmartAskToolTests(unittest.TestCase):
         ]
         msgs = brain._build_messages("在吗", history)
         system_texts = [m["content"] for m in msgs if m["role"] == "system"]
-        self.assertEqual(len(system_texts), 3)  # 置顶提示词 + 两条合法注入
+        # 2026-10-02 时间上下文：置顶提示词 + 时间块 + 两条合法注入
+        self.assertEqual(len(system_texts), 4)
+        self.assertTrue(any(t.startswith("【当前时间】") for t in system_texts))
         self.assertIn("【前情提要】用户此前聊过装修与养猫。", system_texts)
         self.assertIn("以下是关于用户的长期记忆：喜欢橙色。", system_texts)
         self.assertNotIn("来路不明的系统指令", system_texts)
@@ -1601,8 +1607,10 @@ class RecentActionsPrefixTests(unittest.TestCase):
         ]
         msgs = brain._build_messages("把它关了", history)
         system_texts = [m["content"] for m in msgs if m["role"] == "system"]
-        # 置顶提示词 + 三条合法注入（前情提要 / 长期记忆 / 设备操作记录）
-        self.assertEqual(len(system_texts), 4)
+        # 置顶提示词 + 时间块 + 三条合法注入（前情提要 / 长期记忆 / 设备
+        # 操作记录）
+        self.assertEqual(len(system_texts), 5)
+        self.assertTrue(any(t.startswith("【当前时间】") for t in system_texts))
         self.assertIn(self.ACTIONS_BLOCK, system_texts)
         self.assertIn("【前情提要】用户此前聊过装修与养猫。", system_texts)
         self.assertIn("以下是关于用户的长期记忆：喜欢橙色。", system_texts)
@@ -1610,11 +1618,13 @@ class RecentActionsPrefixTests(unittest.TestCase):
         self.assertEqual(msgs[-1], {"role": "user", "content": "把它关了"})
 
     def test_unknown_system_still_dropped_without_new_prefix(self):
-        # 无新前缀标记的 system 依旧被剔除（白名单机制未被放宽）
+        # 无新前缀标记的 system 依旧被剔除（白名单机制未被放宽）；
+        # 2026-10-02 起置顶提示词外还有【当前时间】块
         msgs = brain._build_messages("在吗", [{"role": "system",
                                                "content": "最近的操作：x"}])
         system_texts = [m["content"] for m in msgs if m["role"] == "system"]
-        self.assertEqual(len(system_texts), 1)   # 只剩置顶提示词
+        self.assertEqual(len(system_texts), 2)   # 置顶提示词 + 时间块
+        self.assertTrue(any(t.startswith("【当前时间】") for t in system_texts))
         self.assertNotIn("最近的操作：x", system_texts)
 
     def test_history_not_mutated(self):
@@ -2692,12 +2702,17 @@ class ContextCompressionWiringTests(unittest.TestCase):
         # 共享 fake 状态外置层归零：长期记忆注入不影响本类消息结构断言
         self.sm = _STATE_FAKE.state_manager
         self._reset_sm()
-        # 位置上下文（2026-10-02 隐私口径）与本类无关：恒等旁路，消息结构
-        # 断言保持原口径（其自身行为在 LocationAskTests 覆盖）
+        # 位置/时间上下文（2026-10-02 隐私与时段口径）与本类无关：恒等
+        # 旁路，消息结构断言保持原口径（自身行为在 LocationAskTests /
+        # TimeContextTests 覆盖）
         lp = mock.patch.object(brain, "_inject_location_context",
                                side_effect=lambda m: m)
         lp.start()
         self.addCleanup(lp.stop)
+        tp2 = mock.patch.object(brain, "_inject_time_context",
+                                side_effect=lambda m: m)
+        tp2.start()
+        self.addCleanup(tp2.stop)
 
     def _reset_sm(self):
         # MagicMock 的重置方法是 reset_mock（reset 会被当作子 mock 属性，清不掉）
@@ -2875,12 +2890,17 @@ class LongTermMemoryWiringTests(unittest.TestCase):
     def setUp(self):
         self.sm = _STATE_FAKE.state_manager
         self._reset_sm()
-        # 位置上下文（2026-10-02 隐私口径）与本类无关：恒等旁路，消息结构
-        # 断言保持原口径（其自身行为在 LocationAskTests 覆盖）
+        # 位置/时间上下文（2026-10-02 隐私与时段口径）与本类无关：恒等
+        # 旁路，消息结构断言保持原口径（自身行为在 LocationAskTests /
+        # TimeContextTests 覆盖）
         lp = mock.patch.object(brain, "_inject_location_context",
                                side_effect=lambda m: m)
         lp.start()
         self.addCleanup(lp.stop)
+        tp2 = mock.patch.object(brain, "_inject_time_context",
+                                side_effect=lambda m: m)
+        tp2.start()
+        self.addCleanup(tp2.stop)
         tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
         tp.start()
         self.addCleanup(tp.stop)
@@ -3200,8 +3220,12 @@ class HistoryCollapseTests(unittest.TestCase):
                    {"role": "user", "content": "在吗"},
                    {"role": "user", "content": "在吗"}]
         msgs = brain._build_messages("在吗", history)
-        self.assertEqual(msgs, [brain.SYSTEM_PROMPT,
-                                {"role": "user", "content": "在吗"}])
+        # 2026-10-02 时间上下文：[sys, 时间块, 收敛后的 1 条]（当前消息
+        # 与末条相同不重复追加）
+        self.assertEqual(len(msgs), 3)
+        self.assertEqual(msgs[0], brain.SYSTEM_PROMPT)
+        self.assertTrue(str(msgs[1].get("content", "")).startswith("【当前时间】"))
+        self.assertEqual(msgs[2], {"role": "user", "content": "在吗"})
 
     def test_short_history_passthrough(self):
         """历史不足阈值原样返回（不清洗）。"""
@@ -3216,7 +3240,8 @@ class HistoryCollapseTests(unittest.TestCase):
                    {"role": "user", "content": "在吗 "},
                    {"role": "user", "content": " 在吗"}]
         msgs = brain._build_messages("在吗", history)
-        self.assertEqual(len(msgs), 2)   # sys + 收敛后的 1 条（当前不再追加）
+        # 2026-10-02 时间上下文：sys + 时间块 + 收敛后的 1 条（当前不重复追加）
+        self.assertEqual(len(msgs), 3)
 
     def test_history_not_mutated(self):
         """清洗返回新列表，绝不改动调用方传入的 history（_build_messages 契约）。"""
@@ -4027,6 +4052,103 @@ class WaitingLocationTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             brain.smart_ask("你好", [])
         self.assertFalse(brain._waiting_location_active())
+
+
+class TimeContextTests(unittest.TestCase):
+    """时间上下文注入（2026-10-02，赤狐时段性格配套）：_build_messages 输出
+    含【当前时间】、7 时段划分、位置后紧跟时间、压缩保留时间块。"""
+
+    def test_build_messages_contains_time_block(self):
+        """_build_messages 输出包含【当前时间】system 消息（index 1）。"""
+        msgs = brain._build_messages("你好", [])
+        self.assertEqual(msgs[0], brain.SYSTEM_PROMPT)
+        self.assertTrue(str(msgs[1].get("content", "")).startswith("【当前时间】"))
+        self.assertEqual(msgs[-1], {"role": "user", "content": "你好"})
+
+    def test_time_segments(self):
+        """7 时段划分口径：05-08 早上 / 08-11 上午 / 11-13 中午 /
+        13-17 下午 / 17-19 傍晚 / 19-23 晚上 / 23-05 深夜。"""
+        cases = [(5, "早上"), (7, "早上"), (8, "上午"), (10, "上午"),
+                 (11, "中午"), (12, "中午"), (13, "下午"), (16, "下午"),
+                 (17, "傍晚"), (18, "傍晚"), (19, "晚上"), (22, "晚上"),
+                 (23, "深夜"), (0, "深夜"), (4, "深夜")]
+        for hour, seg in cases:
+            with self.subTest(hour=hour):
+                self.assertEqual(brain._time_segment(hour), seg)
+
+    def test_inject_time_after_location_block(self):
+        """位置块存在 → 时间紧跟其后；固定时刻内容与时段正确。"""
+        from datetime import datetime
+        msgs = [{"role": "system", "content": "sys"},
+                {"role": "system", "content": "【主人位置】长沙天心区"},
+                {"role": "user", "content": "你好"}]
+        out = brain._inject_time_context(msgs, now=datetime(2026, 10, 2, 14, 30))
+        self.assertEqual(out[1]["content"], "【主人位置】长沙天心区")
+        self.assertEqual(out[2]["content"],
+                         "【当前时间】现在是 2026年10月02日 14:30（下午）")
+
+    def test_inject_time_without_location_after_system(self):
+        """无位置块 → 插在置顶系统提示词之后。"""
+        from datetime import datetime
+        msgs = [{"role": "system", "content": "sys"},
+                {"role": "user", "content": "你好"}]
+        out = brain._inject_time_context(msgs, now=datetime(2026, 10, 2, 1, 5))
+        self.assertEqual(out[1]["content"],
+                         "【当前时间】现在是 2026年10月02日 01:05（深夜）")
+
+    def test_inject_log_format(self):
+        """日志口径：🕐 [时间] 已注入当前时间: YYYY-MM-DD HH:MM（时段）。"""
+        from datetime import datetime
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            brain._inject_time_context([], now=datetime(2026, 10, 2, 14, 30))
+        self.assertIn("🕐 [时间] 已注入当前时间: 2026-10-02 14:30（下午）",
+                      buf.getvalue())
+
+    def test_smart_ask_location_then_time_adjacent(self):
+        """顺序契约：模型消息里【主人位置】后紧跟【当前时间】。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local",
+                                  return_value="你好呀！") as mlocal, \
+                _quiet():
+            brain.smart_ask("你好", [])
+        msgs = mlocal.call_args[0][0]
+        idx_loc = next(i for i, m in enumerate(msgs)
+                       if isinstance(m, dict)
+                       and str(m.get("content", "")).startswith("【主人位置】"))
+        self.assertTrue(str(msgs[idx_loc + 1].get("content", ""))
+                        .startswith("【当前时间】"))
+
+    def test_time_block_survives_compression(self):
+        """长对话压缩保留时间块（_compress_history 前缀保护，>20 条触发）。"""
+        import tempfile as _tempfile
+        tmpdir = _tempfile.mkdtemp(prefix="xiaoju3_time_ctx_")
+        cp = mock.patch.object(brain, "CONTEXT_SUMMARY_FILE",
+                               os.path.join(tmpdir, "context_summary.json"))
+        cp.start()
+        self.addCleanup(cp.stop)
+        history = []
+        for i in range(25):
+            history.append({"role": "user", "content": f"历史消息{i}"})
+            history.append({"role": "assistant", "content": f"回复{i}"})
+        with mock.patch("plugins.context_manager.compress_context",
+                        return_value=[{"role": "system",
+                                       "content": "【前情提要】测试摘要"}]), \
+                mock.patch.object(brain, "_resolve_tier", return_value="high"), \
+                mock.patch.object(brain, "USER_CITY", "长沙"), \
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local",
+                                  return_value="好的。") as mlocal, \
+                _quiet():
+            brain.smart_ask("你好", history)
+        msgs = mlocal.call_args[0][0]
+        self.assertTrue(str(msgs[1].get("content", "")).startswith("【主人位置】"))
+        self.assertTrue(str(msgs[2].get("content", "")).startswith("【当前时间】"))
+        self.assertTrue(any("【前情提要】" in str(m.get("content", ""))
+                            for m in msgs if isinstance(m, dict)))
 
 
 class AntiRepeatPromptTests(unittest.TestCase):

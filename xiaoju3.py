@@ -131,6 +131,11 @@ HA_TOKEN = os.environ.get("HA_TOKEN", "")
 USER_CITY = os.environ.get("USER_CITY", "")
 USER_DISTRICT = os.environ.get("USER_DISTRICT", "")
 
+# 赤狐性格开关与浓度（2026-10-02：off=纯通用助手 / low=精简 / medium=完整
+# （默认）/ high=强化；prompts 按档位动态拼装【赤狐性格设定】段，硬规则
+# 各段不受档位影响）
+XIAOJU3_PERSONALITY = os.environ.get("XIAOJU3_PERSONALITY", "medium")
+
 # 心跳轮询间隔（秒），文档 §7：60 秒
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "60"))
 
