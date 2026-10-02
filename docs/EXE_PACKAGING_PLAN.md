@@ -41,8 +41,8 @@ else:
 | `xiaoju3_dashboard.py:186` getmtime（防缓存 `?v=`） | PROJECT_ROOT 派生 | **资源根** | datas 落盘后有真实 mtime，逻辑可原样保留；兜底加 frozen 时回退固定版本号 |
 | `xiaoju3_launcher.py:49` `PROJECT_ROOT` | `__file__` 锚 | 双用途拆分 | `:226` 传给 build_launch_plan 找 dashboard 脚本（frozen 下见 §二）、`:167` 见下行 |
 | `xiaoju3_launcher.py:167` `LOG_DIR`（xiaoju3_data/ 启动日志） | PROJECT_ROOT 派生 | **数据根** | 日志可写 |
-| `migration.py:48,135,137,219,264,319` | import xiaoju3.PROJECT_ROOT | **数据根** | 灵魂包输出 `backups/`、导入恢复目标均为可写区；`:135` 旧口径 `PROJECT_ROOT/.env` 顺带核实是否应指 `xiaoju3_data/.env`（待核实，独立小改） |
-| `emoji_manager.py:27,30` `EMOJI_DIR`（assets/emoji） | PROJECT_ROOT 派生 | **待核实：疑数据根** | 若该目录只读展示→资源根；若下载落盘→必须迁 `xiaoju3_data/`（frozen 下 _MEIPASS 不可写）。实施步 1 时以读码定论 |
+| `migration.py:48,135,137,219,264,319` | import xiaoju3.PROJECT_ROOT | **数据根（自动归位）** | 灵魂包输出 `backups/`、导入恢复目标均为可写区；`:135` 旧口径 `PROJECT_ROOT/.env` 已核实为旧 export_bundle 故意设计（只记录存在性），随 PROJECT_ROOT→数据根重定义自动归位，无独立改动 |
+| `emoji_manager.py:27,30` `EMOJI_DIR` | PROJECT_ROOT 派生 | **数据根（已定，1b 已迁）** | 读码定论：`download_emoji` 运行时落盘（`:112` makedirs + `:122-124` 写文件，触发链=get_emoji_path 未命中兜底下载/brain.translate_emoji），frozen 下 _MEIPASS 不可写——已迁 `xiaoju3_data/emoji`，头注与 docstring 同步 |
 | `run_link_log.py:19,22` `DATA_DIR`（dev_logs/） | PROJECT_ROOT 派生 | **数据根** | 可写 |
 | `desktop_launcher.py:190` launcher 脚本存在性检查 | `__file__` 拼接 | **分流改造点** | frozen 下不存在 .py 文件，改为 spawn-self 判定（§二），非 frozen 原样 |
 | `main.py:327` creator.json base_dir 缺省 | `__file__` 锚 | **数据根** | 用户数据 |

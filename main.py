@@ -57,6 +57,7 @@ import requests
 
 import brain
 import home_tools
+import paths  # 双根路径锚（方案 §1）：creator.json 等用户数据锚定数据根
 from agent_state.state_manager import state_manager
 from auth_lv4 import root_warning
 from brain import load_memory, reset_tool_fuse, save_memory, smart_ask
@@ -322,9 +323,9 @@ def get_creator_name(base_dir=None):
 
     只表现署名，不授予任何权限（权限由 LV4 决定）。公开版（无隔离区
     文件）返回空串，所有署名位置自动隐藏。base_dir 仅供测试注入临时
-    目录（缺省 = 项目根下 xiaoju3_data）。
+    目录（缺省 = 数据根下 xiaoju3_data）。
     """
-    base = base_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+    base = base_dir or os.path.join(paths.DATA_ROOT,
                                     "xiaoju3_data")
     path = os.path.join(base, "creator.json")
     try:
