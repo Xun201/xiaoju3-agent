@@ -1942,6 +1942,20 @@ class CreatorCommandTests(unittest.TestCase):
     """/api/chat /creator 分流（2026-10-02 修复：与 QQ 通道共用
     main.handle_creator_command，缺失时返回开源项目链接）。"""
 
+    def test_console_page_title_has_no_creator_suffix(self):
+        """2026-10-02 用户口径：标题栏隐藏"为 XUN 而建"——/console 页面
+        header-title 保持"小橘3号 · 控制台"原样（署名只走 /creator 命令
+        与启动日志）。"""
+        import xiaoju3_dashboard as dashboard
+        client = dashboard.app.test_client()
+        html = client.get("/console").get_data(as_text=True)
+        self.assertIn('class="header-title">小橘3号 · 控制台<', html)
+        self.assertNotIn("而建", html)
+        # 防缓存版本参数随 mtime 变化，确保浏览器刷新拉到新 console.js
+        import re as _re
+        m = _re.search(r'/console/console\.js\?v=(\d+)', html)
+        self.assertIsNotNone(m)
+
     def test_creator_with_name_returns_card(self):
         import xiaoju3_dashboard as dashboard
         from xiaoju3_dashboard import main
