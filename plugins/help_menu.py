@@ -30,7 +30,7 @@ def get_help_menu(current_level):
 
     # 2. Lv.2 普通用户（2026-10-02 定稿：写文件 / 列目录）
     if level_value >= 2:
-        menu += "\n**【普通用户 · Lv.2+】**\n"
+        menu += "\n**【普通用户 · Lv.2】**\n"
         menu += "· `/register <密码>`：注册 / 更新注册（Lv.2）\n"
         menu += "· `/reset_fuse`：重置防死循环熔断\n"
         menu += "· 写文件 / 列目录\n"
@@ -40,7 +40,7 @@ def get_help_menu(current_level):
 
     # 3. Lv.3 代码编写者（定稿：改代码 + 管理插件 + 安全家居六类）
     if level_value >= 3:
-        menu += "\n**【代码编写者 · Lv.3+】**\n"
+        menu += "\n**【代码编写者 · Lv.3】**\n"
         menu += "· `/gen_log <DeepSeek分享链接>`：后台提取开发日志\n"
         menu += "· 改代码 / 写文件 / 管理插件\n"
         menu += "· 控制安全家居（灯/开关/传感器/空调/媒体播放器/输入布尔器）\n"
