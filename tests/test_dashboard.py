@@ -1938,5 +1938,33 @@ class ConsoleCacheBustingTests(unittest.TestCase):
             self.assertIn("no-store", resp.headers.get("Cache-Control", ""))
 
 
+class CreatorCommandTests(unittest.TestCase):
+    """/api/chat /creator 分流（2026-10-02 修复：与 QQ 通道共用
+    main.handle_creator_command，缺失时返回开源项目链接）。"""
+
+    def test_creator_with_name_returns_card(self):
+        import xiaoju3_dashboard as dashboard
+        from xiaoju3_dashboard import main
+        with mock.patch.object(main, "get_creator_name",
+                               return_value="XUN"):
+            client = dashboard.app.test_client()
+            resp = client.post("/api/chat", json={"message": "/creator"})
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertEqual(payload["data"]["reply"],
+                         "🦊 小橘3号 · 由 XUN 创造与维护")
+        self.assertEqual(payload["data"]["source"], "⚙️ 系统")
+
+    def test_creator_without_name_returns_oss_link(self):
+        import xiaoju3_dashboard as dashboard
+        from xiaoju3_dashboard import main
+        with mock.patch.object(main, "get_creator_name", return_value=""):
+            client = dashboard.app.test_client()
+            resp = client.post("/api/chat", json={"message": "/creator"})
+        payload = resp.get_json()
+        self.assertIn("https://github.com/Xun201/xiaoju3-agent",
+                      payload["data"]["reply"])
+
+
 if __name__ == "__main__":
     unittest.main()
