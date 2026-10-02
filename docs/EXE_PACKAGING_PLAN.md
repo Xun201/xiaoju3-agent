@@ -129,7 +129,18 @@ if __name__ == "__main__":
 | 1 | **双根基建**：新增 `paths.py`；§1.2 表逐点切换（xiaoju3.py 保名重定义、dashboard 资源五处、launcher LOG_DIR、migration、run_link_log、main.py:327、emoji_manager 以读码定论）；非 frozen 行为零变化 | paths.py + 各模块 import 调整 + `tests/test_paths.py` | 1540+新增 |
 | 2 | **spawn-self 分流**：dashboard `__main__` 抽 `serve()`；build_launch_plan 加 frozen/role 参数（缺省=现行）；desktop_launcher ensure_backend_services 加 frozen 自 spawn 分支；`_windowless_python` frozen 短路 | 三文件改造 + frozen 用例 | 同上 |
 | 3 | **无控制台收口**：launcher/dashboard print 防御（stdout None → 日志文件，复用 timestamped_log_path）；restart_clean 清杀口径函数化（进程名参数化，兼容 python.exe 与 xiaoju3.exe）+ 对应 bat/测试同步 | print 收口 + restart_clean 适配 | 同上 |
-| 4 | **出 exe**：写 `xiaoju3.spec` + `build_exe.bat`（入库），构建产物留本地；真实机冒烟清单：双击→窗口→:5003/console→QQ webhook（LLOneBot 回包）→心跳一轮→关窗整树停服→DATA_ROOT 自动生成 xiaoju3_data/agent_state/workspace→二次启动复用不重拉 | xiaoju3.exe + 冒烟记录 | 测试不受影响，全绿不变 |
+| 4 | **出 exe**：写 `xiaoju3.spec` + `build_exe.bat`（入库），构建产物留本地；真机冒烟按下方「冒烟六项清单」逐项验收；测试不碰 exe 产物（全绿不变） | xiaoju3.exe + 冒烟记录 | 测试不受影响，全绿不变 |
+
+#### 冒烟六项清单（步 4 验收标准，2026-10-03 定稿；逐项通过才算步 4 完成）
+
+| # | 冒烟项 | 操作 | 预期 |
+|---|---|---|---|
+| 1 | **双击起服务** | 双击 `xiaoju3.exe`（无标志） | 桌面窗口打开（标题"小橘3号 · 控制台"），无黑框；数秒内后台自拉 launcher/dashboard 角色 exe 进程（任务管理器可见 `xiaoju3.exe` 带 `--xj3-role=…` 参数）；`xiaoju3_data\`、`agent_state\` 在 exe 旁自动生成 |
+| 2 | **5003 可达** | 浏览器开 `http://127.0.0.1:5003/console`；`GET /api/status` | 控制台页 200 正常渲染；status 返回 cpu/memory 数据（资源根 `_MEIPASS` 的前端三件套与 assets 托管成功）；再次双击 exe → 提示复用现有进程，不重复拉起 |
+| 3 | **QQ 收发** | 群里 @小橘3号 发 `/help`、私聊发一句话 | 指令路由命中（`[指令路由]` 日志），回复正常；webhook 地址 `http://127.0.0.1:5003/onebot` 不断连；`ensure_napcat` 静默拉起不受 exe 形态影响 |
+| 4 | **桌宠渲染** | 控制台右下角查看桌宠，拖拽贴边/翻转 | 桌宠挂载、半身/全身状态机切换正常（assets 打进 datas 从 `_MEIPASS` 托管）；防缓存 `?v=` 版本参数正常下发 |
+| 5 | **心跳感知** | 等 60 秒×2 轮，观察终端日志与 HA（若 .env 配置） | 心跳 daemon 宿主于 5003 进程运行（无第二心跳）；HA 未配置时管线静默零刷屏；数据根快照文件正常读写 |
+| 6 | **重启入口** | 跑 `restart_clean.bat`；再直接关桌面窗口 | bat 清杀命中 `python.exe` 与 `xiaoju3*.exe` 两类进程、确认 5003 释放、隐藏窗口重启成功；关窗整树终止全部 exe 子进程，无孤儿进程、端口全释放 |
 | 5 | （可选，1.0 后）首启 .env 引导 UI、图标/版本资源、杀软误报说明、README 安装章节 | 安装体验收尾 | — |
 
 依赖关系：1 → 2 → 3 → 4（5 独立）。每步一次 commit，步 1-3 任何一步失败可独立回退，不影响现网 python 直跑形态。

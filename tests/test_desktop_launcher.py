@@ -44,6 +44,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import desktop_launcher as launcher  # noqa: E402
+import paths  # noqa: E402  # frozen 分流用例需 mock 双根标志
 
 
 @contextlib.contextmanager
@@ -538,6 +539,64 @@ class StaticContractTests(unittest.TestCase):
         """可选任务（文档标记，不实施）：pyinstaller 单 exe → 🔜 规划中。"""
         self.assertIn("pyinstaller", self.src.lower())
         self.assertIn("🔜 规划中", self.src)
+
+
+class TestSpawnSelfRouting(unittest.TestCase):
+    """frozen spawn-self 分流（方案 §2）：route_argv 纯函数 + frozen 拉起分支。
+
+    mock 注意：paths.FROZEN/DATA_ROOT 与 sys.executable 全部 mock.patch，
+    绝不真拉起进程；非 frozen 缺省行为由既有用例锁定，此处只测新分支。
+    """
+
+    def test_route_argv_three_roles(self):
+        """三角色分流：无标志=desktop（缺省），两标志各归其位，首个命中生效。"""
+        self.assertEqual(launcher.route_argv([]), "desktop")
+        self.assertEqual(launcher.route_argv(None), "desktop")
+        self.assertEqual(launcher.route_argv(["--xj3-role=launcher"]), "launcher")
+        self.assertEqual(launcher.route_argv(["--xj3-role=dashboard"]), "dashboard")
+        self.assertEqual(
+            launcher.route_argv(["--xj3-role=launcher", "--other"]), "launcher")
+
+    def test_route_argv_unrelated_args_stay_desktop(self):
+        """无关参数（如 --serve-port）不影响缺省桌面角色。"""
+        self.assertEqual(launcher.route_argv(["--serve-port", "5900"]), "desktop")
+
+    def test_role_flag_literals_locked(self):
+        """角色标志字面锁定：desktop 侧与 xiaoju3_launcher 侧必须一致。"""
+        import xiaoju3_launcher as xl
+        self.assertEqual(launcher.ROLE_LAUNCHER_FLAG, "--xj3-role=launcher")
+        self.assertEqual(launcher.ROLE_DASHBOARD_FLAG, "--xj3-role=dashboard")
+        self.assertEqual(launcher.ROLE_DASHBOARD_FLAG, xl.ROLE_DASHBOARD_FLAG)
+
+    def test_frozen_start_backend_spawns_self(self):
+        """frozen：exe 以 launcher 角色 spawn 自身；cwd=数据根；stdio 全 DEVNULL。"""
+        fake_exe = r"C:\Apps\xiaoju3\xiaoju3.exe"
+        with mock.patch.object(paths, "FROZEN", True), \
+             mock.patch.object(paths, "DATA_ROOT", r"C:\Apps\xiaoju3"), \
+             mock.patch.object(sys, "executable", fake_exe), \
+             mock.patch.object(subprocess, "Popen") as popen, \
+             mock.patch.object(sys, "stdout", new=io.StringIO()):
+            popen.return_value = mock.MagicMock(pid=4321)
+            proc = launcher.start_backend_launcher()
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0], [fake_exe, launcher.ROLE_LAUNCHER_FLAG])
+        self.assertEqual(kwargs["cwd"], r"C:\Apps\xiaoju3")
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertIsNotNone(proc)
+
+    def test_non_frozen_start_backend_skips_frozen_branch(self):
+        """非 frozen（FROZEN=False）：不触发 spawn-self——cmd 仍为
+        [解释器, xiaoju3_launcher.py]，不含角色标志（原路径回归锚）。"""
+        with mock.patch.object(paths, "FROZEN", False), \
+             mock.patch.object(subprocess, "Popen") as popen, \
+             mock.patch.object(sys, "stdout", new=io.StringIO()):
+            popen.return_value = mock.MagicMock(pid=1)
+            launcher.start_backend_launcher()
+        args = popen.call_args[0][0]
+        self.assertTrue(str(args[1]).endswith("xiaoju3_launcher.py"))
+        self.assertNotIn(launcher.ROLE_LAUNCHER_FLAG, args)
 
 
 if __name__ == "__main__":

@@ -383,5 +383,36 @@ class TestMainSingleInstanceGuard(unittest.TestCase):
         mlauncher.return_value.run.assert_called_once_with()
 
 
+class TestBuildLaunchPlanFrozen(unittest.TestCase):
+    """frozen（spawn-self）计划（方案 §2）：exe 以 dashboard 角色拉起自身。"""
+
+    def setUp(self):
+        self.plan = xl.build_launch_plan(python=FAKE_PY, root=FAKE_ROOT,
+                                         frozen=True)
+
+    def test_server_cmd_spawns_self_with_dashboard_role(self):
+        """frozen：server 条目 cmd = [exe 自身, --xj3-role=dashboard]。"""
+        server = [e for e in self.plan if e["kind"] == "subprocess"][0]
+        self.assertEqual(server["cmd"], [FAKE_PY, xl.ROLE_DASHBOARD_FLAG])
+
+    def test_server_cwd_is_exe_dir(self):
+        """frozen：cwd 取 exe 所在目录（数据根，可写持久）。"""
+        server = [e for e in self.plan if e["kind"] == "subprocess"][0]
+        self.assertEqual(server["cwd"],
+                         os.path.dirname(os.path.abspath(FAKE_PY)))
+
+    def test_flag_literal_locked(self):
+        """角色标志字面锁定（与 desktop_launcher 侧一致性锚）。"""
+        self.assertEqual(xl.ROLE_DASHBOARD_FLAG, "--xj3-role=dashboard")
+
+    def test_non_frozen_default_unchanged(self):
+        """缺省 frozen=False：cmd/cwd 与现行 .py 路径逐字节一致（回归锚）。"""
+        plan = xl.build_launch_plan(python=FAKE_PY, root=FAKE_ROOT)
+        server = [e for e in plan if e["kind"] == "subprocess"][0]
+        self.assertEqual(server["cmd"],
+                         [FAKE_PY, os.path.join(FAKE_ROOT, "xiaoju3_dashboard.py")])
+        self.assertEqual(server["cwd"], FAKE_ROOT)
+
+
 if __name__ == "__main__":
     unittest.main()

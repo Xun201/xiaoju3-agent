@@ -67,6 +67,7 @@ import time
 
 from werkzeug.serving import make_server
 
+import paths  # 双根路径锚（方案 §1）：frozen 分支按 RESOURCE/DATA_ROOT 分流
 from xiaoju3_dashboard import app   # 复用全部既有路由（/console、/api/*）
 
 WINDOW_TITLE = "小橘3号 · 控制台"      # 桌面窗口标题（用户口径）
@@ -80,6 +81,11 @@ DASHBOARD_PORT = 5003
 # xiaoju3_launcher.py 的解释器（后台子树口径，2026-10-02 用户指令：pythonw
 # 无窗口形态）——见 _windowless_python()
 LAUNCHER_SCRIPT = "xiaoju3_launcher.py"
+# spawn-self 角色标志（方案 §2.1）：exe 单一入口按 argv 分流三角色——
+# 无标志=桌面主进程（缺省，双击形态）。与 xiaoju3_launcher.ROLE_DASHBOARD_FLAG
+# 保持字面一致（测试锁定）。
+ROLE_LAUNCHER_FLAG = "--xj3-role=launcher"
+ROLE_DASHBOARD_FLAG = "--xj3-role=dashboard"
 # Windows creationflags：CREATE_NO_WINDOW（防闪黑窗；POSIX 无此常量，回退同值）
 _WIN_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -180,13 +186,49 @@ def _windowless_python():
     return exe
 
 
+def route_argv(argv):
+    """角色分流（纯函数，方案 §2.1）：返回 "launcher" / "dashboard" / "desktop"。
+
+    exe（frozen）单一入口按 argv 标志把三种角色分流到对应主函数；
+    无标志 = 桌面主进程（缺省，双击形态）。首个命中的标志生效，
+    标志串与写入格式严格一致（大小写敏感）。
+    """
+    for a in argv or []:
+        if a == ROLE_LAUNCHER_FLAG:
+            return "launcher"
+        if a == ROLE_DASHBOARD_FLAG:
+            return "dashboard"
+    return "desktop"
+
+
 def start_backend_launcher():
     """subprocess 后台拉起统一启动器 xiaoju3_launcher.py。
 
     它再拉起控制台服务 xiaoju3_dashboard.py(:5003——QQ webhook/心跳宿主其中)。
     返回 Popen 句柄（供窗口关闭后整树终止）；脚本缺失/拉起失败返回 None
     （仅打开控制台窗口，不报错中断）。
+
+    frozen 分支（方案 §2）：exe 以 launcher 角色 spawn 自身——无 .py 脚本
+    可查（跳过存在性检查），解释器即 exe 自身，cwd 取数据根（可写持久）。
     """
+    if paths.FROZEN:
+        cmd = [sys.executable, ROLE_LAUNCHER_FLAG]
+        kwargs = {"cwd": paths.DATA_ROOT,
+                  "stdin": subprocess.DEVNULL,
+                  "stdout": subprocess.DEVNULL,
+                  "stderr": subprocess.DEVNULL}
+        if os.name == "nt":
+            kwargs["creationflags"] = _WIN_CREATE_NO_WINDOW
+        else:
+            kwargs["start_new_session"] = True
+        try:
+            proc = subprocess.Popen(cmd, **kwargs)
+        except OSError as e:
+            _print(f"⚠️ 后台服务拉起失败（exe spawn-self）: {e}", err=True)
+            return None
+        _print(f"🚀 已后台拉起启动器角色（PID {proc.pid}）："
+               "心跳/主程序/控制台启动中…")
+        return proc
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           LAUNCHER_SCRIPT)
     if not os.path.isfile(script):
@@ -378,4 +420,18 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    # PyInstaller 冻结形态安全阀（方案 §2.2）：onefile 子进程引导必需
+    multiprocessing.freeze_support()
+    # spawn-self 角色分流（方案 §2.1）：exe 单一入口，按 argv 标志进三角色。
+    # launcher/dashboard 角色延迟 import——非 frozen 桌面形态依赖面零变化。
+    role = route_argv(sys.argv[1:])
+    if role == "launcher":
+        import xiaoju3_launcher
+        rest = [a for a in sys.argv[1:] if a != ROLE_LAUNCHER_FLAG]
+        sys.exit(xiaoju3_launcher.main(rest, frozen=True))
+    if role == "dashboard":
+        import xiaoju3_dashboard
+        xiaoju3_dashboard.serve()
+        sys.exit(0)
     sys.exit(main())
