@@ -26,10 +26,15 @@ RFC_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 REGISTER_PASSWORD_ENV = permission.REGISTER_PASSWORD_ENV
 
 # §7 用户指令新表：能力全集（按所需最低等级分组）
+# 2026-10-02 权限重构定稿：读/写维持原档；安全家居升 LV3；ADB 全套/
+# 发图/restart_service 归 LV4
 LV1_ACTIONS = ("chat", "web_search")
-LV2_ACTIONS = ("read_file", "list_files", "control_normal_devices")
-LV3_ACTIONS = ("write_file", "modify_code", "manage_plugins")
-LV4_ACTIONS = ("control_dangerous_devices", "system_manage", "read_private_memory")
+LV2_ACTIONS = ("read_file", "list_files")
+LV3_ACTIONS = ("write_file", "control_normal_devices", "modify_code",
+               "manage_plugins")
+LV4_ACTIONS = ("control_dangerous_devices", "system_manage",
+               "read_private_memory", "adb_full", "send_image",
+               "restart_service")
 ALL_ACTIONS = LV1_ACTIONS + LV2_ACTIONS + LV3_ACTIONS + LV4_ACTIONS
 
 
@@ -104,15 +109,15 @@ class PermissionTableTests(PermissionTestBase):
             pm = self._pm(level)
             self.assertTrue(pm.has_permission("web_search"), level)
 
-    def test_lv2_adds_read_list_and_normal_devices(self):
-        # 相对 Lv.1 的新增面 = read_file / list_files / control_normal_devices
+    def test_lv2_adds_read_and_list(self):
+        # 相对 Lv.1 的新增面 = read_file / list_files（写文件门槛保持 LV3）
         before = self._pm("Lv.1")
         after = self._pm("Lv.2")
         gained = {a for a in ALL_ACTIONS
                   if after.has_permission(a) and not before.has_permission(a)}
         self.assertEqual(gained, set(LV2_ACTIONS))
 
-    def test_lv3_adds_exactly_writer_trio(self):
+    def test_lv3_adds_writer_and_safe_home(self):
         before = self._pm("Lv.2")
         after = self._pm("Lv.3")
         gained = {a for a in ALL_ACTIONS
@@ -574,7 +579,7 @@ class CreatorNameTests(unittest.TestCase):
         for bad in ("XUN", "xun", "Xun", " XUN "):
             ok, msg = permission.validate_claim_name(bad)
             self.assertFalse(ok, bad)
-            self.assertIn("保留名", msg)
+            self.assertIn("创作者署名保护", msg)
 
     def test_empty_name_rejected(self):
         ok, msg = permission.validate_claim_name("  ")
@@ -632,7 +637,7 @@ class CreatorNameTests(unittest.TestCase):
                 pm = self._pm(tmp)
                 msg = pm.register_user("u1", "pw123", name="XUN")
                 self.assertIn("❌", msg)
-                self.assertIn("保留名", msg)              # 命中保留名拦截而非密码错误
+                self.assertIn("创作者署名保护", msg)              # 命中保留名拦截而非密码错误
                 self.assertEqual(pm.current_level, "Lv.1")   # 注册整体中止
                 self.assertEqual(pm.display_name, "")
 

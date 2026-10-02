@@ -63,6 +63,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 
 from werkzeug.serving import make_server
 
@@ -278,6 +279,31 @@ def stop_backend_launcher(proc, timeout=5):
         pass   # 清理尽力而为：任何异常不阻塞窗口关闭与主进程退出
 
 
+def _supervise_backend(state, stop_event, respawn_fn, out=None,
+                       poll_interval=2.0, max_restarts=3, window=60.0):
+    """后台服务监督线程（2026-10-02，restart_service 复活链 Windows 形态）。
+
+    窗口存活期间 launcher 进程意外退出（含 restart_service 受理后的
+    2 秒自尽）→ 自动 respawn；60 秒窗口内最多 max_restarts 次防循环；
+    stop_event 置位（正常关窗清理路径最先置位）即退出，绝不与手动关闭
+    竞争。state 为 {"proc": Popen|None} 共享字典，respawn 后回写。
+    """
+    out = out or (lambda msg: None)
+    restarts = []
+    while not stop_event.is_set():
+        proc = state.get("proc")
+        if proc is not None and proc.poll() is not None:
+            now = time.time()
+            restarts = [t for t in restarts if now - t < window]
+            if len(restarts) >= max_restarts:
+                out("⚠️ 后台服务连续异常退出（60 秒内 3 次），已停止自动重启。")
+                return
+            restarts.append(now)
+            out("🔁 后台服务意外退出，自动重启（restart_service 受理/异常恢复）...")
+            state["proc"] = respawn_fn()
+        stop_event.wait(poll_interval)
+
+
 def main(argv=None):
     """入口：缺 pywebview 中文提示退出；拉后台服务 → 开窗口 → 关闭全清理。
 
@@ -294,6 +320,16 @@ def main(argv=None):
 
     # ① 后台服务：:5003 已监听则复用现有进程，否则后台拉起统一启动器
     launcher_proc = ensure_backend_services()
+    # 🔁 监督线程（2026-10-02）：窗口存活期间后台服务意外退出自动重启
+    # （restart_service 复活链 Windows 形态）；正常关窗时 finally 最先
+    # 置位 stop_event，监督线程随即退出，不与手动清理竞争
+    backend_state = {"proc": launcher_proc}
+    stop_event = threading.Event()
+    if launcher_proc is not None:
+        threading.Thread(
+            target=_supervise_backend,
+            args=(backend_state, stop_event, ensure_backend_services, _print),
+            daemon=True).start()
 
     # ② 启动探测：主程序未在线且没有启动器在拉起途中 → 提示"聊天功能受限"
     #   （自拉启动器时主程序数秒后就绪，不打过时提示；窗口仍可打开界面）
@@ -335,8 +371,9 @@ def main(argv=None):
         # 关闭清理：先停内置服务线程（M4 既有，防僵尸端口），再整树终止
         # xiaoju3_launcher.py（含心跳/main/dashboard 子进程）——关窗口即
         # 停全部后台进程，无孤儿驻留
+        stop_event.set()   # 先停监督线程：正常关窗不再触发自动重启
         stop_local_server(server, thread)
-        stop_backend_launcher(launcher_proc)
+        stop_backend_launcher(backend_state["proc"])
     return 0
 
 

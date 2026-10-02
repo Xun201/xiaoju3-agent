@@ -557,13 +557,14 @@ class SmartAskToolTests(unittest.TestCase):
     def tearDown(self):
         brain.tool_fuse.reset()
 
-    def test_whitelist_matches_thirteen_tools(self):
+    def test_whitelist_matches_fourteen_tools(self):
+        # 2026-10-02 权限重构：+restart_service（14 项）
         self.assertEqual(
             sorted(brain.TOOL_WHITELIST),
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
                     "vision_tap_element", "ui_tap_element", "web_search",
-                    "system_manage", "read_core_memory"]))
+                    "system_manage", "read_core_memory", "restart_service"]))
 
     def test_build_messages_keeps_wired_system_entries(self):
         """前情提要/长期记忆注入的 system 条目应保留，其余 system 剔除（§10 #2/#3 接线）。"""
@@ -1829,10 +1830,11 @@ class ToolLoopFuseTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class _Lv3PermissionManager:
-    """恒放行的 Lv.3 权限替身（tools._level_at_least 走 level_value() 数值门）。"""
+    """恒放行的 Lv.4 权限替身（2026-10-02：ui/adb 门禁升 Lv4，档位同步；
+    类名保留沿用——tools._level_at_least 走 level_value() 数值门）。"""
 
     def level_value(self):
-        return 3
+        return 4
 
     def has_permission(self, action):
         return True

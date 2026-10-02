@@ -292,6 +292,52 @@ class DangerousEntityTests(unittest.TestCase):
         self.assertFalse(home_tools.is_dangerous_entity("clock.wall"))
 
 
+class DangerExpansionTests(unittest.TestCase):
+    """危险判定扩展（2026-10-02 权限重构）：valve/阀 + DANGER_ENTITIES。"""
+
+    def setUp(self):
+        self._old = os.environ.pop("DANGER_ENTITIES", None)
+        if self._old is not None:
+            self.addCleanup(os.environ.__setitem__, "DANGER_ENTITIES", self._old)
+
+    def test_valve_keyword_is_dangerous(self):
+        for entity in ("switch.water_valve", "switch.VALVE-1",
+                       "switch.燃气阀", "switch.进水阀"):
+            self.assertTrue(home_tools.is_dangerous_entity(entity), entity)
+
+    def test_danger_entities_custom_whitelist(self):
+        # 精确命中自定义白名单 → 危险（词表外实体亦可声明）
+        os.environ["DANGER_ENTITIES"] = ("lock.front_door,"
+                                         "switch.induction_cooker")
+        try:
+            self.assertTrue(
+                home_tools.is_dangerous_entity("lock.front_door"))
+            self.assertTrue(
+                home_tools.is_dangerous_entity("switch.induction_cooker"))
+            # 白名单外（即使同前缀）不命中
+            self.assertFalse(
+                home_tools.is_dangerous_entity("switch.induction_cooker_2"))
+        finally:
+            os.environ.pop("DANGER_ENTITIES", None)
+
+    def test_danger_entities_whitespace_tolerant(self):
+        os.environ["DANGER_ENTITIES"] = " switch.heater , light.x "
+        try:
+            self.assertTrue(home_tools.is_dangerous_entity("switch.heater"))
+            self.assertTrue(home_tools.is_dangerous_entity("light.x"))
+            # 白名单外照常安全
+            self.assertFalse(home_tools.is_dangerous_entity("switch.other"))
+        finally:
+            os.environ.pop("DANGER_ENTITIES", None)
+
+    def test_builtin_keywords_still_work_without_env(self):
+        # 未配置 DANGER_ENTITIES 时内置关键词照常（lock/gas/valve/燃气/阀）
+        self.assertTrue(home_tools.is_dangerous_entity("lock.front_door"))
+        self.assertTrue(home_tools.is_dangerous_entity("switch.gas_valve"))
+        self.assertTrue(home_tools.is_dangerous_entity("switch.water_valve"))
+        self.assertFalse(home_tools.is_dangerous_entity("light.living"))
+
+
 class ImportSafetyTests(unittest.TestCase):
     """import 本模块零副作用：未配置 HA 时 import 也不崩、不发请求。"""
 
