@@ -134,6 +134,28 @@ def _strip_cq(text):
     return re.sub(r'\[CQ:[^\]]*\]', '', text).strip()
 
 
+
+# @机器人提及文本形态（2026-10-02 紧急修复）：LLOneBot 部分版本 raw_message
+# 的 @ 为纯文本"@小橘3号 指令"而非 CQ 码，指令精确/前缀匹配全部失效——
+# 指令匹配前剥离（按 TRIGGER_WORDS 最长优先交替，避免"小橘"吃掉"小橘3号"）。
+# 触发词之外补全名"小橘3号"（实测群里 @ 文本用的是全名）；最长优先交替，
+# 避免"小橘"先吃掉"小橘3号"的前两个字。
+_AT_BOT_MENTION_RE = re.compile(
+    r"@\s*(?:" + "|".join(sorted(set(TRIGGER_WORDS) | {"小橘3号"},
+                                 key=len, reverse=True)) + r")")
+
+
+def _command_text_of(raw_message):
+    """指令匹配文本：去 CQ 码 + 去 @机器人提及文本后 strip。
+
+    仅供 handle_message 指令分流匹配使用；模型路径仍用清洗后 message
+    （保留原文语义）。两种 @ 形态都覆盖：CQ 码形态（[CQ:at,qq=...]）与
+    纯文本形态（"@小橘3号 指令"）。
+    """
+    text = _strip_cq(raw_message or "")
+    return _AT_BOT_MENTION_RE.sub("", text).strip()
+
+
 def _strip_think(text):
     """剥除 <think>...</think> 思维链包装块（含标签本体，DOTALL 跨行）。
 
@@ -467,13 +489,21 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     if not message:
         return "（你发了一条空消息）"
 
+    # 🎯 指令匹配文本（2026-10-02 紧急修复）：去 CQ 码 + 去开头 @机器人
+    # 提及文本（LLOneBot 部分版本 raw_message 的 @ 为纯文本形态而非 CQ 码，
+    # 实测群里 @小橘3号 + 指令 全部失效落模型）。仅供下方指令分流匹配；
+    # 模型路径仍用清洗后 message（保留原文语义）。
+    command_text = _command_text_of(raw_message)
+    if command_text.startswith("/"):
+        print(f"[指令路由] 收到指令: {command_text[:60]}")
+
     # === 🧹 一键清空记忆（/clear、/reset、清空记忆、重置记忆） ===
     # 精确匹配（清洗后全等）：不误吞更长的 /reset_fuse，也不误伤含"清空记忆"
     # 字样的普通对话。内存列表与磁盘文件双清——只清文件不清内存的话，本会话
     # 记忆并未消失，下一轮 _compress_and_save 又会把旧历史写回文件。
     # 内存仅保留置顶系统提示词（通道历史恒以 system 开头的不变量不破坏）。
     global messages_web, messages_qq
-    if message in ("/clear", "/reset", "清空记忆", "重置记忆"):
+    if command_text in ("/clear", "/reset", "清空记忆", "重置记忆"):
         if source == 'web':
             messages_web[:] = [SYSTEM_PROMPT]
             save_memory([], MEMORY_FILE_WEB)          # 文件内容置空数组 []
@@ -491,7 +521,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     # === 📍 位置指令（/set_location /clear_location，QQ 与网页共用逻辑） ===
     # 2026-10-02 隐私口径：位置存本地 agent_state/user_location.json（不写
     # .env、不入库），网页端经 dashboard /api/chat 调同一 helper
-    location_reply = handle_location_command(raw_message)
+    location_reply = handle_location_command(command_text)
     if location_reply is not None:
         return location_reply
 
@@ -499,36 +529,36 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     # 2026-10-02 修复：QQ 群 @ 消息清洗后残留 "CQ:at,qq=xxx" 前缀，
     # 清洗文本精确匹配失效（实测落模型瞎编）——改用去 CQ 码后的
     # raw_message 精确匹配，群内 @/creator 与私聊 /creator 均命中
-    if _strip_cq(raw_message).strip() == "/creator":
+    if command_text == "/creator":
         return handle_creator_command()
 
     # === 🔒 儿童锁裁决（/approve /deny，QQ 与网页共用，批次②） ===
-    child_reply = handle_child_command(raw_message, user_key)
+    child_reply = handle_child_command(command_text, user_key)
     if child_reply is not None:
         return child_reply
 
     # === 🛡️ 指令菜单 ===
-    if message in ["/help", "菜单", "帮助", "指令"]:
+    if command_text in ["/help", "菜单", "帮助", "指令"]:
         from plugins.help_menu import get_help_menu
         return get_help_menu(permission_manager.current_level)
 
     # === 🛡️ Lv.2 注册（§7：env 注册密码校验，等级落盘） ===
-    if message.startswith("/register"):
+    if command_text.startswith("/register"):
         arg = _arg_after(raw_message, "/register").strip()
         parts = arg.split(None, 1)
         password = parts[0] if parts else ""
         name = parts[1].strip() if len(parts) > 1 else None
         return permission_manager.register_user(user_key, password, name=name)
 
-    if message.startswith("/name"):
+    if command_text.startswith("/name"):
         return permission_manager.claim_name(user_key, _arg_after(raw_message, "/name"))
 
     # === 🛡️ Lv.3 TOTP 动态密码激活（等级持久化接线，修复"重启回落"） ===
-    if message.startswith("/coder_auth"):
+    if command_text.startswith("/coder_auth"):
         return permission_manager.activate_lv3(user_key, _arg_after(raw_message, "/coder_auth"))
 
     # === 🛡️ /sudo：开启 120 秒写操作窗口（与工具链门禁同为缺省用户口径） ===
-    if message.startswith("/sudo"):
+    if command_text.startswith("/sudo"):
         code = _arg_after(raw_message, "/sudo")
         if not code:
             return ("用法：/sudo <6位动态密码>——开启 120 秒写操作窗口（Lv.3 已可直接写文件，本指令为兼容保留），"
@@ -536,7 +566,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return permission_manager.open_operation_window(None, totp_code=code)
 
     # === 🛡️ /lv4_auth 两步流：类 Root 警告 → 双因子 confirm 授权 ===
-    if message.startswith("/lv4_auth"):
+    if command_text.startswith("/lv4_auth"):
         _ensure_biometric_sim()
         rest = _arg_after(raw_message, "/lv4_auth")
         if not rest:
@@ -557,11 +587,11 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return "用法：/lv4_auth 查看类 Root 警告；/lv4_auth confirm <6位动态密码> 完成授权。"
 
     # === 🛡️ /lv4_revoke：撤销主人级权限（立即生效） ===
-    if message.startswith("/lv4_revoke"):
+    if command_text.startswith("/lv4_revoke"):
         return permission_manager.revoke_lv4(user_key)
 
     # === ⛔ /reset_fuse：防死循环熔断重置（Lv.2+，管理员口径全通道清零） ===
-    if message.startswith("/reset_fuse"):
+    if command_text.startswith("/reset_fuse"):
         if permission_manager.level_value() < 2:
             return "❌ 权限不足，该指令需要 Lv.2（普通用户）权限。请先 /register <密码> 注册升级。"
         reset_tool_fuse()
@@ -590,7 +620,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return "🔄 收到链接啦！小橘3号正在后台努力阅读和总结（大约需要1分钟）。完成后日志会自动保存到 dev_logs 文件夹里！"
 
     # === 🛡️ 发送图片指令（2026-10-02 权限重构：LV4 主人级专属） ===
-    if message.startswith("/send_image"):
+    if command_text.startswith("/send_image"):
         if permission_manager.level_value() < 4:
             return "❌ 权限不足，发图需要 Lv.4（主人级）权限。请先 /lv4_auth confirm <6位动态密码> 授权。"
         # 从清洗前原文提取路径（清洗会剥掉盘符冒号与扩展名里的点）

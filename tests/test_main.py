@@ -1450,6 +1450,54 @@ class TestCreatorCommand(_MainCase):
         self.smart_ask.assert_not_called()
 
 
+class TestCommandAtPrefix(_MainCase):
+    """指令路由统一口径（2026-10-02 紧急修复）：CQ 码与纯文本 @ 前缀均
+    不影响内置指令命中；[指令路由] 日志可见。"""
+
+    def _onebot_group(self, text):
+        return self.onebot({
+            "post_type": "message", "message_type": "group",
+            "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+            "raw_message": text,
+        })
+
+    def test_cq_at_help_hits_dispatch(self):
+        self._onebot_group("[CQ:at,qq=10000] /help")
+        self.smart_ask.assert_not_called()   # 命中指令分流，不进模型
+        self.assertIn("指令菜单", self.napcat_payload()["message"])
+
+    def test_text_at_help_hits_dispatch(self):
+        # 2026-10-02 修复回归锁：纯文本 @ 形态（LLOneBot raw_message 直接
+        # 给"@小橘3号 指令"）同样命中指令分流
+        self._onebot_group("@小橘3号 /help")
+        self.smart_ask.assert_not_called()
+        self.assertIn("指令菜单", self.napcat_payload()["message"])
+
+    def test_text_at_creator_returns_card(self):
+        p = patch("main.get_creator_name", return_value="XUN")
+        p.start()
+        self.addCleanup(p.stop)
+        self._onebot_group("@小橘3号 /creator")
+        self.smart_ask.assert_not_called()
+        self.assertIn("由 XUN 创造与维护", self.napcat_payload()["message"])
+
+    def test_command_route_log_printed(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._onebot_group("@小橘3号 /help")
+        self.assertIn("[指令路由] 收到指令: /help", buf.getvalue())
+
+    def test_private_help_hits_dispatch(self):
+        resp = self.onebot({
+            "post_type": "message", "message_type": "private",
+            "self_id": "10000", "sender": {"user_id": 123},
+            "raw_message": "/help",
+        })
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+        self.assertIn("指令菜单", self.napcat_payload()["message"])
+
+
 if __name__ == "__main__":
 
     unittest.main()
