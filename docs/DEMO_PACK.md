@@ -4,9 +4,9 @@
 | --- | --- |
 | 项目 | 小橘3号（xiaoju3-agent）——住在家用设备里的私人 AI 管家 |
 | 文档名 | 四大创新点演示包（DEMO_PACK） |
-| 编制日期 | 2026-10-03 |
+| 编制日期 | 2026-10-02（同日深夜同步至最新代码状态） |
 | 仓库 | https://github.com/Xun201/xiaoju3-agent（main） |
-| 基线 | c1fb69d（1482 项离线测试全绿） |
+| 基线 | 43b5515（1527 项离线测试全绿） |
 | 用途 | 演示/评审四大创新点的"是什么 → 代码在哪 → 怎么验证"一页通；`[SCREENSHOT: …]` 为截图占位，补图后即为完整演示稿 |
 
 状态标记沿用三份主文档口径：🟢 已实现（代码可核对）｜🟡 模块已就绪·接线中｜🔜 规划中。
@@ -16,9 +16,9 @@
 | # | 创新点 | 一句话 | 状态 |
 | --- | --- | --- | --- |
 | 1 | 物理安全底线 + 软件四级权限 | 物理开关绝对优先于一切软件等级（含 Lv.4），软件侧再叠四级门禁 + 儿童锁人在环路 | 🟢 |
-| 2 | 设备自动迁移 / 灵魂备份 | 一个 zip 带走"自己是谁、记得什么"，新设备解包即活；多设备互相守望 | 🟡（migration.py 已就绪，一键指令 10-04 接线） |
+| 2 | 设备自动迁移 / 灵魂备份 | 一个 zip 带走"自己是谁、记得什么"，新设备解包即活；多设备互相守望 | 🟢（/soul_export //soul_import 已落地，7b14fe2；PeerWatch 已接线，8ea0b8c） |
 | 3 | 本地优先双脑 + 完整设备接管链 | 本地模型优先、云端兜底；同一具身体控手机、控家电、控文件 | 🟢 |
-| 4 | QQ 家庭入口 + 桌宠人格 | 全家人用现成的 QQ 就能召唤它；桌面狐狸娘是它的"脸" | 🟢（桌宠 JS 完整、页面暂载加速球，10-07 完整形态回归） |
+| 4 | QQ 家庭入口 + 桌宠人格 | 全家人用现成的 QQ 就能召唤它；桌面狐狸娘是它的"脸" | 🟢（桌宠已回归上线，与加速球共存） |
 
 ---
 
@@ -65,7 +65,7 @@
 
 ---
 
-## 创新点 2：设备自动迁移 / 灵魂备份 🟡（模块已就绪，10-04 接线一键指令）
+## 创新点 2：设备自动迁移 / 灵魂备份 🟢（/soul_export //soul_import 已落地）
 
 ### 当前状态
 
@@ -74,8 +74,8 @@
   - `import_bundle(zip_path, overwrite=False)`：解包恢复到 `agent_state/`；冲突默认跳过；成员路径防穿越（绝对路径 / `..` 一律拒绝）；
   - `PeerWatch`：对端列表 env `XIAOJU3_PEERS`（逗号分隔 http://host:port），逐个 GET `/api/health`（3 秒超时），连续 3 次失联触发 `on_peer_down` 回调——默认中文告警 + 自动 `export_bundle` 留最新备份，**不自动抢班**（抢班交给部署编排层，本模块提供钩子）；
   - `health_bp`：`/api/health` Flask Blueprint，已注册于 `xiaoju3_dashboard.py:72,80`（:5003 可被对端探测）。
-- **已接线部分**：`/api/health` 端点 🟢；PeerWatch 守护线程挂进 `main.py:829-832` `start_background_services()`（默认关闭，env `XIAOJU3_WATCH=1` + `XIAOJU3_PEERS` 才启动）🟢；`xiaoju3_soul_*.zip` 已进 `.gitignore:30` 🟢。
-- **待接线部分（10-04 冲刺项）**：`export_bundle` / `import_bundle` 尚无生产调用点——将落成 `/soul_export`、`/soul_import` 一键指令（QQ/控制台/CLI 三入口），即"最小可用版"。
+- **已接线部分**：`/api/health` 端点 🟢；PeerWatch 守护线程挂进 `main.py` `start_background_services()`（**主入口 env `PEER_DEVICE_URL` 配置即启用**，多对端扩展 `XIAOJU3_PEERS`+`XIAOJU3_WATCH=1` 口径不变；8ea0b8c）🟢；`xiaoju3_soul_*.zip` 已进 `.gitignore` 🟢。
+- **灵魂指令已落地（2026-10-02，7b14fe2）**：QQ 指令 `/soul_export`（Lv.3+，默认落 `backups/soul_<时间戳>.zip`）与 `/soul_import`（Lv.4，MANIFEST.json 强校验 + 覆盖式恢复 + 安全警告回复）；经 `main.handle_soul_command` 指令分流，`[指令路由]` 日志自动覆盖。注意：灵魂包为 **.env 配置项快照随包**（含密钥，仅限家庭内网迁移），与旧 `export_bundle`"密钥不进包"口径不同——旧函数保留供 PeerWatch 留备份。
 
 ### 要迁移的核心数据
 
@@ -98,17 +98,14 @@ export_bundle(path=None)                    # → xiaoju3_soul_YYYYMMDD_HHMMSS.z
 import_bundle(zip_path, overwrite=False)    # → 恢复 agent_state/，防穿越校验
 PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_down（默认自动留最新备份）
 
-# ===== 待接线草图（10-04 最小可用版）=====
-# ① QQ / 控制台指令（主人级 Lv.4 门禁——灵魂包含身份与记忆）
-#   /soul_export                → 执行 export_bundle()，回复包路径与大小
-#   /soul_import <zip绝对路径>   → 执行 import_bundle(zip, overwrite=False)，
-#                                 回复恢复清单 + 提醒按 MANIFEST.txt 手工补 .env
-# ② HTTP API（:5003，复用 /api 族风格）
-#   POST /api/soul/export                 → {"code":0,"data":{"bundle":"...zip","bytes":N}}
-#   POST /api/soul/import {"path":..., "overwrite":false} → 恢复结果逐项清单
-# ③ CLI（migration.py 自带 __main__ 参数）
-#   python migration.py --export [输出路径]
-#   python migration.py --import <zip> [--overwrite]
+# ===== 已落地（2026-10-02，7b14fe2）：QQ 指令 =====
+#   /soul_export [路径]          （Lv.3+）→ export_soul_bundle()：backups/soul_<时间戳>.zip
+#                                 回复包路径 + 大小 + 包含项摘要（.env 为配置项快照）
+#   /soul_import <zip绝对路径>   （Lv.4）→ import_soul_bundle()：MANIFEST.json 强校验
+#                                 后覆盖式恢复；回复含 [安全警告] + 建议重启生效
+# ===== 仍未实现（保持规划）=====
+# ② HTTP API（:5003）与网页控制台入口——未实现
+# ③ CLI——migration.py 自带 __main__ 仅覆盖旧口径函数（export_bundle/import_bundle）
 # ④ 守望联动（已留钩子）：on_peer_down → 告警日志 + export_bundle 留最新备份；
 #   新设备拉起后 /api/health 恢复心跳，PeerWatch 快照翻绿
 ```
@@ -116,7 +113,7 @@ PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_dow
 ### 可验证证据
 
 - 离线：`tests/test_migration.py`（导出/导入/防穿越/守望探测）全绿。
-- 现场（接线后）：A 机 `/soul_export` → 把 zip 拷到 B 机 → `/soul_import` → 重启后身份、等级、两通道记忆原样续聊。
+- 现场（已落地）：QQ 发 `/soul_export` → 把 zip 拷到新机 → `/soul_import` → 重启后身份、等级、记忆原样续聊（导出链已生产验证）。
 
 > 📷 截图占位 [SCREENSHOT: /soul_export 的 QQ 回复（含 xiaoju3_soul_*.zip 路径与大小）+ 新设备 /soul_import 后"我是谁/记得什么"续聊对比]
 
@@ -194,7 +191,7 @@ PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_dow
 
 **桌宠人格**：`desktop-pet.js`（598 行，IIFE 单例注入）——Q 版橘色狐狸娘挂在网页控制台右下角：Pointer Events 拖拽 + 按压形变、距屏幕左右边缘 <24px 磁吸贴边、`scaleX(-1)` 左右翻转（始终朝屏幕中心）、**双版本状态机**（吸附时半身像 `normal_half.png` 只露上半身，拖拽中自动切全身像 `normal_full.png`，素材缺失逐级回退绝不裂图）、随机台词气泡与余额轮换、WebAudio 程序合成音效（零音频文件）、移动端视口自动缩放。`PET_STATE_IMAGES` 常量表即情绪扩展接口（新增情绪 = 补素材 + 表内登记）。
 
-**现状注记（如实）**：桌宠 JS 功能已完备，但按 2026-10-01 口径暂从 `index.html` 停载（index.html:538-543 注释保留，右下角当前唯一悬浮元素是加速球）；10-07 冲刺日以完整形态回归上线。`assets/pet/normal_half|full.png` 目前为 JPG 占位字节，待替换为即梦 AI 生成的透明 PNG。
+**现状注记（如实）**：桌宠 JS 功能齐备，已于 2026-10-02 回归上线（`index.html` 重新挂载 `desktop-pet.js`）；加速球仅最小化态显示（`body.xiaoju3-minimized`），二者共存互不依赖。`assets/pet/normal_half|full.png` 目前为 JPG 占位字节，待替换为即梦 AI 生成的透明 PNG。
 
 ### 代码位置
 

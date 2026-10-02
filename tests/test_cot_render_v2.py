@@ -254,7 +254,11 @@ class CotCollapseRhythmTests(unittest.TestCase):
 # 任务 4：桌宠下线只留加速球
 # ---------------------------------------------------------------------------
 
-class PetOfflineBallOnlyTests(unittest.TestCase):
+class PetOnlineRegressionTests(unittest.TestCase):
+    """桌宠完整形态回归（2026-10-02）：desktop-pet.js 重新挂载。
+
+    2026-10-01 曾按"右下角唯一悬浮元素"口径注释停载（任务 4）；本次恢复
+    加载，加速球仅最小化态显示（body.xiaoju3-minimized 才 display），二者共存。"""
 
     @classmethod
     def setUpClass(cls):
@@ -262,21 +266,22 @@ class PetOfflineBallOnlyTests(unittest.TestCase):
         cls.console_js = _read("console.js")
         cls.pet_js = _read("desktop-pet.js")
 
-    def test_desktop_pet_script_disabled(self):
-        """desktop-pet.js 停止加载：去掉 HTML 注释后（浏览器实际加载面）
-        不存在任何指向 desktop-pet.js 的 script 标签；console.js 仍正常加载。"""
+    def test_desktop_pet_script_enabled(self):
+        """desktop-pet.js 重新挂载：去掉 HTML 注释后（浏览器实际加载面）
+        存在指向 desktop-pet.js 的 script 标签；console.js 仍正常加载。"""
         stripped = _strip_html_comments(self.index_html)
-        self.assertIsNone(re.search(r"<script[^>]*desktop-pet\.js", stripped))
+        self.assertIsNotNone(re.search(r"<script[^>]*desktop-pet\.js", stripped))
+        self.assertIn('<script src="/console/desktop-pet.js"></script>', stripped)
         self.assertIn('<script src="/console/console.js"></script>', stripped)
 
-    def test_disabled_tag_commented_with_reason(self):
-        """下线方式为注释而非删除：原 script 标签原文保留在 HTML 注释中
-        （未来恢复只需取消注释），并注明下线原因（桌宠下线字样）。"""
+    def test_mount_comment_updated_to_regression(self):
+        """挂载点注释同步回归口径：旧的下线注释行已移除，注明回归日期与
+        共存口径（加速球仅最小化态显示）。"""
         html = self.index_html
-        self.assertIn("<!-- <script src=\"/console/desktop-pet.js\"></script> -->",
-                      html)
-        self.assertIn("桌宠下线", html)          # 原因注明
-        self.assertIn("取消下一行注释", html)     # 恢复方式注明
+        self.assertNotIn(
+            "<!-- <script src=\"/console/desktop-pet.js\"></script> -->", html)
+        self.assertIn("桌宠完整形态回归", html)
+        self.assertIn("仅最小化态显示", html)
 
     def test_pet_file_kept_on_disk_with_fallback_chain(self):
         """桌宠文件本体保留在仓库不删除：IIFE 单例哨兵、双版本状态图常量、
@@ -319,12 +324,13 @@ class PetOfflineBallOnlyTests(unittest.TestCase):
         self.assertIn("getElementById('console-minimize')", section)
 
     def test_no_other_floating_pet_elements(self):
-        """右下角只允许一个悬浮元素：页面 img 仅剩加速球头像一张（桌宠
-        形象无任何残留节点）；挂件容器 #xiaoju3-root 为空 div（无视觉）。"""
+        """静态 HTML 口径：页面 img 仅剩加速球头像一张（桌宠形象由
+        desktop-pet.js 运行时注入 #xiaoju3-root，不新增静态节点）；
+        挂件容器 #xiaoju3-root 为空 div（挂载点，桌宠回归后由 JS 填充）。"""
         html = self.index_html
         stripped = _strip_html_comments(html)
         imgs = re.findall(r'<img[^>]*src="([^"]+)"', stripped)
-        self.assertEqual(imgs, ["/assets/pet/normal_half.png"])   # 唯一图片=球头像
+        self.assertEqual(imgs, ["/assets/pet/normal_half.png"])   # 唯一静态图片=球头像
         self.assertIn('<div id="xiaoju3-root"></div>', stripped)
         # 加速球元素仍引用头像（资产保留在仓库且前端仍用）
         ball = re.search(r'<div id="xiaoju3-ball".*?</div>', html, flags=re.S)

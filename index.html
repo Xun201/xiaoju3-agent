@@ -436,8 +436,9 @@
         /* ==================== 加速球（任务 7：网页内缩略模式） ==================== */
         /* 最小化：控制台主体（侧栏+聊天区）隐藏，右下角 60px 圆形加速球；
            由 console.js 切换 body 的 .xiaoju3-minimized 类（互切幂等）。
-           任务 4（2026-10-01 用户口径）：桌宠已下线（desktop-pet.js 停止
-           加载），加速球是页面唯一可悬浮交互元素。 */
+           桌宠回归（2026-10-02）：desktop-pet.js 重新加载，常态下球隐藏、
+           桌宠独占悬浮位；最小化态球现于右下角，与桌宠共存（z-index 同为
+           99999，位置天然分离——钳制边界隐藏时桌宠偏屏幕上方区域）。 */
         body.xiaoju3-minimized > .sidebar,
         body.xiaoju3-minimized > .chat-area { display: none; }
         #xiaoju3-ball {
@@ -525,22 +526,21 @@
         </div>
     </div>
 
-    <!-- 加速球（任务 7：网页内缩略模式，最小化时显示；任务 4 后为唯一悬浮元素）。
+    <!-- 加速球（任务 7：网页内缩略模式，仅最小化态显示；常态悬浮位归桌宠）。
          头像 = 小橘半身像 assets/pet/normal_half.png（非桌宠 DSniang1 素材）；
          文件缺失时由 console.js 兜底退化为 🦊 emoji 圆球。 -->
     <div id="xiaoju3-ball" title="点击展开控制台（可拖拽移动）">
         <img src="/assets/pet/normal_half.png" alt="小橘3号">
     </div>
 
-    <!-- 挂件容器（桌宠注入点，桌宠下线后保留：空容器无视觉，恢复桌宠时直接复用） -->
+    <!-- 挂件容器（桌宠注入点：desktop-pet.js 运行时向此容器注入形象节点） -->
     <div id="xiaoju3-root"></div>
 
-    <!-- 任务 4（2026-10-01 用户口径）：桌宠下线，desktop-pet.js 停止加载。
-         原因：右下角只保留一个悬浮元素（加速球 #xiaoju3-ball，交互逻辑在
-         console.js，不依赖本脚本）；桌宠文件本体保留在仓库不删除（含
-         onerror 裂图回退链与音效引擎），未来恢复时取消下一行注释即可。
-         注意：下一行注释内的 script 标签须保持原文，勿改动 src 写法。 -->
-    <!-- <script src="/console/desktop-pet.js"></script> -->
+    <!-- 桌宠完整形态回归（2026-10-02）：desktop-pet.js 重新加载上线。
+         三能力齐备（边缘吸附 / 左右翻转 / 随机台词气泡，静态断言见
+         test_dashboard.py 桌宠规格组与 test_pet_desktop.py）；加速球仅
+         最小化态显示，二者共存互不依赖。2026-10-01 的下线注释档见 git 历史。 -->
+    <script src="/console/desktop-pet.js"></script>
     <script src="/console/console.js"></script>
 </body>
 </html>
