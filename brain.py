@@ -93,6 +93,7 @@ import logging
 import os
 import re
 import socket
+import time
 
 import requests
 import requests.packages.urllib3.util.connection as urllib3_cn
@@ -657,6 +658,32 @@ _ADMIN_SUFFIX_RE = re.compile(r'[\u4e00-\u9fa5]{1,6}(?:省|市|自治区|自治�
 LOCATION_ASK_REPLY = ("我还不知道你在哪个城市和区，请先告诉我"
                       "（例如：长沙天心区），我下次就能直接搜了～")
 
+# ==================== 清除静默期（2026-10-02 用户口径） ====================
+# /clear_location 后历史消息里的位置仍会把小模型带偏（从历史推断位置继续
+# 用，json 删了也拦不住）——清除后 LOCATION_CLEAR_GRACE_SECONDS 秒内强制
+# 视为位置未知（即使历史里有位置也不采纳），确保 AI 重新询问。内存标记，
+# 不落盘（进程重启后静默期自然失效，json 本身已删、无历史泄漏载体）。
+LOCATION_CLEAR_GRACE_SECONDS = 300
+_location_cleared_at = 0.0   # 最近一次 /clear_location 的时间戳（0 = 未清除过）
+
+
+def mark_location_cleared():
+    """/clear_location 指令调用（main.handle_location_command）：记录清除
+    时间戳，开启位置静默期。"""
+    global _location_cleared_at
+    _location_cleared_at = time.time()
+    print("📍 [位置] 已清除位置记录，进入 5 分钟静默期（忽略历史位置）")
+
+
+def _location_in_clear_grace():
+    """是否处于 /clear_location 后的静默期（最近 5 分钟内清除过）。"""
+    try:
+        if _location_cleared_at <= 0:
+            return False
+        return (time.time() - _location_cleared_at) < LOCATION_CLEAR_GRACE_SECONDS
+    except Exception:
+        return False
+
 
 def _resolve_user_location():
     """解析用户位置（三级来源，2026-10-02 隐私口径）。
@@ -726,17 +753,20 @@ def _enhance_query_precision(city, district, original_query):
 
 
 def _inject_location(query):
-    """搜索指代消解 + 精度增强（2026-10-02 隐私口径 + 精度口径）。
+    """搜索指代消解 + 精度增强（2026-10-02 隐私口径 + 严格来源口径）。
 
-    位置三级回退：.env USER_CITY/USER_DISTRICT 优先 → 本地位置记忆
-    agent_state/user_location.json → 都没有返回 None（调用方硬拦截转询问
-    主人）。改写与增强规则：
-    - query 自带完整"城市+区县"组合 → 主人点名的位置优先（天气类规范化
-      为精准 query，其余原样）；
-    - query 已含解析位置（城市或区县出现）→ 天气类规范化、其余原样；
-    - query 带词表外地名/行政区划后缀 → 原样（不叠加配置位置）；
-    - 裸地点敏感 query → 用解析位置改写 + 精度增强；
-    - 无位置 → None。
+    位置来源只有两个（严格化）：.env 的 USER_CITY/USER_DISTRICT、本地位置
+    记忆 agent_state/user_location.json——**历史对话/模型 query 里的位置
+    信息不作为来源**（小模型会从历史推断位置继续用，清除记录后仍然漏，
+    实测：/clear_location 后问天气直接搜了长沙天心区）。判定规则：
+    - /clear_location 后 5 分钟静默期内（且无新位置写入）→ 强制 None
+      （重新询问，🚿 日志）；
+    - 无位置 → None（调用方硬拦截转询问主人，无论 query/历史里有什么）；
+    - query 已含解析位置（城市或区县出现）→ 天气类规范化精准 query、
+      其余原样；
+    - query 含其他词表城市（主人点名外地，如"北京天气"）→ 原样（主人
+      说的地点优先，不叠加配置位置）；
+    - 裸地点敏感 query → 用解析位置改写 + 精度增强。
     每次判定打一行 📍 [搜索] 位置来源 日志。异常安全（任何异常原样返回）。
     """
     try:
@@ -746,26 +776,29 @@ def _inject_location(query):
         if not any(k in q for k in LOCATION_SENSITIVE_KEYWORDS):
             return q
         city, district, source = _resolve_user_location()
-
-        # ① query 自带完整"城市+区县"组合：主人点名的位置优先
-        q_city, q_district = _find_city_district(q)
-        if q_city and q_district:
-            print(f"📍 [搜索] 位置来源: 主人指定（{q_city}{q_district}）")
-            return _enhance_query_precision(q_city, q_district, q)
-
         location = (city + district).strip()
-        # ② query 已含解析位置（城市或区县出现）：天气类规范化，不叠加
-        if location and ((city and city in q) or (district and district in q)):
-            print(f"📍 [搜索] 位置来源: {source}（{location}）")
-            return _enhance_query_precision(city, district, q)
-        # ③ query 带词表外地名/行政区划后缀（他人城市等）：原样
-        if any(loc in q for loc in _KNOWN_LOCATIONS) or _ADMIN_SUFFIX_RE.search(q):
-            return q
-        # ④ 无位置：不改写（None → 调用方硬拦截转询问主人）
+
+        # 🚿 清除静默期（任务 2）：/clear_location 后 5 分钟内强制视为位置
+        # 未知——历史消息里的位置仍会把小模型带偏，json 已删也不采纳
+        if not location and _location_in_clear_grace():
+            print("📍 [位置] 已清除后处于静默期，忽略历史位置，强制询问")
+            return None
+        # 🚫 位置来源严格化（任务 1）：历史/query 里的位置不作为来源——
+        # 无位置一律 None（调用方硬拦截转询问主人）。注意：query 里哪怕
+        # 带着完整的"长沙天心区"（模型从历史推断）也不采信——主人重新
+        # 告知位置后 user_location.json 会有新记录，届时自然放行
         if not location:
             print("📍 [搜索] 位置来源: 未知（不改写，待主动询问主人）")
             return None
-        # ⑤ 裸地点敏感 query：用解析位置改写 + 精度增强
+
+        # ① query 已含解析位置（城市或区县出现）：天气类规范化，不叠加
+        if (city and city in q) or (district and district in q):
+            print(f"📍 [搜索] 位置来源: {source}（{location}）")
+            return _enhance_query_precision(city, district, q)
+        # ② query 含其他词表城市（主人点名外地，如"北京天气"）：原样
+        if any(loc in q for loc in _KNOWN_LOCATIONS) or _ADMIN_SUFFIX_RE.search(q):
+            return q
+        # ③ 裸地点敏感 query：用解析位置改写 + 精度增强
         print(f"📍 [搜索] 位置来源: {source}（{location}）")
         return _enhance_query_precision(city, district, location + q)
     except Exception as e:

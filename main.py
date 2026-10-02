@@ -375,6 +375,14 @@ def handle_location_command(message):
             clear_user_location()
         except Exception as e:
             return f"❌ 位置记录清除失败: {e}"
+        # 🚿 清除静默期（2026-10-02 用户口径）：历史消息里的位置仍会把小
+        # 模型带偏（从历史推断位置继续用）——清除后 5 分钟内强制视为位置
+        # 未知，确保 AI 重新询问（brain 内存标记，不落盘）
+        try:
+            import brain
+            brain.mark_location_cleared()
+        except Exception as mark_err:
+            print(f"⚠️ 位置静默期标记失败（不影响清除）: {mark_err}")
         return "✅ 位置记录已清除（本地 agent_state/user_location.json）"
     return None
 

@@ -1224,6 +1224,15 @@ class TestLocationCommands(unittest.TestCase):
         reply = main.handle_location_command("/clear_location")
         self.assertIn("已清除", reply)
 
+    def test_clear_location_marks_grace_period(self):
+        """/clear_location 触发 brain 位置静默期标记（2026-10-02 用户口径：
+        清除后 5 分钟内忽略历史位置，强制 AI 重新询问）。"""
+        import brain
+        self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
+        main.handle_location_command("/clear_location")
+        self.assertGreater(brain._location_cleared_at, 0)
+        self.assertTrue(brain._location_in_clear_grace())
+
     def test_normal_message_not_intercepted(self):
         """普通对话（含"位置"字样）不被位置指令误拦截。"""
         self.assertIsNone(main.handle_location_command("你住什么位置呀"))
