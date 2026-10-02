@@ -64,6 +64,7 @@ import threading
 import time
 
 import main  # QQ 接入层业务逻辑模块（架构合并：webhook 业务体宿主于此进程）
+import paths  # 双根路径锚（方案 §1）：资源根=静态托管基准，非 frozen 与项目根同值
 import psutil
 import requests
 from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
@@ -79,8 +80,9 @@ app = Flask(__name__)
 # 原 :5002 main.py 注册点随架构合并迁入）
 app.register_blueprint(health_bp)
 
-# 项目根目录（新版控制台前端文件与 assets 的静态托管基准）
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# 资源根（保名重定义，方案 §1.2）：新版控制台前端文件与 assets 的静态托管基准——
+# frozen 下为 _MEIPASS（datas 只读），非 frozen 与项目根同值，行为不变
+PROJECT_ROOT = paths.RESOURCE_ROOT
 
 
 @app.after_request

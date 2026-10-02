@@ -46,7 +46,7 @@ import subprocess
 import sys
 import time
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+import paths  # 双根路径锚（方案 §1）：资源根=程序自带文件基准，数据根=可写运行数据
 
 # ✅ 三行确认日志 + ⚠️ 改址提醒（文案口径固定，测试断言）
 BANNER_QQ = "✅ QQ 接入层已启动 (5003)"
@@ -164,7 +164,7 @@ def ensure_napcat(napcat_dir=None, popen=None, out=None, running_fn=None,
 DASHBOARD_PORT = 5003
 ALREADY_RUNNING_HINT = ("⚠️ 小橘3号已在运行（5003 已被占用），本次启动取消。"
                         "如需重启，请先停止现有进程。")
-LOG_DIR = os.path.join(PROJECT_ROOT, "xiaoju3_data")
+LOG_DIR = os.path.join(paths.DATA_ROOT, "xiaoju3_data")
 LOG_FILE_PREFIX = "dashboard_live_"
 LOG_KEEP = 10
 
@@ -223,7 +223,7 @@ def build_launch_plan(python=None, root=None):
     hosted 条目只打印）。
     """
     py = python or sys.executable or "python"
-    base = root or PROJECT_ROOT
+    base = root or paths.RESOURCE_ROOT
     return [
         {
             "name": "server",

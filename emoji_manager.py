@@ -5,8 +5,8 @@
   落盘 agent_state/emoji_links.json（文件名与参考实现一致，位置收敛到
   统一配置的 agent_state 隔离区），去重 + 容量截断（滚动保留最新
   MAX_EMOJI_LINKS 条，防链接无限膨胀）。
-- download_emoji(url, tag)：从链接下载图片到本地表情库 assets/emoji/
-  （目录自动创建；文件名 = 安全化标签 + URL MD5 哈希，同链接同名天然去重；
+- download_emoji(url, tag)：从链接下载图片到本地表情库 xiaoju3_data/emoji/
+  （数据根，目录自动创建；文件名 = 安全化标签 + URL MD5 哈希，同链接同名天然去重；
   扩展名按响应 Content-Type 推断、默认 .png）；超时/失败返回 None，
   绝不抛异常。
 - get_emoji_path(tag) / get_random_emoji()：按标签 / 随机从本地表情库取图，
@@ -26,8 +26,9 @@ import requests
 
 from xiaoju3 import AGENT_STATE_DIR, PROJECT_ROOT
 
-# 本地表情库目录（W1 接线口径：项目 assets/emoji/，下载时自动创建）
-EMOJI_DIR = os.path.join(PROJECT_ROOT, "assets", "emoji")
+# 本地表情库目录（数据根 xiaoju3_data/emoji/，下载时自动创建；双根口径：
+# download_emoji 运行时落盘，frozen 下 _MEIPASS 只读不可写，故不落 assets）
+EMOJI_DIR = os.path.join(PROJECT_ROOT, "xiaoju3_data", "emoji")
 
 # 链接收藏仓库（agent_state 隔离区，运行数据不入仓库）
 EMOJI_LOG_FILE = os.path.join(AGENT_STATE_DIR, "emoji_links.json")
@@ -101,7 +102,7 @@ def get_random_emoji():
 
 
 def download_emoji(url, tag="unknow"):
-    """下载图片到本地表情库（assets/emoji/，目录自动创建）。
+    """下载图片到本地表情库（xiaoju3_data/emoji/，目录自动创建）。
 
     文件名 = 安全化标签 + URL MD5 哈希 + 扩展名：同链接同名覆盖（天然去重、
     不产生随机重名文件）；扩展名按响应 Content-Type 推断、默认 .png。

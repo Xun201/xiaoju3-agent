@@ -9,18 +9,21 @@
 """
 import os
 
+import paths  # 双根路径锚（docs/EXE_PACKAGING_PLAN.md §1）：数据根=可写持久，非 frozen 与项目根同值
+
 # ---------------------------------------------------------------------------
 # .env 加载器（stdlib 极简实现）：项目根 .env 中 KEY=VALUE 注入环境变量，
 # 已存在的环境变量优先，不被覆盖。
 # ---------------------------------------------------------------------------
 
 
-# 敏感配置隔离区：.env 统一放在项目根的 xiaoju3_data/ 下（与 Linux 端一致），
-# 路径基于本文件位置推导，Windows / Linux 通用，不写死任何绝对路径。
-ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+# 敏感配置隔离区：.env 统一放在数据根的 xiaoju3_data/ 下（与 Linux 端一致），
+# 路径基于双根的 DATA_ROOT 推导（非 frozen 即项目根），Windows / Linux 通用，
+# 不写死任何绝对路径。
+ENV_FILE = os.path.join(paths.DATA_ROOT,
                         "xiaoju3_data", ".env")
 # 迁移期兼容：旧版把 .env 放在项目根，存在时仍可读取（并提示迁移）
-_LEGACY_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+_LEGACY_ENV_FILE = os.path.join(paths.DATA_ROOT, ".env")
 
 
 def _load_env_file(path=None):
@@ -108,7 +111,9 @@ ONEBOT_TOKEN = (os.environ.get("ONEBOT_TOKEN", "").strip()
                 or os.environ.get("NAPCAT_TOKEN", "").strip())
 
 # 工作区（文件读写沙箱根目录，惰性创建）
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# PROJECT_ROOT 保名重定义（方案 §1.1）：= paths.DATA_ROOT（数据根）——
+# WORKSPACE / AGENT_STATE_DIR 等派生锚随之归位；非 frozen 下两根同值，行为不变。
+PROJECT_ROOT = paths.DATA_ROOT
 WORKSPACE = os.environ.get("WORKSPACE", os.path.join(PROJECT_ROOT, "workspace"))
 
 # 会话记忆
