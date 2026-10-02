@@ -241,5 +241,67 @@ class PromptsTests(unittest.TestCase):
         self.assertTrue(any(p.startswith("【静默回退铁律】") for p in paragraphs))
 
 
+class FoxPersonalityTests(unittest.TestCase):
+    """赤狐性格设定（2026-10-02）：档位拼装与注入。"""
+
+    def test_default_level_is_medium(self):
+        self.assertEqual(prompts.PERSONALITY_LEVEL, "medium")
+
+    def test_medium_section_in_system_prompt(self):
+        """medium（默认）完整档：性格段 + 8 特质要素 + 分界句 + 时段句。"""
+        content = prompts.SYSTEM_PROMPT["content"]
+        self.assertIn("【赤狐性格设定】", content)
+        self.assertIn("汪什么汪，我是狐狸", content)   # "我是狐狸"纠正条目
+        self.assertIn("最多一两处", content)            # 肢体隐喻上限
+        self.assertIn("安全严肃", content)              # 场景分界句
+        self.assertIn("深夜", content)                  # 时段浓度描述
+        self.assertIn("小火苗", content)                # 完整档特征（领地条）
+        self.assertIn("赤狐娘", content)                # 开场句含蓄版
+
+    def test_last_paragraph_still_anti_repeat(self):
+        """末段断言仍为【防复读规则】（性格段插在中间，硬规则不变）。"""
+        paragraphs = [p.strip() for p in
+                      prompts.SYSTEM_PROMPT["content"].split("\n\n")
+                      if p.strip()]
+        self.assertTrue(paragraphs[-1].startswith("【防复读规则】"))
+
+    def test_build_section_off_is_empty(self):
+        """off 档：无性格段（纯通用助手）。"""
+        self.assertEqual(prompts.build_personality_section("off"), "")
+
+    def test_build_section_low_is_condensed(self):
+        """low 档：精简版——保留分界句与时段句，缺完整档特质（小火苗）。"""
+        low = prompts.build_personality_section("low")
+        medium = prompts.build_personality_section("medium")
+        self.assertIn("【赤狐性格设定】", low)
+        self.assertIn("安全严肃", low)
+        self.assertIn("深夜", low)
+        self.assertNotIn("小火苗", low)
+        self.assertLess(len(low), len(medium))
+
+    def test_build_section_high_is_enhanced_superset(self):
+        """high 档：完整档超集 + 浓度强化段。"""
+        high = prompts.build_personality_section("high")
+        medium = prompts.build_personality_section("medium")
+        self.assertIn("【浓度强化】", high)
+        self.assertIn("小火苗", high)
+        self.assertIn("汪什么汪，我是狐狸", high)
+        self.assertGreater(len(high), len(medium))
+
+    def test_build_section_invalid_falls_back_to_medium(self):
+        """非法档位兜底 medium 完整档。"""
+        self.assertEqual(prompts.build_personality_section("bogus"),
+                         prompts.build_personality_section("medium"))
+
+    def test_build_opening_off_vs_fox(self):
+        """开场句：off 通用助手口径；其余含蓄版狐狸娘（黏主人/距离感）。"""
+        self.assertEqual(prompts.build_opening("off"),
+                         "语气活泼幽默，像个真实的朋友。")
+        fox = prompts.build_opening("medium")
+        self.assertIn("赤狐娘", fox)
+        self.assertIn("对主人黏", fox)
+        self.assertIn("对陌生人保持距离", fox)
+
+
 if __name__ == "__main__":
     unittest.main()

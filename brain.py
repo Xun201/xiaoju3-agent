@@ -94,6 +94,7 @@ import os
 import re
 import socket
 import time
+from datetime import datetime
 
 import requests
 import requests.packages.urllib3.util.connection as urllib3_cn
@@ -910,9 +911,61 @@ def _inject_location_context(messages):
                        "[LOCATION:城市-区县] 标记（如 [LOCATION:长沙-天心区]，"
                        "主人只说了城市就写 [LOCATION:城市]）；主人未告知前"
                        "绝对不用不含地点的裸词搜索。")
-        messages.insert(1, {"role": "system", "content": content})
+        insert_at = 1
+        for i, m in enumerate(messages[:5]):
+            if (isinstance(m, dict) and m.get("role") == "system"
+                    and str(m.get("content", "")).startswith("【当前时间】")):
+                insert_at = i   # 插在时间块之前：最终【主人位置】紧跟【当前时间】
+                break
+        messages.insert(insert_at, {"role": "system", "content": content})
     except Exception as e:
         print(f"⚠️ 位置上下文注入失败（已静默跳过）: {e}")
+    return messages
+
+
+# ==================== 时间上下文注入（2026-10-02，赤狐时段性格配套） ====================
+
+def _time_segment(hour):
+    """小时（0-23）→ 时段名。划分口径（2026-10-02 用户指定）：
+    05-08 早上 / 08-11 上午 / 11-13 中午 / 13-17 下午 / 17-19 傍晚 /
+    19-23 晚上 / 23-05 深夜。纯函数。"""
+    hour = int(hour) % 24
+    if 5 <= hour < 8:
+        return "早上"
+    if 8 <= hour < 11:
+        return "上午"
+    if 11 <= hour < 13:
+        return "中午"
+    if 13 <= hour < 17:
+        return "下午"
+    if 17 <= hour < 19:
+        return "傍晚"
+    if 19 <= hour < 23:
+        return "晚上"
+    return "深夜"
+
+
+def _inject_time_context(messages, now=None):
+    """注入【当前时间】system 上下文（赤狐时段性格配套，prompts
+    【时段浓度】依据）。默认插在置顶系统提示词之后；若已存在【主人位置】
+    块则紧跟其后（最终顺序：位置 → 时间相邻）。now 参数便于测试注入固定
+    时刻；异常静默跳过，绝不影响对话主链路。"""
+    try:
+        dt = now if now is not None else datetime.now()
+        seg = _time_segment(dt.hour)
+        content = (f"【当前时间】现在是 {dt.year}年{dt.month:02d}月{dt.day:02d}日 "
+                   f"{dt.hour:02d}:{dt.minute:02d}（{seg}）")
+        insert_at = 1
+        for i, m in enumerate(messages[:5]):
+            if (isinstance(m, dict) and m.get("role") == "system"
+                    and str(m.get("content", "")).startswith("【主人位置】")):
+                insert_at = i + 1   # 紧跟【主人位置】之后
+                break
+        messages.insert(insert_at, {"role": "system", "content": content})
+        print(f"🕐 [时间] 已注入当前时间: {dt.year}-{dt.month:02d}-{dt.day:02d} "
+              f"{dt.hour:02d}:{dt.minute:02d}（{seg}）")
+    except Exception as e:
+        print(f"⚠️ 时间上下文注入失败（已静默跳过）: {e}")
     return messages
 
 
@@ -1253,7 +1306,15 @@ def _compress_history(messages, session_key="default"):
     """
     if len(messages) <= COMPRESS_THRESHOLD:
         return messages
-    old_segment = messages[1:-COMPRESS_KEEP_RECENT]
+    # 🕐 【当前时间】块（_build_messages 注入，位于 index 1）不参与压缩：
+    # 摘出后原位保留——长对话压缩不能把时间上下文吞掉
+    time_block = None
+    old_start = 1
+    if (len(messages) > 1 and isinstance(messages[1], dict)
+            and str(messages[1].get("content", "")).startswith("【当前时间】")):
+        time_block = messages[1]
+        old_start = 2
+    old_segment = messages[old_start:-COMPRESS_KEEP_RECENT]
     if not old_segment:
         return messages
     fingerprint = _history_fingerprint(old_segment)
@@ -1288,8 +1349,11 @@ def _compress_history(messages, session_key="default"):
         cache[session_key] = {"fingerprint": fingerprint, "summary": summary}
         _save_summary_cache(cache)
         print(f"🧠 前情提要已生成并缓存（{session_key}）：{summary[:60]}")
-    # 压缩形态：置顶系统提示词 + 前情提要 system 条目 + 最近明细
-    return ([messages[0], {"role": "system", "content": summary}]
+    # 压缩形态：置顶系统提示词 + （时间块原位保留）+ 前情提要 system 条目
+    # + 最近明细
+    prefix = [messages[0]] + ([time_block] if time_block else [])
+    return (prefix
+            + [{"role": "system", "content": summary}]
             + messages[-COMPRESS_KEEP_RECENT:])
 
 
@@ -1561,6 +1625,10 @@ def _build_messages(message, history):
         messages.append({"role": role, "content": content})
     if not (messages[-1]["role"] == "user" and messages[-1]["content"] == message):
         messages.append({"role": "user", "content": message})
+    # 🕐 时间上下文注入（2026-10-02，赤狐时段性格配套）：插在置顶提示词
+    # 之后（index 1）；后续 _inject_location_context 会把【主人位置】插到
+    # 时间块之前，最终顺序恒为【主人位置】紧跟【当前时间】
+    messages = _inject_time_context(messages)
     return messages
 
 
