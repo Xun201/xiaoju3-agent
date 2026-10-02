@@ -584,6 +584,16 @@ def api_chat():
         if not user_msg:
             return jsonify({"code": 400, "error": "消息不能为空"})
 
+        # 📍 位置指令（2026-10-02 隐私口径）：与 QQ 通道同一处理逻辑
+        # （main.handle_location_command；命中即系统消息返回，不进大脑）
+        location_reply = main.handle_location_command(user_msg)
+        if location_reply is not None:
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(location_reply),
+                         "source": "⚙️ 系统"}
+            })
+
         history = data.get("history") or []
         print(f"[香橙派收到消息] {user_msg}")
         reply, source = smart_ask(user_msg, history)

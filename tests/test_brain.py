@@ -443,7 +443,9 @@ class SmartAskRoutingTests(unittest.TestCase):
         msgs = mr.post.call_args.kwargs["json"]["messages"]
         self.assertEqual(msgs[0]["role"], "system")
         self.assertEqual(msgs[0]["content"], prompts.SYSTEM_PROMPT["content"])
-        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 1)
+        # 2026-10-02 位置隐私模式：+【主人位置】系统上下文（紧跟置顶提示词）
+        self.assertTrue(msgs[1]["content"].startswith("【主人位置】"))
+        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 2)
         self.assertEqual(msgs[-1], {"role": "user", "content": "早"})
 
     def test_history_system_prompt_not_duplicated(self):
@@ -457,8 +459,10 @@ class SmartAskRoutingTests(unittest.TestCase):
             brain.smart_ask("那继续", history)
 
         msgs = mr.post.call_args.kwargs["json"]["messages"]
-        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 1)
-        self.assertEqual([m["content"] for m in msgs[1:]],
+        # 2026-10-02 位置隐私模式：+【主人位置】系统上下文（不与历史重复）
+        self.assertEqual(sum(1 for m in msgs if m["role"] == "system"), 2)
+        self.assertTrue(msgs[1]["content"].startswith("【主人位置】"))
+        self.assertEqual([m["content"] for m in msgs[2:]],
                          ["昨天聊到哪了", "聊到记忆压缩", "那继续"])
 
     def test_history_with_pre_appended_user_message_dedup(self):
@@ -470,7 +474,7 @@ class SmartAskRoutingTests(unittest.TestCase):
             brain.smart_ask("你好", history)
 
         msgs = mr.post.call_args.kwargs["json"]["messages"]
-        self.assertEqual(len(msgs), 2)  # system + 去重后的 user
+        self.assertEqual(len(msgs), 3)  # system + 【主人位置】 + 去重后的 user
         self.assertEqual(msgs[-1]["content"], "你好")
 
     def test_history_not_mutated(self):
@@ -2687,6 +2691,12 @@ class ContextCompressionWiringTests(unittest.TestCase):
         # 共享 fake 状态外置层归零：长期记忆注入不影响本类消息结构断言
         self.sm = _STATE_FAKE.state_manager
         self._reset_sm()
+        # 位置上下文（2026-10-02 隐私口径）与本类无关：恒等旁路，消息结构
+        # 断言保持原口径（其自身行为在 LocationAskTests 覆盖）
+        lp = mock.patch.object(brain, "_inject_location_context",
+                               side_effect=lambda m: m)
+        lp.start()
+        self.addCleanup(lp.stop)
 
     def _reset_sm(self):
         # MagicMock 的重置方法是 reset_mock（reset 会被当作子 mock 属性，清不掉）
@@ -2864,6 +2874,12 @@ class LongTermMemoryWiringTests(unittest.TestCase):
     def setUp(self):
         self.sm = _STATE_FAKE.state_manager
         self._reset_sm()
+        # 位置上下文（2026-10-02 隐私口径）与本类无关：恒等旁路，消息结构
+        # 断言保持原口径（其自身行为在 LocationAskTests 覆盖）
+        lp = mock.patch.object(brain, "_inject_location_context",
+                               side_effect=lambda m: m)
+        lp.start()
+        self.addCleanup(lp.stop)
         tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
         tp.start()
         self.addCleanup(tp.stop)
@@ -3221,6 +3237,17 @@ class LocationInjectTests(unittest.TestCase):
     搜索引擎随机定位（返回杭州余杭，用户实际在长沙天心）。
     """
 
+    @classmethod
+    def setUpClass(cls):
+        # sys.modules 中 agent_state.state_manager 可能是并行测试模块注入的
+        # fake（缺本批新增方法）——按真实路径重载（手法同 LocationAskTests）
+        import importlib.util
+        real_path = os.path.join(PROJECT_ROOT, "agent_state", "state_manager.py")
+        spec = importlib.util.spec_from_file_location(
+            "agent_state.state_manager", real_path)
+        cls.real_sm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.real_sm)
+
     def test_bare_weather_query_rewritten_with_city(self):
         """任务口径用例①："今天天气" + USER_CITY=长沙 → "长沙今天天气"。"""
         with mock.patch.object(brain, "USER_CITY", "长沙"), \
@@ -3240,10 +3267,15 @@ class LocationInjectTests(unittest.TestCase):
             self.assertEqual(brain._inject_location("今天新闻"), "长沙今天新闻")
 
     def test_unconfigured_keeps_original(self):
-        """任务口径用例④：USER_CITY 未配置 → 保持原 query 不改写。"""
+        """任务口径用例④：USER_CITY 未配置且无本地位置记忆 → 返回 None
+        （2026-10-02 隐私口径：调用方不改写，由模型主动询问主人）。"""
         with mock.patch.object(brain, "USER_CITY", ""), \
-                mock.patch.object(brain, "USER_DISTRICT", ""):
-            self.assertEqual(brain._inject_location("今天天气"), "今天天气")
+                mock.patch.object(brain, "USER_DISTRICT", ""), \
+                mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value=None), \
+                mock.patch.dict(sys.modules,
+                                {"agent_state.state_manager": self.real_sm}):
+            self.assertIsNone(brain._inject_location("今天天气"))
 
     def test_non_location_query_untouched(self):
         """任务口径用例⑤：非天气/本地类 query"如何写Python" → 不改写。"""
@@ -3294,9 +3326,144 @@ class LocationInjectTests(unittest.TestCase):
         """提示词约束（2026-10-02 用户口径）：联网搜索规则含地点条款。"""
         content = brain.SYSTEM_PROMPT["content"]
         self.assertIn("query 必须包含具体地点", content)
-        self.assertIn("USER_CITY 和 USER_DISTRICT", content)
-        self.assertIn("以主人说的为准", content)
+        self.assertIn("必须先问", content)
+        self.assertIn("以主人新说的为准", content)
         self.assertIn("不含地点的裸词去搜索", content)
+
+
+class LocationAskTests(unittest.TestCase):
+    """位置隐私模式（2026-10-02）：AI 主动询问 + 本地记忆，不写 .env。
+
+    位置三级来源：.env USER_CITY/USER_DISTRICT（可选）→ 本地位置记忆
+    agent_state/user_location.json（gitignore，[LOCATION:] 标记 /
+    /set_location 指令写入）→ 都没有则不改写、由模型主动询问主人。
+
+    注意：sys.modules 中的 agent_state.state_manager 可能是并行测试模块
+    注入的 fake（缺本批新增方法）——setUpClass 按真实路径重载一份，经
+    mock.patch.dict 让 brain 的延迟导入绑定真实实现（test_heartbeat 的
+    _ensure_real_modules 同款手法），文件断言也走真实模块、测试后清理。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        real_path = os.path.join(PROJECT_ROOT, "agent_state", "state_manager.py")
+        spec = importlib.util.spec_from_file_location(
+            "agent_state.state_manager", real_path)
+        cls.real_sm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.real_sm)
+
+    def setUp(self):
+        self.real_sm.clear_user_location()   # 起点干净
+        self.addCleanup(self.real_sm.clear_user_location)
+
+    def _sm_ctx(self):
+        """让 brain 的延迟导入在 patch.dict 生效期间绑定真实 state_manager。"""
+        return mock.patch.dict(sys.modules,
+                               {"agent_state.state_manager": self.real_sm})
+
+    def test_no_location_anywhere_returns_none(self):
+        """.env 未配置 + 本地位置记忆不存在 → _inject_location 返回 None
+        （不改写搜索词，由模型侧主动询问主人）。"""
+        with mock.patch.object(brain, "USER_CITY", ""),                 mock.patch.object(brain, "USER_DISTRICT", ""),                 mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value=None),                 self._sm_ctx():
+            self.assertIsNone(brain._inject_location("今天天气"))
+
+    def test_local_memory_location_rewrites(self):
+        """.env 未配置 + user_location.json 记录"长沙天心区"→ 改写 query，
+        位置来源日志标注 user_location.json。"""
+        buf = io.StringIO()
+        with mock.patch.object(brain, "USER_CITY", ""),                 mock.patch.object(brain, "USER_DISTRICT", ""),                 mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value={"city": "长沙",
+                                                "district": "天心区"}),                 self._sm_ctx(), contextlib.redirect_stdout(buf):
+            result = brain._inject_location("今天天气")
+        self.assertEqual(result, "长沙天心区今天天气")
+        self.assertIn("user_location.json", buf.getvalue())
+
+    def test_env_location_takes_priority_over_memory(self):
+        """.env 与本地记忆同时存在 → .env 优先（不读、不叠加本地记忆）。"""
+        buf = io.StringIO()
+        with mock.patch.object(brain, "USER_CITY", "长沙"),                 mock.patch.object(brain, "USER_DISTRICT", "天心区"),                 mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value={"city": "北京",
+                                                "district": "朝阳区"}) as mget,                 self._sm_ctx(), contextlib.redirect_stdout(buf):
+            result = brain._inject_location("今天天气")
+        self.assertEqual(result, "长沙天心区今天天气")
+        self.assertIn(".env", buf.getvalue())
+        mget.assert_not_called()   # .env 命中即短路，不触达本地记忆
+
+    def test_location_context_injection_known(self):
+        """位置已知 → 系统上下文注入【主人位置】+ "直接使用"指示。"""
+        msgs = [{"role": "system", "content": "sys"},
+                {"role": "user", "content": "你好"}]
+        with mock.patch.object(brain, "USER_CITY", "长沙"),                 mock.patch.object(brain, "USER_DISTRICT", "天心区"),                 self._sm_ctx():
+            out = brain._inject_location_context(msgs)
+        self.assertEqual(len(out), 3)
+        self.assertIn("【主人位置】长沙天心区", out[1]["content"])
+        self.assertIn("无需再询问", out[1]["content"])
+
+    def test_location_context_injection_unknown(self):
+        """位置未知 → 系统上下文注入"先询问主人 + [LOCATION:] 标记"指示。"""
+        msgs = [{"role": "system", "content": "sys"},
+                {"role": "user", "content": "你好"}]
+        with mock.patch.object(brain, "USER_CITY", ""),                 mock.patch.object(brain, "USER_DISTRICT", ""),                 mock.patch.object(self.real_sm, "get_user_location",
+                                  return_value=None),                 self._sm_ctx():
+            out = brain._inject_location_context(msgs)
+        self.assertIn("【主人位置】未知", out[1]["content"])
+        self.assertIn("[LOCATION:城市-区县]", out[1]["content"])
+
+    def test_smart_ask_injects_location_context(self):
+        """端到端：smart_ask 的模型消息含【主人位置】系统上下文。"""
+        with mock.patch.object(brain, "USER_CITY", "长沙"),                 mock.patch.object(brain, "USER_DISTRICT", ""),                 self._sm_ctx(),                 mock.patch.object(brain, "probe_local", return_value=True),                 mock.patch.object(brain, "ask_local",
+                                  return_value="你好呀！很高兴见到你。") as mlocal,                 _quiet():
+            brain.smart_ask("你好", [])
+        msgs = mlocal.call_args[0][0]
+        self.assertTrue(any(isinstance(m, dict) and m.get("role") == "system"
+                            and str(m.get("content", "")).startswith("【主人位置】")
+                            for m in msgs), msgs[:3])
+
+    def test_location_marker_consumed_and_saved(self):
+        """回复含 [LOCATION:长沙-天心区] → 写入本地位置记忆 + 回复里标记
+        被剥离（对主人不可见）。写真实 agent_state/user_location.json，
+        测试后清除（setUp/addCleanup 兜底）。"""
+        with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+            out = brain._dedupe_reply(
+                "<think>[思考] 记录位置。</think>"
+                "好的，已记录！[LOCATION:长沙-天心区]")
+        # 标记从正文剥离，<think> 包装原样保留
+        self.assertEqual(out,
+                         "<think>[思考] 记录位置。</think>好的，已记录！")
+        self.assertEqual(self.real_sm.get_user_location(),
+                         {"city": "长沙", "district": "天心区"})
+
+    def test_location_marker_city_only(self):
+        """[LOCATION:长沙]（主人只说了城市）→ 城市写入、区县为空。"""
+        with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+            out = brain._dedupe_reply("好的！[LOCATION:长沙]")
+        self.assertEqual(out, "好的！")
+        self.assertEqual(self.real_sm.get_user_location(),
+                         {"city": "长沙", "district": ""})
+
+    def test_marker_only_reply_conservative(self):
+        """整条回复只有标记（剥空口径）→ 保守返回原文，绝不下发空回复。"""
+        with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+            out = brain._dedupe_reply("[LOCATION:长沙-天心区]")
+        self.assertEqual(out, "[LOCATION:长沙-天心区]")
+
+    def test_no_marker_zero_change(self):
+        """无标记回复逐字节原样返回（消费逻辑零误伤）。"""
+        text = "<think>[思考] 想想</think>今天天气不错。"
+        with self._sm_ctx(), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(brain._dedupe_reply(text), text)
+
+    def test_prompt_contains_ask_and_marker_protocol(self):
+        """提示词（2026-10-02 隐私口径）：包含"必须先问"与 [LOCATION:] 协议。"""
+        content = brain.SYSTEM_PROMPT["content"]
+        self.assertIn("必须先问", content)
+        self.assertIn("你现在在哪个城市和区", content)
+        self.assertIn("[LOCATION:城市-区县]", content)
+        self.assertIn("对主人不可见", content)
+        self.assertIn("不要再重复询问", content)
+        self.assertIn("直接使用，不要再问", content)
 
 
 class AntiRepeatPromptTests(unittest.TestCase):

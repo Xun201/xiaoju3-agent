@@ -343,6 +343,42 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
 
 
 # ================= 核心内核（统一入口） =================
+def handle_location_command(message):
+    """位置指令（2026-10-02 隐私口径）：QQ 与网页共用同一处理逻辑。
+
+    - /set_location <城市> [区县] → 写入本地位置记忆
+      （agent_state/user_location.json，gitignore 不入库）；
+    - /clear_location → 清除位置记录；
+    - 命中返回回复文本；未命中返回 None（调用方继续走正常对话链路）。
+    位置不上传 GitHub、不写 .env、不传云端（仅天气/本地搜索时用于拼 query）。
+    """
+    text = (message or "").strip()
+    if text.startswith("/set_location"):
+        arg = text[len("/set_location"):].strip()
+        parts = arg.split()
+        if not parts:
+            return ("📍 用法：/set_location <城市> [区县]，"
+                    "例如：/set_location 长沙 天心区")
+        city = parts[0]
+        district = parts[1] if len(parts) > 1 else None
+        try:
+            from agent_state.state_manager import save_user_location
+            save_user_location(city, district)
+        except Exception as e:
+            return f"❌ 位置记录失败: {e}"
+        shown = city + (f" {district}" if district else "")
+        return (f"✅ 位置已记录：{shown}（仅存本地 agent_state/user_location.json，"
+                "可用 /clear_location 清除）")
+    if text.startswith("/clear_location"):
+        try:
+            from agent_state.state_manager import clear_user_location
+            clear_user_location()
+        except Exception as e:
+            return f"❌ 位置记录清除失败: {e}"
+        return "✅ 位置记录已清除（本地 agent_state/user_location.json）"
+    return None
+
+
 def handle_message(source, user_id, group_id, message, self_qq=None):
     """所有消息（QQ/网页）都统一交给这个函数处理。
 
@@ -377,6 +413,13 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
 
     user_key = str(user_id)
+
+    # === 📍 位置指令（/set_location /clear_location，QQ 与网页共用逻辑） ===
+    # 2026-10-02 隐私口径：位置存本地 agent_state/user_location.json（不写
+    # .env、不入库），网页端经 dashboard /api/chat 调同一 helper
+    location_reply = handle_location_command(raw_message)
+    if location_reply is not None:
+        return location_reply
 
     # === 🛡️ 指令菜单 ===
     if message in ["/help", "菜单", "帮助", "指令"]:
