@@ -1262,5 +1262,58 @@ class TestLocationCommands(unittest.TestCase):
         self.assertIsNone(self.sm.get_user_location())
 
 
+class TestWaitingLocationWindow(_MainCase):
+    """等待位置回答窗口（2026-10-02 群聊体验修复）：AI 问位置后，群聊裸
+    回答"长沙天心区"（无 @）绕过防刷屏规则放行处理；无组合/超时仍忽略。"""
+
+    def setUp(self):
+        super().setUp()
+        import brain
+        self.brain = brain
+        brain.clear_waiting_location()
+        self.addCleanup(brain.clear_waiting_location)
+
+    def _onebot_group(self, text):
+        return self.onebot({
+            "post_type": "message", "message_type": "group",
+            "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
+            "raw_message": text,
+        })
+
+    def test_location_answer_without_at_processed(self):
+        """任务口径用例①：窗口内群聊裸回答"长沙天心区"（无 @）→ 放行进
+        handle_message（smart_ask 被调用，不再被防刷屏规则忽略）。"""
+        self.brain._mark_waiting_location()
+        resp = self._onebot_group("长沙天心区")
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_called_once()
+        self.napcat.post.assert_called_once()
+
+    def test_normal_chat_without_combo_still_ignored(self):
+        """任务口径用例②：窗口内无位置组合的普通聊天（"今天怎么样"）
+        → 仍被忽略（不误处理普通聊天）。"""
+        self.brain._mark_waiting_location()
+        resp = self._onebot_group("今天怎么样")
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+        self.napcat.post.assert_not_called()
+
+    def test_window_expired_still_ignored(self):
+        """任务口径用例③：窗口超时（6 分钟前开窗）→ 裸回答仍被忽略。"""
+        import time as _time
+        self.brain._waiting_location_until = _time.time() - 1   # 已超时
+        resp = self._onebot_group("长沙天心区")
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
+        self.smart_ask.assert_not_called()
+        self.napcat.post.assert_not_called()
+
+    def test_clear_location_closes_window(self):
+        """任务口径用例④：/clear_location 关闭等待窗口（避免遗留状态）。"""
+        self.brain._mark_waiting_location()
+        self.assertTrue(self.brain._waiting_location_active())
+        main.handle_message('web', 'admin', None, "/clear_location")
+        self.assertFalse(self.brain._waiting_location_active())
+
+
 if __name__ == "__main__":
     unittest.main()

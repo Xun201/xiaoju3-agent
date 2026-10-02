@@ -531,6 +531,9 @@ def _extract_location_from_user_message(message):
         city, district = _find_city_district(text)
         if not city or not district:
             return False
+        # 提取成功（组合完整）即关闭等待位置回答窗口——无论写入与否，
+        # 主人都已经回答过位置了
+        clear_waiting_location()
         try:
             from agent_state.state_manager import (get_user_location,
                                                    save_user_location)
@@ -654,8 +657,9 @@ _ADMIN_SUFFIX_RE = re.compile(r'[\u4e00-\u9fa5]{1,6}(?:省|市|自治区|自治�
 
 # 位置未知时的固定询问文案（2026-10-02 硬拦截口径）：本地小模型不可靠、
 # "必须先问"的提示词约束靠不住（实测自己编了"杭州余杭区"直接搜索）——
-# 关键行为必须在代码层硬拦截
-LOCATION_ASK_REPLY = ("我还不知道你在哪个城市和区，请先告诉我"
+# 关键行为必须在代码层硬拦截。文案给用户明确指引（直接回复或 @ 均可——
+# 等待窗口内群聊裸回答会被放行，@ 是窗口未接住时的兜底）
+LOCATION_ASK_REPLY = ("我还不知道你在哪个城市和区，直接回复我或 @ 我都行"
                       "（例如：长沙天心区），我下次就能直接搜了～")
 
 # ==================== 清除静默期（2026-10-02 用户口径） ====================
@@ -683,6 +687,42 @@ def _location_in_clear_grace():
         return (time.time() - _location_cleared_at) < LOCATION_CLEAR_GRACE_SECONDS
     except Exception:
         return False
+
+
+# ==================== 等待位置回答窗口（2026-10-02 用户口径） ====================
+# 群聊体验修复：AI 主动问"你在哪个城市和区"后，用户自然回答"长沙天心区"
+# （没 @ 机器人）会被群聊防刷屏规则挡掉——硬拦截命中（发出询问）时开启
+# 5 分钟等待窗口，窗口内群聊消息含"城市+区县"组合即绕过 @ 判断放行处理；
+# 位置提取成功 / /clear_location / 超时（读取时判断）三种方式关闭窗口。
+WAITING_LOCATION_WINDOW_SECONDS = 300
+_waiting_location_until = 0.0   # 等待位置回答的截止时间戳（0 = 无等待）
+
+
+def _mark_waiting_location():
+    """硬拦截命中（发出位置询问）时开启等待窗口。"""
+    global _waiting_location_until
+    _waiting_location_until = time.time() + WAITING_LOCATION_WINDOW_SECONDS
+
+
+def clear_waiting_location():
+    """关闭等待位置回答窗口（位置提取成功 / /clear_location 时调用）。"""
+    global _waiting_location_until
+    _waiting_location_until = 0.0
+
+
+def _waiting_location_active():
+    """是否处于等待位置回答窗口内（读取时判断，超时自动失效）。"""
+    try:
+        return _waiting_location_until > time.time()
+    except Exception:
+        return False
+
+
+def message_has_location(text):
+    """消息是否含"城市+区县"完整组合（等待窗口放行判定，main.py 群聊
+    防刷屏 @ 判断之前调用；纯检查不写盘）。"""
+    city, district = _find_city_district(text)
+    return bool(city and district)
 
 
 def _resolve_user_location():
@@ -1630,6 +1670,8 @@ def smart_ask(message, history=None, session_key="default"):
                         located = _inject_location(raw_query)
                         if located is None:
                             print("🛑 [搜索] 位置未知，拦截搜索请求，改为询问用户")
+                            # 📍 开启等待位置回答窗口（群聊裸回答放行配套）
+                            _mark_waiting_location()
                             return (_wrap_think(thinking, LOCATION_ASK_REPLY),
                                     "📍 询问位置")
                         if located != raw_query:
