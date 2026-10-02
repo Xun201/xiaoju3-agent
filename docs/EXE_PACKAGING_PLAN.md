@@ -53,6 +53,7 @@ else:
 - **不打包**：`xiaoju3_data/.env`（真实配置）、`agent_state/`（身份/记忆/历史）、`workspace/`、`backups/`、日志、`dev_logs/`——全部运行时在 DATA_ROOT 生成。
 - **打包进 datas（只读）**：`assets/`、前端三件套、`plugins/`、`.env.example`、（可选 `manifest.txt`/`checksums.sha256`）。
 - **外部依赖不进包**：Ollama（127.0.0.1:11434 外部服务）、NapCat（外部常驻服务，`ensure_napcat` 句柄不纳入生命周期，exe 化无影响）、Playwright Chromium（约 200MB，缺失优雅降级既有口径不变，exe 首机用 /gen_log 前需 `playwright install chromium`）。
+- **已知行为（2026-10-03 观察项 C）**：数据根与项目根相互独立——exe 形态的 `xiaoju3_data\`（配置/日志/表情库）与 `agent_state\`（身份/记忆）落在 exe 旁，与项目根的同名目录**互不同步**；两侧各自独立演进，属双根设计的自然结果，非缺陷。
 
 ---
 
@@ -141,7 +142,18 @@ if __name__ == "__main__":
 | 4 | **桌宠渲染** | 控制台右下角查看桌宠，拖拽贴边/翻转 | 桌宠挂载、半身/全身状态机切换正常（assets 打进 datas 从 `_MEIPASS` 托管）；防缓存 `?v=` 版本参数正常下发 |
 | 5 | **心跳感知** | 等 60 秒×2 轮，观察终端日志与 HA（若 .env 配置） | 心跳 daemon 宿主于 5003 进程运行（无第二心跳）；HA 未配置时管线静默零刷屏；数据根快照文件正常读写 |
 | 6 | **重启入口** | 跑 `restart_clean.bat`；再直接关桌面窗口 | bat 清杀命中 `python.exe` 与 `xiaoju3*.exe` 两类进程、确认 5003 释放、隐藏窗口重启成功；关窗整树终止全部 exe 子进程，无孤儿进程、端口全释放 |
-| 5 | （可选，1.0 后）首启 .env 引导 UI、图标/版本资源、杀软误报说明、README 安装章节 | 安装体验收尾 | — |
+
+#### 真机验收记录（2026-10-03，冒烟六项全过）
+
+- ① 双击起服务：桌面窗口打开无黑框；spawn-self 四进程链实锤（bootloader 父 → desktop 角色 → `--xj3-role=launcher` → `--xj3-role=dashboard`）；exe 旁自动生成 `xiaoju3_data\`、`agent_state\`。
+- ② 5003 可达：`/console` HTTP 200；`/api/status` 正常 JSON（cpu/memory/creator 字段齐全）。
+- ③ QQ 收发：群 @小橘3号 `/help` 完整回复（补 `xiaoju3_data\.env` 后通）。
+- ④ 桌宠渲染：窗口内 `GET /console`、`desktop-pet.js?v=` 防缓存、`normal_half.png` 全 200。
+- ⑤ 心跳感知：dashboard 日志实锤——检测到环境变化 → 本地大脑决策 `control_ha_device` → `turn_on input_boolean.xiao_ju_ce_shi_deng` 成功，二轮"无需干预"。
+- ⑥ 关窗停服：点窗口 ×，任务管理器 4 个 `xiaoju3.exe` 全消失、无孤儿。
+- 首跑缺陷一例已修：`_redirect_stdio` 目录不存在时降级不崩主流程（`2f7eb68`）。
+- 产物：`dist\xiaoju3.exe` 45,210,167 字节（≈43.1 MB），PyInstaller 6.22.3 / Python 3.14.7。
+| 5 | （可选，1.0 后）首启 .env 引导 UI（**承接待办 B：exe 首跑缺 .env 引导**——测试者无可拷配置时必须引导填写）、图标/版本资源、杀软误报说明、README 安装章节 | 安装体验收尾 | — |
 
 依赖关系：1 → 2 → 3 → 4（5 独立）。每步一次 commit，步 1-3 任何一步失败可独立回退，不影响现网 python 直跑形态。
 
