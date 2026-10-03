@@ -183,3 +183,11 @@ if __name__ == "__main__":
 | 3 | `_MEIPASS` 只读踩写（emoji_manager 等漏改点） | 中 | 步 1 逐点表 + emoji_manager 读码定论；全仓再 grep 一遍写路径 |
 | 4 | 杀软误报 onefile 中文 exe | 低（发布口径） | 文档声明 + 可选换 onedir 形态备用 |
 | 5 | Chromium 缺失时 /gen_log 降级文案在 exe 下路径不同 | 低 | 既有 LinkFetchError 中文提示机制不变 |
+
+#### 引导层 + 方案 C 真机验证记录（2026-10-03，安装器步 A 收官）
+
+- **首启弹层**：桌面窗口内自动弹出「欢迎使用小橘3号」引导卡，四探针亮灯（ollama / napcat / home_assistant / deepseek），标题栏 v1.0.0 徽标 ✅
+- **跳过 → 关窗 → 重开**：不再弹——skip 标记落 `dist\xiaoju3_data\.first_run_skipped`，跨启动持久（两轮跳过均实测写盘：15:01、15:04，端点行为两次实锤）✅
+- **完成 → 关窗 → 重开**：`xiaoju3_data\.env` 生成（sk- key 落盘 + 未填字段写空值 + 非法键白名单过滤）、`.first_run_skipped` 被 complete 顺手清除、引导卡不再弹、程序读到新配置 ✅
+- **教训沉淀**：两次真机才暴露的 bug——①桌面窗口随机端口 6697 撞 Chromium ERR_UNSAFE_PORT 黑名单；②跳过标记押 localStorage 但 pywebview 缺省 `private_mode=True`（WebView2 InPrivate）→ localStorage 即焚（浏览器验过 ✅、桌面窗口失效 ❌）。**关键验证结论：pywebview 缺省 private_mode=True，localStorage 在桌面窗口不可跨启动 → 跳过标记改后端文件承载**（`45f94d7`），彻底弃用 localStorage。两条教训已立为 BUILD_BRIEF「冒烟触发规则」（`a1584e5`）。
+- 同批回归：桌面窗口已改挂 `:5003/console`（占位窗「🍊 正在启动主程序…」→ 就绪自动导航，随机内置服务退役，6697 类问题根除）。
