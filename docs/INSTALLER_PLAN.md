@@ -115,3 +115,50 @@ exe 首启（`paths.DATA_ROOT/xiaoju3_data/.env` 不存在）时，桌面窗口�
 | 3 | **数据目录位置**：exe 旁（`%LOCALAPPDATA%\Programs\小橘3号`）vs `%APPDATA%` | 中 | 拍板 **exe 旁**——paths.py 双根（DATA_ROOT=exe 目录）**零改动**；`PrivilegesRequired=lowest` 使该位置可写无需管理员；风险=用户自选含中文/空格路径（os.path 兼容已核实）；卸载误删由"默认保留+显式勾选才删"兜住 |
 | 4 | Pascal Script 硬件自检在个别机器被组策略禁 COM/WMI | 低 | 自检失败降级为"无法预判，程序内将自动复测"，不阻塞安装 |
 | 5 | 首装引导"写 .env"是新代码路径（此前只读加载） | 中 | 写入走隔离区 + 键白名单 + 覆盖前备份旧 .env；离线单测覆盖（步 A） |
+
+## 11. 步 C（B3b）真机装卸演练验收记录（2026-10-03，三大场景全过）
+
+演练环境：`dist\xiaoju3-1.0.0-setup.exe` 46,723,774 字节（含消费端 `590e7d8` + iss 重构 `4dd7a0b`），自定义中文安装路径 `F:\测试\小橘3号`，Inno 6.7.3 中文向导，全程零 UAC。前置：B3b 首装首测曾触发两个 Runtime error（①裸 `StrToInt64(WmiFirstValue(...))` 空串硬崩；②失败级联后 DeinitializeSetup 访问未创建的 WizardForm），定位后按 `docs/INSTALLER_STEP_B3_CODE_FIX_DESIGN.md` 重构 [Code] 段（`4dd7a0b`：探测归 InitializeSetup / 建页归 InitializeWizard / `WizardWasCreated` 旗守卫 / `WmiFirstInt` 哨兵 -1），**本记录为重构后的复测结论**。
+
+#### 场景一：首装 ✅
+
+- **零 Runtime error**（重构前三连炸根除）：自检页→组件页→安装完成全程无报错弹窗。
+- **WMI 哨兵降级真机跑通**：安装瞬间 WMI 瞬时不稳，自检页三项显示"无法预判"，**不再误报"推荐轻量版 / 约 0 GB"**（§6 缺陷 #1 修复实锤）。
+- **installer_report.txt 落盘**：97 字节，GBK 编码实锤（utf-8 解码失败、gbk 成功——`SaveStringToFile` AnsiString→系统 ANSI 代码页，消费端回退读法标的形态）；五行逐字吻合：`2026-10-03 17:55:13` / `硬件自检建议: 无法预判（程序首次运行将自动复测）` / `ollama=1` / `napcat=1` / `ha=1`。
+- **自启覆盖语义**：HKCU Run `Xiaoju3` 由演练前指向 dist 的旧值被覆盖为 `"F:\测试\小橘3号\xiaoju3.exe"`（同键同名最后写入者胜）。
+- **消费端真机被调用**：`xiaoju3_data\dashboard_live_20261003_175519.log` 行 15-17，17:55:20 三连全 200——`GET /api/first_run/status` → `installer_report` → `probes`（initFirstRun 特征链）。
+- 装机清单核对：[Files] 三件 + `xiaoju3.exe` 45,371,010 字节 + 卸载器两件；卸载键 `{7E3A1C94-…}_is1` 全字段（DisplayName=小橘3号 版本 1.0.0）。**查询口径备忘：Inno 卸载键带 `_is1` 后缀，按裸 AppId 查恒"不存在"。**
+
+#### 场景二：升级（覆盖安装）✅
+
+- **报告覆写与用户目击逐秒闭环**：`installer_report.txt` 时间戳变为 `2026-10-03 18:04:42`，与用户目击浮层灰字「安装于 2026-10-03 18:04:42；安装器建议：无法预判（真实档位以本机复测为准）」**逐秒一致**——安装器写 → 消费端读同源同刻；徽标「安装时勾选：本地 Ollama / QQ(NapCat) / HA 心跳」与报告三意向 1/1/1 吻合。
+- **数据保留零破坏**：旧三角色日志（dashboard 1,183 / desktop 146 / launcher 388 字节）与 `agent_state\long_term.db` 12,288 字节**字节 + mtime 逐项原样**。
+- **口径注记**：`.env.example`/`QUICKSTART.md`/`xiaoju3.exe` 覆盖安装后 mtime 不刷新属 Inno 正常行为（复制时恢复源文件 mtime）；覆盖证据看新生成产物——`unins000.exe`→18:04:16、`unins000.dat`→18:04:40、报告→18:04:42。
+- **注册表原位刷新**：`Selected Components=ollama,napcat,ha`、`Selected Tasks=desktopicon,autostart`、`InstallDate=20261003` 同键更新；Run 值同路径。
+- **消费端两轮调用**：18:04 轮与 18:06 轮 dashboard 日志均三连 200（18:04:49 / 18:06:25）。
+
+#### 场景三：卸载（默认保数据路径）✅
+
+- **程序侧三清**：程序五件（exe / QUICKSTART.md / .env.example / unins000.exe / unins000.dat）全消失；桌面与开始菜单 `小橘3号 · 控制台.lnk` 消失；`_is1` 卸载键消失、`Run\Xiaoju3` 被 `uninsdeletevalue` 清除（Run 键全量 11 值零小橘残留）。
+- **数据侧全保留**：`installer_report.txt` + 三轮×3 角色日志 + `long_term.db` 共 **11 项字节 + mtime 逐项原样**（含追加后的 1,317 字节日志）；`xiaoju3_data\`、`agent_state\` 两目录本体保留，安装根目录无任何文件残留。
+- **"数据不装不删"承诺在默认卸载路径完整兑现。**
+
+#### 遗留清单（如实记录，均非本轮缺陷）
+
+| # | 遗留 | 状态 |
+|---|---|---|
+| 1 | 卸载向导无「彻底删除用户数据」复选（`[UninstallDelete]` 留空的当前实现即无此功能） | **未实现**——后续步 / 1.1（`CurUninstallStepChanged` + `DelTree` 方案已在 B 设计 §2/§6） |
+| 2 | 卸载完成页「数据保留位置」提示文案未落地（B 设计 §2/§6 承诺过） | **未实现**——同属卸载侧待办 |
+| 3 | 组件页无法改勾选（升级演练中用户未能改动勾选态，UI bug） | **待修**——bug 单独跟踪 |
+| 4 | dashboard 绑 `0.0.0.0`（内网可达） | **加固候选**——改绑 127.0.0.1，1.0 后评估 |
+
+#### B3b 复现命令
+
+```bat
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{7E3A1C94-5B2D-4F68-9A03-18C45E7F2B60}_is1" /s
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Xiaoju3
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall" | findstr /i "7E3A1C94"
+dir /s /b "F:\测试\小橘3号"
+```
+
+（注意卸载键 `_is1` 后缀；路径与盘符按实际安装位置替换。）
