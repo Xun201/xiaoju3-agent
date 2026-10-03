@@ -1456,10 +1456,9 @@
         });
     })();
 
-    // ==================== 首装引导覆盖层（安装器方案步 A4b） ====================
-    // 三处零触碰：2s 轮询不暂停、showToast 原样调用、最小化只走 setConsoleMinimized。
-    var FIRST_RUN_DONE_KEY = 'xiaoju3_first_run_done';
-
+    // ==================== 首装引导覆盖层（安装器方案步 A4b/C） ====================
+    // 跳过语义（方案 C）：后端文件承载（xiaoju3_data/.first_run_skipped），
+    // 彻底弃用 localStorage——浏览器/WebView2 容器差异免疫。
     function setFirstRunError(msg) {
         const el = document.getElementById('first-run-error');
         if (!el) return;
@@ -1467,19 +1466,13 @@
         else { el.textContent = ''; el.hidden = true; }
     }
 
-    function markFirstRunDone() {
-        // 跳过语义（前端标记）：localStorage 记 done，后端 .env 不写——
-        // 下次启动后端 status 仍 true，但此处守卫命中即不再弹。
-        try { localStorage.setItem(FIRST_RUN_DONE_KEY, '1'); } catch (err) { /* storage 不可用忽略 */ }
+    function closeFirstRunOverlay() {
         const overlay = document.getElementById('first-run-overlay');
         if (overlay) overlay.hidden = true;
     }
 
     function initFirstRun() {
-        // 跳过语义守卫：有 done 标记本轮不弹（必须先于 showFirstRun 判定）
-        try {
-            if (localStorage.getItem(FIRST_RUN_DONE_KEY) === '1') return;
-        } catch (err) { /* storage 不可用：按未跳过处理 */ }
+        // 弹与不弹由后端 status 判定（.env 与跳过标记两个文件，容器无关）
         fetch('/api/first_run/status')
             .then(res => res.json())
             .then(res => {
@@ -1515,11 +1508,20 @@
 
     function submitFirstRun(skip) {
         if (skip) {
-            // 跳过：只记前端标记，.env 不写（不调 complete 端点）
-            markFirstRunDone();
-            if (typeof showToast === 'function') {
-                showToast('已跳过首装引导，可稍后编辑 xiaoju3_data\\.env');
-            }
+            // 跳过：后端写跳过标记文件（.env 不写），first_run 自然翻转为 false
+            fetch('/api/first_run/skip', { method: 'POST' })
+                .then(res => res.json())
+                .then(res => {
+                    if (res.code === 200) {
+                        closeFirstRunOverlay();
+                        if (typeof showToast === 'function') {
+                            showToast('已跳过首装引导，可稍后编辑 xiaoju3_data\\.env');
+                        }
+                    } else {
+                        setFirstRunError(res.error || '跳过失败，请重试');
+                    }
+                })
+                .catch(() => setFirstRunError('网络异常，请重试'));
             return;
         }
         const keyInput = document.getElementById('first-run-deepseek-key');
@@ -1553,7 +1555,7 @@
         .then(res => res.json())
         .then(res => {
             if (res.code === 200) {
-                markFirstRunDone();
+                closeFirstRunOverlay();
                 if (typeof showToast === 'function') {
                     showToast('配置已保存，关闭窗口重新打开即生效');
                 }

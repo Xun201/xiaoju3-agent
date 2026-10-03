@@ -22,13 +22,34 @@ import home_tools
 import xiaoju3_launcher as _xl
 from xiaoju3 import CLOUD_KEY, ENV_FILE  # CLOUD_KEY 即 env 键 DEEPSEEK_API_KEY
 
+# 跳过标记（方案 C：后端文件承载，彻底弃用 localStorage——容器差异免疫）：
+# 与 ENV_FILE 同根（数据根 xiaoju3_data/），.env 落盘时由 complete 顺手清除
+SKIP_FLAG_FILE = os.path.join(os.path.dirname(ENV_FILE), ".first_run_skipped")
+
 _PROBE_TIMEOUT = 5          # HA /api/ 探测超时（秒）；Ollama 探针自带 1s
 _DEEPSEEK_KEY_MIN_LEN = 30  # DeepSeek key 形态：sk- 前缀 + 充分长度
 
 
 def is_first_run():
-    """首装判定（单一事实源在文件）：ENV_FILE 不存在即 first_run。"""
-    return not os.path.exists(ENV_FILE)
+    """首装判定（单一事实源在文件）：.env 不存在 且 无跳过标记文件。"""
+    if os.path.exists(ENV_FILE):
+        return False
+    return not os.path.exists(SKIP_FLAG_FILE)
+
+
+def mark_skipped():
+    """写跳过标记（空文件）。失败抛 OSError（调用方提示用户重试）。"""
+    os.makedirs(os.path.dirname(SKIP_FLAG_FILE), exist_ok=True)
+    with open(SKIP_FLAG_FILE, "w", encoding="utf-8") as f:
+        f.write("")
+
+
+def clear_skipped():
+    """清除跳过标记（complete 成功落盘时调用）；文件不存在则静默跳过。"""
+    try:
+        os.remove(SKIP_FLAG_FILE)
+    except OSError:
+        pass
 
 
 def validate_deepseek_key(key):
