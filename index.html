@@ -117,6 +117,7 @@
             gap: 10px;
         }
         .header-title { flex: 1; }
+        .header-version { font-size: 12px; opacity: .55; margin-left: 8px; font-weight: normal; }
         .header-actions { display: flex; align-items: center; gap: 4px; }
         .header-btn {
             background: none;
@@ -495,7 +496,7 @@
         <div class="chat-header">
             <!-- 移动端抽屉开关（≤768px 显示） -->
             <button id="sidebar-toggle" class="header-btn" title="监控面板">☰</button>
-            <span class="header-title">小橘3号 · 控制台</span>
+            <span class="header-title">小橘3号 · 控制台<span id="header-version" class="header-version"></span></span>
             <span class="header-actions">
                 <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
                 <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>

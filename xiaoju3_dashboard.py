@@ -73,7 +73,8 @@ from brain import load_memory, save_memory, smart_ask  # 直连大脑（架构�
 from migration import health_bp  # 迁移守望探测端点（架构 §8，原 :5002 注册点迁入）
 from web_sanitize import sanitize_for_web  # Web 出口 CQ 码净化（QQ 通道不经此处）
 from xiaoju3 import (AGENT_STATE_DIR, CLOUD_BALANCE_URL, CLOUD_KEY,
-                     DASHBOARD_PORT, MAX_MESSAGES, TTS_VOICE)
+                     DASHBOARD_PORT, MAX_MESSAGES, TTS_VOICE,
+                     XIAOJU3_VERSION)
 
 app = Flask(__name__)
 # 🛡️ 迁移守望探测端点（架构 §8，migration docstring 接入示例：一行注册；
@@ -512,11 +513,13 @@ def api_history_delete():
 
 @app.route("/api/status")
 def api_status():
-    """系统状态 API：{code, data:{cpu, memory, temperature, timestamp, tts_voice}}。
+    """系统状态 API：{code, data:{cpu, memory, temperature, timestamp, tts_voice,
+    version, creator}}。
 
     psutil 异常时 cpu/memory 回退 0.0，不让接口 500；temperature 走三平台
     读取链（get_cpu_temp），全失败返回 "暂无温度"；tts_voice 供前端 TTS
-    音色选择（组 B 前端契约）。
+    音色选择（组 B 前端契约）；version 为程序版本（安装器方案步 A1，
+    源头 xiaoju3.XIAOJU3_VERSION）。
     """
     try:
         cpu = float(psutil.cpu_percent(interval=0.5))
@@ -534,6 +537,7 @@ def api_status():
             "temperature": get_cpu_temp(),   # 三平台读取链，失败 "暂无温度"
             "timestamp": int(time.time()),
             "tts_voice": TTS_VOICE,          # 前端 TTS 音色（组 B 前端消费）
+            "version": XIAOJU3_VERSION,      # 程序版本（步 A1，前端标题徽标）
             "creator": main.get_creator_name() or None,   # 创作者署名（批次②）
         }
     })
