@@ -128,3 +128,7 @@
 ## 一键发版脚本（2026-10-03 入库：_dev/release.bat → release.ps1，gh CLI 路线）
 
 把「升版本号 → 重建 → 提交 → 打标签 → 推送 → 建 Release 传附件」串成一条命令。前置依赖：gh CLI（`winget install --id GitHub.cli -e` 安装）+ 一次性 `gh auth login` 浏览器授权（token 由 gh 托管，脚本零凭证）。用法：`cd _dev` 后 `.\release.bat <新版本号>`（如 `.\release.bat 1.1.0`；可选 `-Notes "说明"`）。脚本流程：前置检查（gh 已装/已认证/xiaoju3 进程/git 干净/与 origin 同步）→ 版本校验（目标必须大于当前）→ y 确认 → 升版本号（xiaoju3.py 定义 + 2 测试锚，计数校验防锚漂移）→ build_exe.bat → commit → 打标签 → 推送 → 建 Release 传双附件。守卫：每步失败即停并给人工补救话术；不 force、不 rebase、不删标签、不碰 token。编码注意：release.bat 无 BOM + CRLF（全英文包装器）；release.ps1 带 BOM（中文输出）。不替代 push.sh（内容安检与本脚本互补，发版前建议先过 push.sh）。
+
+## 开发流水账（2026-10-03 入库：xiaoju3_data/开发流水账.md + _dev/devlog_export.py）
+
+**换对话框前**：项目根跑 `python _dev/devlog_export.py`，当日素材块（会话/工具统计/commit 时间线）输出到 stdout，粘贴进 `xiaoju3_data/开发流水账.md` 的〔素材〕区，补一两句定稿条目再收工。流水账为清单式私有文档（整目录 gitignore），叙事故事已归档至同目录 `开发日志.md`（弃用不再续写）。素材导出纪律：拷库只读、只取本项目、只导元数据不读消息正文。
