@@ -8,6 +8,8 @@
 模块 `from xiaoju3 import ...` 时零副作用。
 """
 import os
+import re
+import shutil
 
 import paths  # 双根路径锚（docs/EXE_PACKAGING_PLAN.md §1）：数据根=可写持久，非 frozen 与项目根同值
 
@@ -24,6 +26,105 @@ ENV_FILE = os.path.join(paths.DATA_ROOT,
                         "xiaoju3_data", ".env")
 # 迁移期兼容：旧版把 .env 放在项目根，存在时仍可读取（并提示迁移）
 _LEGACY_ENV_FILE = os.path.join(paths.DATA_ROOT, ".env")
+
+# .env 写入白名单（安装器方案步 A2）：与 .env.example 键集严格一致（tests/
+# test_first_run.py 防漂移锚锁定），越界键一律拒绝——防任意配置覆盖。
+# 键集来源：.env.example 实测 39 键（2026-10-03）；增删 .env.example 键时
+# 必须同步本集合（测试会红）。
+ENV_WRITE_ALLOWLIST = frozenset({
+    "DEEPSEEK_API_KEY", "LOCAL_URL", "LOCAL_PROBE_URL", "LOCAL_MODEL",
+    "CLOUD_URL", "CLOUD_MODEL", "WEB_API_KEY", "HA_URL", "HA_TOKEN",
+    "VISION_MODEL", "VISION_KEY", "VISION_API_URL", "TOOL_FUSE_LIMIT",
+    "LOCAL_GENERATE_TIMEOUT", "XIAOJU3_ACCOUNT_BOOK", "XIAOJU3_MODEL_ROUTE",
+    "XIAOJU3_TOTP_SECRET", "XIAOJU3_REGISTER_PASSWORD", "PEER_DEVICE_URL",
+    "XIAOJU3_PEERS", "XIAOJU3_HUMIDITY_THRESHOLD", "XIAOJU3_BIOMETRIC_SIM",
+    "XIAOJU3_WATCH", "SEARCH_ENGINE", "SERPER_API_KEY", "TAVILY_API_KEY",
+    "USER_CITY", "USER_DISTRICT", "XIAOJU3_PERSONALITY", "NAPCAT_DIR",
+    "DANGER_ENTITIES", "CHILD_LOCK_ENABLED", "DEVICE_TIER",
+    "LOCAL_MODEL_SMALL", "XIAOJU3_CREATOR_DEVICE", "XIAOJU3_OWNER_QQ",
+    "ONEBOT_API_URL", "ONEBOT_TOKEN", "TTS_VOICE",
+})
+
+
+def _quote_env_value(value):
+    """写入值加引号策略：空串或含空白/#/引号的值包双引号（_load_env_file
+    读取端会剥首尾引号，往返无损）；引导键集（key/URL/城市）不含引号。"""
+    v = str(value).strip()
+    if v == "" or any(ch in v for ch in (" ", "\t", "#", '"', "'")):
+        return f'"{v}"'
+    return v
+
+
+def save_env_file(updates, path=None, backup=True):
+    """写 .env（首装引导/设置变更专用，安装器方案步 A2）——与
+    _load_env_file 只读加载对称的**唯一**写入入口。
+
+    四条防线：
+    1. 白名单：updates 里非 ENV_WRITE_ALLOWLIST 的键一律拒绝（进 skipped
+       返回，不抛错——调用方决定如何提示），防任意配置覆盖；
+    2. 单槽备份：backup=True 且文件已存在时先轮换为 <path>.bak（不积累
+       密钥副本，敏感面最小）；
+    3. 原子落盘：写 <path>.tmp 后 os.replace（Windows 原子），写失败清理
+       tmp 并抛原 OSError——绝不留半截 .env 毒化下次启动；
+    4. 增量合并：逐行保留未提及键与注释/顺序（行级替换，非全量重写），
+       新键追加文件尾；同值重复写内容逐字节不变（幂等）。
+
+    并发口径：写者收敛为 desktop 角色引导/设置 UI 单点，launcher/dashboard
+    终生不写；跨进程竞态取"最后写入者胜"（详见 INSTALLER_STEP_A_DESIGN §2.4）。
+
+    返回 (written_keys, skipped_keys, backup_path_or_None)。
+    写失败抛 OSError（调用方必须提示用户，绝不静默）。
+    """
+    if path is None:
+        path = ENV_FILE
+    path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    written, skipped, clean = [], [], {}
+    for key, value in dict(updates or {}).items():
+        k = str(key).strip()
+        if k in ENV_WRITE_ALLOWLIST:
+            clean[k] = _quote_env_value(value)
+            written.append(k)
+        else:
+            skipped.append(k)
+
+    backup_path = None
+    if backup and os.path.exists(path):
+        backup_path = path + ".bak"
+        shutil.copy2(path, backup_path)
+
+    lines = []
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8-sig") as f:
+            lines = f.read().splitlines()
+    key_re = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+    seen = set()
+    out = []
+    for line in lines:
+        m = key_re.match(line)
+        if m and m.group(1) in clean:
+            out.append(f"{m.group(1)}={clean[m.group(1)]}")
+            seen.add(m.group(1))
+        else:
+            out.append(line)
+    for key in clean:
+        if key not in seen:
+            out.append(f"{key}={clean[key]}")
+
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + ("\n" if out else ""))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    return written, skipped, backup_path
 
 
 def _load_env_file(path=None):
