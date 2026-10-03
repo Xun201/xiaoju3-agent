@@ -259,3 +259,148 @@ class IsFirstRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+import sys  # noqa: E402  # A4a frozen 形态用例
+
+import autostart  # noqa: E402
+
+
+class AutostartTargetCommandTests(unittest.TestCase):
+    """A4a target_command 两形态（测死）：frozen=exe 自身；非 frozen=pythonw+脚本。"""
+
+    def test_frozen_uses_exe_itself(self):
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(sys, "executable",
+                               r"C:\Apps\xiaoju3\xiaoju3.exe"):
+            cmd = autostart.target_command()
+        self.assertEqual(cmd, r'"C:\Apps\xiaoju3\xiaoju3.exe"')
+
+    def test_non_frozen_uses_windowless_python_and_script(self):
+        fake_py = r"C:\Python\pythonw.exe"
+        with mock.patch("desktop_launcher._windowless_python",
+                        return_value=fake_py):
+            cmd = autostart.target_command()
+        self.assertIn(fake_py, cmd)
+        self.assertIn("desktop_launcher.py", cmd)
+        self.assertTrue(cmd.startswith('"') and cmd.endswith('"'))
+
+
+class AutostartPlatformGuardTests(unittest.TestCase):
+    """A4a 平台守卫：非 Windows 四函数全部零操作（winreg 不被触碰）。"""
+
+    def test_non_windows_all_ops_noop(self):
+        fake_wr = mock.MagicMock()
+        with mock.patch.dict(sys.modules, {"winreg": fake_wr}), \
+             mock.patch.object(autostart.os, "name", "posix"):
+            self.assertIsNone(autostart.read())
+            self.assertFalse(autostart.write())
+            self.assertFalse(autostart.remove())
+            self.assertFalse(autostart.is_enabled())
+        fake_wr.assert_not_called()
+
+
+class AutostartRegistryTests(unittest.TestCase):
+    """A4a 注册表三操作：fake winreg 注入 sys.modules（winreg 延迟 import）。"""
+
+    def setUp(self):
+        self.fake_wr = mock.MagicMock()
+        self.key = mock.MagicMock()
+        self.fake_wr.CreateKey.return_value = self.key
+        self.fake_wr.OpenKey.return_value = self.key
+        self.fake_wr.REG_SZ = 1
+        self._patchers = [mock.patch.dict(sys.modules, {"winreg": self.fake_wr}),
+                          mock.patch.object(autostart.os, "name", "nt")]
+        for p in self._patchers:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_write_calls_setvalueex(self):
+        with mock.patch.object(autostart, "target_command",
+                               return_value=r'"C:\x\xiaoju3.exe"'):
+            self.assertTrue(autostart.write())
+        args = self.fake_wr.SetValueEx.call_args[0]
+        self.assertEqual(args[1], autostart.VALUE_NAME)   # 值名 Xiaoju3
+        self.assertEqual(args[2], 0)
+        self.assertEqual(args[3], 1)                      # REG_SZ
+        self.assertEqual(args[4], r'"C:\x\xiaoju3.exe"')
+
+    def test_read_hit_and_miss(self):
+        self.fake_wr.QueryValueEx.return_value = (r'"C:\x\xiaoju3.exe"', 1)
+        self.assertEqual(autostart.read(), r'"C:\x\xiaoju3.exe"')
+        self.fake_wr.QueryValueEx.side_effect = FileNotFoundError
+        self.assertIsNone(autostart.read())
+
+    def test_remove_idempotent(self):
+        self.assertTrue(autostart.remove())               # 值存在：删除成功
+        self.fake_wr.DeleteValue.side_effect = FileNotFoundError
+        self.assertFalse(autostart.remove())              # 值已不在：幂等 False 不抛
+
+
+class FirstRunCompleteTests(unittest.TestCase):
+    """A4a complete 端点：落盘/skipped/自启/OSError 500。"""
+
+    def setUp(self):
+        import xiaoju3_dashboard as dashboard
+        self.client = dashboard.app.test_client()
+        self.tmp = tempfile.mkdtemp(prefix="xj3_complete_")
+        self.env_path = os.path.join(self.tmp, ".env")
+        # save_env_file 缺省读 xiaoju3.ENV_FILE；first_run.ENV_FILE 独立绑定，
+        # 两处同 patch 使落盘与翻转判定都指向 tmp
+        self._patchers = [mock.patch.object(xiaoju3, "ENV_FILE", self.env_path),
+                          mock.patch.object(first_run, "ENV_FILE", self.env_path)]
+        for p in self._patchers:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_success_with_skipped_and_autostart(self):
+        legal_key = "sk-" + "a" * 27
+        with mock.patch.object(autostart, "write", return_value=True) as wr:
+            resp = self.client.post("/api/first_run/complete",
+                                    json={"env": {"DEEPSEEK_API_KEY": legal_key,
+                                                  "EVIL_KEY": "pwn"},
+                                          "autostart": True})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        self.assertEqual(data["written"], ["DEEPSEEK_API_KEY"])
+        self.assertEqual(data["skipped"], ["EVIL_KEY"])
+        self.assertFalse(data["first_run"])                # 落盘即自然翻转
+        self.assertIsNone(data["warning"])
+        wr.assert_called_once()                            # 自启勾选 → 写注册表
+        text = open(self.env_path, encoding="utf-8").read()
+        self.assertIn(f"DEEPSEEK_API_KEY={legal_key}", text)
+        self.assertNotIn("EVIL_KEY", text)
+
+    def test_oserror_maps_to_500_with_chinese_error(self):
+        with mock.patch.object(xiaoju3, "save_env_file",
+                               side_effect=OSError("disk full")):
+            resp = self.client.post("/api/first_run/complete",
+                                    json={"env": {"DEEPSEEK_API_KEY": "sk-x"},
+                                          "autostart": False})
+        self.assertEqual(resp.status_code, 500)
+        self.assertIn("配置保存失败", resp.get_json()["error"])
+        self.assertIn("disk full", resp.get_json()["error"])
+
+    def test_autostart_false_never_touches_registry(self):
+        with mock.patch.object(autostart, "write") as wr:
+            resp = self.client.post("/api/first_run/complete",
+                                    json={"env": {"USER_CITY": "示例市"},
+                                          "autostart": False})
+        self.assertEqual(resp.status_code, 200)
+        wr.assert_not_called()
+        self.assertIsNone(resp.get_json()["data"]["warning"])
+
+    def test_autostart_failure_degrades_to_warning_not_500(self):
+        with mock.patch.object(autostart, "write", return_value=False):
+            resp = self.client.post("/api/first_run/complete",
+                                    json={"env": {"USER_CITY": "示例市"},
+                                          "autostart": True})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("自启", resp.get_json()["data"]["warning"])
+
+
+if __name__ == "__main__":
+    unittest.main()

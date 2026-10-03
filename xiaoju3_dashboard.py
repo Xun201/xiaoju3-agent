@@ -564,6 +564,42 @@ def api_first_run_probes():
     })
 
 
+@app.route("/api/first_run/complete", methods=["POST"])
+def api_first_run_complete():
+    """首装完成落盘（安装器方案步 A4a）：
+    - env 子集直调 save_env_file（A2 四防线：39 键白名单硬边界、单槽备份、
+      原子落盘、增量合并）；OSError → 500 + 中文 error（原子性保证原文件不损）；
+    - autostart=true 时写 HKCU Run 自启键，失败降级 warning 不落 500
+      （自启非关键路径）；
+    - first_run 翻转零状态代码：.env 落盘即自然变 false（is_first_run 判定
+      即文件存在性）。"""
+    from autostart import write as autostart_write  # 延迟导入同上
+    from first_run import is_first_run
+    from xiaoju3 import save_env_file
+
+    payload = request.get_json(silent=True) or {}
+    env_updates = payload.get("env") or {}
+    want_autostart = bool(payload.get("autostart"))
+    warning = None
+    try:
+        written, skipped, _ = save_env_file(env_updates)
+    except OSError as e:
+        return jsonify({"code": 500,
+                        "error": f"配置保存失败：{e}（原配置未改动，可重试）"}), 500
+    if want_autostart:
+        try:
+            if not autostart_write():
+                warning = ("开机自启写入未成功（非 Windows 或权限不足），"
+                           "可稍后在设置页重试")
+        except Exception as e:  # 自启失败绝不阻塞首装完成
+            warning = f"开机自启写入异常：{e}"
+    return jsonify({
+        "code": 200,
+        "data": {"written": written, "skipped": skipped,
+                 "first_run": is_first_run(), "warning": warning},
+    })
+
+
 def _balance_fallback(error):
     """余额兜底结构：余额回退 0.0 并附错误提示（前端据此展示失败态）。"""
     return jsonify({
