@@ -1456,4 +1456,134 @@
         });
     })();
 
+    // ==================== 首装引导覆盖层（安装器方案步 A4b） ====================
+    // 三处零触碰：2s 轮询不暂停、showToast 原样调用、最小化只走 setConsoleMinimized。
+    var FIRST_RUN_DONE_KEY = 'xiaoju3_first_run_done';
+
+    function setFirstRunError(msg) {
+        const el = document.getElementById('first-run-error');
+        if (!el) return;
+        if (msg) { el.textContent = msg; el.hidden = false; }
+        else { el.textContent = ''; el.hidden = true; }
+    }
+
+    function markFirstRunDone() {
+        // 跳过语义（前端标记）：localStorage 记 done，后端 .env 不写——
+        // 下次启动后端 status 仍 true，但此处守卫命中即不再弹。
+        try { localStorage.setItem(FIRST_RUN_DONE_KEY, '1'); } catch (err) { /* storage 不可用忽略 */ }
+        const overlay = document.getElementById('first-run-overlay');
+        if (overlay) overlay.hidden = true;
+    }
+
+    function initFirstRun() {
+        // 跳过语义守卫：有 done 标记本轮不弹（必须先于 showFirstRun 判定）
+        try {
+            if (localStorage.getItem(FIRST_RUN_DONE_KEY) === '1') return;
+        } catch (err) { /* storage 不可用：按未跳过处理 */ }
+        fetch('/api/first_run/status')
+            .then(res => res.json())
+            .then(res => {
+                if (!(res.code === 200 && res.data && res.data.first_run)) return;
+                return fetch('/api/first_run/probes')
+                    .then(r2 => r2.json())
+                    .then(r2 => { showFirstRun(r2.data && r2.data.probes); });
+            })
+            .catch(() => { /* 引导层静默降级：控制台照常使用 */ });
+    }
+
+    function showFirstRun(probes) {
+        // 防御：最小化态先展开（复用既有幂等函数，不直接操作 body 类）
+        if (document.body.classList.contains('xiaoju3-minimized')) {
+            setConsoleMinimized(false);
+        }
+        const list = document.getElementById('first-run-probes');
+        if (list) {
+            list.innerHTML = '';
+            (probes || []).forEach(function (p) {
+                const li = document.createElement('li');
+                li.textContent = (p.ok ? '🟢' : '🟡') + ' ' + p.name + '：' + (p.detail || '');
+                list.appendChild(li);
+            });
+        }
+        const urlInput = document.getElementById('first-run-local-url');
+        if (urlInput && !urlInput.value) {
+            urlInput.value = 'http://127.0.0.1:11434/api/chat';
+        }
+        const overlay = document.getElementById('first-run-overlay');
+        if (overlay) overlay.hidden = false;
+    }
+
+    function submitFirstRun(skip) {
+        if (skip) {
+            // 跳过：只记前端标记，.env 不写（不调 complete 端点）
+            markFirstRunDone();
+            if (typeof showToast === 'function') {
+                showToast('已跳过首装引导，可稍后编辑 xiaoju3_data\\.env');
+            }
+            return;
+        }
+        const keyInput = document.getElementById('first-run-deepseek-key');
+        const key = ((keyInput && keyInput.value) || '').trim();
+        if (key && !(key.indexOf('sk-') === 0 && key.length >= 30)) {
+            // 本地格式校验拦截：不发请求
+            setFirstRunError('DeepSeek key 格式不对（应以 sk- 开头且足够长），未提交');
+            return;
+        }
+        setFirstRunError('');
+        const val = function (id) {
+            const el = document.getElementById(id);
+            return (el && el.value) ? el.value.trim() : '';
+        };
+        const payload = {
+            env: {
+                DEEPSEEK_API_KEY: key,
+                HA_URL: val('first-run-ha-url'),
+                HA_TOKEN: val('first-run-ha-token'),
+                LOCAL_URL: val('first-run-local-url'),
+                USER_CITY: val('first-run-user-city'),
+            },
+            autostart: !!(document.getElementById('first-run-autostart') &&
+                          document.getElementById('first-run-autostart').checked),
+        };
+        fetch('/api/first_run/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        })
+        .then(res => res.json())
+        .then(res => {
+            if (res.code === 200) {
+                markFirstRunDone();
+                if (typeof showToast === 'function') {
+                    showToast('配置已保存，关闭窗口重新打开即生效');
+                }
+                setFirstRunError('');
+                const hint = document.getElementById('first-run-restart-hint');
+                if (hint) hint.hidden = false;
+                const closeBtn = document.getElementById('first-run-restart-btn');
+                if (closeBtn) closeBtn.hidden = false;   // 点击 → window.close() 触发整树终止，重开读新配置
+            } else {
+                setFirstRunError(res.error || '保存失败，请重试');
+            }
+        })
+        .catch(function () {
+            setFirstRunError('网络异常，配置未保存，请重试');
+        });
+    }
+
+    const frSkipBtn = document.getElementById('first-run-skip');
+    if (frSkipBtn) frSkipBtn.addEventListener('click', function () { submitFirstRun(true); });
+    const frDoneBtn = document.getElementById('first-run-done');
+    if (frDoneBtn) frDoneBtn.addEventListener('click', function () { submitFirstRun(false); });
+    const frRestartBtn = document.getElementById('first-run-restart-btn');
+    if (frRestartBtn) frRestartBtn.addEventListener('click', function () { window.close(); });
+    const frDsLinkBtn = document.getElementById('first-run-ds-link');
+    if (frDsLinkBtn) frDsLinkBtn.addEventListener('click', function () {
+        // DeepSeek 开放平台（外链按 UI 哨兵口径不放 index.html 字面量，由 JS 打开新窗口）
+        try { window.open('https://platform.deepseek.com', '_blank', 'noopener'); } catch (err) { /* 弹窗被拦时忽略 */ }
+    });
+
+    // 单点插入（IIFE 尾部）：所有既有绑定完成后再尝试弹引导
+    initFirstRun();
+
 })();

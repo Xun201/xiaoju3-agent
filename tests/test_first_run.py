@@ -404,3 +404,75 @@ class FirstRunCompleteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FirstRunOverlayStaticTests(unittest.TestCase):
+    """A4b 静态锚：覆盖层 DOM/函数/CSS 存在性 + 跳过语义源码锁定。
+    UI 运行行为不可离线单测，此处锁定「壳存在 + 默认不弹 + 既有零触碰」。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = open(os.path.join(PROJECT_ROOT, "index.html"),
+                        encoding="utf-8").read()
+        cls.js = open(os.path.join(PROJECT_ROOT, "console.js"),
+                      encoding="utf-8").read()
+
+    def test_overlay_present_and_default_hidden(self):
+        """覆盖层存在且默认 hidden（非引导场景零视觉变化锚）。"""
+        self.assertIn('<div id="first-run-overlay" hidden>', self.html)
+
+    def test_overlay_css_present(self):
+        """CSS 锚：置顶遮罩 + 卡片样式就位。"""
+        self.assertIn("#first-run-overlay {", self.html)
+        self.assertIn("z-index: 3000", self.html)
+        self.assertIn(".first-run-card {", self.html)
+
+    def test_five_form_inputs_and_probe_list(self):
+        """5 键表单 + 自启勾选 + 探针灯行元素齐全。"""
+        for input_id in ("first-run-deepseek-key", "first-run-ha-url",
+                         "first-run-ha-token", "first-run-local-url",
+                         "first-run-user-city"):
+            self.assertIn(f'id="{input_id}"', self.html)
+        self.assertIn('id="first-run-autostart"', self.html)
+        self.assertIn('id="first-run-probes"', self.html)
+        self.assertIn('id="first-run-error"', self.html)
+        self.assertIn('id="first-run-restart-hint"', self.html)
+        self.assertIn('id="first-run-restart-btn"', self.html)
+
+    def test_three_functions_and_single_call_site(self):
+        """三函数定义存在 + IIFE 尾部单点调用。"""
+        for frag in ("function initFirstRun()", "function showFirstRun(",
+                     "function submitFirstRun("):
+            self.assertIn(frag, self.js)
+        self.assertIn("    initFirstRun();", self.js)
+
+    def test_polling_and_minimize_untouched(self):
+        """零触碰锚：2s 轮询行原样存在；overlay 逻辑只经 setConsoleMinimized
+        （不直接操作 xiaoju3-minimized 类的新增写入）。"""
+        self.assertIn("setInterval(fetchStatus, 2000)", self.js)
+        fr_block = self.js[self.js.index("首装引导覆盖层"):self.js.index("initFirstRun();")]
+        self.assertNotIn("classList.add('xiaoju3-minimized'", fr_block)
+        self.assertNotIn("classList.remove('xiaoju3-minimized'", fr_block)
+
+    def test_skip_semantics_guard_before_show_and_no_complete(self):
+        """跳过语义源码锁定：initFirstRun 先查 localStorage done（有则不弹，
+        守卫先于弹出判定）；skip 分支写 done 且绝不调 complete 端点——
+        「跳过后再启动不弹（status 仍 true）」的实现级锁定。"""
+        init_idx = self.js.index("function initFirstRun()")
+        guard_idx = self.js.index("localStorage.getItem(FIRST_RUN_DONE_KEY)",
+                                  init_idx)
+        show_idx = self.js.index("showFirstRun(", init_idx)
+        self.assertLess(guard_idx, show_idx)
+        self.assertIn("localStorage.setItem(FIRST_RUN_DONE_KEY", self.js)
+        fn_start = self.js.index("function submitFirstRun(skip)")
+        fn_end = self.js.index("fetch('/api/first_run/complete'")
+        skip_branch = self.js[fn_start:fn_start + 400]
+        self.assertIn("markFirstRunDone()", skip_branch)
+        complete_in_fn = "/api/first_run/complete" in self.js[fn_start:fn_end + 40]
+        self.assertTrue(complete_in_fn)      # 完成分支含端点（确认定位正确）
+        skip_seg = self.js[fn_start:fn_start + 260]
+        self.assertNotIn("/api/first_run/complete", skip_seg)  # 跳过分支不含端点
+
+
+if __name__ == "__main__":
+    unittest.main()

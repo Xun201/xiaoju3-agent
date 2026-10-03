@@ -467,10 +467,62 @@
             display: block;
             pointer-events: none;               /* 事件落在球容器，拖拽/点击统一处理 */
         }
+        /* 首装引导覆盖层（步 A4b）：z-index 3000 置顶（高于加速球/卡片），
+           显隐走 [hidden] 全局兜底；默认 hidden，非引导场景零视觉变化 */
+        #first-run-overlay { position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; }
+        .first-run-card { background: var(--color-panel, #fff); color: var(--color-text, #222); border-radius: 10px; padding: 20px 24px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+        .first-run-sub { opacity: .75; margin: 4px 0 10px; }
+        .first-run-probes { margin: 0 0 12px; padding-left: 18px; }
+        .first-run-field { display: block; margin: 10px 0; }
+        .first-run-field span { display: block; font-size: 12px; opacity: .8; margin-bottom: 4px; }
+        .first-run-field input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid rgba(127,127,127,.4); border-radius: 6px; }
+        .first-run-check { display: block; margin: 10px 0; }
+        .first-run-error { color: #e0433f; }
+        .first-run-hint { color: #2fa24c; }
+        .first-run-actions { display: flex; gap: 10px; margin-top: 12px; }
     </style>
     <link rel="icon" href="data:,">
 </head>
 <body>
+    <!-- 首装引导覆盖层（步 A4b）：默认 hidden，仅 first_run 且未跳过时由 console.js 弹出 -->
+    <div id="first-run-overlay" hidden>
+        <div class="first-run-card">
+            <h2>欢迎使用小橘3号</h2>
+            <p class="first-run-sub">首次配置：数据只存本机；按需填写，可随时跳过</p>
+            <ul id="first-run-probes" class="first-run-probes"></ul>
+            <label class="first-run-field">
+                <span>DeepSeek API Key（云端对话必需；点「注册 / 充值 DeepSeek」开官方平台，密钥仅存本机）</span>
+                <input type="password" id="first-run-deepseek-key" name="DEEPSEEK_API_KEY" placeholder="sk- 开头，粘贴到这里" autocomplete="off">
+                <button id="first-run-ds-link" class="header-btn" type="button">注册 / 充值 DeepSeek</button>
+            </label>
+            <label class="first-run-field">
+                <span>Home Assistant 地址（可选，用于主动服务心跳）</span>
+                <input type="text" id="first-run-ha-url" name="HA_URL" placeholder="形如 127.0.0.1:8123">
+            </label>
+            <label class="first-run-field">
+                <span>Home Assistant 长期访问令牌（可选）</span>
+                <input type="password" id="first-run-ha-token" name="HA_TOKEN" placeholder="HA 长期访问令牌">
+            </label>
+            <label class="first-run-field">
+                <span>本地模型地址（可选，默认 Ollama）</span>
+                <input type="text" id="first-run-local-url" name="LOCAL_URL" placeholder="形如 127.0.0.1:11434/api/chat">
+            </label>
+            <label class="first-run-field">
+                <span>所在城市（可选，天气 / 新闻用）</span>
+                <input type="text" id="first-run-user-city" name="USER_CITY" placeholder="城市 区县">
+            </label>
+            <label class="first-run-check">
+                <input type="checkbox" id="first-run-autostart" checked> 开机自动启动小橘3号
+            </label>
+            <p id="first-run-error" class="first-run-error" hidden></p>
+            <p id="first-run-restart-hint" class="first-run-hint" hidden>✅ 配置已保存。<b>关闭小橘3号窗口，重新打开即生效</b>（新进程读取你刚填的配置）。</p>
+            <div class="first-run-actions">
+                <button id="first-run-skip" class="header-btn">跳过，稍后配置</button>
+                <button id="first-run-done" class="header-btn">完成并保存</button>
+                <button id="first-run-restart-btn" class="header-btn" hidden>关闭窗口</button>
+            </div>
+        </div>
+    </div>
     <!-- 左侧监控面板（移动端收为可展开抽屉） -->
     <div class="sidebar">
         <div class="panel-header">小橘3号 · 系统状态</div>
