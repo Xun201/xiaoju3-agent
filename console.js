@@ -1321,16 +1321,16 @@
         terminalRefreshBtn.addEventListener('click', loadTerminalHistory);
     }
 
-    // ==================== 8. 缩成加速球（任务 7：网页内缩略模式） ====================
-    // 与本地桌宠（desktop-pet.js）不同功能、两者共存：本节只切换 body 的
-    // 最小化类与球体显隐，不注入/不修改桌宠任何节点（desktop-pet.js 零改动）。
+    // ==================== 8. 缩成加速球（2026-10-03 口径：⌄ 缩桌宠成球） ====================
+    // 与桌宠（desktop-pet.js）的协作：本节只切换 body 的 xiaoju3-pet-minimized
+    // 类与球体显隐/定位，不注入/不修改桌宠任何节点（桌宠隐藏由 CSS 类驱动）。
     // 球体为 index.html 静态节点 #xiaoju3-ball（60px 圆形、橘色 Q 版边框、
-    // 小橘头像）；最小化时控制台主体（.sidebar + .chat-area）display:none，
-    // 球体 display:block（样式见 index.html）；位置存 localStorage
-    // （xiaoju3_ball_pos）刷新保持；互切幂等（重复最小化/展开不报错、不抖动），
-    // 球体挂载点缺失时全部静默跳过，无 JS 报错路径。
-    const MINIMIZE_CLASS = 'xiaoju3-minimized';
-    const BALL_POS_KEY = 'xiaoju3_ball_pos';
+    // 小橘头像）；控制台主体（.sidebar + .chat-area）永不隐藏（口径①）。
+    // 球跟桌宠走（口径②）：进入最小化时从 __xiaoju3Pet.getPos() 实时取桌宠
+    // 坐标重放球位（球心对齐桌宠心），位置不由球记忆（无 localStorage 持久化）；
+    // 互切幂等（重复最小化/恢复不报错、不抖动），球体挂载点缺失时全部静默
+    // 跳过，无 JS 报错路径。（PET_BALL_FIX_DESIGN）
+    const PET_MINIMIZE_CLASS = 'xiaoju3-pet-minimized';
     const BALL_SIZE = 60;   // 球体直径（px，与 index.html #xiaoju3-ball 一致）
 
     function getBallEl() {
@@ -1357,30 +1357,32 @@
         ball.style.bottom = 'auto';
     }
 
-    function loadBallPos() {
-        try {
-            const pos = JSON.parse(localStorage.getItem(BALL_POS_KEY) || 'null');
-            if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') return pos;
-        } catch (e) { /* 记忆损坏：回退 CSS 默认位（右下角） */ }
-        return null;
+    // （位置持久化已退役：口径②球跟桌宠走，位置不由球记忆——每次进入
+    // 最小化都按 __xiaoju3Pet.getPos() 实时原位重放，拖拽仅会话内生效）
+
+    // 球跟桌宠（PET_BALL_FIX_DESIGN §2/§3）：从桌宠单例实时取坐标重放球位
+    // （球心对齐桌宠心）；桌宠单例缺失/坐标异常时保持现状（回退 CSS 兜底位）
+    function replayBallAtPet() {
+        const pos = (window.__xiaoju3Pet && typeof window.__xiaoju3Pet.getPos === 'function')
+            ? window.__xiaoju3Pet.getPos() : null;
+        if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') return;
+        const w = (typeof pos.w === 'number' && pos.w > 0) ? pos.w : BALL_SIZE;
+        const h = (typeof pos.h === 'number' && pos.h > 0) ? pos.h : BALL_SIZE;
+        applyBallPos({
+            x: pos.x + (w - BALL_SIZE) / 2,
+            y: pos.y + (h - BALL_SIZE) / 2,
+        });
     }
 
-    function saveBallPos(pos) {
-        try { localStorage.setItem(BALL_POS_KEY, JSON.stringify(pos)); }
-        catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
-    }
-
-    // 最小化/展开互切（幂等）：已是目标状态直接返回，不重复操作
-    function setConsoleMinimized(minimized) {
+    // 桌宠最小化/恢复互切（幂等）：已是目标状态直接返回，不重复操作。
+    // 最小化 = 桌宠缩成球（CSS 类驱动桌宠隐藏 + 球显示），控制台永不缩
+    function setPetMinimized(minimized) {
         const ball = getBallEl();
         if (!ball) return;   // 球体挂载点缺失：静默跳过，无 JS 报错路径
-        const isMin = document.body.classList.contains(MINIMIZE_CLASS);
+        const isMin = document.body.classList.contains(PET_MINIMIZE_CLASS);
         if (isMin === minimized) return;
-        document.body.classList.toggle(MINIMIZE_CLASS, minimized);
-        if (minimized) {
-            const stored = loadBallPos();
-            if (stored) applyBallPos(stored);   // 恢复记忆位置；无记忆走 CSS 右下角默认
-        }
+        if (minimized) replayBallAtPet();   // 先重放球位（桌宠尚可见，尺寸取真实值）
+        document.body.classList.toggle(PET_MINIMIZE_CLASS, minimized);
     }
 
     // 球体交互初始化：点击展开、指针拖拽移动（拖拽阈值口径与桌宠一致：
@@ -1412,22 +1414,18 @@
         ball.addEventListener('pointerup', function () {
             if (!dragging) return;
             dragging = false;
-            if (moved) {
-                saveBallPos({
-                    x: parseFloat(ball.style.left) || 0,
-                    y: parseFloat(ball.style.top) || 0,
-                });
-            } else {
-                setConsoleMinimized(false);   // 未拖动＝点击展开回完整控制台
+            if (!moved) {
+                setPetMinimized(false);   // 未拖动＝点击恢复桌宠
             }
+            // 拖动＝会话内自由摆位（applyBallPos 已实时落位）；不持久化，
+            // 下次进入最小化按桌宠实时原位重放
         });
         // 拖拽被系统打断（来电/手势竞争）：复位拖拽态，不误判为点击
         ball.addEventListener('pointercancel', function () { dragging = false; });
-        // 窗口尺寸变化：最小化态下按记忆位置重钳制在视口内
+        // 窗口尺寸变化：最小化态下按桌宠当前原位重放球位并钳制在视口内
         window.addEventListener('resize', function () {
-            if (document.body.classList.contains(MINIMIZE_CLASS)) {
-                const pos = loadBallPos();
-                if (pos) applyBallPos(pos);
+            if (document.body.classList.contains(PET_MINIMIZE_CLASS)) {
+                replayBallAtPet();
             }
         });
     }
@@ -1435,8 +1433,8 @@
     const minimizeBtn = document.getElementById('console-minimize');
     if (minimizeBtn) {
         minimizeBtn.addEventListener('click', function () {
-            setConsoleMinimized(true);
-            showToast('已缩成加速球，点击小球恢复');
+            setPetMinimized(true);
+            showToast('桌宠已缩成加速球，点击小球恢复');
         });
     }
     initConsoleBall();
@@ -1491,10 +1489,6 @@
     }
 
     function showFirstRun(probes) {
-        // 防御：最小化态先展开（复用既有幂等函数，不直接操作 body 类）
-        if (document.body.classList.contains('xiaoju3-minimized')) {
-            setConsoleMinimized(false);
-        }
         const list = document.getElementById('first-run-probes');
         if (list) {
             list.innerHTML = '';

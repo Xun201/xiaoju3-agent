@@ -17,15 +17,14 @@
   （border-left）+ 灰色文字（#6b7280）+ 淡蓝色阶段标签小徽章（#3b82f6
   on #eff6ff）；无阶段标记的思考文本降级沿用原逐字打字机（THINK_TYPE_MS
   口径零回退，既有断言零回退）；历史回放（animateThink=false）不打字；
-- 任务 7 缩成加速球：聊天头部 ⌄ 最小化按钮，点击后整个控制台收成直径
-  60px 圆形小挂件（右下角悬浮、小橘半身像 /assets/pet/normal_half.png、
-  橘色 Q 版
-  圆形边框）；点击小球展开回完整控制台；小球支持拖拽移动（拖拽阈值与桌宠
-  同口径：位移平方>9），位置存 localStorage（xiaoju3_ball_pos）刷新保持、
-  resize 重钳制；实现 = body 根容器 class 切换（.xiaoju3-minimized）+ CSS
-  （控制台主体 display:none、球体 display:block），互切幂等、球体挂载点
-  缺失静默跳过（无 JS 报错路径）；与本地桌宠（desktop-pet.js）不同功能、
-  两者共存——desktop-pet.js 零改动（哨兵断言）。
+- 缩成加速球（2026-10-03 口径，PET_BALL_FIX_DESIGN）：聊天头部 ⌄ 最小化
+  按钮，点击后桌宠缩成直径 60px 圆形小挂件（球跟桌宠原位、小橘半身像
+  /assets/pet/normal_half.png、橘色 Q 版圆形边框），控制台永不隐藏；点击
+  小球恢复桌宠；小球支持拖拽移动（拖拽阈值与桌宠同口径：位移平方>9，
+  仅会话内——位置不由球记忆，每次进入最小化按 __xiaoju3Pet.getPos() 实时
+  原位重放）、resize 重钳制；实现 = body 根容器 class 切换
+  （.xiaoju3-pet-minimized）+ CSS（桌宠 .xiaoju-root display:none、球体
+  display:block），互切幂等、球体挂载点缺失静默跳过（无 JS 报错路径）。
 
 测试方式：静态断言（test_dashboard.FrontendStaticTests 风格）+ node 实跑
 （提取真实源码片段喂桩：splitThinkStageLines 分段行为、加速球互切幂等与
@@ -312,7 +311,7 @@ class BallWidgetTests(unittest.TestCase):
         self.assertIn("getElementById('console-minimize')", js)
         section = self._ball_section()
         btn_idx = section.index("getElementById('console-minimize')")
-        self.assertLess(btn_idx, section.index("setConsoleMinimized(true)"))
+        self.assertLess(btn_idx, section.index("setPetMinimized(true)"))
 
     def test_ball_markup_with_mascot(self):
         """球体挂载点：index.html 静态节点 #xiaoju3-ball，小橘半身像
@@ -344,48 +343,52 @@ class BallWidgetTests(unittest.TestCase):
                       "bottom: 24px", "border: 3px solid #d96f2b"):
             self.assertIn(token, css)
         html = self.index_html
-        self.assertIn("body.xiaoju3-minimized #xiaoju3-ball { display: block; }", html)
-        # 控制台主体（侧栏+聊天区）最小化时隐藏：根容器 class + CSS
-        self.assertIn("body.xiaoju3-minimized > .sidebar", html)
-        self.assertIn("body.xiaoju3-minimized > .chat-area", html)
-        self.assertIn("body.xiaoju3-minimized > .chat-area { display: none; }", html)
+        self.assertIn("body.xiaoju3-pet-minimized #xiaoju3-ball { display: block; }", html)
+        # 新口径（PET_BALL_FIX_DESIGN）：桌宠 .xiaoju-root 隐藏（选择器配对
+        # 运行时自建节点）；控制台主体（.sidebar/.chat-area）永不隐藏——旧隐藏规则禁回流
+        self.assertIn("body.xiaoju3-pet-minimized .xiaoju-root { display: none; }", html)
+        self.assertNotIn("xiaoju3-minimized >", html)
 
     def test_toggle_class_and_idempotency(self):
         """互切幂等：class 切换（classList.toggle 带显式布尔）+ 已是目标状态
         直接返回；球体挂载点缺失静默跳过（无 JS 报错路径）。"""
         section = self._ball_section()
-        self.assertIn("const MINIMIZE_CLASS = 'xiaoju3-minimized'", section)
-        self.assertIn("function setConsoleMinimized", section)
-        self.assertIn("document.body.classList.toggle(MINIMIZE_CLASS, minimized)",
+        self.assertIn("const PET_MINIMIZE_CLASS = 'xiaoju3-pet-minimized'", section)
+        self.assertIn("function setPetMinimized", section)
+        self.assertIn("document.body.classList.toggle(PET_MINIMIZE_CLASS, minimized)",
                       section)
         self.assertIn("if (isMin === minimized) return;", section)   # 幂等守卫
         self.assertIn("if (!ball) return;", section)                 # 缺挂载点静默
         self.assertIn("if (isMin === minimized) return;", section)
 
     def test_ball_drag_and_position_memory(self):
-        """拖拽与位置记忆：拖拽阈值与桌宠同口径（位移平方>9）、松手存
-        localStorage（xiaoju3_ball_pos）、载入/最小化恢复记忆位置并钳制在
-        视口内、resize 重钳制。"""
+        """拖拽保留、持久化退役（PET_BALL_FIX_DESIGN 口径②：球跟桌宠走，
+        位置不由球记忆）：拖拽阈值与桌宠同口径（位移平方>9）、钳制与 resize
+        重放仍在；BALL_POS_KEY/loadBallPos/saveBallPos 不得回流；点击（未
+        拖动）恢复桌宠；球跟桌宠原位（getPos 重放）接线在位。"""
         section = self._ball_section()
-        self.assertIn("const BALL_POS_KEY = 'xiaoju3_ball_pos'", section)
         self.assertIn("const BALL_SIZE = 60", section)
         self.assertIn("if (dx * dx + dy * dy > 9) moved = true;", section)
-        self.assertIn("localStorage.setItem(BALL_POS_KEY, JSON.stringify(pos))",
-                      section)
-        self.assertIn("JSON.parse(localStorage.getItem(BALL_POS_KEY)", section)
         self.assertIn("function clampBallPos", section)
         self.assertIn("window.addEventListener('resize'", section)   # resize 重钳制
-        # 点击（未拖动）展开回完整控制台
-        self.assertIn("setConsoleMinimized(false);   // 未拖动＝点击展开回完整控制台",
+        self.assertIn("setPetMinimized(false);   // 未拖动＝点击恢复桌宠",
                       section)
+        self.assertIn("function replayBallAtPet", section)
+        self.assertIn("window.__xiaoju3Pet.getPos", section)
+        for gone in ("BALL_POS_KEY", "xiaoju3_ball_pos",
+                     "function loadBallPos", "function saveBallPos"):
+            self.assertNotIn(gone, section)
 
     def test_coexists_with_desktop_pet(self):
-        """共存哨兵：加速球节不注入/不修改桌宠任何节点（无 __xiaoju3Pet/
-        xiaoju3-root 引用），desktop-pet.js 桌宠规格标记原样保留（零改动）。"""
+        """共存哨兵（2026-10-03 口径更新）：加速球节不注入/不修改桌宠任何
+        节点（xiaoju3-root/PET_LINES/xiaoju3Sound/xiaoju3SetPetState 禁引用），
+        仅**只读**桌宠坐标接口 __xiaoju3Pet.getPos（PET_BALL_FIX_DESIGN §3）；
+        desktop-pet.js 桌宠规格标记原样保留（零改动）。"""
         section = self._ball_section()
-        for pet_token in ("__xiaoju3Pet", "xiaoju3-root", "PET_LINES",
+        for pet_token in ("xiaoju3-root", "PET_LINES",
                           "xiaoju3Sound", "xiaoju3SetPetState"):
             self.assertNotIn(pet_token, section)
+        self.assertIn("window.__xiaoju3Pet.getPos", section)   # 只读坐标接口
         for pet_token in ("window.__xiaoju3Pet", "PET_STATE_IMAGES",
                           "snapToEdge", "PET_LINES"):
             self.assertIn(pet_token, self.pet_js)   # 桌宠本体零改动哨兵
@@ -549,21 +552,18 @@ class WebUxNodeLiveRunTests(unittest.TestCase):
         self.assertEqual(out["r4n"], 0)                     # 空串安全
 
     def test_ball_toggle_idempotent_and_clamped(self):
-        """加速球互切（提取真实 setConsoleMinimized 等整组函数 + 桩替代
-        DOM/localStorage）：重复最小化/展开幂等（class 恰切换一次）；记忆
-        位置越界时钳制在视口内；挂载点缺失静默跳过（不抛错=无 JS 报错路径）。"""
+        """桌宠缩球互切（提取真实 setPetMinimized 等整组函数 + 桩替代
+        DOM/桌宠单例）：重复最小化/恢复幂等（class 恰切换一次）；进入最小化
+        按桌宠原位重放球位（球心对齐桌宠心）；越界钳制在视口内；挂载点缺失
+        静默跳过（不抛错=无 JS 报错路径）。"""
         js = _read("console.js")
-        chunk = js[js.index("const MINIMIZE_CLASS"):
+        chunk = js[js.index("const PET_MINIMIZE_CLASS"):
                    js.index("function initConsoleBall")]
         script = (
-            "var __store = {};\n"
-            "var localStorage = {\n"
-            "  getItem: function (k) { return (k in __store) ? __store[k] : null; },\n"
-            "  setItem: function (k, v) { __store[k] = String(v); },\n"
-            "  removeItem: function (k) { delete __store[k]; }\n"
-            "};\n"
             "var __ball = { style: {}, dataset: {} };\n"
             "var __minCls = {};\n"
+            "var window = { __xiaoju3Pet: { getPos: function () {\n"
+            "  return { x: 100, y: 100, w: 250, h: 250 }; } } };\n"
             "var document = {\n"
             "  body: { classList: {\n"
             "    contains: function (c) { return !!__minCls[c]; },\n"
@@ -575,28 +575,34 @@ class WebUxNodeLiveRunTests(unittest.TestCase):
             "return id === 'xiaoju3-ball' ? __ball : null; }\n"
             "};\n"
             + chunk + "\n"
-            "setConsoleMinimized(true);\n"
-            "setConsoleMinimized(true);          // 重复最小化：幂等无操作\n"
-            "var minOnce = document.body.classList.contains('xiaoju3-minimized');\n"
-            "setConsoleMinimized(false);\n"
-            "setConsoleMinimized(false);          // 重复展开：幂等无操作\n"
-            "var expanded = !document.body.classList.contains('xiaoju3-minimized');\n"
-            "saveBallPos({ x: 900, y: -20 });    // 越界位置 → 钳制在视口内\n"
-            "setConsoleMinimized(true);\n"
+            "setPetMinimized(true);\n"
+            "setPetMinimized(true);              // 重复最小化：幂等无操作\n"
+            "var minOnce = document.body.classList.contains('xiaoju3-pet-minimized');\n"
+            "var replayLeft = __ball.style.left, replayTop = __ball.style.top;\n"
+            "setPetMinimized(false);\n"
+            "setPetMinimized(false);             // 重复恢复：幂等无操作\n"
+            "var expanded = !document.body.classList.contains('xiaoju3-pet-minimized');\n"
+            "applyBallPos({ x: 900, y: -20 });   // 越界位置 → 钳制在视口内\n"
             "var left = __ball.style.left, top = __ball.style.top;\n"
+            "setPetMinimized(true);              // 再缩：重放回桌宠原位（摆位不跨重放）\n"
+            "var replay2Left = __ball.style.left;\n"
             "document = { getElementById: function () { return null; } };  // 缺挂载点\n"
             "var noThrow = true;\n"
-            "try { setConsoleMinimized(true); setConsoleMinimized(false); } "
+            "try { setPetMinimized(true); setPetMinimized(false); } "
             "catch (e) { noThrow = false; }\n"
             "console.log(JSON.stringify({ minOnce: minOnce, expanded: expanded,\n"
+            "  replayLeft: replayLeft, replayTop: replayTop,\n"
             "  left: left, top: top, right: __ball.style.right,\n"
-            "  noThrow: noThrow }));\n")
+            "  replay2Left: replay2Left, noThrow: noThrow }));\n")
         out = self._run_node(script)
         self.assertTrue(out["minOnce"])                       # 幂等：最小化恰好生效
-        self.assertTrue(out["expanded"])                      # 幂等：展开恰好生效
+        self.assertTrue(out["expanded"])                      # 幂等：恢复恰好生效
+        self.assertEqual(out["replayLeft"], "195px")          # 100+(250-60)/2 球心对齐桌宠心
+        self.assertEqual(out["replayTop"], "195px")
         self.assertEqual(out["left"], "740px")                # 800-60 钳制
         self.assertEqual(out["top"], "0px")                   # 负值钳到 0
         self.assertEqual(out["right"], "auto")                # 定位切换到 left/top
+        self.assertEqual(out["replay2Left"], "195px")         # 再缩重放（摆位不跨重放）
         self.assertTrue(out["noThrow"])                       # 缺挂载点不抛错
 
 

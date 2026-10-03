@@ -434,14 +434,15 @@
             .chat-input-area input { font-size: 16px; }  /* 16px 防 iOS 聚焦自动放大 */
         }
 
-        /* ==================== 加速球（任务 7：网页内缩略模式） ==================== */
-        /* 最小化：控制台主体（侧栏+聊天区）隐藏，右下角 60px 圆形加速球；
-           由 console.js 切换 body 的 .xiaoju3-minimized 类（互切幂等）。
-           桌宠回归（2026-10-02）：desktop-pet.js 重新加载，常态下球隐藏、
-           桌宠独占悬浮位；最小化态球现于右下角，与桌宠共存（z-index 同为
-           99999，位置天然分离——钳制边界隐藏时桌宠偏屏幕上方区域）。 */
-        body.xiaoju3-minimized > .sidebar,
-        body.xiaoju3-minimized > .chat-area { display: none; }
+        /* ==================== 加速球（桌宠缩略态） ==================== */
+        /* 口径（2026-10-03，PET_BALL_FIX_DESIGN）：⌄ 缩桌宠成球，球跟桌宠
+           原位（console.js 进入最小化时从 __xiaoju3Pet.getPos() 实时取坐标），
+           控制台（.sidebar + .chat-area）永不隐藏。由 console.js 切换 body
+           的 .xiaoju3-pet-minimized 类（互切幂等）：桌宠 .xiaoju-root 隐藏、
+           球显示；right/bottom 为 JS 未生效时的兜底位。
+           注意（2026-10-03 真机教训）：桌宠由 desktop-pet.js 运行时自建
+           .xiaoju-root 节点直挂 document.body（非静态挂载点）——隐藏
+           选择器必须配对 .xiaoju-root。 */
         #xiaoju3-ball {
             display: none;                      /* 默认隐藏，最小化态显示 */
             position: fixed;
@@ -459,7 +460,8 @@
             touch-action: none;                 /* 指针拖拽不触发页面手势 */
             user-select: none;
         }
-        body.xiaoju3-minimized #xiaoju3-ball { display: block; }
+        body.xiaoju3-pet-minimized #xiaoju3-ball { display: block; }
+        body.xiaoju3-pet-minimized .xiaoju-root { display: none; }   /* 桌宠缩球态：桌宠隐藏（纯类驱动，desktop-pet.js 零 display 控制）；选择器配对运行时自建的 .xiaoju-root */
         #xiaoju3-ball img {
             width: 100%;
             height: 100%;
@@ -556,7 +558,7 @@
                 <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
                 <button id="auto-tts-toggle" class="header-btn" title="自动朗读开关（AI 回复自动播报，与音效独立）">🔇</button>
                 <button id="theme-toggle" class="header-btn" title="切换橘色主题">🦊</button>
-                <button id="console-minimize" class="header-btn" title="最小化：缩成加速球">⌄</button>
+                <button id="console-minimize" class="header-btn" title="最小化：桌宠缩成加速球">⌄</button>
             </span>
         </div>
         <!-- 聊天标签页：对话窗口 / 终端记录（终端记录只读，切换逻辑在 console.js） -->
@@ -581,20 +583,22 @@
         </div>
     </div>
 
-    <!-- 加速球（任务 7：网页内缩略模式，仅最小化态显示；常态悬浮位归桌宠）。
-         头像 = 小橘半身像 assets/pet/normal_half.png（非桌宠 DSniang1 素材）；
-         文件缺失时由 console.js 兜底退化为 🦊 emoji 圆球。 -->
-    <div id="xiaoju3-ball" title="点击展开控制台（可拖拽移动）">
+    <!-- 加速球（桌宠缩略态，2026-10-03 口径：⌄ 缩桌宠成球，球跟桌宠原位；
+         控制台永不缩）。头像 = 小橘半身像 assets/pet/normal_half.png（非桌宠
+         DSniang1 素材）；文件缺失时由 console.js 兜底退化为 🦊 emoji 圆球。 -->
+    <div id="xiaoju3-ball" title="点击恢复桌宠（可拖拽移动）">
         <img src="/assets/pet/normal_half.png" alt="小橘3号">
     </div>
 
-    <!-- 挂件容器（桌宠注入点：desktop-pet.js 运行时向此容器注入形象节点） -->
-    <div id="xiaoju3-root"></div>
+    <!-- 桌宠挂载说明：desktop-pet.js 运行时自建 .xiaoju-root 节点直挂
+         document.body，无静态容器元素（2026-10-03 清理孤儿空 div
+         #xiaoju3-root——注释称"注入点"但实现从未使用）。 -->
 
     <!-- 桌宠完整形态回归（2026-10-02）：desktop-pet.js 重新加载上线。
          三能力齐备（边缘吸附 / 左右翻转 / 随机台词气泡，静态断言见
-         test_dashboard.py 桌宠规格组与 test_pet_desktop.py）；加速球仅
-         最小化态显示，二者共存互不依赖。2026-10-01 的下线注释档见 git 历史。 -->
+         test_dashboard.py 桌宠规格组与 test_pet_desktop.py）；
+         最小化=桌宠缩球（球跟桌宠原位），控制台永不缩。
+         2026-10-01 的下线注释档见 git 历史。 -->
     <script src="/console/desktop-pet.js"></script>
     <script src="/console/console.js"></script>
 </body>

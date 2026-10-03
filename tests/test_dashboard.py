@@ -681,8 +681,9 @@ class ServingTests(unittest.TestCase):
 
     def test_console_loads_desktop_pet(self):
         """桌宠完整形态回归（2026-10-02）：/console 页面重新挂载
-        desktop-pet.js（2026-10-01 曾注释停载，加速球仅最小化态显示；
-        script 带 mtime 防缓存 ?v= 参数，与 console.js 同机制）。"""
+        desktop-pet.js（2026-10-01 曾注释停载；2026-10-03 口径=最小化桌宠
+        缩球，控制台永不缩；script 带 mtime 防缓存 ?v= 参数，与 console.js
+        同机制）。"""
         resp = self.client.get("/console")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
@@ -747,7 +748,7 @@ class FrontendStaticTests(unittest.TestCase):
             "100vh",                             # 无页面滚动
             "你好！我是小橘3号，很高兴为你服务喵~",   # 欢迎语
             "onkeypress",                        # 回车发送
-            "xiaoju3-root",                      # 桌宠容器
+            ".xiaoju-root",                      # 桌宠（运行时自建节点，缩球隐藏规则锚）
         )
         for token in tokens:
             self.assertIn(token, html)

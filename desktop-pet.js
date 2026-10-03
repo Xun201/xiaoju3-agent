@@ -24,7 +24,7 @@
 //   window.xiaoju3SetPetState('happy_full') 挂载即可。
 (function() {
     if (window.__xiaoju3Pet) return;
-    window.__xiaoju3Pet = true;
+    window.__xiaoju3Pet = { getPos: getPos };   // getPos 为 IIFE 内函数声明（提升可用），真身见 state 定义处
 
     // ==================== 0. 双版本状态图常量表（情绪扩展接口） ====================
     // 键 = 状态名（后续情绪按此表挂载），值 = 素材路径；素材由即梦 AI 生成
@@ -355,6 +355,18 @@
         root.style.top = state.top + 'px';
     }
 
+    // 坐标接口（PET_BALL_FIX_DESIGN §3）：加速球定位的真源——state 即逻辑
+    // 坐标（style.left/top 是其投影），w/h 取当前渲染尺寸（缺省兜底 250）
+    function getPos() {
+        const rect = root.getBoundingClientRect();
+        return {
+            x: state.left,
+            y: state.top,
+            w: rect.width || 250,
+            h: rect.height || 250,
+        };
+    }
+
     function applyFacing() {
         root.classList.toggle('facing-right', facing === 'right');
     }
@@ -380,6 +392,11 @@
     }
 
     function initPosition() {
+        // 隐藏态（桌宠缩球）早退守卫：display:none 下 getBoundingClientRect
+        // 全 0，会把垃圾坐标写进 state 导致恢复后跳位（PET_BALL_FIX_DESIGN §3）。
+        // 判据用 getComputedStyle——root 是 position:fixed，offsetParent 恒为
+        // null（与可见性无关），不能用
+        if (getComputedStyle(root).display === 'none') return;
         applyPetScale();
         const rect = root.getBoundingClientRect();
         const petWidth = rect.width || 250;

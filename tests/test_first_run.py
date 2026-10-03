@@ -305,12 +305,12 @@ class FirstRunOverlayStaticTests(unittest.TestCase):
         self.assertIn("    initFirstRun();", self.js)
 
     def test_polling_and_minimize_untouched(self):
-        """零触碰锚：2s 轮询行原样存在；overlay 逻辑只经 setConsoleMinimized
-        （不直接操作 xiaoju3-minimized 类的新增写入）。"""
+        """零触碰锚：2s 轮询行原样存在；overlay 逻辑零桌宠缩球依赖
+        （不直接操作 xiaoju3-pet-minimized 类的新增写入）。"""
         self.assertIn("setInterval(fetchStatus, 2000)", self.js)
         fr_block = self.js[self.js.index("首装引导覆盖层"):self.js.index("initFirstRun();")]
-        self.assertNotIn("classList.add('xiaoju3-minimized'", fr_block)
-        self.assertNotIn("classList.remove('xiaoju3-minimized'", fr_block)
+        self.assertNotIn("classList.add('xiaoju3-pet-minimized'", fr_block)
+        self.assertNotIn("classList.remove('xiaoju3-pet-minimized'", fr_block)
 
     def test_skip_semantics_uses_backend_flag(self):
         """跳过语义（方案 C）源码锁定：skip 走后端端点写标记文件，
@@ -567,14 +567,14 @@ class InstallerReportFrontendTests(unittest.TestCase):
 
     def test_zero_touch_anchors_intact(self):
         """零触碰锚复述（范围=initFirstRun 定义到 IIFE 尾调用，覆盖全部新增
-        代码）：轮询原样、该段零 localStorage、不直操 minimized 类——
+        代码）：轮询原样、该段零 localStorage、不直操桌宠缩球类——
         （节头注释含"弃用 localStorage"历史字样，故不从节头起切，同 house 锚口径）。"""
         self.assertIn("setInterval(fetchStatus, 2000)", self.js)
         seg = self.js[self.js.index("function initFirstRun()"):
                       self.js.index("initFirstRun();")]
         self.assertNotIn("localStorage", seg)
-        self.assertNotIn("classList.add('xiaoju3-minimized'", seg)
-        self.assertNotIn("classList.remove('xiaoju3-minimized'", seg)
+        self.assertNotIn("classList.add('xiaoju3-pet-minimized'", seg)
+        self.assertNotIn("classList.remove('xiaoju3-pet-minimized'", seg)
 
 
 if __name__ == "__main__":
