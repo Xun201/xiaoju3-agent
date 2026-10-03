@@ -1,4 +1,4 @@
-﻿; 小橘3号 · Inno Setup 安装器（安装器方案步 B2/B3a，详见 docs/INSTALLER_STEP_B_DESIGN.md）
+﻿; 小橘3号 · Inno Setup 安装器（安装器方案步 B2/B3a/B3 修复，详见 docs/INSTALLER_STEP_B_DESIGN.md 与 docs/INSTALLER_STEP_B3_CODE_FIX_DESIGN.md）
 ; 铁律：
 ;   程序自带文件只装三件（主程序、配置模板、快速上手）——绝不打包
 ;   xiaoju3_data 与 agent_state 两个用户数据目录（由程序首启生成）；
@@ -66,69 +66,108 @@ Name: "ha"; Description: "计划接入 Home Assistant 主动服务心跳（需�
 var
   SelfCheckPageID: Integer;
   TierHintText: String;
+  SelfCheckBody: String;
+  WizardWasCreated: Boolean;
 
 function YesNoStr(B: Boolean): String;
 begin
   if B then Result := '1' else Result := '0';
 end;
 
-function WmiFirstValue(const WmiClass, WmiProp: String): String;
+function WmiFirstValue(const WmiClass, WmiProp, WmiWhere: String): String;
 var
   Locator, Service, ResultSet: Variant;
+  Query: String;
 begin
   Result := '';
   try
     Locator := CreateOleObject('WbemScripting.SWbemLocator');
     Service := Locator.ConnectServer('.', 'root' + chr(92) + 'cimv2');
-    ResultSet := Service.ExecQuery('SELECT ' + WmiProp + ' FROM ' + WmiClass);
+    Query := 'SELECT ' + WmiProp + ' FROM ' + WmiClass;
+    if WmiWhere <> '' then
+      Query := Query + ' WHERE ' + WmiWhere;
+    ResultSet := Service.ExecQuery(Query);
     if ResultSet.Count > 0 then
       Result := ResultSet.ItemIndex(0).Properties[WmiProp].Value;
+      { Value 为 Null（如无介质光驱）时隐式赋 String 得空串或抛 variant
+        异常，均被下方 except 兜成 ''——Null 不设专门分支，空串交给
+        WmiFirstInt 的哨兵统一拦截（设计稿 §2.2） }
   except
     Result := '';
   end;
 end;
 
+function WmiFirstInt(const WmiClass, WmiProp, WmiWhere: String): Int64;
+begin
+  { 哨兵 -1=查询失败或值不可解析，真 0 不受影响；降级收敛单一咽喉点，
+    调用点禁止再出现裸 StrToInt64(WmiFirstValue(...)（炸点①教训，设计稿 §2.1） }
+  Result := StrToInt64Def(Trim(WmiFirstValue(WmiClass, WmiProp, WmiWhere)), -1);
+end;
+
 function InitializeSetup(): Boolean;
 var
-  RamKb, GpuName, Tier: String;
-  RamGbInt, DiskGb: Int64;
-  Dedicated: String;
-  Body: String;
-  SelfCheckPage: TOutputMsgWizardPage;
+  RamKb, DiskBytes, RamGb, DiskGb: Int64;
+  GpuName, Dedicated, InstallDrive: String;
+  Tier, MemText, GpuText, DiskText: String;
 begin
   Result := True;   { 返回 False 将中止安装（本流程恒继续） }
-  { 硬件自检（WMI；任一查询失败降级"无法预判"，不阻塞安装） }
-  RamKb := WmiFirstValue('Win32_OperatingSystem', 'TotalVisibleMemorySize');
-  GpuName := WmiFirstValue('Win32_VideoController', 'Name');
+  { 硬件自检（WMI 暂态不稳是常态，降级走哨兵 -1 落"无法预判"，不阻塞安装）。
+    本钩子只许纯 COM 探测：禁建页、禁任何 Wizard* API（炸点③教训） }
+  RamKb := WmiFirstInt('Win32_OperatingSystem', 'TotalVisibleMemorySize', '');
+  GpuName := WmiFirstValue('Win32_VideoController', 'Name', '');
   Dedicated := '0';
   if (Pos('NVIDIA', GpuName) > 0) or (Pos('Radeon', GpuName) > 0) or
      (Pos('GTX', GpuName) > 0) or (Pos('RX ', GpuName) > 0) then
     Dedicated := '1';
-  RamGbInt := 0;
-  try
-    RamGbInt := StrToInt64(Trim(RamKb)) div 1048576;   { KB -> GB }
-  except
-    RamGbInt := 0;
-  end;
-  DiskGb := StrToInt64(WmiFirstValue('Win32_LogicalDisk', 'FreeSpace')) div 1073741824;
+  InstallDrive := ExtractFileDrive(ExpandConstant('{localappdata}'));
+  DiskBytes := WmiFirstInt('Win32_LogicalDisk', 'FreeSpace',
+    'DriveType=3 AND DeviceID=' + chr(39) + InstallDrive + chr(39));
 
-  { 分档仅为安装期建议；真档位由程序内 hardware_profiler 首启复测 }
-  if (RamGbInt >= 16) and (Dedicated = '1') and (DiskGb >= 20) then
+  if RamKb >= 0 then
+    RamGb := RamKb div 1048576   { KB -> GB }
+  else
+    RamGb := -1;
+  if DiskBytes >= 0 then
+    DiskGb := DiskBytes div 1073741824   { 字节 -> GB }
+  else
+    DiskGb := -1;
+
+  { 分档仅为安装期建议；任一指标不可知即"无法预判"，不再误报轻量版（设计稿 §2.3） }
+  if (RamGb < 0) or (DiskGb < 0) or (GpuName = '') then
+    Tier := '无法预判（程序首次运行将自动复测）'
+  else if (RamGb >= 16) and (Dedicated = '1') and (DiskGb >= 20) then
     Tier := '推荐完整版（本地优先：可安装 Ollama + 本地模型）'
-  else if RamGbInt < 8 then
+  else if RamGb < 8 then
     Tier := '推荐轻量版（云端优先：跳过本地模型，直接使用云端）'
   else
     Tier := '推荐完整版（本地模型响应可能较慢，可按需安装 Ollama）';
   TierHintText := Tier;
 
-  Body := '内存：' + IntToStr(RamGbInt) + ' GB' + #13#10 +
-          '显卡：' + GpuName + #13#10 +
-          '安装目标盘可用空间：约 ' + IntToStr(DiskGb) + ' GB' + #13#10 +
-          '安装形态建议：' + Tier + #13#10 +
-          '（仅用于推荐安装形态；程序首次运行会自动复测真实档位）';
-  SelfCheckPage := CreateOutputMsgPage(wpInfoBefore,
-    '硬件自检', '检测结果仅用于推荐安装形态', Body);
-  SelfCheckPageID := SelfCheckPage.ID;
+  if RamGb < 0 then
+    MemText := '内存：无法预判'
+  else
+    MemText := '内存：' + IntToStr(RamGb) + ' GB';
+  if GpuName = '' then
+    GpuText := '显卡：无法预判'
+  else
+    GpuText := '显卡：' + GpuName;
+  if DiskGb < 0 then
+    DiskText := '安装目标盘可用空间：无法预判'
+  else
+    DiskText := '安装目标盘可用空间：约 ' + IntToStr(DiskGb) + ' GB';
+
+  SelfCheckBody := MemText + #13#10 +
+    GpuText + #13#10 +
+    DiskText + #13#10 +
+    '安装形态建议：' + Tier + #13#10 +
+    '（仅用于推荐安装形态；程序首次运行会自动复测真实档位）';
+end;
+
+procedure InitializeWizard();
+begin
+  WizardWasCreated := True;   { 旗唯一写点：向导窗体此刻已创建（设计稿 §1.1） }
+  SelfCheckPageID := CreateOutputMsgPage(wpInfoBefore,
+    '硬件自检', '检测结果仅用于推荐安装形态', SelfCheckBody).ID;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -141,7 +180,10 @@ procedure DeinitializeSetup();
 var
   Report: String;
 begin
+  if not WizardWasCreated then
+    Exit;   { 旗守卫：向导未建=无意向可记，Wizard* API 也会二次崩（炸点②教训） }
   { 记录用户组件意向（装完或取消都记录）；文件在数据目录，卸载默认保留 }
+  ForceDirectories(ExpandConstant('{app}' + chr(92) + 'xiaoju3_data'));
   Report := GetDateTimeString('yyyy/mm/dd hh:nn:ss', '-', ':') + #13#10 +
     '硬件自检建议: ' + TierHintText + #13#10 +
     'ollama=' + YesNoStr(WizardIsComponentSelected('ollama')) + #13#10 +
