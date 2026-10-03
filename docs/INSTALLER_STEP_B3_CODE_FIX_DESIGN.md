@@ -94,3 +94,71 @@ WMI 属性为 Null（如无介质光驱的 FreeSpace）时，PascalScript 隐式
 - 实施顺序：iss 单文件手术（行级 splice，遵循 [[inno-pascalscript-pitfalls]] 十条——注释禁段名样方括号文本、UTF-8 带 BOM、PS 无 IEnumVariant 等）；随后 `tests/test_installer_script.py` 锚全绿 + 全仓 1605 不减。
 - **验收只认真机口径**：重建 setup 后 B3b 重演——①双击不再弹任何 Runtime error ②自检页三行正常/或全"无法预判" ③组件页反选语义在 ④装完浮层消费报告徽标链 ⑤模拟 WMI 禁用 → 零弹窗+零报告 ⑥取消会话 → 报告=取消时意向。编译只是前置门槛，不进验收清单。
 - 风险：`StrToInt64Def` 为 Inno 6 文档化支持函数（低风险，实施时以 ISCC 实际编译为前置门槛，但**不作为验收**）；wpInfoBefore 锚点平移后页面顺序视觉不变（低风险，真机核对）。
+
+## 8. 补充设计：WMI 瞬时不稳的重试与备用方案（2026-10-03 第三次真机反馈后追加）
+
+> 状态：设计稿，**未动代码、未重编译**。触发：真机三次安装自检页连续全「无法预判」，但同机手动 WMI 查询数据正常（内存 15.3GB、四盘 FreeSpace 有值）——**安装瞬间 WMI 瞬时不稳是常态而非例外，§2 的"一次查询失败即降级"没有给恢复机会**。上游衔接：本节修正 §2.1 的磁盘 WMI 路径决策（改 Inno 原生 API），哨兵 -1 与「无法预判」降级机制**原样保留**。
+>
+> **查证方法声明**：以下 Inno 能力结论全部来自**本机 6.7.3 编译探针实测**（临时 .iss 用 ISCC 编译验证签名，探针用后即删，不碰仓库与产物）与官方 Examples 原文，非凭印象。
+
+### 8.0 查证结论（ISCC 编译探针权威验证）
+
+| 能力 | 结论 | 证据 |
+|---|---|---|
+| `GetSpaceOnDisk64(const Path: String; var Free, Total: Int64): Boolean` | **存在，3 参形态编译通过**（6.7.3） | 探针 1 `Successful compile`；ISCmplr.dll 函数注册表含该函数名 |
+| `Sleep(毫秒)` | **存在，编译通过**；官方示例在用（Examples/AllPagesExample.iss:107 `Sleep(3000 div Max)`、CodeDlg.iss:151 `Sleep(100)`） | 探针 1 + Examples 原文 |
+| GlobalMemoryStatusEx（kernel32 DLL 导入 + PascalScript record） | **编译通过**（record 声明 + SizeOf + DLL import 全被接受）；**运行时字节对齐需真机一次实测**（布局推演：DWORD×2 头部恰使 Int64 落 8 对齐，理论成立） | 探针 2 `Successful compile` |
+| 显卡的非 WMI 内置函数 | **无**（Inno 无显示适配器枚举支持函数；EnumDisplayDevices 需字符串缓冲记录，PascalScript 风险高，不采纳） | 编译器注册表扫描 + 官方文档缺位 |
+
+### 8.1 重试策略（硬上限 ≤5 秒）
+
+- **位置**：收敛在 `WmiFirstValue` 内部（单一咽喉点原则同 §2.1）——内存/显卡两个 WMI 指标自动获得重试，调用侧零改动。
+- **参数**：`MAX_WMI_ATTEMPTS = 3`（同一查询最多 3 次尝试）+ 每次失败 `Sleep(400)`（末次失败不睡直接返回）。每次尝试都**新建 SWbemLocator 连接**（现函数结构天然如此），重试间隔即真实等待。
+- **【全局预算闸】WmiUnavailable 模块级标志**：任一指标的完整重试序列耗尽 → 置位 `WmiUnavailable := True`；此后本次安装会话内所有 WMI 查询**跳过重试直接快速失败**（落哨兵）。**没有这个闸，两指标独立重试的最坏总耗时 ≈ 2×(3 尝试+2 睡 400ms) = 6-12 秒，违反上限**；有了它，最坏只有第一个指标耗预算（≈2-4 秒），总上限钉死 ≤5 秒。WmiUnavailable 不跨安装会话持久化（仅 [Code] 变量）。
+- **条件**：按指标独立重试（哪个指标在重试窗口内恢复就出哪个的值），成功即返回。
+
+### 8.2 备用方案三层
+
+| 指标 | 主路径 | 备用路径 | 兜底 |
+|---|---|---|---|
+| 磁盘 | **GetSpaceOnDisk64（替换 WMI）** | — | 哨兵 -1 → 无法预判 |
+| 内存 | WmiFirstInt + 重试 | GlobalMemoryStatusEx DLL（**实装备用**，标注需真机一次实测对齐） | 哨兵 -1 → 无法预判 |
+| 显卡 | WmiFirstValue + 重试 | **无高质量备用**（诚实标注：无内置函数，DLL 字符串缓冲/注册表枚举复杂度不成比例，不采纳） | 无法预判 |
+
+- **磁盘主路径改 GetSpaceOnDisk64 的理由**：①Inno 内置、直调 Win32 GetDiskFreeSpaceEx——**不经 WMI 服务，从根上免疫安装瞬间 WMI 未就绪**；②消掉 `WHERE DriveType=3 AND DeviceID=…` 的 WQL 复杂度（直接传 `{localappdata}` 路径，自动定位所在盘）；③返回 Int64 字节，现有 `div 1073741824` 换算不变。**本节修正 §2.1 的磁盘 WMI 决策——以本节为准**。返回 False（奇葩卷）→ 落哨兵 -1。
+- **内存备用的实装条件**：探针 2 已过编译；**实装时须真机一次实测**（自检页 GB 数 vs 手动查询 15.3GB 对照）——record 字节对齐推演成立但未经运行时证明；对不上则撤 DLL 备用，内存仅重试。
+- `Sleep` 为编译器支持函数（官方示例在用），**重试等待无需空转循环，无空转风险**。
+
+### 8.3 降级机制不变（确认）
+
+哨兵 -1 /「无法预判（程序首次运行将自动复测）」文案 / Tier 分支 / WmiUnavailable 只影响"是否重试"不影响"失败返回什么"——全部原样。GetSpaceOnDisk64 返回 False → 同样落哨兵 -1。
+
+### 8.4 不破既有结构（确认）
+
+WizardWasCreated 旗守卫、InitializeSetup 禁建页/禁 Wizard* 红线、CRLF + UTF-8 BOM、[Code] 段函数族边界——全部不动。本轮改动范围：`WmiFirstValue` 加重试循环与 WmiUnavailable 判定、新增 GlobalMemoryStatusEx 导入与 record（若实装备用获批）、`InitializeSetup` 磁盘调用行改 `GetSpaceOnDisk64`；[Setup]/[Files]/其余 [Code] 函数零改动。
+
+### 8.5 测试计划
+
+**tests/test_installer_script.py 现有 8 锚逐条核对**：
+
+| 锚 | 影响 |
+|---|---|
+| ①裸 StrToInt64 禁令 | 无影响（GetSpaceOnDisk64 不引入 StrToInt64） |
+| ②InitializeSetup 禁建页/禁 Wizard* | 无影响（备用方案均非 Wizard API） |
+| ③旗三锚 / ④InitializeWizard 存在 | 无影响 |
+| ⑤无法预判文案 | 无影响（降级机制不动） |
+| ⑥ `DriveType=3` WQL 锚 | **需改**——磁盘 WMI 查询整体退役：改锁 `GetSpaceOnDisk64(` 接线 + 反向锚 `DriveType=3` 与 `Win32_LogicalDisk` 不得回流 |
+| ⑦ BOM + CRLF | 无影响（沿用字节级手术纪律） |
+
+**新增锚**：重试存在（`MAX_WMI_ATTEMPTS` 常量 + `Sleep(` 落在 WmiFirstValue 内 + `WmiUnavailable` 先判后置）；磁盘备用接线（`GetSpaceOnDisk64(` 于 InitializeSetup）；内存备用接线（若实装：`GlobalMemoryStatusEx@kernel32.dll` 导入声明锚）。
+
+**如实说明**：重试的真机行为（冷启动窗口内能否抓到 WMI 恢复）离线测不了；GlobalMemoryStatusEx 的 record 对齐运行时正确性离线测不了——两者都只能真机验。
+
+### 8.6 验收（只认真机）
+
+1. **冷启动场景**：重启机器后**立即**双击 setup 安装 → 自检页显示真实数据（不再全"无法预判"）；
+2. WMI 正常场景：常规安装自检页真实数据照旧；
+3. 降级路径仍活：人为制造 WMI 不可用（或极冷启动）→ 显卡/内存行"无法预判"、磁盘行仍出真实值（GetSpaceOnDisk64 不依赖 WMI）；
+4. 重试上限：自检页出现前无长时间停顿（≤5 秒预算，人工感知核对）。
+
+**编译通过 ≠ 真机跑得动——本节验收只认真机自检页显示。**

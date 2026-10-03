@@ -100,12 +100,32 @@ class InstallerScriptAnchorTests(unittest.TestCase):
         self.assertLess(self.code.index("无法预判"),
                         self.code.index("推荐轻量版"))
 
-    def test_anchor6_disk_wql_filters_fixed_install_drive(self):
-        """锚⑥：磁盘 WQL 限定固定盘 + 安装盘（ExtractFileDrive 取盘符）。"""
-        self.assertIn("DriveType=3", self.code)
-        self.assertIn("ExtractFileDrive(ExpandConstant('{localappdata}'))",
-                      self.code)
-        self.assertIn("DeviceID=' + chr(39) + InstallDrive + chr(39)", self.code)
+    def test_anchor6_disk_native_query_no_wmi(self):
+        """锚⑥（§8.2 修正）：磁盘走 Inno 原生 GetSpaceOnDisk64（不经 WMI
+        服务，免疫安装瞬间未就绪）；WMI 磁盘查询退役禁回流。"""
+        body = _func_body(self.code, "function InitializeSetup(): Boolean;")
+        self.assertIn("GetSpaceOnDisk64(ExpandConstant('{localappdata}')", body)
+        self.assertNotIn("DriveType=3", self.code)
+        self.assertNotIn("Win32_LogicalDisk", self.code)
+
+    def test_anchor8_wmi_retry_and_budget_gate(self):
+        """§8.1 锚：WMI 重试 + 预算闸——MAX_WMI_ATTEMPTS 常量、Sleep(400)
+        退避落在 WmiFirstValue 内、WmiUnavailable 先判后置（重试耗尽置位）。"""
+        self.assertIn("MAX_WMI_ATTEMPTS = 3;", self.code)
+        body = _func_body(self.code, "function WmiFirstValue(")
+        self.assertIn("Sleep(400)", body)
+        self.assertIn("if WmiUnavailable then", body)
+        self.assertIn("WmiUnavailable := True", body)
+        self.assertLess(body.index("if WmiUnavailable then"),
+                        body.index("WmiUnavailable := True"))
+
+    def test_anchor9_memory_fallback_dll(self):
+        """§8.2 锚：内存备用 kernel32 GlobalMemoryStatusEx 导入声明 +
+        备用函数接线（record 对齐真机实测一次，见 §8.2）。"""
+        self.assertIn("GlobalMemoryStatusEx@kernel32.dll", self.code)
+        self.assertIn("function TotalPhysKBBackup", self.code)
+        body = _func_body(self.code, "function InitializeSetup(): Boolean;")
+        self.assertIn("RamKb := TotalPhysKBBackup()", body)
 
     def test_anchor7_utf8_bom_and_pure_crlf_intact(self):
         """锚⑦：字节级 UTF-8 带 BOM + 纯 CRLF（Inno 中文 [Code] 官方要求
@@ -116,7 +136,7 @@ class InstallerScriptAnchorTests(unittest.TestCase):
         self.assertEqual(raw.count(b"\n"), raw.count(b"\r\n"))
 
     def test_report_five_line_format_red_line(self):
-        """红线加码锁（七锚之外）：报告五行格式一字不改——时间戳口径、
+        """红线锚（七锚之外）：报告五行格式一字不改——时间戳口径、
         '硬件自检建议: ' 前缀（半角冒号+空格）、三布尔行、覆写落盘，
         消费端 parse_installer_report（590e7d8）按此解析。"""
         deinit = _func_body(self.code, "procedure DeinitializeSetup();")
@@ -127,6 +147,20 @@ class InstallerScriptAnchorTests(unittest.TestCase):
                           deinit)
         self.assertIn("installer_report.txt", deinit)
         self.assertIn("Report, False);", deinit)
+
+    def test_deinit_except_block_silent(self):
+        """提前取消防线（2026-10-03 真机 Runtime error 23:118 教训）：app 常量
+        在用户未走过选目录页 wpSelectDir 时未初始化——报告写入整体 try 包裹，
+        except 静默跳过且段内绝不允许 ExpandConstant / ForceDirectories /
+        SaveStringToFile 回流（except 内调 ExpandConstant 正是炸点）。
+        断言打在剥注释后的代码面（注释里的禁令文档字样不作数，同锚①②口径）。"""
+        deinit = _strip_pascal_comments(
+            _func_body(self.code, "procedure DeinitializeSetup();"))
+        except_idx = deinit.index("except")
+        except_seg = deinit[except_idx:deinit.index("end;", except_idx)]
+        self.assertNotIn("ExpandConstant", except_seg)
+        self.assertNotIn("ForceDirectories", except_seg)
+        self.assertNotIn("SaveStringToFile", except_seg)
 
 
 if __name__ == "__main__":
