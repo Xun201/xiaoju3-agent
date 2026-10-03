@@ -153,6 +153,21 @@ if __name__ == "__main__":
 - ⑥ 关窗停服：点窗口 ×，任务管理器 4 个 `xiaoju3.exe` 全消失、无孤儿。
 - 首跑缺陷一例已修：`_redirect_stdio` 目录不存在时降级不崩主流程（`2f7eb68`）。
 - 产物：`dist\xiaoju3.exe` 45,210,167 字节（≈43.1 MB），PyInstaller 6.22.3 / Python 3.14.7。
+
+#### 场景规则①真机验证记录（2026-10-03 11:16，回家开灯补测闭环）
+
+香橙派容器版 HA（2026.9.4）建齐两实体后真机触发，链路全通：
+
+- **链路**：用户拨 `input_boolean.hui_jia_mo_ni_kai_guan` on（11:16:47.737）→ `binary_sensor.hui_jia_jian_ce_qi` off→on（+3ms）→ 心跳快照 diff 命中场景规则① → `control_ha_device turn_on light.mo_ni_ke_ting_deng_deng_zu` → 灯亮（11:16:55.950，HA last_changed 实锤）。
+- **关键**：本地规则命中直接执行，**0 token**——不进大模型（先规则后大模型的既定优先级生效）。
+- **日志原文**（`dist\xiaoju3_data\dashboard_live_20261003_101916.log` 行 56-57）：
+
+```
+📋 [心跳] 场景规则命中 1 条动作（本地规则，0 token），直接执行...
+⚡ [心跳] 规则动作结果：✅ 设备 light.mo_ni_ke_ting_deng_deng_zu 执行 turn_on 成功！
+```
+
+- 实体建法备忘：configuration.yaml 经 SSH `docker exec` 追加 template 段（文件属主 root:root，宿主用户无写权，备份 `configuration.yaml.bak-20261003` 同目录）；entity_id 由 friendly_name 中文 slugify 生成拼音（`hui_jia_jian_ce_qi` / `mo_ni_ke_ting_deng_deng_zu`），`unique_id` 不决定 entity_id。
 | 5 | （可选，1.0 后）首启 .env 引导 UI（**承接待办 B：exe 首跑缺 .env 引导**——测试者无可拷配置时必须引导填写）、图标/版本资源、杀软误报说明、README 安装章节 | 安装体验收尾 | — |
 
 依赖关系：1 → 2 → 3 → 4（5 独立）。每步一次 commit，步 1-3 任何一步失败可独立回退，不影响现网 python 直跑形态。
