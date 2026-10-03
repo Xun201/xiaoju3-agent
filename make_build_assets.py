@@ -108,6 +108,7 @@ def main():
     icon_path = make_icon()
     print(f"✅ assets/xiaoju3.ico 已生成：{icon_path}"
           f"（{os.path.getsize(icon_path)} 字节）")
+    print(f"VERSION={version}")   # 机器可读行：build_exe.bat 捕获传 ISCC /DAppVersion
 
 
 if __name__ == "__main__":
