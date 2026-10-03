@@ -125,7 +125,7 @@ class StatusApiTests(unittest.TestCase):
         self.assertEqual(payload["code"], 200)
         data = payload["data"]
         self.assertEqual(set(data.keys()),
-                         {"cpu", "memory", "temperature", "timestamp", "tts_voice", "creator"})
+                         {"cpu", "memory", "temperature", "timestamp", "tts_voice", "creator", "version"})
         self.assertEqual(data["cpu"], 32.5)
         self.assertEqual(data["memory"], 61.2)
         self.assertEqual(data["temperature"], 52.3)  # 取首个可用温度
@@ -149,7 +149,7 @@ class StatusApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()["data"]
         self.assertEqual(set(data.keys()),
-                         {"cpu", "memory", "temperature", "timestamp", "tts_voice", "creator"})
+                         {"cpu", "memory", "temperature", "timestamp", "tts_voice", "creator", "version"})
         self.assertEqual(data["cpu"], 0.0)
         self.assertEqual(data["memory"], 0.0)
         # 组 C 新口径：温度读取链全失败返回字符串占位（替换旧恒 0.0）
@@ -1989,6 +1989,38 @@ class CreatorCommandTests(unittest.TestCase):
         payload = resp.get_json()
         self.assertIn("https://github.com/Xun201/xiaoju3-agent",
                       payload["data"]["reply"])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestVersionBadge(unittest.TestCase):
+    """版本统一（安装器方案步 A1）：/api/status 下发 version + 前端徽标锚。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_api_status_includes_version(self):
+        """/api/status data.version == xiaoju3.XIAOJU3_VERSION（单一事实源）。"""
+        resp = self.client.get("/api/status")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        self.assertEqual(data["version"], xiaoju3.XIAOJU3_VERSION)
+        self.assertEqual(data["version"], "1.0.0")
+
+    def test_header_version_element_in_console_html(self):
+        """/console 页（index.html）含 header-version 徽标元素与样式锚
+        （console.js 动态填充内容，此处锁定壳存在）。"""
+        with open(os.path.join(PROJECT_ROOT, "index.html"),
+                  "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn('id="header-version"', html)
+        self.assertIn("header-version", html)
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("header-version", js)
 
 
 if __name__ == "__main__":

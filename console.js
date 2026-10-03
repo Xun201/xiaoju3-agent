@@ -272,6 +272,12 @@
             .then(res => {
                 if (res.code === 200) {
                     const d = res.data;
+                    // 版本徽标（步 A1）：/api/status 下发 version，有值才写
+                    // （旧后端无此键时保持空，不显示 undefined）
+                    const verEl = document.getElementById('header-version');
+                    if (verEl && d.version) {
+                        verEl.textContent = 'v' + d.version;
+                    }
                     const cpuText = document.getElementById('cpu-text');
                     const cpuBar = document.getElementById('cpu-bar');
                     if (cpuText && cpuBar) {
