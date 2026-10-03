@@ -258,7 +258,8 @@ class PetOnlineRegressionTests(unittest.TestCase):
     """桌宠完整形态回归（2026-10-02）：desktop-pet.js 重新挂载。
 
     2026-10-01 曾按"右下角唯一悬浮元素"口径注释停载（任务 4）；本次恢复
-    加载，加速球仅最小化态显示（body.xiaoju3-minimized 才 display），二者共存。"""
+    加载，最小化=桌宠缩球（body.xiaoju3-pet-minimized 才 display），控制台
+    永不缩（PET_BALL_FIX_DESIGN）。"""
 
     @classmethod
     def setUpClass(cls):
@@ -275,13 +276,13 @@ class PetOnlineRegressionTests(unittest.TestCase):
         self.assertIn('<script src="/console/console.js"></script>', stripped)
 
     def test_mount_comment_updated_to_regression(self):
-        """挂载点注释同步回归口径：旧的下线注释行已移除，注明回归日期与
-        共存口径（加速球仅最小化态显示）。"""
+        """挂载点注释同步口径：旧的下线注释行已移除，注明回归日期与
+        新口径（最小化=桌宠缩球，球跟桌宠原位）。"""
         html = self.index_html
         self.assertNotIn(
             "<!-- <script src=\"/console/desktop-pet.js\"></script> -->", html)
         self.assertIn("桌宠完整形态回归", html)
-        self.assertIn("仅最小化态显示", html)
+        self.assertIn("最小化=桌宠缩球", html)
 
     def test_pet_file_kept_on_disk_with_fallback_chain(self):
         """桌宠文件本体保留在仓库不删除：IIFE 单例哨兵、双版本状态图常量、
@@ -298,44 +299,67 @@ class PetOnlineRegressionTests(unittest.TestCase):
 
     def test_ball_kept_in_html(self):
         """加速球保留（index.html 静态节点）：60px 圆形 #xiaoju3-ball、
-        小橘半身像 /assets/pet/normal_half.png、最小化态显示规则原样。"""
+        小橘半身像 /assets/pet/normal_half.png、最小化态显示规则（新类名）。"""
         html = self.index_html
         self.assertIn('id="xiaoju3-ball"', html)
         self.assertIn('src="/assets/pet/normal_half.png"', html)
         self.assertIn("#xiaoju3-ball {", html)
-        self.assertIn("body.xiaoju3-minimized #xiaoju3-ball", html)
+        self.assertIn("body.xiaoju3-pet-minimized #xiaoju3-ball", html)
         self.assertIn('id="console-minimize"', html)      # 缩球入口按钮
 
     def test_ball_logic_kept_in_console_js(self):
-        """加速球交互逻辑不动（console.js）：可拖拽（位移平方>9 阈值、
-        setPointerCapture）、localStorage 位置记忆、点击展开/收回互切。"""
+        """加速球交互逻辑（console.js）：可拖拽（位移平方>9 阈值、
+        setPointerCapture）、球跟桌宠原位重放（getPos）、点击恢复互切。"""
         js = self.console_js
         section = _extract_span(js, "缩成加速球", "initConsoleBall();") \
             + js[js.index("initConsoleBall();"):]
         self.assertIn("function initConsoleBall", section)
         self.assertIn("const BALL_SIZE = 60", section)
-        self.assertIn("const BALL_POS_KEY = 'xiaoju3_ball_pos'", section)
         self.assertIn("if (dx * dx + dy * dy > 9) moved = true;", section)
         self.assertIn("setPointerCapture", section)
-        self.assertIn("localStorage.setItem(BALL_POS_KEY, JSON.stringify(pos))",
-                      section)
-        self.assertIn("setConsoleMinimized(false);   // 未拖动＝点击展开回完整控制台",
+        self.assertIn("setPetMinimized(false);   // 未拖动＝点击恢复桌宠",
                       section)
         self.assertIn("getElementById('console-minimize')", section)
 
+    def test_console_never_hides_and_new_class_anchors(self):
+        """口径①反向锚（PET_BALL_FIX_DESIGN §6）：控制台隐藏规则不得回流
+        （旧类名 index.html 全文件禁绝）；新类两锚=桌宠 .xiaoju-root 隐藏 +
+        球显示。"""
+        html = self.index_html
+        self.assertNotIn("xiaoju3-minimized >", html)          # 旧隐藏规则禁回流
+        self.assertNotIn("xiaoju3-minimized", html)            # 旧类名全文件退役
+        self.assertIn(
+            "body.xiaoju3-pet-minimized #xiaoju3-ball { display: block; }", html)
+        self.assertIn(
+            "body.xiaoju3-pet-minimized .xiaoju-root { display: none; }", html)
+
     def test_no_other_floating_pet_elements(self):
         """静态 HTML 口径：页面 img 仅剩加速球头像一张（桌宠形象由
-        desktop-pet.js 运行时注入 #xiaoju3-root，不新增静态节点）；
-        挂件容器 #xiaoju3-root 为空 div（挂载点，桌宠回归后由 JS 填充）。"""
+        desktop-pet.js 运行时自建 .xiaoju-root 节点直挂 document.body，
+        不新增静态节点）；孤儿空挂载点 #xiaoju3-root 已清理（2026-10-03
+        真机教训：注释称"注入点"但实现从未使用），markup 侧不得回流。"""
         html = self.index_html
         stripped = _strip_html_comments(html)
         imgs = re.findall(r'<img[^>]*src="([^"]+)"', stripped)
         self.assertEqual(imgs, ["/assets/pet/normal_half.png"])   # 唯一静态图片=球头像
-        self.assertIn('<div id="xiaoju3-root"></div>', stripped)
+        self.assertNotIn('id="xiaoju3-root"', stripped)           # 孤儿挂载点禁回流
         # 加速球元素仍引用头像（资产保留在仓库且前端仍用）
         ball = re.search(r'<div id="xiaoju3-ball".*?</div>', html, flags=re.S)
         self.assertIsNotNone(ball)
         self.assertIn("/assets/pet/normal_half.png", ball.group(0))
+
+    def test_hide_selector_matches_real_pet_node(self):
+        """成对锁锚（2026-10-03 真机教训，本轮修复核心）：CSS 隐藏选择器
+        必须与桌宠真实节点配对——桌宠是 desktop-pet.js 运行时自建的
+        .xiaoju-root 节点（root.className 赋类 + document.body 直挂，非静态
+        挂载点）；隐藏规则用 .xiaoju-root。谁改一边此锚必炸。"""
+        html = self.index_html
+        js = self.pet_js
+        self.assertIn(
+            "body.xiaoju3-pet-minimized .xiaoju-root { display: none; }", html)
+        self.assertIn("root.className = 'xiaoju-root';", js)      # 创建侧：类名
+        self.assertIn("document.body.appendChild(root)", js)      # 挂载侧：body 直挂
+        self.assertNotIn("xiaoju3-root", _strip_html_comments(html))   # 旧 ID 禁回流（史档注释豁免）
 
 
 # ---------------------------------------------------------------------------
