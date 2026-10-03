@@ -117,3 +117,10 @@
 - 冒烟环境 = 交付环境（exe 的冒烟就在桌面窗口，不拿浏览器替代）
 
 落地依据：2026-10-03 两次真机才暴露的 bug——①桌面窗口随机端口 6697 撞 Chromium 黑名单（离线全绿测不出）②跳过标记押 localStorage 但 WebView2 是 InPrivate 即焚（浏览器验过、桌面窗口失效）。
+
+## Windows 批处理（.bat）编写规范
+本项目 bat 脚本必须遵守（教训来源：build_exe.bat 与 restart_clean.bat 两次踩坑）：
+1. 文件必须 CRLF 行尾，禁 LF-only——cmd 对 LF-only 的括号块/多字节解析会碎行。写完做字节级断言。
+2. 含中文（UTF-8）的 bat 禁用 goto/label——cmd 的 goto/label 扫描在多字节序列里会错位跳转。一律线性 if/else。
+3. 文件头不留空行 + 加 UTF-8 BOM 配 chcp 65001——chcp 后 cmd 带字节偏移重读，头部空行导致解析错位。
+4. 路径带空格（如 C:\Program Files）用 call "带引号路径" 参数，别在大括号块内直接执行。
