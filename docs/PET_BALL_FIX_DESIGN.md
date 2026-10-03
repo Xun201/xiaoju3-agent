@@ -130,3 +130,25 @@ console.js 锁 `getPos()` 调用 + 进入最小化路径含钳制重放（函数
 5. 窗口 resize 后重复 1 ——球钳制在视口内。
 
 **离线测不了**：像素级"球心=桌宠心"的对齐观感、拖拽手感、隐藏/恢复的过渡动画。
+
+---
+
+## 8. 已知遗留（记入 1.1，未定性不卡 1.0）：恢复时偶发弹回右下角
+
+> 2026-10-03 真机验证本设计时发现。主路径通过（拖任意位松手停住不弹回；缩球/恢复/球跟桌宠原位全过），本遗留为验证过程中发现的偶发问题。
+
+- **现象**：反复缩球/恢复几次后，某次恢复狐狸弹回右下角（每次会话首次恢复正常，反复后才偶发）。
+- **已排除**（两轮只读诊断，证据齐）：
+  - IIFE 重跑——实验会话 `desktop-pet.js` 网络请求仅 1 次（dashboard 日志），且 ：26 哨兵 `if (window.__xiaoju3Pet) return` 结构性拦截：即使重注入执行，二跑在 ：26 直接 return，摸不到 initPosition，state 归旧闭包所有；
+  - state 六写入点——initPosition（positionInitialized 守卫）/ pointermove+clamp（需 drag 非 null，缩球态桌宠不可见落不到）/ snapToEdge（仅 pointerup）/ resize（仅 Math.min 向下 clamp）；
+  - 页面重载——会话 `GET /console` 仅 1 次；
+  - 磁吸（仅近缘 <24px 吸左右缘）/ 本设计改动（守卫在拖拽场景不触发）。
+- **日志佐证**：实验会话（19:33:39-19:34:45）`GET /console`、desktop-pet.js、console.js 各恰 1 次；normal_full ×13 与拖拽一一对应（静态服务 no-store → 每次换图真实下载）；服务端日志零 JS 异常取证面（前端异常在 WebView2 控制台）；2 条 Win32 releasing IUnknown = pythonnet 进程关闭噪音。
+- **剩余嫌疑**：WebView2 运行时黑盒——渲染进程异常恢复 / JS 上下文重建（此类重置不产生网络请求，与日志吻合）。
+- **验收影响**：无。主路径功能完整；偶发弹回可再拖回，不丢数据、不崩溃。
+- **下一步取证手段（零代码改动）**：复现前设环境变量
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 后启动，
+  复现时浏览器开 `http://localhost:9222` 选中页面，Console 里查三个值：
+  `__xiaoju3Pet.getPos()` / `.xiaoju-root` 的 `style.left/top` / `document.body.className`
+  ——一锤定音"state 变没变、类在不在、单例活没活"。
+- **精化实验 A'**：弹回后点 ⌄ 看球的精确位置——"getPos 返回出生位"（贴右缘 + 输入框上方）与"replay 失败走兜底"（离右缘 24px + 视口底部）都在右下但坐标不同，可区分两种候选。
