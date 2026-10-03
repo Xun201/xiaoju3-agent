@@ -169,6 +169,28 @@ def _is_main_running(port=DASHBOARD_APP_PORT, timeout=1.0):
     return _is_port_listening(port, timeout=timeout)
 
 
+def wait_for_dashboard_ready(timeout_s=15.0, interval_s=0.5,
+                             check_fn=None, sleep_fn=None):
+    """轮询等待 :5003 就绪（端口修复设计 docs/DESKTOP_PORT_FIX.md §1，P1）。
+
+    纯函数式时序：check_fn 缺省复用 _is_port_listening（纯 socket connect，
+    无 HTTP 副作用）；sleep_fn 可注入使单测零真实等待。就绪返回 True，
+    超时返回 False（调用方决定超时后的窗口/提示行为）。
+    """
+    check = check_fn or _is_port_listening
+    sleep = sleep_fn or time.sleep
+    deadline = time.monotonic() + float(timeout_s)
+    while True:
+        try:
+            if check(DASHBOARD_APP_PORT):
+                return True
+        except Exception:
+            pass   # 探针异常按"本轮未就绪"处理，继续轮询
+        if time.monotonic() >= deadline:
+            return False
+        sleep(interval_s)
+
+
 def _windowless_python():
     """后台子进程用解释器（2026-10-02 用户口径：pythonw 无窗口形态）。
 

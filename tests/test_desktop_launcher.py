@@ -601,3 +601,48 @@ class TestSpawnSelfRouting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WaitForDashboardReadyTests(unittest.TestCase):
+    """端口修复 P1：wait_for_dashboard_ready 三态（check/sleep 全注入，零真等）。"""
+
+    def test_first_check_ready_returns_true(self):
+        """首轮即就绪（复用模式：服务已在）→ True，且不再 sleep。"""
+        sleeps = []
+        self.assertTrue(launcher.wait_for_dashboard_ready(
+            timeout_s=15, interval_s=0.5,
+            check_fn=lambda p: True, sleep_fn=sleeps.append))
+        self.assertEqual(sleeps, [])
+
+    def test_ready_after_n_rounds(self):
+        """第 N 轮就绪 → True：前两轮 False，第三轮 True（验证轮询推进）。"""
+        seq = iter([False, False, True])
+        sleeps = []
+        self.assertTrue(launcher.wait_for_dashboard_ready(
+            timeout_s=15, interval_s=0.5,
+            check_fn=lambda p: next(seq), sleep_fn=sleeps.append))
+        self.assertEqual(sleeps, [0.5, 0.5])   # 就绪前恰好 sleep 两轮
+
+    def test_timeout_returns_false(self):
+        """超时 → False：check 恒 False + 快速假 sleep，不真等。"""
+        fast = mock.MagicMock()
+        self.assertFalse(launcher.wait_for_dashboard_ready(
+            timeout_s=1.0, interval_s=0.2,
+            check_fn=lambda p: False, sleep_fn=fast))
+        self.assertGreaterEqual(fast.call_count, 1)
+
+    def test_check_exception_treated_as_not_ready(self):
+        """探针抛异常按"本轮未就绪"处理（不炸轮询）。"""
+        seq = iter([Exception("boom"), True])
+        def flaky(_port):
+            step = next(seq)
+            if isinstance(step, Exception):
+                raise step
+            return step
+        self.assertTrue(launcher.wait_for_dashboard_ready(
+            timeout_s=15, interval_s=0.5, check_fn=flaky,
+            sleep_fn=lambda _s: None))
+
+
+if __name__ == "__main__":
+    unittest.main()
