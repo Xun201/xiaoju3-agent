@@ -346,6 +346,7 @@
 
     // ==================== 3. 核心交互逻辑 ====================
     let state = { scale: 1, left: 0, top: 0 };
+    let positionInitialized = false;   // 出生位只定一次：换图 load 不再重置坐标（拖拽回弹修复）
     let drag = null;
     let isDragging = false;
     let facing = 'left';   // 素材原始朝向：角色面朝左侧气泡区；面向由位置相对屏幕中线决定
@@ -397,6 +398,11 @@
         // 判据用 getComputedStyle——root 是 position:fixed，offsetParent 恒为
         // null（与可见性无关），不能用
         if (getComputedStyle(root).display === 'none') return;
+        // 出生位只定一次守卫：换图（拖拽切全身像 / 松手切回半身像）会重放
+        // img load——无此守卫每次 load 都会把桌宠重置回出生位（拖拽回弹
+        // bug 根因）。隐藏态守卫在先：隐藏态不初始化也不置位，下次可见时
+        // （load）才能初始化
+        if (positionInitialized) return;
         applyPetScale();
         const rect = root.getBoundingClientRect();
         const petWidth = rect.width || 250;
@@ -417,6 +423,7 @@
         express();
         // 出生/校准位置后按位置定面向（默认出生右下角 → 朝左即朝向屏幕中心）
         updateFacingByPosition();
+        positionInitialized = true;   // 成功定位后置位：后续换图 load 只刷渲染模式，不再动坐标
     }
 
     function pressDown() { body.style.transform = 'scaleY(0.88) scaleX(1.05)'; }

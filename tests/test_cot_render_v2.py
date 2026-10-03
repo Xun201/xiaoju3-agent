@@ -361,6 +361,18 @@ class PetOnlineRegressionTests(unittest.TestCase):
         self.assertIn("document.body.appendChild(root)", js)      # 挂载侧：body 直挂
         self.assertNotIn("xiaoju3-root", _strip_html_comments(html))   # 旧 ID 禁回流（史档注释豁免）
 
+    def test_position_initialized_only_once(self):
+        """出生位只定一次锚（拖拽回弹修复）：initPosition 带 positionInitialized
+        标志（先判后置）——换图 load（拖拽切全身像/松手切回半身像）不再重置
+        坐标；隐藏态守卫在先（隐藏态不初始化也不置位）。"""
+        js = self.pet_js
+        self.assertIn("let positionInitialized = false;", js)
+        guard_idx = js.index("if (positionInitialized) return;")
+        set_idx = js.index("positionInitialized = true;")
+        disp_idx = js.index("getComputedStyle(root).display === 'none'")
+        self.assertLess(disp_idx, guard_idx)   # 隐藏态守卫在先（不初始化也不置位）
+        self.assertLess(guard_idx, set_idx)    # 标志先判后置
+
 
 # ---------------------------------------------------------------------------
 # 零回退哨兵：splitThinkBlock 容错/兜底/诊断链一律保留
