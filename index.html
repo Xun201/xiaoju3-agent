@@ -473,6 +473,7 @@
         .first-run-card { background: var(--color-panel, #fff); color: var(--color-text, #222); border-radius: 10px; padding: 20px 24px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
         .first-run-sub { opacity: .75; margin: 4px 0 10px; }
         .first-run-probes { margin: 0 0 12px; padding-left: 18px; }
+        #first-run-install-hints { font-size: 12px; opacity: .75; margin: 0 0 10px; line-height: 1.6; }
         .first-run-field { display: block; margin: 10px 0; }
         .first-run-field span { display: block; font-size: 12px; opacity: .8; margin-bottom: 4px; }
         .first-run-field input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid rgba(127,127,127,.4); border-radius: 6px; }
@@ -490,6 +491,7 @@
             <h2>欢迎使用小橘3号</h2>
             <p class="first-run-sub">首次配置：数据只存本机；按需填写，可随时跳过</p>
             <ul id="first-run-probes" class="first-run-probes"></ul>
+            <div id="first-run-install-hints" hidden></div>
             <label class="first-run-field">
                 <span>DeepSeek API Key（云端对话必需；点「注册 / 充值 DeepSeek」开官方平台，密钥仅存本机）</span>
                 <input type="password" id="first-run-deepseek-key" name="DEEPSEEK_API_KEY" placeholder="sk- 开头，粘贴到这里" autocomplete="off">

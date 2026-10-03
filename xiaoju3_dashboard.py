@@ -564,6 +564,20 @@ def api_first_run_probes():
     })
 
 
+@app.route("/api/first_run/installer_report")
+def api_first_run_installer_report():
+    """安装器意向报告（安装器步 B3 消费端，
+    docs/INSTALLER_STEP_B3_CONSUMER_DESIGN.md）：只读展示安装期硬件建议
+    与三组件意向。独立于 probes（探针是运行态带网络超时；报告读盘即时），
+    各自独立降级——文件缺失（便携/直跑/升级后）返回 available:False，
+    前端 hints 块保持隐藏。"""
+    from first_run import read_installer_report  # 延迟导入：非引导场景依赖面零变化
+    return jsonify({
+        "code": 200,
+        "data": read_installer_report(),
+    })
+
+
 @app.route("/api/first_run/complete", methods=["POST"])
 def api_first_run_complete():
     """首装完成落盘（安装器方案步 A4a）：

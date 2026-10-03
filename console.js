@@ -1477,6 +1477,12 @@
             .then(res => res.json())
             .then(res => {
                 if (!(res.code === 200 && res.data && res.data.first_run)) return;
+                // 安装器意向报告并行独立拉取（步 B3 消费端）：自带 catch 独立降级，
+                // 不合并等待——报告慢/缺失绝不拖累探针弹出
+                fetch('/api/first_run/installer_report')
+                    .then(r3 => r3.json())
+                    .then(r3 => { renderInstallerReport(r3 && r3.data); })
+                    .catch(() => { /* 报告缺失降级：hints 块保持隐藏 */ });
                 return fetch('/api/first_run/probes')
                     .then(r2 => r2.json())
                     .then(r2 => { showFirstRun(r2.data && r2.data.probes); });
@@ -1504,6 +1510,40 @@
         }
         const overlay = document.getElementById('first-run-overlay');
         if (overlay) overlay.hidden = false;
+    }
+
+    function renderInstallerReport(data) {
+        // 安装器意向报告只读展示（步 B3 消费端）：铁律=不预填表单、不写 .env、
+        // 不预勾自启、不因意向跳过任何探针、不碰 DEVICE_TIER（真档位归
+        // hardware_profiler 复测）。内容一律 textContent，绝不拼 HTML。
+        const box = document.getElementById('first-run-install-hints');
+        if (!box) return;
+        box.innerHTML = '';
+        box.hidden = true;
+        const d = (data && typeof data === 'object') ? data : {};
+        if (!d.available) return;
+        const intents = (d.intents && typeof d.intents === 'object') ? d.intents : {};
+        const labels = { ollama: '本地 Ollama', napcat: 'QQ(NapCat)', ha: 'HA 心跳' };
+        const picked = Object.keys(labels).filter(function (k) {
+            return intents[k] === true;
+        });
+        const metaBits = [];
+        if (d.installed_at) metaBits.push('安装于 ' + d.installed_at);
+        if (d.tier_hint) metaBits.push('安装器建议：' + d.tier_hint + '（真实档位以本机复测为准）');
+        if (!picked.length && !metaBits.length) return;   // available 但三项全无：保持隐藏
+        if (picked.length) {
+            const badge = document.createElement('div');
+            badge.textContent = '安装时勾选：' + picked.map(function (k) {
+                return labels[k];
+            }).join(' / ');
+            box.appendChild(badge);
+        }
+        if (metaBits.length) {
+            const meta = document.createElement('div');
+            meta.textContent = metaBits.join('；');
+            box.appendChild(meta);
+        }
+        box.hidden = false;
     }
 
     function submitFirstRun(skip) {
