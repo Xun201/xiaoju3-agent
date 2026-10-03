@@ -63,11 +63,41 @@ Name: "ha"; Description: "计划接入 Home Assistant 主动服务心跳（需�
 ; 「彻底删除」可选项归后续步（卸载向导复选 + 删除树）。
 
 [Code]
+const
+  MAX_WMI_ATTEMPTS = 3;   { 同一 WMI 查询最多尝试次数（§8.1 重试预算） }
+
 var
   SelfCheckPageID: Integer;
   TierHintText: String;
   SelfCheckBody: String;
   WizardWasCreated: Boolean;
+  WmiUnavailable: Boolean;   { 全局预算闸：任一指标重试耗尽即置位，后续 WMI 查询快速失败（§8.1） }
+
+type
+  TMemoryStatusEx = record
+    dwLength: Cardinal;
+    dwMemoryLoad: Cardinal;
+    ullTotalPhys: Int64;
+    ullAvailPhys: Int64;
+    ullTotalPageFile: Int64;
+    ullAvailPageFile: Int64;
+    ullTotalVirtual: Int64;
+    ullAvailVirtual: Int64;
+    ullAvailExtendedVirtual: Int64;
+  end;
+
+function GlobalMemoryStatusEx(var Buffer: TMemoryStatusEx): Boolean;
+external 'GlobalMemoryStatusEx@kernel32.dll stdcall';
+
+function TotalPhysKBBackup(): Int64;
+var
+  M: TMemoryStatusEx;
+begin
+  Result := -1;
+  M.dwLength := SizeOf(M);
+  if GlobalMemoryStatusEx(M) then
+    Result := M.ullTotalPhys div 1024;   { 字节 → KB（与 WMI TotalVisibleMemorySize 同单位） }
+end;
 
 function YesNoStr(B: Boolean): String;
 begin
@@ -78,23 +108,35 @@ function WmiFirstValue(const WmiClass, WmiProp, WmiWhere: String): String;
 var
   Locator, Service, ResultSet: Variant;
   Query: String;
+  Attempt: Integer;
 begin
   Result := '';
-  try
-    Locator := CreateOleObject('WbemScripting.SWbemLocator');
-    Service := Locator.ConnectServer('.', 'root' + chr(92) + 'cimv2');
-    Query := 'SELECT ' + WmiProp + ' FROM ' + WmiClass;
-    if WmiWhere <> '' then
-      Query := Query + ' WHERE ' + WmiWhere;
-    ResultSet := Service.ExecQuery(Query);
-    if ResultSet.Count > 0 then
-      Result := ResultSet.ItemIndex(0).Properties[WmiProp].Value;
-      { Value 为 Null（如无介质光驱）时隐式赋 String 得空串或抛 variant
-        异常，均被下方 except 兜成 ''——Null 不设专门分支，空串交给
-        WmiFirstInt 的哨兵统一拦截（设计稿 §2.2） }
-  except
-    Result := '';
+  if WmiUnavailable then
+    Exit;   { 预算耗尽后不再尝试任何 WMI：用户延迟优先于数据完整性；磁盘已走 GetSpaceOnDisk64 不受影响（§8.1） }
+  for Attempt := 1 to MAX_WMI_ATTEMPTS do
+  begin
+    try
+      Locator := CreateOleObject('WbemScripting.SWbemLocator');
+      Service := Locator.ConnectServer('.', 'root' + chr(92) + 'cimv2');
+      Query := 'SELECT ' + WmiProp + ' FROM ' + WmiClass;
+      if WmiWhere <> '' then
+        Query := Query + ' WHERE ' + WmiWhere;
+      ResultSet := Service.ExecQuery(Query);
+      if ResultSet.Count > 0 then
+      begin
+        Result := ResultSet.ItemIndex(0).Properties[WmiProp].Value;
+        { Value 为 Null（如无介质光驱）时隐式赋 String 得空串或抛 variant
+          异常——Null 不设专门分支，空串交给 WmiFirstInt 的哨兵统一拦截（§2.2） }
+        Break;
+      end;
+    except
+      Result := '';
+    end;
+    if Attempt < MAX_WMI_ATTEMPTS then
+      Sleep(400);   { 末次失败不睡（§8.1） }
   end;
+  if Result = '' then
+    WmiUnavailable := True;   { MAX_WMI_ATTEMPTS 次全失败：预算闸落下，后续 WMI 查询快速失败（§8.1） }
 end;
 
 function WmiFirstInt(const WmiClass, WmiProp, WmiWhere: String): Int64;
@@ -106,22 +148,27 @@ end;
 
 function InitializeSetup(): Boolean;
 var
-  RamKb, DiskBytes, RamGb, DiskGb: Int64;
-  GpuName, Dedicated, InstallDrive: String;
+  RamKb, DiskBytes, RamGb, DiskGb, DiskFree, DiskTotal: Int64;
+  GpuName, Dedicated: String;
   Tier, MemText, GpuText, DiskText: String;
 begin
   Result := True;   { 返回 False 将中止安装（本流程恒继续） }
   { 硬件自检（WMI 暂态不稳是常态，降级走哨兵 -1 落"无法预判"，不阻塞安装）。
     本钩子只许纯 COM 探测：禁建页、禁任何 Wizard* API（炸点③教训） }
   RamKb := WmiFirstInt('Win32_OperatingSystem', 'TotalVisibleMemorySize', '');
+  if RamKb < 0 then
+    RamKb := TotalPhysKBBackup();   { WMI 重试耗尽 → kernel32 备用（§8.2；record 对齐真机实测一次） }
   GpuName := WmiFirstValue('Win32_VideoController', 'Name', '');
   Dedicated := '0';
   if (Pos('NVIDIA', GpuName) > 0) or (Pos('Radeon', GpuName) > 0) or
      (Pos('GTX', GpuName) > 0) or (Pos('RX ', GpuName) > 0) then
     Dedicated := '1';
-  InstallDrive := ExtractFileDrive(ExpandConstant('{localappdata}'));
-  DiskBytes := WmiFirstInt('Win32_LogicalDisk', 'FreeSpace',
-    'DriveType=3 AND DeviceID=' + chr(39) + InstallDrive + chr(39));
+  { 磁盘：Inno 原生 GetSpaceOnDisk64（§8.2）——不经 WMI 服务，免疫安装瞬间
+    WMI 未就绪；Path 传完整路径；返回 Int64 字节，False → 哨兵 -1 }
+  if GetSpaceOnDisk64(ExpandConstant('{localappdata}'), DiskFree, DiskTotal) then
+    DiskBytes := DiskFree
+  else
+    DiskBytes := -1;
 
   if RamKb >= 0 then
     RamGb := RamKb div 1048576   { KB -> GB }
@@ -182,13 +229,21 @@ var
 begin
   if not WizardWasCreated then
     Exit;   { 旗守卫：向导未建=无意向可记，Wizard* API 也会二次崩（炸点②教训） }
-  { 记录用户组件意向（装完或取消都记录）；文件在数据目录，卸载默认保留 }
-  ForceDirectories(ExpandConstant('{app}' + chr(92) + 'xiaoju3_data'));
-  Report := GetDateTimeString('yyyy/mm/dd hh:nn:ss', '-', ':') + #13#10 +
-    '硬件自检建议: ' + TierHintText + #13#10 +
-    'ollama=' + YesNoStr(WizardIsComponentSelected('ollama')) + #13#10 +
-    'napcat=' + YesNoStr(WizardIsComponentSelected('napcat')) + #13#10 +
-    'ha=' + YesNoStr(WizardIsComponentSelected('ha')) + #13#10;
-  SaveStringToFile(ExpandConstant('{app}' + chr(92) + 'xiaoju3_data' + chr(92) + 'installer_report.txt'),
-                   Report, False);
+  { 记录用户组件意向（装完或取消都记录）；文件在数据目录，卸载默认保留。
+    报告写入整体 try 包裹（2026-10-03 真机教训：app 常量在用户未走过选目录
+    页 wpSelectDir 时才初始化，ExpandConstant 直接抛 Runtime error——异常即
+    用户未达选目录页=无意向可记，静默跳过；except 内绝不调 ExpandConstant、
+    不写任何东西 }
+  try
+    Report := GetDateTimeString('yyyy/mm/dd hh:nn:ss', '-', ':') + #13#10 +
+      '硬件自检建议: ' + TierHintText + #13#10 +
+      'ollama=' + YesNoStr(WizardIsComponentSelected('ollama')) + #13#10 +
+      'napcat=' + YesNoStr(WizardIsComponentSelected('napcat')) + #13#10 +
+      'ha=' + YesNoStr(WizardIsComponentSelected('ha')) + #13#10;
+    ForceDirectories(ExpandConstant('{app}' + chr(92) + 'xiaoju3_data'));
+    SaveStringToFile(ExpandConstant('{app}' + chr(92) + 'xiaoju3_data' + chr(92) + 'installer_report.txt'),
+                     Report, False);
+  except
+    { 静默跳过：不写文件、不建目录、绝不调 ExpandConstant（那正是炸点） }
+  end;
 end;
