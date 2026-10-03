@@ -108,10 +108,11 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,                          # -w 无控制台（桌面窗口即主入口）
+    version='version_info.txt',             # 步 B1：bat 预生成（版本抓自 xiaoju3.py）
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,                              # 步 5 可选：assets/pet 转 ico
+    icon='assets/xiaoju3.ico',              # 步 B1：make_build_assets.py 生成（源 pet/normal_half.png）
 )
