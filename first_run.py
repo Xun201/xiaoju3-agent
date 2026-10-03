@@ -14,6 +14,7 @@
 """
 import concurrent.futures
 import os
+import re
 
 import requests
 
@@ -25,6 +26,11 @@ from xiaoju3 import CLOUD_KEY, ENV_FILE  # CLOUD_KEY 即 env 键 DEEPSEEK_API_KE
 # 跳过标记（方案 C：后端文件承载，彻底弃用 localStorage——容器差异免疫）：
 # 与 ENV_FILE 同根（数据根 xiaoju3_data/），.env 落盘时由 complete 顺手清除
 SKIP_FLAG_FILE = os.path.join(os.path.dirname(ENV_FILE), ".first_run_skipped")
+
+# 安装器意向报告（步 B3a 产出：iss DeinitializeSetup 每次安装会话覆写，
+# 内容=时间戳 + 硬件自检建议 + ollama/napcat/ha 三意向；与跳过标记同根=数据根，
+# frozen 下即安装器写入的 {app}\xiaoju3_data\installer_report.txt，路径逐字节对齐）
+INSTALLER_REPORT_FILE = os.path.join(os.path.dirname(ENV_FILE), "installer_report.txt")
 
 _PROBE_TIMEOUT = 5          # HA /api/ 探测超时（秒）；Ollama 探针自带 1s
 _DEEPSEEK_KEY_MIN_LEN = 30  # DeepSeek key 形态：sk- 前缀 + 充分长度
@@ -121,3 +127,70 @@ def run_probes():
         results = [{"name": name, **fut.result()}
                    for (name, fn), fut in zip(probes, futures)]
     return results
+
+
+# 安装器意向报告解析（步 B3 消费端，docs/INSTALLER_STEP_B3_CONSUMER_DESIGN.md §2.1）
+_TIER_HINT_PREFIX = "硬件自检建议: "
+_INTENT_KEYS = ("ollama", "napcat", "ha")
+_INTENT_LINE_RE = re.compile(r"^(ollama|napcat|ha)=(1|0)$")
+
+
+def parse_installer_report(text):
+    """解析安装器意向报告文本（纯函数）→
+    {"installed_at": str|None, "tier_hint": str|None,
+     "intents": {"ollama": True|False|None, "napcat": …, "ha": …}}
+
+    行规则：文案/布尔行先归类（"硬件自检建议: " 前缀行 → tier_hint；
+    ^(ollama|napcat|ha)=(1|0)$ 严格取布尔，其余值不匹配 → None 未知）；
+    首个无法归类的非空行 = installed_at（安装器 5 行格式恒为行 1 时间戳；
+    缺时间戳行时布尔/文案行仍各归其位，不误吞）；其余行忽略。
+    解析全程异常不外抛，逐项降级为 None。"""
+    result = {"installed_at": None, "tier_hint": None,
+              "intents": {key: None for key in _INTENT_KEYS}}
+    try:
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith(_TIER_HINT_PREFIX):
+                result["tier_hint"] = line[len(_TIER_HINT_PREFIX):].strip() or None
+                continue
+            matched = _INTENT_LINE_RE.match(line)
+            if matched:
+                result["intents"][matched.group(1)] = matched.group(2) == "1"
+                continue
+            if result["installed_at"] is None:
+                result["installed_at"] = line
+    except Exception:
+        pass
+    return result
+
+
+def read_installer_report():
+    """读取安装器意向报告（只读，绝不外抛）→ {"available": bool, ...}。
+
+    文件缺失/读盘失败/解析异常一律 {"available": False}（便携 exe /
+    python 直跑 / 升级后无报告=非安装形态，前端 hints 块保持隐藏）。
+    编码回退 utf-8 → gbk：Inno 6 SaveStringToFile 的 S 参是 AnsiString，
+    中文按系统 ANSI 代码页落盘（中文 Windows=GBK），utf-8 严格读会炸。"""
+    try:
+        with open(INSTALLER_REPORT_FILE, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return {"available": False}
+    text = None
+    for encoding in ("utf-8", "gbk"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            text = None
+    if text is None:
+        # utf-8 读 GBK 字节可能无声误读为乱码（非异常），但报告仅作展示，
+        # 三布尔行纯 ASCII 不受影响，故 errors="replace" 兜底可接受。
+        text = raw.decode("utf-8", errors="replace")
+    try:
+        parsed = parse_installer_report(text)
+    except Exception:
+        return {"available": False}
+    return {"available": True, **parsed}

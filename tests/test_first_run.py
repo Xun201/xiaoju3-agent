@@ -370,5 +370,212 @@ class SkipFlagTests(unittest.TestCase):
         self.assertTrue(os.path.exists(env_path))          # 配置照常落盘
 
 
+class ParseInstallerReportTests(unittest.TestCase):
+    """B3 消费端：parse_installer_report 纯函数（行规则逐条）。"""
+
+    def test_full_five_line_report(self):
+        """全量 5 行报告（安装器真实格式，CRLF）：五项各归其位。"""
+        text = ("2026/10/03 23:15:42\r\n"
+                "硬件自检建议: 推荐完整版（本地优先：可安装 Ollama + 本地模型）\r\n"
+                "ollama=1\r\nnapcat=0\r\nha=1\r\n")
+        r = first_run.parse_installer_report(text)
+        self.assertEqual(r["installed_at"], "2026/10/03 23:15:42")
+        self.assertEqual(r["tier_hint"],
+                         "推荐完整版（本地优先：可安装 Ollama + 本地模型）")
+        self.assertEqual(r["intents"],
+                         {"ollama": True, "napcat": False, "ha": True})
+
+    def test_missing_lines_degrade_to_none(self):
+        """缺行：缺时间戳行时不误吞意图行（installed_at 保持 None）。"""
+        r = first_run.parse_installer_report("ollama=1\nnapcat=0\n")
+        self.assertIsNone(r["installed_at"])
+        self.assertIsNone(r["tier_hint"])
+        self.assertEqual(r["intents"],
+                         {"ollama": True, "napcat": False, "ha": None})
+
+    def test_garbage_lines_ignored(self):
+        """垃圾行混入：时间戳不误吞，垃圾行忽略，合法行照常解析。"""
+        text = ("2026/10/03 23:15:42\n"
+                "=== 任意垃圾行 ===\n"
+                "硬件自检建议: 推荐轻量版\n"
+                "hello=world\n"
+                "ha=0\n")
+        r = first_run.parse_installer_report(text)
+        self.assertEqual(r["installed_at"], "2026/10/03 23:15:42")
+        self.assertEqual(r["tier_hint"], "推荐轻量版")
+        self.assertEqual(r["intents"],
+                         {"ollama": None, "napcat": None, "ha": False})
+
+    def test_empty_string_all_none(self):
+        """空串：结构完整、全 None、不抛。"""
+        self.assertEqual(
+            first_run.parse_installer_report(""),
+            {"installed_at": None, "tier_hint": None,
+             "intents": {"ollama": None, "napcat": None, "ha": None}})
+
+    def test_bad_intent_value_unknown(self):
+        """值非 1/0：该意向降级 None（未知，UI 不展示），其余照常。"""
+        r = first_run.parse_installer_report("ollama=yes\nnapcat=1 extra\nha=0\n")
+        self.assertEqual(r["intents"],
+                         {"ollama": None, "napcat": None, "ha": False})
+
+    def test_none_input_safe(self):
+        """None 入参防御：按空串处理不抛。"""
+        r = first_run.parse_installer_report(None)
+        self.assertIsNone(r["installed_at"])
+        self.assertEqual(r["intents"],
+                         {"ollama": None, "napcat": None, "ha": None})
+
+
+class ReadInstallerReportTests(unittest.TestCase):
+    """B3 消费端：read_installer_report 编码回退 + 永不外抛。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xj3_report_")
+        self.report = os.path.join(self.tmp, "installer_report.txt")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_bytes(self, data):
+        with open(self.report, "wb") as f:
+            f.write(data)
+
+    def test_missing_file_available_false(self):
+        """文件缺失（便携/直跑形态）：available False，绝不外抛。"""
+        with mock.patch.object(first_run, "INSTALLER_REPORT_FILE", self.report):
+            self.assertEqual(first_run.read_installer_report(),
+                             {"available": False})
+
+    def test_gbk_bytes_with_chinese_hint(self):
+        """GBK 字节（Inno SaveStringToFile=AnsiString 实锤形态）解析成功。"""
+        content = ("2026/10/03 23:15:42\r\n"
+                   "硬件自检建议: 推荐轻量版（云端优先）\r\n"
+                   "ollama=0\r\nnapcat=1\r\nha=0\r\n")
+        self._write_bytes(content.encode("gbk"))
+        with mock.patch.object(first_run, "INSTALLER_REPORT_FILE", self.report):
+            r = first_run.read_installer_report()
+        self.assertTrue(r["available"])
+        self.assertEqual(r["tier_hint"], "推荐轻量版（云端优先）")
+        self.assertEqual(r["installed_at"], "2026/10/03 23:15:42")
+        self.assertEqual(r["intents"],
+                         {"ollama": False, "napcat": True, "ha": False})
+
+    def test_utf8_bytes_also_ok(self):
+        """utf-8 字节同样通过（回退链第一级直中）。"""
+        content = ("2026/10/03 23:15:42\n硬件自检建议: 推荐完整版\n"
+                   "ollama=1\nnapcat=0\nha=0\n")
+        self._write_bytes(content.encode("utf-8"))
+        with mock.patch.object(first_run, "INSTALLER_REPORT_FILE", self.report):
+            r = first_run.read_installer_report()
+        self.assertTrue(r["available"])
+        self.assertEqual(r["tier_hint"], "推荐完整版")
+        self.assertTrue(r["intents"]["ollama"])
+
+    def test_binary_garbage_falls_back_without_raise(self):
+        """补强：既非 utf-8 也非合法 GBK 的字节 → errors="replace" 兜底，
+        不抛异常、返回结构完整合法。"""
+        self._write_bytes(b"\xff\xfe\xfd\xfc")   # utf-8/gbk 解码均必炸的字节
+        with mock.patch.object(first_run, "INSTALLER_REPORT_FILE", self.report):
+            r = first_run.read_installer_report()
+        self.assertTrue(r["available"])
+        for key in ("installed_at", "tier_hint", "intents"):
+            self.assertIn(key, r)
+        self.assertEqual(set(r["intents"]), {"ollama", "napcat", "ha"})
+
+    def test_empty_file_available_but_all_none(self):
+        """空文件：available True 但全 None（前端三项全无守卫保持隐藏）。"""
+        self._write_bytes(b"")
+        with mock.patch.object(first_run, "INSTALLER_REPORT_FILE", self.report):
+            r = first_run.read_installer_report()
+        self.assertTrue(r["available"])
+        self.assertIsNone(r["installed_at"])
+        self.assertEqual(r["intents"],
+                         {"ollama": None, "napcat": None, "ha": None})
+
+
+class InstallerReportEndpointTests(unittest.TestCase):
+    """B3 消费端：/api/first_run/installer_report 独立路由。"""
+
+    def setUp(self):
+        import xiaoju3_dashboard as dashboard
+        self.client = dashboard.app.test_client()
+        self.tmp = tempfile.mkdtemp(prefix="xj3_report_api_")
+        self.report = os.path.join(self.tmp, "installer_report.txt")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_missing_report_available_false(self):
+        """报告缺失：200 + {"available": False}（路由自身零异常面）。"""
+        with mock.patch.object(first_run, "INSTALLER_REPORT_FILE", self.report):
+            resp = self.client.get("/api/first_run/installer_report")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(),
+                         {"code": 200, "data": {"available": False}})
+
+    def test_report_parsed_and_served(self):
+        """GBK 报告在盘：路由吐出完整解析结构（available/时间戳/文案/三意向）。"""
+        content = ("2026/10/03 23:15:42\n硬件自检建议: 推荐完整版\n"
+                   "ollama=1\nnapcat=1\nha=0\n")
+        with open(self.report, "wb") as f:
+            f.write(content.encode("gbk"))
+        with mock.patch.object(first_run, "INSTALLER_REPORT_FILE", self.report):
+            resp = self.client.get("/api/first_run/installer_report")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        self.assertTrue(data["available"])
+        self.assertEqual(data["tier_hint"], "推荐完整版")
+        self.assertEqual(data["intents"],
+                         {"ollama": True, "napcat": True, "ha": False})
+
+
+class InstallerReportFrontendTests(unittest.TestCase):
+    """B3 消费端静态锚：报告端点恰一次并行拉取 + hints 块默认隐藏 +
+    渲染函数存在 + 禁 Promise.all + 既有零触碰不动（UI 运行行为不可离线
+    单测，此处锁定「壳存在 + 默认不显示 + 源码语义」）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = open(os.path.join(PROJECT_ROOT, "index.html"),
+                        encoding="utf-8").read()
+        cls.js = open(os.path.join(PROJECT_ROOT, "console.js"),
+                      encoding="utf-8").read()
+
+    def test_hints_div_present_and_default_hidden(self):
+        """hints 块存在且默认 hidden（非安装形态零视觉变化锚），
+        且位于浮层卡片内。"""
+        self.assertIn('<div id="first-run-install-hints" hidden>', self.html)
+        self.assertGreater(self.html.index('id="first-run-install-hints"'),
+                           self.html.index('id="first-run-overlay"'))
+
+    def test_report_fetch_exactly_once_inside_initfirstrun(self):
+        """报告端点全文件恰一次，且在 initFirstRun 的 first_run=true 分支内。"""
+        self.assertEqual(
+            self.js.count("fetch('/api/first_run/installer_report')"), 1)
+        init_idx = self.js.index("function initFirstRun()")
+        seg = self.js[init_idx:self.js.index("function showFirstRun(")]
+        self.assertIn("fetch('/api/first_run/installer_report')", seg)
+
+    def test_render_function_and_no_promise_all(self):
+        """renderInstallerReport 独立渲染函数存在；首装块禁 Promise.all
+        （报告慢不得拖探针——并行独立拉取口径源码锁定）。"""
+        self.assertIn("function renderInstallerReport(", self.js)
+        seg = self.js[self.js.index("function initFirstRun()"):
+                      self.js.index("function submitFirstRun(")]
+        self.assertNotIn("Promise.all", seg)
+
+    def test_zero_touch_anchors_intact(self):
+        """零触碰锚复述（范围=initFirstRun 定义到 IIFE 尾调用，覆盖全部新增
+        代码）：轮询原样、该段零 localStorage、不直操 minimized 类——
+        （节头注释含"弃用 localStorage"历史字样，故不从节头起切，同 house 锚口径）。"""
+        self.assertIn("setInterval(fetchStatus, 2000)", self.js)
+        seg = self.js[self.js.index("function initFirstRun()"):
+                      self.js.index("initFirstRun();")]
+        self.assertNotIn("localStorage", seg)
+        self.assertNotIn("classList.add('xiaoju3-minimized'", seg)
+        self.assertNotIn("classList.remove('xiaoju3-minimized'", seg)
+
+
 if __name__ == "__main__":
     unittest.main()
