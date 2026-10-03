@@ -593,10 +593,25 @@ def api_first_run_complete():
                            "可稍后在设置页重试")
         except Exception as e:  # 自启失败绝不阻塞首装完成
             warning = f"开机自启写入异常：{e}"
+    from first_run import clear_skipped, is_first_run  # 延迟导入同上
+    clear_skipped()   # 完成落盘顺手清跳过标记（存在才清，幂等）
     return jsonify({
         "code": 200,
         "data": {"written": written, "skipped": skipped,
                  "first_run": is_first_run(), "warning": warning},
+    })
+
+
+@app.route("/api/first_run/skip", methods=["POST"])
+def api_first_run_skip():
+    """跳过首装引导（安装器方案步 A4b/C：后端文件承载跳过标记，弃用
+    localStorage——浏览器/WebView2 容器差异免疫）。写
+    xiaoju3_data/.first_run_skipped 后 first_run 自然翻转为 False。"""
+    from first_run import is_first_run, mark_skipped  # 延迟导入同上
+    mark_skipped()
+    return jsonify({
+        "code": 200,
+        "data": {"first_run": is_first_run(), "version": XIAOJU3_VERSION},
     })
 
 

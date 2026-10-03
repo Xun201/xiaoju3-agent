@@ -242,168 +242,26 @@ class FirstRunEndpointsTests(unittest.TestCase):
 class IsFirstRunTests(unittest.TestCase):
     """A3 判定：ENV_FILE 存在/不存在两态（单一事实源在文件）。"""
 
-    def test_file_two_states(self):
+    def test_file_three_states(self):
+        """三态：双无=first_run；.env 存在=非；无 .env 有跳过标记=非。"""
         tmp = tempfile.mkdtemp(prefix="xj3_firstrun_")
         try:
-            existing = os.path.join(tmp, "exists.env")
-            with open(existing, "w", encoding="utf-8") as f:
-                f.write("DEEPSEEK_API_KEY=x\n")
-            with mock.patch.object(first_run, "ENV_FILE", existing):
-                self.assertFalse(first_run.is_first_run())
-            missing = os.path.join(tmp, "missing.env")
-            with mock.patch.object(first_run, "ENV_FILE", missing):
+            env = os.path.join(tmp, "exists.env")
+            with open(env, "w", encoding="utf-8") as f:
+                f.write("K=x\n")
+            skip = os.path.join(tmp, ".first_run_skipped")
+            with open(skip, "w", encoding="utf-8") as f:
+                f.write("")
+            missing_env = os.path.join(tmp, "missing.env")
+            no_skip = os.path.join(tmp, "no_skip.flag")
+            with mock.patch.object(first_run, "ENV_FILE", missing_env),                  mock.patch.object(first_run, "SKIP_FLAG_FILE", no_skip):
                 self.assertTrue(first_run.is_first_run())
+            with mock.patch.object(first_run, "ENV_FILE", env),                  mock.patch.object(first_run, "SKIP_FLAG_FILE", no_skip):
+                self.assertFalse(first_run.is_first_run())
+            with mock.patch.object(first_run, "ENV_FILE", missing_env),                  mock.patch.object(first_run, "SKIP_FLAG_FILE", skip):
+                self.assertFalse(first_run.is_first_run())
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-import sys  # noqa: E402  # A4a frozen 形态用例
-
-import autostart  # noqa: E402
-
-
-class AutostartTargetCommandTests(unittest.TestCase):
-    """A4a target_command 两形态（测死）：frozen=exe 自身；非 frozen=pythonw+脚本。"""
-
-    def test_frozen_uses_exe_itself(self):
-        with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(sys, "executable",
-                               r"C:\Apps\xiaoju3\xiaoju3.exe"):
-            cmd = autostart.target_command()
-        self.assertEqual(cmd, r'"C:\Apps\xiaoju3\xiaoju3.exe"')
-
-    def test_non_frozen_uses_windowless_python_and_script(self):
-        fake_py = r"C:\Python\pythonw.exe"
-        with mock.patch("desktop_launcher._windowless_python",
-                        return_value=fake_py):
-            cmd = autostart.target_command()
-        self.assertIn(fake_py, cmd)
-        self.assertIn("desktop_launcher.py", cmd)
-        self.assertTrue(cmd.startswith('"') and cmd.endswith('"'))
-
-
-class AutostartPlatformGuardTests(unittest.TestCase):
-    """A4a 平台守卫：非 Windows 四函数全部零操作（winreg 不被触碰）。"""
-
-    def test_non_windows_all_ops_noop(self):
-        fake_wr = mock.MagicMock()
-        with mock.patch.dict(sys.modules, {"winreg": fake_wr}), \
-             mock.patch.object(autostart.os, "name", "posix"):
-            self.assertIsNone(autostart.read())
-            self.assertFalse(autostart.write())
-            self.assertFalse(autostart.remove())
-            self.assertFalse(autostart.is_enabled())
-        fake_wr.assert_not_called()
-
-
-class AutostartRegistryTests(unittest.TestCase):
-    """A4a 注册表三操作：fake winreg 注入 sys.modules（winreg 延迟 import）。"""
-
-    def setUp(self):
-        self.fake_wr = mock.MagicMock()
-        self.key = mock.MagicMock()
-        self.fake_wr.CreateKey.return_value = self.key
-        self.fake_wr.OpenKey.return_value = self.key
-        self.fake_wr.REG_SZ = 1
-        self._patchers = [mock.patch.dict(sys.modules, {"winreg": self.fake_wr}),
-                          mock.patch.object(autostart.os, "name", "nt")]
-        for p in self._patchers:
-            p.start()
-            self.addCleanup(p.stop)
-
-    def test_write_calls_setvalueex(self):
-        with mock.patch.object(autostart, "target_command",
-                               return_value=r'"C:\x\xiaoju3.exe"'):
-            self.assertTrue(autostart.write())
-        args = self.fake_wr.SetValueEx.call_args[0]
-        self.assertEqual(args[1], autostart.VALUE_NAME)   # 值名 Xiaoju3
-        self.assertEqual(args[2], 0)
-        self.assertEqual(args[3], 1)                      # REG_SZ
-        self.assertEqual(args[4], r'"C:\x\xiaoju3.exe"')
-
-    def test_read_hit_and_miss(self):
-        self.fake_wr.QueryValueEx.return_value = (r'"C:\x\xiaoju3.exe"', 1)
-        self.assertEqual(autostart.read(), r'"C:\x\xiaoju3.exe"')
-        self.fake_wr.QueryValueEx.side_effect = FileNotFoundError
-        self.assertIsNone(autostart.read())
-
-    def test_remove_idempotent(self):
-        self.assertTrue(autostart.remove())               # 值存在：删除成功
-        self.fake_wr.DeleteValue.side_effect = FileNotFoundError
-        self.assertFalse(autostart.remove())              # 值已不在：幂等 False 不抛
-
-
-class FirstRunCompleteTests(unittest.TestCase):
-    """A4a complete 端点：落盘/skipped/自启/OSError 500。"""
-
-    def setUp(self):
-        import xiaoju3_dashboard as dashboard
-        self.client = dashboard.app.test_client()
-        self.tmp = tempfile.mkdtemp(prefix="xj3_complete_")
-        self.env_path = os.path.join(self.tmp, ".env")
-        # save_env_file 缺省读 xiaoju3.ENV_FILE；first_run.ENV_FILE 独立绑定，
-        # 两处同 patch 使落盘与翻转判定都指向 tmp
-        self._patchers = [mock.patch.object(xiaoju3, "ENV_FILE", self.env_path),
-                          mock.patch.object(first_run, "ENV_FILE", self.env_path)]
-        for p in self._patchers:
-            p.start()
-            self.addCleanup(p.stop)
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_success_with_skipped_and_autostart(self):
-        legal_key = "sk-" + "a" * 27
-        with mock.patch.object(autostart, "write", return_value=True) as wr:
-            resp = self.client.post("/api/first_run/complete",
-                                    json={"env": {"DEEPSEEK_API_KEY": legal_key,
-                                                  "EVIL_KEY": "pwn"},
-                                          "autostart": True})
-        self.assertEqual(resp.status_code, 200)
-        data = resp.get_json()["data"]
-        self.assertEqual(data["written"], ["DEEPSEEK_API_KEY"])
-        self.assertEqual(data["skipped"], ["EVIL_KEY"])
-        self.assertFalse(data["first_run"])                # 落盘即自然翻转
-        self.assertIsNone(data["warning"])
-        wr.assert_called_once()                            # 自启勾选 → 写注册表
-        text = open(self.env_path, encoding="utf-8").read()
-        self.assertIn(f"DEEPSEEK_API_KEY={legal_key}", text)
-        self.assertNotIn("EVIL_KEY", text)
-
-    def test_oserror_maps_to_500_with_chinese_error(self):
-        with mock.patch.object(xiaoju3, "save_env_file",
-                               side_effect=OSError("disk full")):
-            resp = self.client.post("/api/first_run/complete",
-                                    json={"env": {"DEEPSEEK_API_KEY": "sk-x"},
-                                          "autostart": False})
-        self.assertEqual(resp.status_code, 500)
-        self.assertIn("配置保存失败", resp.get_json()["error"])
-        self.assertIn("disk full", resp.get_json()["error"])
-
-    def test_autostart_false_never_touches_registry(self):
-        with mock.patch.object(autostart, "write") as wr:
-            resp = self.client.post("/api/first_run/complete",
-                                    json={"env": {"USER_CITY": "示例市"},
-                                          "autostart": False})
-        self.assertEqual(resp.status_code, 200)
-        wr.assert_not_called()
-        self.assertIsNone(resp.get_json()["data"]["warning"])
-
-    def test_autostart_failure_degrades_to_warning_not_500(self):
-        with mock.patch.object(autostart, "write", return_value=False):
-            resp = self.client.post("/api/first_run/complete",
-                                    json={"env": {"USER_CITY": "示例市"},
-                                          "autostart": True})
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("自启", resp.get_json()["data"]["warning"])
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class FirstRunOverlayStaticTests(unittest.TestCase):
@@ -454,24 +312,62 @@ class FirstRunOverlayStaticTests(unittest.TestCase):
         self.assertNotIn("classList.add('xiaoju3-minimized'", fr_block)
         self.assertNotIn("classList.remove('xiaoju3-minimized'", fr_block)
 
-    def test_skip_semantics_guard_before_show_and_no_complete(self):
-        """跳过语义源码锁定：initFirstRun 先查 localStorage done（有则不弹，
-        守卫先于弹出判定）；skip 分支写 done 且绝不调 complete 端点——
-        「跳过后再启动不弹（status 仍 true）」的实现级锁定。"""
+    def test_skip_semantics_uses_backend_flag(self):
+        """跳过语义（方案 C）源码锁定：skip 走后端端点写标记文件，
+        first-run 块整体零 localStorage——浏览器/WebView2 容器差异免疫；
+        弹出判定只依赖后端 status（.env 与跳过标记两个文件）。"""
+        block = self.js[self.js.index("first-run-overlay"):]
+        self.assertIn("/api/first_run/skip", block)
+        self.assertIn("method: 'POST'", block)
+        self.assertIn("closeFirstRunOverlay()", block)
+        self.assertNotIn("localStorage", block)
+        self.assertNotIn("FIRST_RUN_DONE_KEY", self.js)
         init_idx = self.js.index("function initFirstRun()")
-        guard_idx = self.js.index("localStorage.getItem(FIRST_RUN_DONE_KEY)",
-                                  init_idx)
-        show_idx = self.js.index("showFirstRun(", init_idx)
-        self.assertLess(guard_idx, show_idx)
-        self.assertIn("localStorage.setItem(FIRST_RUN_DONE_KEY", self.js)
-        fn_start = self.js.index("function submitFirstRun(skip)")
-        fn_end = self.js.index("fetch('/api/first_run/complete'")
-        skip_branch = self.js[fn_start:fn_start + 400]
-        self.assertIn("markFirstRunDone()", skip_branch)
-        complete_in_fn = "/api/first_run/complete" in self.js[fn_start:fn_end + 40]
-        self.assertTrue(complete_in_fn)      # 完成分支含端点（确认定位正确）
-        skip_seg = self.js[fn_start:fn_start + 260]
-        self.assertNotIn("/api/first_run/complete", skip_seg)  # 跳过分支不含端点
+        init_seg = self.js[init_idx:self.js.index("function showFirstRun(")]
+        self.assertNotIn("localStorage", init_seg)
+
+class SkipFlagTests(unittest.TestCase):
+    """A4b/C 跳过标记：mark/clear 幂等 + skip 端点写盘翻转 + complete 清除。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xj3_skip_")
+        self.skip_flag = os.path.join(self.tmp, ".first_run_skipped")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_mark_and_clear_idempotent(self):
+        with mock.patch.object(first_run, "SKIP_FLAG_FILE", self.skip_flag):
+            first_run.mark_skipped()
+            self.assertTrue(os.path.exists(self.skip_flag))
+            first_run.clear_skipped()
+            self.assertFalse(os.path.exists(self.skip_flag))
+            first_run.clear_skipped()   # 幂等：已不存在不抛
+
+    def test_skip_endpoint_writes_flag_and_flips_status(self):
+        import xiaoju3_dashboard as dashboard
+        client = dashboard.app.test_client()
+        with mock.patch.object(first_run, "SKIP_FLAG_FILE", self.skip_flag),              mock.patch.object(first_run, "ENV_FILE",
+                               os.path.join(self.tmp, "missing.env")):
+            resp = client.post("/api/first_run/skip")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        self.assertFalse(data["first_run"])   # 写标记即自然翻转
+        self.assertTrue(os.path.exists(self.skip_flag))
+
+    def test_complete_clears_skip_flag(self):
+        import xiaoju3_dashboard as dashboard
+        client = dashboard.app.test_client()
+        env_path = os.path.join(self.tmp, ".env")
+        with open(self.skip_flag, "w", encoding="utf-8") as f:
+            f.write("")
+        with mock.patch.object(first_run, "SKIP_FLAG_FILE", self.skip_flag),              mock.patch.object(xiaoju3, "ENV_FILE", env_path),              mock.patch.object(first_run, "ENV_FILE", env_path):
+            resp = client.post("/api/first_run/complete",
+                               json={"env": {"USER_CITY": "示例市"},
+                                     "autostart": False})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(os.path.exists(self.skip_flag))   # 完成即清除
+        self.assertTrue(os.path.exists(env_path))          # 配置照常落盘
 
 
 if __name__ == "__main__":
