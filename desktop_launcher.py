@@ -6,16 +6,21 @@
     xiaoju3_dashboard.py(:5003——QQ webhook/onebot、指令族、心跳引擎已全部宿主其中)）；
     若 :5003 已监听则跳过拉起，提示复用现有进程；
   ② pywebview 打开原生窗口（标题"小橘3号 · 控制台"，1200x800，可最小化/
-    可关闭，无地址栏），加载本机回环内置服务的 /console 页面——
+    可关闭，无地址栏），窗口先显示"正在启动主程序…"占位页，就绪后
+    导航到 http://127.0.0.1:5003/console——
     **绝对禁止加载任何外网 URL**。
 
-【窗口加载方案（沿用 M4 既有机制，零回退）】
-  webview 启动一个仅绑定 127.0.0.1 回环地址的内置线程服务（复用
-  xiaoju3_dashboard.app，端口默认随机 :0），窗口加载
-  http://127.0.0.1:<port>/console。前端 fetch 全部为相对路径（已核实
-  console.js），同源直达内置服务，/api/* 既有路由原样复用——不碰前端
-  三件套（console.js / index.html / desktop-pet.js）。
-  --serve-port 参数保留（M4 兼容）：显式指定内置服务端口，缺省随机。
+【窗口加载方案（端口修复 2bed65b 前身 d9551cf，2026-10-03 定稿）】
+  旧形态（已退役）：desktop 进程自起随机端口本地服务——
+  随机端口可能抽中 Chromium ERR_UNSAFE_PORT 黑名单（真机 6697 实锤），
+  窗口直接白屏。
+  新形态：desktop **不再起任何本地服务**——先建占位窗（PLACEHOLDER_HTML），
+  经 webview.start(回调) 在 GUI 就绪后后台轮询 wait_for_dashboard_ready()
+  （复用 _is_port_listening 探 :5003），就绪即 window.load_url 到
+  http://127.0.0.1:5003/console。前端 fetch 全部为相对路径（已核实
+  console.js），同源直达 5003 主服务，/api/* 既有路由原样复用——不碰前端
+  三件套（console.js / index.html / desktop-pet.js）。显式端口参数随
+  内置服务一并退役（从未被 bat/自启/exe 使用）。
 
 【离线优先通信（不改任何既有链路，仅核实）】
   - 本地 Ollama 聊天 / 本地文件读取本就离线可用（brain 既有链路）；
@@ -33,30 +38,26 @@
     指令：pythonw 场景原样用 sys.executable，控制台场景解析同目录孪生
     pythonw.exe，缺席回退原解释器——全程无黑框）。
   关闭（窗口关闭 → 自动停止全部后台进程，finally 兜底）：
-    先停本进程内置服务线程（M4 既有 stop_local_server，防僵尸端口驻留），
-    再整树终止 xiaoju3_launcher.py（stop_backend_launcher）：优先 psutil
+    整树终止 xiaoju3_launcher.py（stop_backend_launcher）：优先 psutil
     （白名单依赖，已装则进程树 terminate→超时 kill）；psutil 未装则
     Windows 用 `taskkill /T /F /PID`（/T 连子进程整树）、POSIX 用
     os.killpg 向进程组发 SIGTERM（跨平台写法均保留，零新依赖）；最后
     proc.kill()/wait() 回收自身 spawn 的句柄。proc 为 None（复用现有
     进程 / 脚本缺失 / 拉起失败）时不做任何事——绝不误杀非本模块拉起的
     进程。关闭窗口即停全部，无孤儿进程驻留。
+    （旧"先停内置服务线程"步骤随内置服务退役一并移除。）
 
 【启动探测】
-  控制台（:5003）未在线且后台启动器缺位（脚本缺失/拉起失败）时，
-  打印（并注入窗口标题）"主程序未启动，聊天功能受限"——窗口仍可打开界面
-  （状态/历史等仪表盘功能不受影响）；自拉启动器途中不打该过时提示。
+  新形态：launcher 已自拉 → wait_for_dashboard_ready 轮询 :5003（15s 上限）；
+  launcher 缺位且 :5003 不在线（无人会拉起）→ 跳过等待直接导航（错误页 +
+  标题提示）。超时/缺位两条路径都仍创建窗口——窗口是唯一 UI 出口。
 
 用法：
-  python desktop_launcher.py                  # 内置服务端口随机
-  python desktop_launcher.py --serve-port 5900  # 指定内置服务端口
+  python desktop_launcher.py                  # 占位窗 → 就绪后自动进控制台
 
-【打包规划（文档标记，暂不实施）】
-  pyinstaller -F -w desktop_launcher.py 打包为单文件免终端 exe → 🔜 规划中
-  （届时需把 xiaoju3_launcher.py / xiaoju3_dashboard.py 等作为
-  随包数据一并处理）。
+【打包规划（已实施：xiaoju3.spec + build_exe.bat，见 docs/EXE_PACKAGING_PLAN.md；
+  spawn-self 三角色由 argv 标志分流，route_argv/ROLE_* 常量）】
 """
-import argparse
 import os
 import signal
 import socket
@@ -65,10 +66,8 @@ import sys
 import threading
 import time
 
-from werkzeug.serving import make_server
-
 import paths  # 双根路径锚（方案 §1）：frozen 分支按 RESOURCE/DATA_ROOT 分流
-from xiaoju3_dashboard import app   # 复用全部既有路由（/console、/api/*）
+from xiaoju3_dashboard import app   # 装配 dashboard 路由单例（PyInstaller 收录锚；import 不产生端口）
 
 WINDOW_TITLE = "小橘3号 · 控制台"      # 桌面窗口标题（用户口径）
 WINDOW_WIDTH = 1200                   # 窗口尺寸（用户口径 1200x800）
@@ -88,6 +87,18 @@ ROLE_LAUNCHER_FLAG = "--xj3-role=launcher"
 ROLE_DASHBOARD_FLAG = "--xj3-role=dashboard"
 # Windows creationflags：CREATE_NO_WINDOW（防闪黑窗；POSIX 无此常量，回退同值）
 _WIN_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+# 控制台页完整 URL（端口修复 P2：窗口直接挂 5003 主服务，随机内置服务已退役）
+CONSOLE_URL = f"http://{DEFAULT_HOST}:{DASHBOARD_APP_PORT}/console"
+# 占位页（先出窗后导航：create_window 先显示，就绪后 load_url 切控制台）
+PLACEHOLDER_HTML = (
+    "<!doctype html><html><head><meta charset='utf-8'>"
+    "<style>body{font-family:system-ui,sans-serif;background:#101828;"
+    "color:#e8eefc;display:flex;align-items:center;justify-content:center;"
+    "height:100vh;margin:0}div{text-align:center}h2{margin:0 0 8px}"
+    "p{opacity:.7;margin:0}</style></head><body><div>"
+    "<h2>🍊 正在启动主程序…</h2>"
+    "<p>首次启动约需数秒，窗口将自动进入控制台</p></div></body></html>"
+)
 
 MAIN_NOT_RUNNING_HINT = "⚠️ 主程序未启动，聊天功能受限（界面仍可打开）"
 LAUNCHER_REUSE_HINT = "ℹ️ 控制台(5003)已在运行，复用现有进程"
@@ -106,51 +117,6 @@ def _print(msg, err=False):
         return
     try:
         print(msg, file=stream)
-    except Exception:
-        pass
-
-
-def parse_args(argv=None):
-    """解析命令行参数：--serve-port <port> 指定内置服务端口（默认随机）。"""
-    parser = argparse.ArgumentParser(
-        description="小橘3号 · 桌面控制台（pywebview 主入口）")
-    parser.add_argument("--serve-port", type=int, default=None,
-                        help="内置本地服务端口（缺省由系统随机分配）")
-    return parser.parse_args(argv)
-
-
-def start_local_server(port=None, host=DEFAULT_HOST):
-    """启动仅绑定 host（默认 127.0.0.1 回环）的内置线程服务。
-
-    port 为 None/0 时由系统随机分配可用端口（make_server 绑定完成后
-    server.server_port 即真实端口，pywebview 据此拼 URL）；threaded=True
-    支撑前端 2s 状态轮询与聊天的并发请求。服务线程为 daemon。
-
-    返回 (server, thread)：server 含 server_port / shutdown() /
-    server_close()；stop_local_server 消费同一对对象完成关闭清理。
-    """
-    server = make_server(host, port or 0, app, threaded=True)
-    thread = threading.Thread(target=server.serve_forever,
-                              name="xiaoju3-console-local", daemon=True)
-    thread.start()
-    return server, thread
-
-
-def stop_local_server(server, thread=None):
-    """关闭清理：shutdown() 停 serve_forever 循环 → join 线程 →
-    server_close() 释放端口（webview 窗口关闭后调用，防僵尸驻留）。
-
-    注意 shutdown() 必须从 serve_forever 之外线程调用（本函数调用方为
-    主线程/测试线程）；各步骤容错，保证清理流程走到释放端口为止。
-    """
-    try:
-        server.shutdown()
-    except Exception:
-        pass
-    if thread is not None:
-        thread.join(timeout=5)
-    try:
-        server.server_close()
     except Exception:
         pass
 
@@ -369,10 +335,11 @@ def _supervise_backend(state, stop_event, respawn_fn, out=None,
 
 
 def main(argv=None):
-    """入口：缺 pywebview 中文提示退出；拉后台服务 → 开窗口 → 关闭全清理。
+    """入口：缺 pywebview 中文提示退出；拉后台服务 → 占位窗 → 就绪导航 →
+    关闭全清理（端口修复 P2：内置随机服务退役，窗口直挂 :5003）。
 
-    返回退出码：0 正常（窗口关闭并清理完成）；1 环境不满足（缺 pywebview /
-    端口不可用）。
+    返回退出码：0 正常（窗口关闭并清理完成）；1 环境不满足（缺 pywebview）。
+    argv 参数保留兼容既有调用形态（launcher.main([])），当前不消费。
     """
     from xiaoju3_launcher import _redirect_stdio  # 延迟导入：非 frozen 依赖面零变化
     _redirect_stdio("desktop")  # frozen 入口重定向（步 3）；非 frozen 空操作
@@ -381,8 +348,6 @@ def main(argv=None):
     except Exception:
         _print(MISSING_WEBVIEW_HINT, err=True)
         return 1
-
-    args = parse_args(argv)
 
     # ① 后台服务：:5003 已监听则复用现有进程，否则后台拉起统一启动器
     launcher_proc = ensure_backend_services()
@@ -398,24 +363,37 @@ def main(argv=None):
             daemon=True).start()
 
     # ② 启动探测：主程序未在线且没有启动器在拉起途中 → 提示"聊天功能受限"
-    #   （自拉启动器时主程序数秒后就绪，不打过时提示；窗口仍可打开界面）
+    #   （无人会拉起主程序时等待无意义，导航线程跳过等待直接进错误页路径）
     main_ok = _is_main_running()
     main_hint = not main_ok and launcher_proc is None
+    need_wait = (launcher_proc is not None) or main_ok
     if main_hint:
         _print(MAIN_NOT_RUNNING_HINT)
 
-    try:
-        server, thread = start_local_server(args.serve_port)
-    except OSError as e:
-        _print(f"内置本地服务启动失败（端口 {args.serve_port or '随机'}）: {e}",
-               err=True)
-        stop_backend_launcher(launcher_proc)   # 失败退出也回收已拉起的子进程
-        return 1
-
-    url = f"http://{DEFAULT_HOST}:{server.server_port}/console"
-    # 原生桌面窗口：无地址栏，可最小化/可关闭（pywebview 默认能力）
-    window = webview.create_window(WINDOW_TITLE, url,
+    # ③ 占位窗先行（先出窗后导航，端口修复 P2）：create_window 先显示
+    #   "正在启动主程序…"，GUI 就绪后由 webview.start 回调在后台线程
+    #   轮询 :5003，就绪即 load_url 切控制台
+    window = webview.create_window(WINDOW_TITLE, html=PLACEHOLDER_HTML,
                                    width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
+
+    def _navigate_when_ready():
+        """后台导航（webview.start 回调）：等 :5003 就绪 → load_url 控制台。
+        超时/缺位也仍导航（WebView2 自显示连接失败页，稍后服务起来刷新即
+        恢复）——窗口是唯一 UI 出口，不能没有内容；同时标题追加提示。"""
+        timed_out = False
+        if need_wait:
+            timed_out = not wait_for_dashboard_ready()
+        try:
+            window.load_url(CONSOLE_URL)
+        except Exception as e:
+            _print(f"⚠️ 控制台导航失败：{e}", err=True)
+            return
+        if timed_out or main_hint:
+            try:
+                window.evaluate_js(
+                    f"document.title += '{MAIN_NOT_RUNNING_HINT}'")
+            except Exception:
+                pass
 
     def _on_loaded(*_):
         # 窗口内可见且非阻塞的提示：标题后缀（不用 alert，避免卡 GUI 线程）
@@ -432,13 +410,12 @@ def main(argv=None):
         pass   # 个别后端事件系统不可用时静默跳过（终端已有打印提示）
 
     try:
-        webview.start()   # 阻塞至窗口关闭
+        webview.start(_navigate_when_ready)   # GUI 启动后执行导航回调，阻塞至窗口关闭
     finally:
-        # 关闭清理：先停内置服务线程（M4 既有，防僵尸端口），再整树终止
-        # xiaoju3_launcher.py（含心跳/main/dashboard 子进程）——关窗口即
-        # 停全部后台进程，无孤儿驻留
+        # 关闭清理：整树终止 xiaoju3_launcher.py（含心跳/main/dashboard
+        # 子进程）——关窗口即停全部后台进程，无孤儿驻留
+        # （旧"停内置服务线程"步骤随内置服务退役移除）
         stop_event.set()   # 先停监督线程：正常关窗不再触发自动重启
-        stop_local_server(server, thread)
         stop_backend_launcher(backend_state["proc"])
     return 0
 

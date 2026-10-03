@@ -4,11 +4,11 @@
 覆盖（S3 桌面软件化任务口径；pywebview 真窗口不自动化测试——无头环境不可行，
 以纯函数 + 静态断言 + mock webview/subprocess/psutil 覆盖）：
 - 缺 pywebview（sys.modules 置 None）→ main 中文提示退出，返回码 1；
-- --serve-port 参数解析：缺省 None（随机端口）、显式端口正确解析（M4 兼容）；
+- 角色分流 route_argv（步 A4a）：无标志=desktop，--xj3-role=* 归位；
 - 后台启动器拉起：:5002/:5003 未监听时经 subprocess.Popen 后台拉起
   xiaoju3_launcher.py（命令行含该脚本名、stdio 全 DEVNULL）；两端口均已
   监听 → 跳过拉起并提示"复用现有进程"；脚本缺失/拉起失败 → 跳过不报错；
-- 关闭清理：webview.start 返回（窗口关闭）后 stop_local_server（M4 既有）
+- 关闭清理：webview.start 返回（窗口关闭）后 stop_backend_launcher 整树终止
   与 stop_backend_launcher 均被调用；stop_backend_launcher 内部
   psutil 进程树 terminate / 无 psutil 时 Windows taskkill /T /F、POSIX
   killpg、proc.kill 兜底回收句柄；proc 为 None 时绝不误杀；
@@ -59,16 +59,15 @@ def _no_psutil():
     return mock.patch.dict(sys.modules, {"psutil": None})
 
 
-class ParseArgsTests(unittest.TestCase):
-    """--serve-port 参数解析（任务口径：缺省随机、可显式指定；M4 兼容）。"""
+class ServePortRetiredTests(unittest.TestCase):
+    """--serve-port/内置服务退役反向锚（端口修复 P2）：形态不得回流。"""
 
-    def test_default_port_is_none_random(self):
-        args = launcher.parse_args([])
-        self.assertIsNone(args.serve_port)
-
-    def test_explicit_serve_port(self):
-        args = launcher.parse_args(["--serve-port", "5099"])
-        self.assertEqual(args.serve_port, 5099)
+    def test_serve_port_and_builtin_server_retired(self):
+        src = open(os.path.join(PROJECT_ROOT, "desktop_launcher.py"),
+                   encoding="utf-8").read()
+        self.assertNotIn("--serve-port", src)
+        self.assertNotIn("start_local_server", src)
+        self.assertNotIn("make_server", src)
 
 
 class MissingWebviewTests(unittest.TestCase):
@@ -82,17 +81,14 @@ class MissingWebviewTests(unittest.TestCase):
         self.assertIn("pywebview", err.getvalue())
         self.assertIn("离线桌面", err.getvalue())   # 中文提示
 
-    def test_missing_webview_no_window_no_server(self):
-        """缺库快速失败：不拉后台服务、不创建窗口、不启动内置服务、不探测。"""
+    def test_missing_webview_no_window_no_probe(self):
+        """缺库快速失败：不拉后台服务、不创建窗口、不探测。"""
         err = io.StringIO()
-        with _fake_webview(None), contextlib.redirect_stderr(err), \
-                mock.patch.object(launcher, "ensure_backend_services") as me, \
-                mock.patch.object(launcher, "start_local_server") as ms, \
-                mock.patch.object(launcher, "_is_main_running") as mp:
+        with _fake_webview(None), contextlib.redirect_stderr(err),                 mock.patch.object(launcher, "ensure_backend_services") as me,                 mock.patch.object(launcher, "wait_for_dashboard_ready") as mw,                 mock.patch.object(launcher, "_is_main_running") as mp:
             rc = launcher.main([])
         self.assertEqual(rc, 1)
         me.assert_not_called()
-        ms.assert_not_called()
+        mw.assert_not_called()
         mp.assert_not_called()
 
 
@@ -276,104 +272,92 @@ class MainFlowTests(unittest.TestCase):
     """main 主流程：窗口形态、后台服务拉起、启动探测提示与关闭清理
     （全 mock，无真窗口、不真拉起进程）。"""
 
-    def _run_main(self, main_running=True, serve_port=None, spawn_proc=None):
-        """注入伪 webview + 伪内置服务跑 main()，返回（rc, 桩集合, stdout）。"""
+    def _run_main(self, main_running=True, ready=True, spawn_proc=None):
+        """注入伪 webview + 伪探测跑 main()，返回（rc, 桩集合, stdout）。
+
+        fake webview.start 同步执行导航回调（真机为 GUI 启动后异步执行），
+        使 load_url/标题提示可在离线单测中断言。
+        """
         fake_webview = mock.MagicMock()
-        fake_server = mock.MagicMock()
-        fake_server.server_port = 45677
-        fake_thread = mock.MagicMock()
+
+        def fake_start(fn=None, *args, **kwargs):
+            if fn:
+                fn()
+            return None
+
+        fake_webview.start.side_effect = fake_start
+        window = fake_webview.create_window.return_value
 
         out = io.StringIO()
-        with _fake_webview(fake_webview), \
-                mock.patch.object(launcher, "ensure_backend_services",
-                                  return_value=spawn_proc) as mspawn, \
-                mock.patch.object(launcher, "_is_main_running",
-                                  return_value=main_running), \
-                mock.patch.object(launcher, "start_local_server",
-                                  return_value=(fake_server,
-                                                fake_thread)) as ms, \
-                mock.patch.object(launcher, "stop_local_server") as mstop, \
-                mock.patch.object(launcher, "stop_backend_launcher") as mkill, \
-                contextlib.redirect_stdout(out):
-            rc = launcher.main([] if serve_port is None
-                               else ["--serve-port", str(serve_port)])
+        with _fake_webview(fake_webview),                 mock.patch.object(launcher, "ensure_backend_services",
+                                  return_value=spawn_proc) as mspawn,                 mock.patch.object(launcher, "_is_main_running",
+                                  return_value=main_running),                 mock.patch.object(launcher, "wait_for_dashboard_ready",
+                                  return_value=ready) as mwait,                 mock.patch.object(launcher, "stop_backend_launcher") as mkill,                 contextlib.redirect_stdout(out):
+            rc = launcher.main([])
         stubs = types.SimpleNamespace(fake_webview=fake_webview, mspawn=mspawn,
-                                      ms=ms, mstop=mstop, mkill=mkill,
-                                      server=fake_server, thread=fake_thread)
+                                      mwait=mwait, mkill=mkill, window=window)
         return rc, stubs, out.getvalue()
 
-    def test_window_title_size_and_loopback_console_url(self):
-        """窗口形态：标题"小橘3号 · 控制台"、1200x800、回环 /console URL
-        （离线红线：无外网 URL）；先拉后台服务再开窗。"""
+    def test_placeholder_window_then_navigate_to_5003(self):
+        """新主线（端口修复 P2）：占位窗（html=PLACEHOLDER_HTML）先行，
+        就绪后 load_url 切 http://127.0.0.1:5003/console——随机内置服务退役。"""
         rc, s, _ = self._run_main()
         self.assertEqual(rc, 0)
-        s.fake_webview.create_window.assert_called_once_with(
-            launcher.WINDOW_TITLE, "http://127.0.0.1:45677/console",
-            width=1200, height=800)
-        self.assertEqual(launcher.WINDOW_TITLE, "小橘3号 · 控制台")
-        self.assertEqual((launcher.WINDOW_WIDTH, launcher.WINDOW_HEIGHT),
+        kwargs = s.fake_webview.create_window.call_args[1]
+        self.assertEqual(kwargs.get("html"), launcher.PLACEHOLDER_HTML)
+        self.assertEqual((kwargs.get("width"), kwargs.get("height")),
                          (1200, 800))
-        s.fake_webview.start.assert_called_once()   # 入口阻塞至窗口关闭
-        s.ms.assert_called_once_with(None)          # 未指定端口 → 随机
+        s.window.load_url.assert_called_once_with(launcher.CONSOLE_URL)
         s.mspawn.assert_called_once_with()          # 开窗前先拉后台服务
+        s.fake_webview.start.assert_called_once()   # 导航回调经 start 执行
 
-    def test_serve_port_forwarded_to_server(self):
-        """--serve-port 透传给内置服务（M4 兼容零回退）。"""
-        _, s, _ = self._run_main(serve_port=5900)
-        s.ms.assert_called_once_with(5900)
+    def test_timeout_still_navigates_and_hints_title(self):
+        """探测超时：窗口照常导航 :5003（WebView2 错误页兜底，稍后刷新即恢复）
+        + 标题追加"主程序未启动"提示；关窗仍回收自拉进程。"""
+        proc = mock.MagicMock()
+        rc, s, _ = self._run_main(main_running=False, ready=False,
+                                  spawn_proc=proc)
+        self.assertEqual(rc, 0)
+        s.window.load_url.assert_called_once_with(launcher.CONSOLE_URL)
+        title_js = s.window.evaluate_js.call_args[0][0]
+        self.assertIn("主程序未启动", title_js)
+        s.mkill.assert_called_once_with(proc)
 
     def test_spawned_launcher_killed_on_window_close(self):
         """关闭清理：窗口关闭后整树终止自拉的 xiaoju3_launcher.py 进程。"""
         proc = mock.MagicMock()
         _, s, _ = self._run_main(spawn_proc=proc)
         s.mkill.assert_called_once_with(proc)
-        s.mstop.assert_called_once_with(s.server, s.thread)   # M4 清理零回退
 
     def test_reuse_mode_cleanup_still_invoked_but_noop(self):
         """复用现有进程（未自拉）：清理照常走 None 分支（不误杀他人进程；
         "复用现有进程"提示由 EnsureBackendServicesTests 覆盖）。"""
         _, s, _ = self._run_main(spawn_proc=None)
         s.mkill.assert_called_once_with(None)
-        s.mstop.assert_called_once_with(s.server, s.thread)
 
     def test_cleanup_runs_even_if_start_raises(self):
-        """webview.start 异常（后端崩溃）照常上抛，但 finally 里两段清理
-        必达——防僵尸端口与孤儿进程。"""
+        """webview.start 异常（后端崩溃）照常上抛，但 finally 里整树终止
+        必达——防孤儿进程。"""
         fake_webview = mock.MagicMock()
         fake_webview.start.side_effect = RuntimeError("gui boom")
-        fake_server, fake_thread = mock.MagicMock(), mock.MagicMock()
-        fake_server.server_port = 45678
         proc = mock.MagicMock()
-        with _fake_webview(fake_webview), \
-                mock.patch.object(launcher, "ensure_backend_services",
-                                  return_value=proc), \
-                mock.patch.object(launcher, "_is_main_running",
-                                  return_value=True), \
-                mock.patch.object(launcher, "start_local_server",
-                                  return_value=(fake_server, fake_thread)), \
-                mock.patch.object(launcher, "stop_local_server") as mstop, \
-                mock.patch.object(launcher, "stop_backend_launcher") as mkill, \
-                contextlib.redirect_stdout(io.StringIO()):
+        with _fake_webview(fake_webview),                 mock.patch.object(launcher, "ensure_backend_services",
+                                  return_value=proc),                 mock.patch.object(launcher, "_is_main_running",
+                                  return_value=True),                 mock.patch.object(launcher, "stop_backend_launcher") as mkill,                 contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(RuntimeError):
-                launcher.main([])
-        mstop.assert_called_once_with(fake_server, fake_thread)
+                launcher.main([])   # 导航回调未执行（start 即抛），清理仍必达
         mkill.assert_called_once_with(proc)
 
-    def test_server_failure_cleans_spawned_launcher(self):
-        """内置服务启动失败退出码 1：已拉起的启动器进程也被回收。"""
-        proc = mock.MagicMock()
-        with _fake_webview(mock.MagicMock()), \
-                mock.patch.object(launcher, "ensure_backend_services",
-                                  return_value=proc), \
-                mock.patch.object(launcher, "_is_main_running",
-                                  return_value=True), \
-                mock.patch.object(launcher, "start_local_server",
-                                  side_effect=OSError("port busy")), \
-                mock.patch.object(launcher, "stop_backend_launcher") as mkill, \
-                contextlib.redirect_stdout(io.StringIO()):
-            rc = launcher.main([])
-        self.assertEqual(rc, 1)
-        mkill.assert_called_once_with(proc)
+    def test_no_launcher_no_wait_navigates_immediately(self):
+        """启动器缺位（proc=None）且主程序未运行：跳过等待直接导航
+        （无人会拉起，等待无意义），窗口仍创建 + 打印受限提示。"""
+        rc, s, stdout = self._run_main(main_running=False, ready=False,
+                                       spawn_proc=None)
+        self.assertEqual(rc, 0)
+        self.assertIn("主程序未启动，聊天功能受限", stdout)
+        s.mwait.assert_not_called()                  # 无人拉起 → 不空等
+        s.window.load_url.assert_called_once_with(launcher.CONSOLE_URL)
+        s.fake_webview.create_window.assert_called_once()
 
     def test_main_not_running_hint_and_window_still_opens(self):
         """启动器缺位（proc=None）且 main.py 未运行：打印"主程序未启动，
@@ -435,57 +419,6 @@ class IsMainRunningTests(unittest.TestCase):
         mc.assert_called_once_with(("127.0.0.1", 5003), timeout=1.0)
 
 
-class LocalServerLifecycleTests(unittest.TestCase):
-    """真实内置服务（127.0.0.1 回环，离线）：绑定、HTTP 可达与关闭清理
-    （M4 机制零回退）。"""
-
-    def _free_port(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
-
-    def test_start_random_port_binds_loopback(self):
-        server, thread = launcher.start_local_server(None)
-        try:
-            self.assertGreater(server.server_port, 0)      # 随机分配了真实端口
-            self.assertEqual(server.server_address[0], "127.0.0.1")
-            self.assertTrue(thread.daemon)
-            self.assertTrue(thread.is_alive())
-        finally:
-            launcher.stop_local_server(server, thread)
-
-    def test_start_explicit_port(self):
-        port = self._free_port()
-        server, thread = launcher.start_local_server(port)
-        try:
-            self.assertEqual(server.server_port, port)
-        finally:
-            launcher.stop_local_server(server, thread)
-
-    def test_console_reachable_via_loopback_http(self):
-        """窗口加载形态冒烟：内置服务上 GET /console 经回环 HTTP 200 可达。"""
-        server, thread = launcher.start_local_server(None)
-        try:
-            url = f"http://127.0.0.1:{server.server_port}/console"
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                body = resp.read().decode("utf-8")
-            self.assertEqual(resp.status, 200)
-            self.assertIn("小橘3号", body)
-        finally:
-            launcher.stop_local_server(server, thread)
-
-    def test_stop_terminates_thread_and_releases_port(self):
-        """关闭清理冒烟：stop 后服务线程终止，端口 HTTP 请求失败（已释放）。"""
-        server, thread = launcher.start_local_server(None)
-        port = server.server_port
-        launcher.stop_local_server(server, thread)
-        self.assertFalse(thread.is_alive())   # serve_forever 循环已退出
-        time.sleep(0.3)                       # 等内核回收监听 socket
-        url = f"http://127.0.0.1:{port}/console"
-        with self.assertRaises(OSError):
-            urllib.request.urlopen(url, timeout=2)
-
-
 class StaticContractTests(unittest.TestCase):
     """静态断言（真窗口不自动化测试的补充）：离线红线与入口形态。"""
 
@@ -504,9 +437,11 @@ class StaticContractTests(unittest.TestCase):
         """入口形态：先拉后台服务 → create_window(1200x800) → start →
         __main__ 守卫。"""
         self.assertIn("ensure_backend_services()", self.src)
-        self.assertIn("webview.create_window(WINDOW_TITLE, url", self.src)
+        self.assertIn(
+            "webview.create_window(WINDOW_TITLE, html=PLACEHOLDER_HTML",
+            self.src)
         self.assertIn("width=WINDOW_WIDTH, height=WINDOW_HEIGHT", self.src)
-        self.assertIn("webview.start()", self.src)
+        self.assertIn("webview.start(_navigate_when_ready)", self.src)
         self.assertIn('if __name__ == "__main__":', self.src)
 
     def test_window_constants_user_spec(self):
@@ -518,8 +453,9 @@ class StaticContractTests(unittest.TestCase):
     def test_close_cleanup_in_finally(self):
         """关闭清理位于 finally：内置服务（M4）+ 后台启动器整树终止都兜底。"""
         self.assertIn("finally:", self.src)
-        self.assertIn("stop_local_server(server, thread)", self.src)
-        self.assertIn("stop_backend_launcher(launcher_proc)", self.src)
+        self.assertNotIn("stop_local_server", self.src)
+        self.assertIn('stop_backend_launcher(backend_state["proc"])', self.src)
+        self.assertIn("wait_for_dashboard_ready()", self.src)
 
     def test_launcher_spawn_shape(self):
         """主入口职责：subprocess Popen 拉起 xiaoju3_launcher.py；端口复用
@@ -535,10 +471,10 @@ class StaticContractTests(unittest.TestCase):
         self.assertIn("import webview", self.src)               # 函数内延迟导入
         self.assertIn("请先安装依赖后重试", self.src)
 
-    def test_pyinstaller_plan_marked_in_docstring(self):
-        """可选任务（文档标记，不实施）：pyinstaller 单 exe → 🔜 规划中。"""
+    def test_pyinstaller_plan_implemented(self):
+        """打包已实施（步 4）：spec 引用 + spawn-self 常量在源。"""
         self.assertIn("pyinstaller", self.src.lower())
-        self.assertIn("🔜 规划中", self.src)
+        self.assertIn("ROLE_LAUNCHER_FLAG", self.src)
 
 
 class TestSpawnSelfRouting(unittest.TestCase):
