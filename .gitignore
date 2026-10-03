@@ -1,6 +1,7 @@
 # 密钥与隐私（push.sh 四道扫描同样覆盖）
 # 敏感配置与运行数据统一隔离区（.env、身份、记忆、日志等），整目录不入仓库
 xiaoju3_data/
+Zcode/
 .env
 agent_state/identity.json
 agent_state/history_qq.json
