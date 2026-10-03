@@ -56,3 +56,4 @@ _dev/ha_check.py
 # PyInstaller 构建产物（步 4：spec 与 build_exe.bat 入库，产物留本地）
 build/
 dist/
+version_info.txt
