@@ -11,7 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-import xiaoju3
+import first_run  # noqa: E402  # A3 探针模块（复用 brain/_napcat_running/_headers）
+import xiaoju3  # noqa: E402
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -129,6 +130,131 @@ class SaveEnvFileTests(unittest.TestCase):
         两边任何一边增删键此测试必红，强制同步。"""
         example_keys = _parse_keys(os.path.join(PROJECT_ROOT, ".env.example"))
         self.assertEqual(xiaoju3.ENV_WRITE_ALLOWLIST, example_keys)
+
+
+class ProbeOllamaTests(unittest.TestCase):
+    """A3 探针①：本地大脑（复用 brain.probe_local，两态）。"""
+
+    def test_two_states(self):
+        with mock.patch.object(first_run.brain, "probe_local", return_value=True):
+            r = first_run._probe_ollama()
+        self.assertTrue(r["ok"])
+        self.assertIn("本地大脑在线", r["detail"])
+        with mock.patch.object(first_run.brain, "probe_local", return_value=False):
+            r = first_run._probe_ollama()
+        self.assertFalse(r["ok"])
+        self.assertIn("可稍后安装", r["detail"])
+
+
+class ProbeNapCatTests(unittest.TestCase):
+    """A3 探针②：NapCat（复用 _napcat_running，只检测不拉起）。"""
+
+    def test_two_states(self):
+        with mock.patch.object(first_run._xl, "_napcat_running", return_value=True):
+            r = first_run._probe_napcat()
+        self.assertTrue(r["ok"])
+        self.assertIn("已就绪", r["detail"])
+        with mock.patch.object(first_run._xl, "_napcat_running", return_value=False):
+            r = first_run._probe_napcat()
+        self.assertFalse(r["ok"])
+        self.assertIn("可稍后安装", r["detail"])
+
+
+class ProbeHaTests(unittest.TestCase):
+    """A3 探针③：Home Assistant（未配置=灰显可选项，在线/不可达两态）。"""
+
+    def test_unconfigured_is_optional_grey(self):
+        with mock.patch.object(first_run.home_tools, "HA_URL", ""):
+            r = first_run._probe_ha()
+        self.assertFalse(r["ok"])
+        self.assertIn("可选项", r["detail"])
+
+    def test_online_and_unreachable(self):
+        with mock.patch.object(first_run.home_tools, "HA_URL",
+                               "http://ha-test:8123"), \
+             mock.patch.object(first_run.home_tools, "_headers",
+                               return_value={"Authorization": "Bearer x"}), \
+             mock.patch.object(first_run.requests, "get") as get:
+            get.return_value = mock.MagicMock(status_code=200)
+            r = first_run._probe_ha()
+            self.assertTrue(r["ok"])
+            self.assertIn("心跳可用", r["detail"])
+            called_url = get.call_args[0][0]
+            self.assertEqual(called_url, "http://ha-test:8123/api/")
+            get.side_effect = OSError("net down")
+            self.assertFalse(first_run._probe_ha()["ok"])
+
+
+class ValidateDeepSeekKeyTests(unittest.TestCase):
+    """A3 探针④前置：DeepSeek key 本地格式校验（sk- 前缀 + 长度）。"""
+
+    def test_formats(self):
+        self.assertTrue(first_run.validate_deepseek_key("sk-" + "a" * 27))
+        self.assertFalse(first_run.validate_deepseek_key("wp-" + "a" * 27))   # 前缀
+        self.assertFalse(first_run.validate_deepseek_key("sk-short"))          # 太短
+        self.assertFalse(first_run.validate_deepseek_key(""))                  # 空
+        self.assertFalse(first_run.validate_deepseek_key(None))                # None
+
+
+class RunProbesTests(unittest.TestCase):
+    """A3 聚合：四探针并发执行、顺序固定、结果聚合带 name。"""
+
+    def test_aggregate_order_and_ok(self):
+        fake = {"ok": True, "detail": "d"}
+        patches = [mock.patch.object(first_run, attr, return_value=dict(fake))
+                   for attr in ("_probe_ollama", "_probe_napcat",
+                                "_probe_ha", "_probe_deepseek")]
+        with patches[0], patches[1], patches[2], patches[3]:
+            rs = first_run.run_probes()
+        self.assertEqual([r["name"] for r in rs],
+                         ["ollama", "napcat", "home_assistant", "deepseek"])
+        self.assertTrue(all(r["ok"] for r in rs))
+        self.assertTrue(all("detail" in r for r in rs))
+
+
+class FirstRunEndpointsTests(unittest.TestCase):
+    """A3 端点：/api/first_run/status 两态 + /api/first_run/probes 聚合。"""
+
+    def setUp(self):
+        import xiaoju3_dashboard as dashboard  # noqa: F401 延迟导入风格同路由
+        self.client = dashboard.app.test_client()
+
+    def test_status_and_probes(self):
+        with mock.patch.object(first_run, "is_first_run", return_value=True):
+            resp = self.client.get("/api/first_run/status")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        self.assertTrue(data["first_run"])
+        self.assertEqual(data["version"], "1.0.0")
+
+        with mock.patch.object(first_run, "is_first_run", return_value=False), \
+             mock.patch.object(first_run, "run_probes",
+                               return_value=[{"name": "ollama", "ok": True,
+                                              "detail": "d"}]):
+            resp = self.client.get("/api/first_run/probes")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        self.assertFalse(data["first_run"])
+        self.assertEqual(len(data["probes"]), 1)
+        self.assertEqual(data["probes"][0]["name"], "ollama")
+
+
+class IsFirstRunTests(unittest.TestCase):
+    """A3 判定：ENV_FILE 存在/不存在两态（单一事实源在文件）。"""
+
+    def test_file_two_states(self):
+        tmp = tempfile.mkdtemp(prefix="xj3_firstrun_")
+        try:
+            existing = os.path.join(tmp, "exists.env")
+            with open(existing, "w", encoding="utf-8") as f:
+                f.write("DEEPSEEK_API_KEY=x\n")
+            with mock.patch.object(first_run, "ENV_FILE", existing):
+                self.assertFalse(first_run.is_first_run())
+            missing = os.path.join(tmp, "missing.env")
+            with mock.patch.object(first_run, "ENV_FILE", missing):
+                self.assertTrue(first_run.is_first_run())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

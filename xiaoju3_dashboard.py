@@ -543,6 +543,27 @@ def api_status():
     })
 
 
+@app.route("/api/first_run/status")
+def api_first_run_status():
+    """首装判定（安装器方案步 A3）：ENV_FILE 不存在即 first_run。"""
+    from first_run import is_first_run  # 延迟导入：非引导场景依赖面零变化
+    return jsonify({
+        "code": 200,
+        "data": {"first_run": is_first_run(), "version": XIAOJU3_VERSION},
+    })
+
+
+@app.route("/api/first_run/probes")
+def api_first_run_probes():
+    """首装探针聚合（安装器方案步 A3）：四探针并行**只读**探测——
+    不写盘、不拉任何服务（NapCat 只检测不拉起），探针实现复用既有函数。"""
+    from first_run import is_first_run, run_probes  # 延迟导入同上
+    return jsonify({
+        "code": 200,
+        "data": {"first_run": is_first_run(), "probes": run_probes()},
+    })
+
+
 def _balance_fallback(error):
     """余额兜底结构：余额回退 0.0 并附错误提示（前端据此展示失败态）。"""
     return jsonify({
