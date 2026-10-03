@@ -81,3 +81,34 @@
 ## 六、最高风险子块判断：**UI 覆盖层（A4b）**
 
 理由：complete 后端是 A2 已验证函数的薄包装（风险=参数校验面小，且 OSError 语义已在 A2 锁死）；autostart 是全新但**纯函数式**的小模块（winreg 可 mock、平台守卫简单）。A4b 则要**在 1459 行 IIFE 里动刀**：覆盖层显隐与既有 `[hidden]` 兜底、加速球 `body.xiaoju3-minimized` 口径、2 秒轮询的交互时序都可能相互影响，且 **UI 行为不可离线单测**（只能静态锚 + 真机看）——视觉回归与脚本错误（改崩 console.js 全控制台瘫痪）的风险都在这块。缓解：overlay 全部逻辑收敛在独立三函数、不碰既有函数体；静态锚锁定 DOM 存在性；真机验收列冒烟项（首启弹层/跳过不再弹/完成关窗重开读新配置）。
+
+---
+
+## 七、A4b 实施设计（侦察后定稿，2026-10-03）
+
+### 7.1 侦察结论（动刀地形）
+- **启动序列**：console.js IIFE = 函数平铺 + 散布顶层立即执行（事件绑定、`initConsoleBall()`、尾部 `bindBallImgFallback()`），无统一 init 入口。**插入点：尾部 `bindBallImgFallback()` 之后、IIFE 收尾 `})()` 之前**——所有既有绑定完成后再弹引导，零干扰。
+- **[hidden] 约定**：`:61` 全局兜底 `[hidden]{display:none!important}`，`#terminal-pane`（:517）即现成先例——overlay 默认 `hidden` 同款。
+- **minimized 冲突**：`body.xiaoju3-minimized` 隐藏 sidebar/chat-area、显示加速球（fixed 层）。首装用户没缩过球，但防御一行：`showFirstRun()` 时若在最小化态先 `setConsoleMinimized(false)`（复用既有幂等函数，不改它）。
+- **2s 轮询**：`setInterval(fetchStatus, 2000)`（:320）句柄未存、暂停须改该行——**不暂停**：overlay 是全屏遮罩视觉隔离，底下状态条照常更新无害，且遵守"不碰既有函数体"铁律。
+- **POST 模式**：既有 `/api/chat` fetch 模式（Content-Type json → res.json() → code 判定 → throw res.error）照抄。
+
+### 7.2 三函数职责（全部新增，零触碰既有函数体）
+- `initFirstRun()`：`GET /api/first_run/status` → `first_run && !localStorage('xiaoju3_first_run_done')` 才继续；`GET /api/first_run/probes` 渲染亮灯 → `showFirstRun()`。任何网络失败静默放弃（引导层不弹，控制台照常用——降级兜底）。
+- `showFirstRun()`：最小化态先展开 → overlay 移除 hidden → 表单预填 LOCAL_URL 缺省。
+- `submitFirstRun(skip)`：skip=true → 不写盘，仅 `localStorage.setItem('xiaoju3_first_run_done','1')` + overlay 加回 hidden + toast「已跳过，可稍后编辑 xiaoju3_data\.env」；skip=false → 本地校验 DeepSeek key 格式（不合法红字拦截不发）→ `POST /api/first_run/complete`（env=5 键非空值 + autostart 勾选）→ 成功：toast + 弹「关闭窗口重新打开即生效」提示 + 「立即重启」按钮 `window.close()`（§3.4 生效机制）；失败（500/网络）：红字展示 res.error / catch 文案，overlay 不关（可重试）。
+
+### 7.3 DOM/CSS（index.html 一次加全）
+`<div id="first-run-overlay" hidden>` 全屏 fixed 遮罩（z-index 3000，高于球/卡片；背景半透明深色）内含引导卡片：标题、四探针灯行（`<ul id="first-run-probes">` 动态渲染 🟢/🟡/🔴 + detail）、5 键表单（DEEPSEEK_API_KEY password 框 / HA_URL / HA_TOKEN / LOCAL_URL 预填 `http://127.0.0.1:11434/api/chat` / USER_CITY）、自启 checkbox（默认勾选）、跳过/完成按钮、结果提示区。
+
+### 7.4 新增测试（静态锚，追加 tests/test_first_run.py）
+1. index.html 含 `id="first-run-overlay"` 且该 div **带 hidden 属性**（非引导零视觉变化锚）；
+2. 5 个 input 的 name/id 各自存在 + autostart checkbox 存在；
+3. console.js 含 `initFirstRun`、`submitFirstRun` 定义与启动序列调用；
+4. console.js **不含**对既有函数体行的改动锚（`setInterval(fetchStatus` 行原样存在）；
+5. overlay CSS 存在（z-index/position fixed 锚）。
+
+### 7.5 真机冒烟三项（A4b 验收标准）
+① 首启弹层：删掉测试机 `xiaoju3_data\.env` 启动 → overlay 自动弹、四探针亮灯正确；
+② 跳过不再弹：点跳过 → overlay 消失，重启程序 → 不再弹（storage 兜底）；
+③ 完成生效：填 key 提交 → toast + 重启提示 → 关窗重开 → `/api/first_run/status` 返回 `first_run:false`、`/api/status` tts_voice 等新配置生效、（勾选自启时）注册表 Run 键出现。
