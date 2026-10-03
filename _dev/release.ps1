@@ -25,6 +25,13 @@ function Fail([string]$msg) {
 }
 function Step([string]$msg) { Write-Host ""; Write-Host "▶ $msg" -ForegroundColor Cyan }
 
+# ===== 步骤 0：项目根定位（脚本位于 _dev/，项目根 = 上一级） =====
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+if (-not (Test-Path (Join-Path $ProjectRoot 'xiaoju3.py'))) {
+    Fail "项目根定位失败：$ProjectRoot 下没有 xiaoju3.py（脚本应位于 项目根\_dev\ 内）。"
+}
+Set-Location $ProjectRoot   # 脚本进程内切到项目根：git 命令与相对参数全程正确，进程退出自动还原
+
 # ===== 步骤 1：前置检查 =====
 Step "前置检查"
 if (-not ($NewVersion -match '^\d+\.\d+\.\d+$')) {
@@ -52,7 +59,7 @@ if ($remoteMain -ne $localMain) {
 
 # ===== 步骤 2：读当前版本号 + 发布确认 =====
 Step "版本号确认"
-$xjRaw = Get-Content xiaoju3.py -Raw
+$xjRaw = Get-Content (Join-Path $ProjectRoot 'xiaoju3.py') -Raw
 if (-not ($xjRaw -match 'XIAOJU3_VERSION = "([\d.]+)"')) {
     Fail "xiaoju3.py 中找不到 XIAOJU3_VERSION 定义。"
 }
@@ -78,9 +85,9 @@ if ($ans -ne 'y') { Fail "已取消（未做任何改动）。" }
 # ===== 步骤 3：升版本号（定义 1 处 + 测试锚 2 处，计数校验防锚漂移） =====
 Step "升版本号 $OldVersion → $NewVersion"
 $edits = @(
-    @{ File = 'xiaoju3.py';                Expect = 1 },
-    @{ File = 'tests\test_dashboard.py';   Expect = 1 },
-    @{ File = 'tests\test_first_run.py';   Expect = 1 }
+    @{ File = (Join-Path $ProjectRoot 'xiaoju3.py');              Expect = 1 },
+    @{ File = (Join-Path $ProjectRoot 'tests\test_dashboard.py'); Expect = 1 },
+    @{ File = (Join-Path $ProjectRoot 'tests\test_first_run.py'); Expect = 1 }
 )
 foreach ($e in $edits) {
     $content = Get-Content $e.File -Raw
@@ -95,13 +102,13 @@ foreach ($e in $edits) {
 
 # ===== 步骤 4：重建双产物 =====
 Step "build_exe.bat（重建 exe + setup）"
-& cmd /c build_exe.bat
+& (Join-Path $ProjectRoot 'build_exe.bat')   # bat 内部自带 cd /d 到项目根，产物落 dist/
 if ($LASTEXITCODE -ne 0) { Fail "build_exe.bat 失败——已停，未 commit（改动留在工作树，人工核查）。" }
-$setup = "dist\xiaoju3-$NewVersion-setup.exe"
+$setup = Join-Path $ProjectRoot "dist\xiaoju3-$NewVersion-setup.exe"
 if (-not (Test-Path $setup)) {
     Fail "未找到 $setup——setup 文件名未带新版本号（版本管线未生效？）。"
 }
-$vi = (Get-Item 'dist\xiaoju3.exe').VersionInfo
+$vi = (Get-Item (Join-Path $ProjectRoot 'dist\xiaoju3.exe')).VersionInfo
 if ($vi.FileVersion -ne $NewVersion) {
     Fail "exe FileVersion=$($vi.FileVersion) ≠ $NewVersion——版本管线未生效，已停。"
 }
@@ -135,9 +142,11 @@ if ($LASTEXITCODE -ne 0) {
 # ===== 步骤 8：gh release create（挂双附件） =====
 Step "gh release create v$NewVersion"
 if (-not $Notes) { $Notes = "修复与改进若干，详见 commit 历史。" }
+$setupAsset = Join-Path $ProjectRoot "dist\xiaoju3-$NewVersion-setup.exe"
+$exeAsset = Join-Path $ProjectRoot 'dist\xiaoju3.exe'
 gh release create "v$NewVersion" `
-    "dist\xiaoju3-$NewVersion-setup.exe#Windows 安装包" `
-    "dist\xiaoju3.exe#Windows 便携版" `
+    "$setupAsset#Windows 安装包" `
+    "$exeAsset#Windows 便携版" `
     --title "小橘3号 v$NewVersion" `
     --notes $Notes
 if ($LASTEXITCODE -ne 0) {
