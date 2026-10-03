@@ -162,3 +162,14 @@ WizardWasCreated 旗守卫、InitializeSetup 禁建页/禁 Wizard* 红线、CRLF
 4. 重试上限：自检页出现前无长时间停顿（≤5 秒预算，人工感知核对）。
 
 **编译通过 ≠ 真机跑得动——本节验收只认真机自检页显示。**
+
+### 8.7 已知遗留（归 1.1）：显卡行偶发「无法预判」
+
+> 2026-10-03 §8 修复版真机验收：内存 15GB ✓、磁盘约 6GB ✓（GetSpaceOnDisk64 生效），**显卡行仍「无法预判」**。
+
+- **现象**：真机自检页显卡行「无法预判」（同轮内存/磁盘均出真实值）。
+- **已排除**：非多显卡处理 bug——SWbemLocator late-bound 复现实验（与安装器完全相同的 COM 路径：ConnectServer → ExecQuery → ItemIndex(0).Properties['Name'].Value）**成功**：COUNT=3（GameViewer Virtual Display Adapter / AMD Radeon 780M / RTX 4060 Laptop GPU）、三条 Name 全非空、ConfigManagerErrorCode 全 0——查询链路在正常时刻无恙。
+- **定性**：安装瞬间 WMI 时序抖动恰好落在显卡查询上，§8 重试窗口（3 尝试 + Sleep(400)×2 ≈ 1-2s）未盖住。
+- **决策（用户拍板）**：归 1.1，本轮不修——分档仅供参考，真档位归程序内 hardware_profiler 首启复测；**不为次要信息牺牲所有用户的安装延迟**（显卡备用方案会拉长最坏路径或引入 DLL/注册表复杂度）。
+- **修法方向（1.1 备选，未实现）**：拉长显卡重试预算（单独 MAX_WMI_ATTEMPTS/间隔）/ 注册表枚举备用（显示适配器类 `{4d36e968-e325-11ce-bfc1-08002be10318}` 的 DriverDesc）。
+- **现状可接受性**：显卡信息仅用于 Dedicated 判定与自检页展示；无法预判时走「无法预判」文案，不影响安装与运行。
