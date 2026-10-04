@@ -185,20 +185,32 @@
             padding: 2px 4px; border-radius: 4px; cursor: pointer;
         }
         .todo-pr:hover { color: var(--color-primary); }
-        .todo-pr.active { background: var(--color-primary); border-color: var(--color-primary); color: #ffffff; }
+        /* 尾巴 C 扩展：优先级下拉选择器（编辑态）+ 只读徽标（锁定态） */
+        .todo-pr-select {
+            font-size: 11px; line-height: 1; padding: 2px 2px; border-radius: 4px;
+            border: 1px solid var(--color-border); background: var(--color-card);
+            color: var(--color-primary); cursor: pointer; flex: none;
+        }
+        .todo-pr-badge {
+            font-size: 10px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+            background: var(--color-progress-track); color: var(--color-text-hint); flex: none;
+        }
         /* 尾巴 F：优先级编辑模式——默认锁定（灰显禁用），点 ⚙️ 切换 */
         .todo-pr:disabled { opacity: 0.45; cursor: default; }
         .todo-pr:disabled:hover { color: var(--color-text-hint); }
         .todos-gear { cursor: pointer; margin-left: 4px; color: var(--color-text-hint); }
         .todos-gear:hover { opacity: 0.75; }
         .todos-gear.editing { color: #f59e0b; }   /* 编辑中：橙色高亮（尾巴 F2） */
-        /* 尾巴 C 精确版：分区标题行（── Px ──），空分区整段不渲染 */
+        /* 尾巴 C 精确版：分区标题行（── Px ──），空分区整段不渲染；
+           尾巴 I：标题可点击折叠/展开（箭头+条数） */
         .todo-group-title {
             font-size: 11px; font-weight: 600; color: var(--color-text-hint);
             letter-spacing: 1px; text-align: center;
             padding: 4px 0 2px; margin-top: 2px;
             border-top: 1px dashed var(--color-border);
+            cursor: pointer; user-select: none;
         }
+        .todo-group-title:hover { color: var(--color-primary); }
         .todo-group-title:first-child { border-top: none; margin-top: 0; }
         .todos-list li.todos-empty { color: var(--color-text-hint); cursor: default; font-size: 12px; padding: 3px 4px; }
         .todos-job { font-size: 12px; color: var(--color-text-hint); margin-top: 4px; }
