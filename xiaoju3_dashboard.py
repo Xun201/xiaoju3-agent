@@ -65,6 +65,7 @@ import time
 
 import main  # QQ 接入层业务逻辑模块（架构合并：webhook 业务体宿主于此进程）
 import paths  # 双根路径锚（方案 §1）：资源根=静态托管基准，非 frozen 与项目根同值
+import vision_tools  # 仅用 preheat_openai_async（拍板①）；随 main→tools 链已加载，零额外开销
 import psutil
 import requests
 from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
@@ -932,6 +933,12 @@ def serve():
     # 💓 心跳 + 多设备互相守望（原 main.py __main__ 启动点，随架构合并移交
     # 本进程拉起：start_heartbeat daemon 线程 + PeerWatch（默认关闭））
     main.start_background_services()
+
+    # 🚀 openai SDK 后台预热（2026-10-04 启动优化拍板①）：vision_tools 顶层
+    # 已惰性化（openai 链 ≈0.6s 移出启动路径），服务就绪后 daemon 线程延迟
+    # 补载——用户真用到视觉回退点击时 SDK 已就绪；预热完成前就调用的罕见
+    # 场景由 vision_tap_element 入口 _ensure_openai 同步导入兜底
+    vision_tools.preheat_openai_async()
 
     app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False)
 

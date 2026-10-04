@@ -42,7 +42,14 @@
 
 ## 二、延迟加载设计（核心：vision_tools 单点 636ms）
 
-### 2.1 vision_tools 延迟导入（主推）
+### 2.1 vision_tools 延迟导入（主推）——✅ 已拍板（2026-10-04）
+
+> **拍板结果**：做，且增强为「延迟导入 + 后台预热」——启动路径零 openai；
+> 主界面就绪后（dashboard serve() 内 app.run 前）daemon 线程延迟
+> OPENAI_PREHEAT_DELAY=5.0s 调 `_ensure_openai()` 预热，用户真用到视觉
+> 回退点击时 SDK 已就绪；预热完成前就调用的罕见场景由入口同步导入兜底
+> （最多卡 ≈0.6s）。已实施：vision_tools.py（惰性导入 + preheat_openai_async）
+> + xiaoju3_dashboard.py serve() 挂钩 + 子进程锚等 6 测试。
 
 - **现状**：vision_tools.py:163-166 顶层 `try: from openai import OpenAI ... except ImportError`——注释自称"延迟可用性检查"，实际**只防缺库不延迟时机**：openai（609ms）+ 依赖链（aiohttp ≈100ms、pydantic_core 等）在模块 import 时全量执行。
 - **策略**：**首次真实调用时导入**（惰性导入 + 模块级缓存哨兵）：
