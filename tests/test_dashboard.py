@@ -463,6 +463,32 @@ class ChatApiTests(HistoryApiTestsBase):
         self.assertEqual(resp.status_code, 200)
         ms.assert_called_once_with("在吗", [])
 
+    def test_console_help_returns_menu_not_llm(self):
+        """控制台 /help 接线（2026-10-04）：命中菜单别名 → 返回 help_menu
+        渲染（含"指令菜单"标题、source=⚙️ 系统），绝不落 smart_ask
+        （修复"/help 落 LLM"——api_chat 此前从未接线 help_menu，
+        QQ 通道 main.py:774 一直正常）。"""
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            resp = self.client.post("/api/chat", json={"message": "/help"})
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        self.assertIn("指令菜单", payload["data"]["reply"])
+        self.assertEqual(payload["data"]["source"], "⚙️ 系统")
+        ms.assert_not_called()
+
+    def test_console_help_aliases_share_menu(self):
+        """别名（菜单/帮助/指令）同走菜单；每个别名都不得触达 LLM。"""
+        for word in ("菜单", "帮助", "指令"):
+            with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+                resp = self.client.post("/api/chat", json={"message": word})
+
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.get_json()["data"]["source"], "⚙️ 系统")
+            self.assertIn("指令菜单", resp.get_json()["data"]["reply"])
+            ms.assert_not_called()
+
     def test_chat_empty_message_rejected(self):
         """空消息：业务码 400 + 中文错误提示（参考口径：HTTP 200、body 携带 code）。"""
         with _quiet():

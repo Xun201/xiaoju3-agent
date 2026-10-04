@@ -794,6 +794,20 @@ def api_chat():
                          "source": "⚙️ 指令"}
             })
 
+        # === 🛡️ 指令菜单（2026-10-04 控制台接线，修"/help 落 LLM"：api_chat
+        #     此前只接位置/儿童锁/creator/待办四类拦截，/help 从未接线 →
+        #     落 smart_ask 走 LLM；QQ 通道 main.py:774 一直正常）。别名与
+        #     main 同款；等级取全局（控制台视为成人设备口径，同 child 块）；
+        #     菜单经 sanitize_for_web 与同级拦截块同口径 ===
+        if user_msg.strip() in ("/help", "菜单", "帮助", "指令"):
+            from plugins.help_menu import get_help_menu
+            menu = get_help_menu(main.permission_manager.current_level)
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(menu),
+                         "source": "⚙️ 系统"}
+            })
+
         history = data.get("history") or []
         print(f"[香橙派收到消息] {user_msg}")
         reply, source = smart_ask(user_msg, history)
