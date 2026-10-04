@@ -266,6 +266,28 @@
     }
 
     // ==================== 1. 定时请求后端系统状态（2 秒轮询） ====================
+
+    // ==================== 1a. 进度条三档变色（尾巴 H） ====================
+    // CPU 与内存各自独立判定同一套阈值：<60 绿 / 60–85 黄 / >85 红。
+    // 阈值集中常量，后续调整只改这里；颜色同步落在 .bar-* 类与内联样式。
+    const BAR_THRESHOLDS = { mid: 60, high: 85 };
+    const BAR_COLORS = { low: '#2fa24c', mid: '#eab308', high: '#e0433f' };
+
+    function barLevel(percent) {
+        if (percent > BAR_THRESHOLDS.high) return 'high';
+        if (percent >= BAR_THRESHOLDS.mid) return 'mid';
+        return 'low';
+    }
+
+    function applyBar(barEl, percent) {
+        if (!barEl) return;
+        const level = barLevel(Math.max(0, Math.min(100, Number(percent) || 0)));
+        barEl.style.width = percent + '%';
+        barEl.style.backgroundColor = BAR_COLORS[level];
+        barEl.classList.remove('bar-low', 'bar-mid', 'bar-high');
+        barEl.classList.add('bar-' + level);
+    }
+
     function fetchStatus() {
         fetch('/api/status')
             .then(res => res.json())
@@ -282,18 +304,14 @@
                     const cpuBar = document.getElementById('cpu-bar');
                     if (cpuText && cpuBar) {
                         cpuText.textContent = d.cpu + '%';
-                        cpuBar.style.width = d.cpu + '%';
-                        // CPU 超过 80%：进度条由绿变红
-                        cpuBar.style.backgroundColor = d.cpu > 80 ? '#e0433f' : '#2fa24c';
+                        applyBar(cpuBar, d.cpu);   // 尾巴 H：三档变色
                     }
 
                     const memText = document.getElementById('mem-text');
                     const memBar = document.getElementById('mem-bar');
                     if (memText && memBar) {
                         memText.textContent = d.memory + '%';
-                        memBar.style.width = d.memory + '%';
-                        // 内存超过 80%：进度条由绿变红
-                        memBar.style.backgroundColor = d.memory > 80 ? '#e0433f' : '#2fa24c';
+                        applyBar(memBar, d.memory);   // 尾巴 H：内存独立三档变色
                     }
 
                     const tempText = document.getElementById('temp-text');
@@ -318,6 +336,8 @@
 
     fetchStatus();
     setInterval(fetchStatus, 2000);
+
+
 
     // ==================== 1b. 待办卡片（2026-10-04 待办提取，设计稿 §6） ====================
     // 数据=GET /api/todos；30 秒低频轮询（待办非实时数据）+ 标完成后即时刷新；
