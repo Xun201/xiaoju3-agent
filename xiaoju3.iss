@@ -50,12 +50,14 @@ Filename: "{app}\xiaoju3.exe"; Description: "立即启动小橘3号"; Flags: now
 Name: "{app}\xiaoju3_data"
 
 [Types]
-Name: "custom"; Description: "自定义选择（三项均可跳过，后续在程序内配置）"
+Name: "lite"; Description: "轻量版（默认仅 QQ 接入，云端优先）"
+Name: "full"; Description: "完整版（QQ 接入 + 本地 Ollama + HA 心跳）"
+Name: "custom"; Description: "自定义（三项均可跳过，逐项勾选；后续也可在程序内配置）"; Flags: iscustom
 
 [Components]
-Name: "ollama"; Description: "计划使用本地 Ollama（推荐完整版路线，需自行安装 Ollama 与模型）"; Types: custom
-Name: "napcat"; Description: "计划接入 QQ（NapCat / LLOneBot，仓库内 setup_napcat.bat 可一键装配）"; Types: custom
-Name: "ha"; Description: "计划接入 Home Assistant 主动服务心跳（需另配 HA_URL/HA_TOKEN）"; Types: custom
+Name: "ollama"; Description: "计划使用本地 Ollama（推荐完整版路线，需自行安装 Ollama 与模型）"; Types: full custom
+Name: "napcat"; Description: "计划接入 QQ（NapCat / LLOneBot，仓库内 setup_napcat.bat 可一键装配）"; Types: lite full custom
+Name: "ha"; Description: "计划接入 Home Assistant 主动服务心跳（需另配 HA_URL/HA_TOKEN）"; Types: full custom
 
 [UninstallDelete]
 ; 故意留空——卸载默认保留用户数据（数据目录由程序首启生成，卸载不清）：
@@ -72,6 +74,7 @@ var
   SelfCheckBody: String;
   WizardWasCreated: Boolean;
   WmiUnavailable: Boolean;   { 全局预算闸：任一指标重试耗尽即置位，后续 WMI 查询快速失败（§8.1） }
+  PurgeUserData: Boolean;   { B5 卸载数据问询结果：True=彻底删除；默认 False=保数据（问询默认焦点「否」） }
 
 type
   TMemoryStatusEx = record
@@ -217,12 +220,6 @@ begin
     '硬件自检', '检测结果仅用于推荐安装形态', SelfCheckBody).ID;
 end;
 
-procedure CurPageChanged(CurPageID: Integer);
-begin
-  if CurPageID = wpWelcome then
-    WizardSelectComponents('napcat');   { 默认不勾：ollama/ha 可选项，napcat 保持默认勾选 }
-end;
-
 procedure DeinitializeSetup();
 var
   Report: String;
@@ -245,5 +242,46 @@ begin
                      Report, False);
   except
     { 静默跳过：不写文件、不建目录、绝不调 ExpandConstant（那正是炸点） }
+  end;
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  { B5 卸载数据问询（设计稿 §2.3）：MB_DEFBUTTON2 让「否」成为默认焦点——
+    默认保数据铁律在 UI 层锁死；本问询只决定数据去留，恒续卸载不中止 }
+  PurgeUserData := MsgBox('是否同时删除小橘3号的用户数据？' + #13#10 + #13#10 +
+      '选择「否」（推荐）：数据保留在安装目录的 xiaoju3_data 与 agent_state，重装后可无缝接续。' + #13#10 +
+      '选择「是」：配置、身份记忆、日志将被彻底清除，不可恢复。',
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+  Result := True;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  case CurUninstallStep of
+    usUninstall:
+      if PurgeUserData then
+      begin
+        try
+          { 白名单：只许这两个数据目录，禁删安装目录本体（卸载器自身仍在运行）；
+            DelTree 6.7.3 签名 (Path, IsDir, DeleteFiles, DeleteSubdirsAlso): Boolean }
+          DelTree(ExpandConstant('{app}') + chr(92) + 'xiaoju3_data', True, True, True);
+          DelTree(ExpandConstant('{app}') + chr(92) + 'agent_state', True, True, True);
+        except
+          { 删除失败=静默保留（安全向）；完成页按 DirExists 实况如实提示，不谎报 }
+        end;
+      end;
+    usPostUninstall:
+      begin
+        { 完成页提示（§11 遗留②）：口径读目录实况、不读旗标——半删失败态也如实报保留 }
+        if (not DirExists(ExpandConstant('{app}') + chr(92) + 'xiaoju3_data')) and
+           (not DirExists(ExpandConstant('{app}') + chr(92) + 'agent_state')) then
+          MsgBox('用户数据已彻底删除（xiaoju3_data 与 agent_state）。', mbInformation, MB_OK)
+        else
+          MsgBox('用户数据保留于：' + #13#10 +
+              ExpandConstant('{app}') + chr(92) + 'xiaoju3_data（配置 / 日志 / 安装报告）' + #13#10 +
+              ExpandConstant('{app}') + chr(92) + 'agent_state（身份记忆）' + #13#10 + #13#10 +
+              '重新安装小橘3号后可无缝接续。', mbInformation, MB_OK);
+      end;
   end;
 end;

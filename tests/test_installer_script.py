@@ -43,6 +43,15 @@ def _strip_pascal_comments(text):
     return re.sub(r"\{[^}]*\}", "", text)
 
 
+def _section(text, name):
+    """切任意 [Section] 段：段头行起，至下一段头（不含）或文件尾。"""
+    lines = text.splitlines()
+    start = next(i for i, l in enumerate(lines) if l.strip() == name)
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].startswith("[")), len(lines))
+    return "\n".join(lines[start:end])
+
+
 class InstallerScriptAnchorTests(unittest.TestCase):
     """B3 修复七锚（对应设计稿 §6，锚序一致）+ 报告红线加码锁。"""
 
@@ -161,6 +170,132 @@ class InstallerScriptAnchorTests(unittest.TestCase):
         self.assertNotIn("ExpandConstant", except_seg)
         self.assertNotIn("ForceDirectories", except_seg)
         self.assertNotIn("SaveStringToFile", except_seg)
+
+
+class InstallerB5AnchorTests(unittest.TestCase):
+    """B5 三项收尾锚（docs/INSTALLER_STEP_B5_DESIGN.md §1.5/§2.5/§3.3）：
+    组件页三类型 + iscustom、卸载数据问询默认否、DelTree 白名单、
+    完成页实况口径、[UninstallDelete] 恒空红线、CurPageChanged 硬编码退役。
+    静态锚只防回退，真机行为归 B5 装卸演练。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.full = _read_iss_bytes().decode("utf-8-sig")
+        cls.code = _code_section(cls.full)
+
+    def test_b5_types_three_types_iscustom_once(self):
+        """锚 B5-1：[Types] 恰三类型且恰一处 Flags: iscustom（官方：仅一
+        类型可挂此 flag；根因即 B2 版漏挂导致锁死手动勾改）；三组件绑定
+        齐——napcat 三类型全占，ollama/ha 不进 lite（轻量版=仅 QQ 接入，
+        与自检页分档叙事对齐）。"""
+        types = _strip_pascal_comments(_section(self.full, "[Types]"))
+        self.assertEqual(types.count("Flags: iscustom"), 1)
+        for name in ("lite", "full", "custom"):
+            self.assertIn(f'Name: "{name}";', types)
+        comps = _strip_pascal_comments(_section(self.full, "[Components]"))
+        self.assertIn(
+            'Name: "napcat"; Description: "计划接入 QQ（NapCat / LLOneBot，'
+            '仓库内 setup_napcat.bat 可一键装配）"; Types: lite full custom',
+            comps)
+        self.assertIn(
+            'Name: "ollama"; Description: "计划使用本地 Ollama（推荐完整版路线，'
+            '需自行安装 Ollama 与模型）"; Types: full custom',
+            comps)
+        self.assertIn(
+            'Name: "ha"; Description: "计划接入 Home Assistant 主动服务心跳'
+            '（需另配 HA_URL/HA_TOKEN）"; Types: full custom',
+            comps)
+
+    def test_b5_curpagechanged_hardcode_retired(self):
+        """锚 B5-2（联动点拍板）：WizardSelectComponents('napcat') 硬编码
+        退役、CurPageChanged 整钩子移除——默认勾选改由首类型 lite 预设决定
+        （硬编码与类型预设打架：勾选态一致但下拉显示可能跳"自定义"）。
+        升级场景不受影响：注册表 Selected Components 恢复独立于本钩子
+        （B3b 实测）。剥注释后断言，注释文档字面量不作数。"""
+        bare = _strip_pascal_comments(self.code)
+        self.assertNotIn("WizardSelectComponents", bare)
+        self.assertNotIn("CurPageChanged", bare)
+
+    def test_b5_uninstalldelete_remains_empty(self):
+        """锚 B5-3（红线）：[UninstallDelete] 恒空——滤 ; 行注释（ini 风格）
+        与 { } 注释后零实质行，卸载默认保数据语义不得经此段回流（彻底删除
+        只走运行时白名单）。"""
+        sect = _section(self.full, "[UninstallDelete]")
+        code_lines = [
+            l for l in sect.splitlines()
+            if l.strip() and not l.strip().startswith(";")
+            and not _strip_pascal_comments(l).strip()
+        ]
+        self.assertEqual(code_lines, [])
+
+    def test_b5_uninstall_hooks_exist(self):
+        """锚 B5-4：卸载双钩子在位（官方 UninstallCodeExample1 同款问询位
+        与两阶段步进；6.7.3 TUninstallStep=usAppMutexCheck/usUninstall/
+        usPostUninstall/usDone 四值）。"""
+        self.assertIn("function InitializeUninstall(): Boolean;", self.code)
+        self.assertIn(
+            "procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);",
+            self.code)
+
+    def test_b5_initializeuninstall_default_no(self):
+        """锚 B5-5：问询默认焦点「否」——MB_YESNO or MB_DEFBUTTON2（官方
+        MsgBox 文档示例同款 defaulting to No），旗标赋值 + 恒续卸载不中止
+        （Result := True）。"""
+        body = _strip_pascal_comments(
+            _func_body(self.code, "function InitializeUninstall(): Boolean;"))
+        self.assertIn("PurgeUserData :=", body)
+        self.assertIn("MB_YESNO or MB_DEFBUTTON2", body)
+        self.assertIn("Result := True;", body)
+
+    def test_b5_purge_flag_declared(self):
+        """锚 B5-6：全局旗标声明（卸载侧唯一状态，安装侧钩子零依赖）。"""
+        self.assertIn("PurgeUserData: Boolean;", self.code)
+
+    def test_b5_deltree_whitelist_only(self):
+        """锚 B5-7（白名单 + 反向）：DelTree 恰两处、各删一个白名单数据
+        目录；反向锚禁裸 {app} 整树删除（卸载器自身仍在运行）。
+        【注】断言打在原始函数体——_strip_pascal_comments 的 { } 正则会把
+        ExpandConstant('{app}') 里的常量也当注释剥掉（本次实测踩坑）；能
+        打原始面是因为卸载钩子注释不含 DelTree( / DirExists( 带括号字样。"""
+        body = _func_body(
+            self.code, "procedure CurUninstallStepChanged(")
+        self.assertEqual(body.count("DelTree("), 2)
+        self.assertIn(
+            "DelTree(ExpandConstant('{app}') + chr(92) + 'xiaoju3_data'", body)
+        self.assertIn(
+            "DelTree(ExpandConstant('{app}') + chr(92) + 'agent_state'", body)
+        self.assertNotIn("DelTree(ExpandConstant('{app}'),", body)
+        self.assertNotIn("DelTree(ExpandConstant('{app}');", body)
+
+    def test_b5_purge_gated_by_flag(self):
+        """锚 B5-8：删除动作唯一入口 = usUninstall 分支内 if PurgeUserData
+        （旗标不置位绝不触碰数据目录；两处 DelTree 均在门后）。"""
+        body = _strip_pascal_comments(
+            _func_body(self.code, "procedure CurUninstallStepChanged("))
+        gate = body.index("usUninstall:")
+        flag = body.index("if PurgeUserData then", gate)
+        first_tree = body.index("DelTree(", gate)
+        second_tree = body.index("DelTree(", first_tree + 1)
+        self.assertLess(flag, first_tree)
+        self.assertLess(flag, second_tree)
+        self.assertEqual(body.count("DelTree("), 2)
+
+    def test_b5_uspostuninstall_reality_check(self):
+        """锚 B5-9（完成页实况口径，§11 遗留②）：DirExists 两连判定决定
+        文案——读目录实况、不读旗标，半删失败态如实报保留；两态文案关键词
+        齐（已彻底删除 / 保留于 / 无缝接续 / 两目录名）。实况判定只许在
+        usPostUninstall 阶段出现。"""
+        body = _strip_pascal_comments(
+            _func_body(self.code, "procedure CurUninstallStepChanged("))
+        post_idx = body.index("usPostUninstall:")
+        post = body[post_idx:]
+        self.assertEqual(post.count("DirExists("), 2)
+        self.assertIn("用户数据已彻底删除", post)
+        self.assertIn("用户数据保留于", post)
+        self.assertIn("无缝接续", post)
+        self.assertIn("'xiaoju3_data'", post)
+        self.assertIn("'agent_state'", post)
+        self.assertNotIn("DirExists(", body[:post_idx])
 
 
 if __name__ == "__main__":
