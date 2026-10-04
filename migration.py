@@ -81,8 +81,9 @@ def _soul_targets(base_dir):
     targets = []
     if not os.path.isdir(base_dir):
         return targets
-    # 固定清单：身份 / 长期记忆库 / 表情链接
-    for name in ("identity.json", "long_term.db", "emoji_links.json"):
+    # 固定清单：身份 / 长期记忆库 / 待办库（2026-10-04 拆库）/ 表情链接
+    for name in ("identity.json", "long_term.db", "todos.db",
+                 "emoji_links.json"):
         if os.path.isfile(os.path.join(base_dir, name)):
             targets.append(name)
     # 双通道会话记忆：history_*.json

@@ -943,86 +943,6 @@ def api_tts():
     return Response(audio, mimetype="audio/mpeg")
 
 
-def _sync_todos_from_source(target_db=None):
-    """待办单向同步（2026-10-04 拍板方案 A，测试版为主）：把
-    XIAOJU3_TODO_SYNC_SOURCE 指向的源库 todos 整表覆盖到本库——
-    serve() 起始处（bind 前、请求未到）调用一次。
-
-    规则：
-    - 未设环境变量 / 源库不存在 → 静默跳过（返回原因，不报错）；
-    - 源库 mtime 与水位文件（.todo_sync_watermark，与目标库同目录）
-      记录一致 → 跳过（省无谓写）；
-    - 单事务覆盖：DELETE 本库 todos 全部 → 按列名 INSERT 源库全部行
-      （两库列序不同——测试库 priority 为旧版 ALTER 追加在末尾——
-      严禁按位置取列；含 id 保号，后续自增取 max+1 不冲突）；
-    - busy_timeout=5000ms，整轮最多尝试 3 次（SQLITE_BUSY 竞态）；
-    - 任何失败：单事务回滚保持目标原状，不抛出——返回 ❌ 串进日志，
-      水位不推进，下次启动自动补同步。
-    返回状态串（仅供启动日志）。target_db 供测试注入临时库。
-    """
-    source = os.environ.get("XIAOJU3_TODO_SYNC_SOURCE", "").strip()
-    if not source:
-        return "skip: XIAOJU3_TODO_SYNC_SOURCE 未设置（本实例不做待办同步）"
-    if not os.path.exists(source):
-        return "skip: 待办源库不存在 " + source
-    target = target_db or state_manager.memory_db
-    try:
-        source_mtime = os.path.getmtime(source)
-    except OSError as e:
-        return f"❌ 待办同步失败（源库 mtime 不可读）: {e}"
-    watermark_file = os.path.join(os.path.dirname(target),
-                                  ".todo_sync_watermark")
-    if os.path.exists(watermark_file):
-        try:
-            with open(watermark_file, "r", encoding="utf-8") as f:
-                if f.read().split("|")[0].strip() == str(source_mtime):
-                    return "skip: 源库未变化（水位一致）"
-        except (OSError, IndexError):
-            pass
-    try:
-        src_conn = sqlite3.connect(source)
-        try:
-            src_conn.row_factory = sqlite3.Row
-            rows = src_conn.execute(
-                "SELECT id, content, source_url, status, created_at,"
-                " done_at, priority FROM todos ORDER BY id").fetchall()
-        finally:
-            src_conn.close()
-        last_error = None
-        for _attempt in range(3):
-            conn = sqlite3.connect(target, timeout=5.0)
-            try:
-                conn.execute("PRAGMA busy_timeout = 5000")
-                conn.execute("DELETE FROM todos")
-                conn.executemany(
-                    "INSERT INTO todos (id, content, source_url, status,"
-                    " created_at, done_at, priority)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [tuple(r) for r in rows])
-                conn.commit()
-                last_error = None
-                break
-            except sqlite3.Error as e:
-                try:
-                    conn.rollback()
-                except sqlite3.Error:
-                    pass
-                last_error = e
-                time.sleep(0.5)
-            finally:
-                conn.close()
-        if last_error is not None:
-            return (f"❌ 待办同步失败（目标保持原状，下次启动重试）: "
-                    f"{last_error}")
-        count = len(rows)
-        with open(watermark_file, "w", encoding="utf-8") as f:
-            f.write(f"{source_mtime}|{count}|"
-                    f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
-        return f"ok: 已同步 {count} 条待办（源: {source}）"
-    except Exception as e:
-        return f"❌ 待办同步失败（目标保持原状，下次启动重试）: {e}"
-
-
 def _console_slash_intercept(user_msg):
     """控制台斜杠指令拦截（C' 第一批，2026-10-04）：main 分发块
     （main.py:739-883）的控制台复用适配层——只调用 main 既有函数与
@@ -1154,14 +1074,10 @@ def serve():
     print("🔌 QQ 接入层已并入本进程（5002 端口废弃）：webhook 地址 "
           "http://127.0.0.1:5003/onebot，请同步修改 LLOneBot 的 HTTP 上报地址")
 
-    # 🔄 待办单向同步（2026-10-04 拍板，方案 A）：测试版为主、启动时单向
-    # 覆盖本库 todos——源库经 XIAOJU3_TODO_SYNC_SOURCE 指定（仅正式版
-    # .env 设置；测试版不设 → 天然跳过）。bind 前执行，请求未到零竞态；
-    # 水位防重复（源库 mtime 未变不重写），失败回滚不抛出。
-    print("[待办同步] " + _sync_todos_from_source())
-
     # 💓 心跳 + 多设备互相守望（原 main.py __main__ 启动点，随架构合并移交
     # 本进程拉起：start_heartbeat daemon 线程 + PeerWatch（默认关闭））
+    # （待办单向同步已随拆库退役：XIAOJU3_TODOS_DB_PATH 共用 todos.db，
+    # 两版读写同一个库，无需同步——2026-10-04 拆库批次）
     main.start_background_services()
 
     # 🚀 openai SDK 后台预热（2026-10-04 启动优化拍板①）：vision_tools 顶层
