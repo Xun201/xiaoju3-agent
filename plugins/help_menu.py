@@ -1,67 +1,113 @@
 # -*- coding: utf-8 -*-
-"""插件：帮助菜单（按权限等级渲染指令菜单）。
+"""插件：帮助菜单（分类展示所有可用指令，含等级门禁标注）。
 
-2026-10-02 权限重构定稿口径：Lv.1 游客 / Lv.2 普通用户（/register 密码
-注册：写文件/列目录）/ Lv.3 代码编写者（/coder_auth TOTP 激活：改代码/
-管理插件/安全家居六类 domain）/ Lv.4 主人级（/lv4_auth 授权级 TOTP：
-危险设备/ADB 全套/发图/restart_service/装卸组件/核心记忆，授权后操作
-不再逐次验证；儿童锁开启时危险家电需在线成人确认）。
-继承语义：等级数值 ≥ 所需等级即展示对应菜单段（Lv.4 可见全部）。
+2026-10-04 分类化改版（用户需求：/help 分类展示所有可用指令）：
+- 组织方式从"按等级分段"改为"按功能分类"（对话直达/待办/权限/记忆/
+  系统/主人级/智能家居），每条指令带【最低等级】标注；
+- 可见性沿用 2026-10-02 口径（tests/test_main.py 既有锚锁定）：低等级
+  不出现高等级段（Lv.2 菜单无"主人级"字样）；/sudo 为兼容保留指令、
+  不进菜单（完整清单见 docs/COMMANDS_REFERENCE.md）；
+- 未达等级以底部"升级指引"一行带过：/register → /coder_auth →
+  /lv4_auth 三级通道自解释。
+
+消费方：main.py（QQ 指令分发，"菜单/帮助/指令"同别名）、xiaoju3.py
+（CLI 兜底同源）——get_help_menu(current_level) 签名不变；插件缺席时
+两处各有内置兜底菜单。
 """
 
 # 等级序数值（与 permission.LEVEL_ORDER 同口径；此处本地定义避免反向依赖）
 _LEVEL_ORDER = {"Lv.1": 1, "Lv.2": 2, "Lv.3": 3, "Lv.4": 4}
 
 
+def _section(title, lines):
+    """渲染一个分类段：**【标题】** + 逐行条目。"""
+    return "**【" + title + "】**\n" + "\n".join(lines)
+
+
 def get_help_menu(current_level):
-    """根据当前权限等级，返回对应的可用指令菜单（含 Lv.4 主人级行）。"""
-    level_value = _LEVEL_ORDER.get(current_level, 0)
+    """按当前权限等级，返回分类指令手册（Lv.4 可见全部段）。"""
+    lv = _LEVEL_ORDER.get(current_level, 0)
+    parts = ["📋 **小橘3号 指令菜单**", ""]
 
-    menu = "📋 **小橘3号 指令菜单**\n\n"
+    # 💬 对话直达（所有等级：自然语言即能力，无需记指令）
+    parts.append(_section("💬 对话直达 · 无需指令", [
+        "· 直接聊天：双脑问答（本地优先 / 云端兜底）",
+        "· 发 DeepSeek 分享链接：自动总结网页内容",
+        "· “帮我搜…”：联网搜索（天气请带城市区县）",
+        "· “记一下账 / 花了30元”：记账本",
+        "· “把对话导出成电子书”：EPUB 电子书",
+        "· “记住…”：长期记忆",
+    ]))
 
-    # 1. 所有人可见的基础指令（Lv.1 起）
-    menu += "**【基础指令 · 所有人】**\n"
-    menu += "· `/help` 或 `菜单`：查看此菜单\n"
-    menu += "· 直接聊天：双脑问答、发链接自动总结网页\n"
-    menu += "· \"帮我搜...\"：联网搜索\n"
-    menu += "· \"记一下账 / 花了30元 / 这个月花了多少\"：记账本\n"
-    menu += "· \"把对话导出成电子书\"：EPUB 电子书\n"
-    menu += "· \"记住...\"：存入长期记忆\n"
+    # 📋 待办（Lv.2 起；清空为 Lv.3 破坏性操作）
+    if lv >= 2:
+        parts.append(_section("📋 待办", [
+            "· `/todos`：待办清单（P0-P5 优先级分组）",
+            "· `/todos done <编号>`：标记完成",
+            "· `/todo_from_link <分享链接>`：链接提取待办（后台约 1 分钟）",
+            "· `/todos clear confirm`：清空全部待办【Lv.3 · 二次确认】",
+        ]))
 
-    # 2. Lv.2 普通用户（2026-10-02 定稿：写文件 / 列目录）
-    if level_value >= 2:
-        menu += "\n**【普通用户 · Lv.2】**\n"
-        menu += "· `/register <密码>`：注册 / 更新注册（Lv.2）\n"
-        menu += "· `/reset_fuse`：重置防死循环熔断\n"
-        menu += "· 写文件 / 列目录\n"
-    else:
-        menu += "\n**【升级指引】**\n"
-        menu += "· `/register <密码>`：注册升级 Lv.2（普通用户）\n"
+    # 🔑 权限（升级通道全级可查；Lv.4 段仅 Lv.4 可见）
+    perm = [
+        "· `/register <密码>`：注册 / 更新注册【Lv.2】",
+        "· `/coder_auth <6位动态密码>`：激活 Lv.3（持久生效）",
+        "· `/name <昵称>`：认领称呼【Lv.2】",
+    ]
+    if lv >= 3:
+        perm.append("· /lv4_auth confirm <6位动态密码>：双因子授权主人级")
+    if lv >= 4:
+        perm.append("· /lv4_revoke：撤销主人级权限（立即生效）")
+    parts.append(_section("🔑 权限", perm))
 
-    # 3. Lv.3 代码编写者（定稿：改代码 + 管理插件 + 安全家居六类）
-    if level_value >= 3:
-        menu += "\n**【代码编写者 · Lv.3】**\n"
-        menu += "· `/gen_log <DeepSeek分享链接>`：后台提取开发日志\n"
-        menu += "· 改代码 / 写文件 / 管理插件\n"
-        menu += "· 控制安全家居（灯/开关/传感器/空调/媒体播放器/输入布尔器）\n"
-    elif level_value >= 2:
-        menu += "\n**【升级指引】**\n"
-        menu += "· `/coder_auth <6位动态密码>`：TOTP 激活 Lv.3（代码编写者，持久生效）\n"
+    # 🧠 记忆（灵魂备份 Lv.3 / 恢复 Lv.4）
+    if lv >= 3:
+        mem = ["· `/soul_export [路径]`：灵魂备份（打包导出）【Lv.3】"]
+        if lv >= 4:
+            mem.append("· `/soul_import <zip路径>`：灵魂恢复【Lv.4】")
+        parts.append(_section("🧠 记忆", mem))
 
-    # 4. Lv.4 主人级（定稿：危险设备 + ADB 全套 + 发图 + restart_service）
-    if level_value >= 4:
-        menu += "\n**【主人级 · Lv.4】**\n"
-        menu += "· `/lv4_auth`：查看类 Root 警告（敏感操作清单 + 后果 + 撤销途径）\n"
-        menu += "· `/lv4_auth confirm <6位动态密码>`：授权主人级（授权后操作不再逐次验证）\n"
-        menu += "· `/lv4_revoke`：撤销主人级权限（立即生效）\n"
-        menu += "· 控制危险设备（门锁/阀门/DANGER_ENTITIES 自定义）\n"
-        menu += "· ADB 手机接管全套\n"
-        menu += "· `/send_image <图片路径>`：发图（LV4）\n"
-        menu += "· `restart_service`：重启小橘自身进程（LV4 专属）\n"
-        menu += "· 装卸系统组件 / 读取核心记忆\n"
+    # ⚙️ 系统（基础全员；熔断 Lv.2 / 日志 Lv.3）
+    sys_lines = [
+        "· `/help`（菜单 / 帮助 / 指令）：本手册",
+        "· `/creator`：创作者署名",
+        "· `/clear`（/reset）：清空会话记忆",
+        "· `/set_location <城市> [区县]`：位置记忆（仅存本地）",
+        "· `/clear_location`：清除位置记录",
+    ]
+    if lv >= 2:
+        sys_lines.append("· `/reset_fuse`：重置工具熔断【Lv.2】")
+    if lv >= 3:
+        sys_lines.append("· `/gen_log <分享链接>`：提取开发日志【Lv.3】")
+    parts.append(_section("⚙️ 系统", sys_lines))
 
-    menu += "\n---\n"
-    menu += f"你当前的权限等级：**{current_level}**\n"
-    menu += "如需升级权限，请使用上面对应的指令。"
+    # 🛡️ 主人级（Lv.4 专属段：低等级不可见，口径同 2026-10-02）
+    if lv >= 4:
+        parts.append(_section("🛡️ 主人级 · Lv.4", [
+            "· `/lv4_auth`：查看类 Root 警告（敏感操作清单 + 撤销途径）",
+            "· `/approve` / `/deny`：裁决儿童操作请求（在线成人）",
+            "· `/send_image <图片路径>`：QQ 发图",
+            "· 能力：危险设备控制 / ADB 手机接管 / restart_service 重启自身",
+        ]))
 
-    return menu
+    # 🏠 智能家居（Lv.3 起可用；多品牌插件开发中）
+    if lv >= 3:
+        parts.append(_section("🏠 智能家居 · 能力", [
+            "· “开灯 / 空调调到26度”：安全家居六类控制【Lv.3】",
+            "· 危险设备（门锁/燃气）【Lv.4】",
+            "· 多品牌智能家居插件开发中，敬请期待",
+        ]))
+
+    # 升级指引（未满级一行带过：下一级通道 + 解锁内容）
+    if lv == 1:
+        parts.append("🔸 升级指引：`/register <密码>` → Lv.2（待办 / 认称呼）")
+    elif lv == 2:
+        parts.append("🔸 升级指引：`/coder_auth <动态密码>` → Lv.3"
+                     "（改代码 / 日志 / 灵魂备份 / 安全家居）")
+    elif lv == 3:
+        parts.append("🔸 升级指引：`/lv4_auth confirm <动态密码>` → 主人级"
+                     "（危险设备 / ADB / 发图 / 灵魂导入）")
+
+    parts.append("")
+    parts.append(f"你当前的权限等级：**{current_level}**")
+    return "\n".join(parts)
