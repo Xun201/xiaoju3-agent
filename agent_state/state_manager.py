@@ -37,6 +37,24 @@ class StateManager:
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS todos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                source_url TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done')),
+                priority TEXT NOT NULL DEFAULT 'P1',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                done_at DATETIME
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status, id)
+        ''')
+        # 旧库迁移（尾巴 C）：ALTER ADD COLUMN 带默认值——既有行自动 P1
+        cols = [row[1] for row in cursor.execute("PRAGMA table_info(todos)")]
+        if "priority" not in cols:
+            cursor.execute("ALTER TABLE todos ADD COLUMN priority TEXT NOT NULL DEFAULT 'P1'")
         conn.commit()
         conn.close()
 
@@ -57,6 +75,152 @@ class StateManager:
         results = cursor.fetchall()
         conn.close()
         return results
+
+    # ==================== 待办清单（DeepSeek 链接提取，docs/TODO_EXTRACT_DESIGN.md §2） ====================
+
+    @staticmethod
+    def _normalize_todo(content):
+        """待办去重口径：去全部空白后全等比较。"""
+        return "".join(str(content or "").split())
+
+    @staticmethod
+    def _normalize_priority(value):
+        """优先级归一：P0/P1/P2 之外的输入一律回落 P1（LLM 输出容错）。"""
+        text = str(value or "").strip().upper()
+        return text if text in ("P0", "P1", "P2") else "P1"
+
+    def save_todos(self, items, source_url=""):
+        """批量写入待办（status='pending'）。
+
+        items: list[str] 或 list[dict{"content", "priority"}]（尾巴 C：
+        priority 可选，P0/P1/P2 之外归一 P1）。
+        幂等：同 source_url 且规范化 content 已存在 pending 项 → 跳过。
+        返回 (inserted, skipped) 计数。
+        """
+        conn = sqlite3.connect(self.memory_db)
+        cursor = conn.cursor()
+        existing = {
+            self._normalize_todo(row[0])
+            for row in cursor.execute(
+                "SELECT content FROM todos WHERE status = 'pending' AND source_url = ?",
+                (source_url,))
+        }
+        inserted = skipped = 0
+        for raw in items:
+            if isinstance(raw, dict):
+                content = str(raw.get("content") or "").strip()
+                priority = self._normalize_priority(raw.get("priority"))
+            else:
+                content = str(raw or "").strip()
+                priority = "P1"
+            if not content:
+                continue
+            key = self._normalize_todo(content)
+            if key in existing:
+                skipped += 1
+                continue
+            cursor.execute("INSERT INTO todos (content, source_url, priority) VALUES (?, ?, ?)",
+                           (content, source_url, priority))
+            existing.add(key)
+            inserted += 1
+        conn.commit()
+        conn.close()
+        return inserted, skipped
+
+    def get_todos(self, status=None, limit=50):
+        """查询待办。status=None 返回全部（id DESC，最新在前）；
+        'pending'/'done' 过滤（id ASC，旧号在前便于按序处理）。
+        返回 list[dict]：{id, content, source_url, status, priority,
+        created_at, done_at}。"""
+        conn = sqlite3.connect(self.memory_db)
+        cursor = conn.cursor()
+        if status in ("pending", "done"):
+            order = "ASC" if status == "pending" else "DESC"
+            cursor.execute(
+                "SELECT id, content, source_url, status, priority, created_at, done_at "
+                f"FROM todos WHERE status = ? ORDER BY id {order} LIMIT ?",
+                (status, limit))
+        else:
+            cursor.execute(
+                "SELECT id, content, source_url, status, priority, created_at, done_at "
+                "FROM todos ORDER BY id DESC LIMIT ?", (limit,))
+        rows = [{"id": r[0], "content": r[1], "source_url": r[2], "status": r[3],
+                 "priority": r[4], "created_at": r[5], "done_at": r[6]}
+                for r in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    def set_todo_priority(self, todo_id, priority):
+        """设置待办优先级（尾巴 C：前端 P0/P1/P2 pill）。
+
+        priority 经 _normalize_priority 归一（非法值回落 P1，端点侧无需预校验）。
+        返回更新后的行 dict；id 不存在 → None。
+        """
+        conn = sqlite3.connect(self.memory_db)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE todos SET priority = ? WHERE id = ?",
+                       (self._normalize_priority(priority), int(todo_id)))
+        conn.commit()
+        updated = cursor.rowcount > 0
+        conn.close()
+        if not updated:
+            return None
+        return next((t for t in self.get_todos(limit=1000)
+                     if t["id"] == int(todo_id)), None)
+
+    def last_extracted_at(self, source_url):
+        """该链接最近一次入库时间（unix 秒）；从未入库返回 None。
+
+        尾巴 B：24h 查重的跨进程持久层——内存表进程重启即失，本查询以
+        todos.created_at（UTC）为真源，重启后仍能拦住同链接重复提取。
+        """
+        conn = sqlite3.connect(self.memory_db)
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT MAX(created_at) FROM todos WHERE source_url = ?",
+            (source_url,)).fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return None
+        import calendar
+        return float(calendar.timegm(time.strptime(row[0], "%Y-%m-%d %H:%M:%S")))
+
+    def complete_todo(self, todo_id):
+        """标记待办完成（置 status='done'、done_at=当前时刻；仅 pending 行受影响）。
+
+        返回完成后的行 dict；id 不存在或已是 done → None（幂等）。
+        """
+        conn = sqlite3.connect(self.memory_db)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE todos SET status = 'done', done_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND status = 'pending'", (int(todo_id),))
+        conn.commit()
+        updated = cursor.rowcount > 0
+        conn.close()
+        if not updated:
+            return None
+        return next((t for t in self.get_todos(status="done", limit=1000)
+                     if t["id"] == int(todo_id)), None)
+
+    def reopen_todo(self, todo_id):
+        """把已完成待办翻回 pending（清 done_at；仅 done 行受影响）。
+
+        复选框取消钩的存储侧（2026-10-04 尾巴 1，与 complete_todo 对称）。
+        返回翻回后的行 dict；id 不存在或已是 pending → None（幂等）。
+        """
+        conn = sqlite3.connect(self.memory_db)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE todos SET status = 'pending', done_at = NULL "
+            "WHERE id = ? AND status = 'done'", (int(todo_id),))
+        conn.commit()
+        updated = cursor.rowcount > 0
+        conn.close()
+        if not updated:
+            return None
+        return next((t for t in self.get_todos(status="pending", limit=1000)
+                     if t["id"] == int(todo_id)), None)
 
     def save_conversation(self, source, messages):
         """把对话历史独立出来，避免污染代码（只保留最近 MAX_MESSAGES 条）"""

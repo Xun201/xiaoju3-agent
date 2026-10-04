@@ -319,6 +319,119 @@
     fetchStatus();
     setInterval(fetchStatus, 2000);
 
+    // ==================== 1b. 待办卡片（2026-10-04 待办提取，设计稿 §6） ====================
+    // 数据=GET /api/todos；30 秒低频轮询（待办非实时数据）+ 标完成后即时刷新；
+    // last_job.running 时卡片顶显示"⏳ 正在阅读链接…"（提取在后台线程进行）。
+    const TODOS_REFRESH_MS = 30000;
+
+    let todoEditing = false;   // 尾巴 F：优先级编辑模式（默认锁定 pill）
+    let gearEl = null;
+
+    function loadTodos() {
+        fetch('/api/todos')
+            .then(res => res.json())
+            .then(res => {
+                if (res.code === 200) renderTodos(res.data);
+            })
+            .catch(err => console.error('获取待办失败', err));
+    }
+
+    function renderTodos(data) {
+        const listEl = document.getElementById('todos-list');
+        const countEl = document.getElementById('todos-count-text');
+        const jobEl = document.getElementById('todos-job-line');
+        if (!listEl) return;
+        if (countEl) countEl.textContent = data.pending_count ? `(${data.pending_count})` : '';
+        if (gearEl) {
+            gearEl.textContent = '⚙️';                       // 尾巴 F2：单一图标
+            gearEl.classList.toggle('editing', todoEditing);  // 编辑态橙色高亮
+        }
+        if (jobEl) {
+            const job = data.last_job;
+            if (job && job.state === 'running') {
+                jobEl.textContent = '⏳ 正在阅读链接…';
+                jobEl.hidden = false;
+            } else if (job && job.state === 'failed') {
+                jobEl.textContent = '❌ 上次提取失败，可重新发送链接重试';
+                jobEl.hidden = false;
+            } else {
+                jobEl.hidden = true;
+            }
+        }
+        // 尾巴 1+C 精确版（2026-10-04）：P0/P1/P2 分区视图——各区带标题行
+        // （── Px ──），空分区不显示；pill 点即改后 loadTodos 全量刷新 =
+        // 条目实时移动到对应分区；分区内沿用 items 既有顺序（id 倒序）
+        const items = data.todos;
+        if (!items.length) {
+            listEl.innerHTML = '<li class="todos-empty">暂无待办</li>';
+            return;
+        }
+        const byPriority = { P0: [], P1: [], P2: [] };
+        items.forEach(t => {
+            (byPriority[t.priority || 'P1'] || byPriority.P1).push(t);
+        });
+        let html = '';
+        for (const pr of ['P0', 'P1', 'P2']) {
+            const group = byPriority[pr];
+            if (!group.length) continue;   // 空分区不显示
+            html += `<li class="todo-group-title">── ${pr} ──</li>`;
+            html += group.map(t => {
+                const doneCls = t.status === 'done' ? ' done' : '';
+                const checked = t.status === 'done' ? ' checked' : '';
+                // 尾巴 F 改（用户精确要求）：锁定时 pills 完全不渲染（隐藏而非灰显）
+            const pills = todoEditing
+                ? ['P0', 'P1', 'P2'].map(p =>
+                    `<button class="todo-pr${p === pr ? ' active' : ''}" data-pr="${p}"` +
+                    ` title="设为 ${p}">${p}</button>`).join('')
+                : '';
+                return `<li class="todo-item${doneCls}" data-id="${t.id}">` +
+                    `<input type="checkbox" class="todo-check"${checked} title="勾选=完成，取消=恢复">` +
+                    `<span class="todo-text">${escapeHtml(t.content)}</span>` +
+                    `<span class="todo-pills">${pills}</span></li>`;
+            }).join('');
+        }
+        listEl.innerHTML = html;
+    }
+
+    gearEl = document.getElementById('todos-edit-gear');
+    if (gearEl) {
+        gearEl.addEventListener('click', function () {
+            todoEditing = !todoEditing;
+            loadTodos();   // 重渲染使 pill 锁定/解锁立即生效
+        });
+    }
+
+    const todosListEl = document.getElementById('todos-list');
+    if (todosListEl) {
+        // 复选框：勾=完成、取消=恢复（done / reopen 对称端点）
+        todosListEl.addEventListener('change', function (ev) {
+            const box = ev.target.closest('input.todo-check');
+            if (!box) return;
+            const li = box.closest('li.todo-item');
+            if (!li) return;
+            const action = box.checked ? 'done' : 'reopen';
+            fetch(`/api/todos/${li.dataset.id}/${action}`, { method: 'POST' })
+                .then(() => loadTodos())
+                .catch(err => console.error('切换待办状态失败', err));
+        });
+        // 优先级 pill：点即改（POST priority 端点）
+        todosListEl.addEventListener('click', function (ev) {
+            const pill = ev.target.closest('button.todo-pr');
+            if (!pill || pill.disabled) return;
+            const li = pill.closest('li.todo-item');
+            if (!li || pill.classList.contains('active')) return;
+            fetch(`/api/todos/${li.dataset.id}/priority`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ priority: pill.dataset.pr })
+            }).then(() => loadTodos())
+              .catch(err => console.error('设置待办优先级失败', err));
+        });
+    }
+
+    loadTodos();
+    setInterval(loadTodos, TODOS_REFRESH_MS);
+
     // ==================== 2. 聊天渲染辅助（历史加载与实时发送共用） ====================
     // XSS 防护（界面文档 §4.4 / §10.4 近期项）：回复文本转义后渲染，换行转 <br>
     function escapeHtml(text) {

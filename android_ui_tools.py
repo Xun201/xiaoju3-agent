@@ -19,6 +19,8 @@ import hashlib
 import os
 import re
 import subprocess
+
+import win_process
 import tempfile
 import xml.etree.ElementTree as ET
 
@@ -102,7 +104,8 @@ def _dump_ui_xml_exec_out():
     失败，返回 None 由上层回退两步法。
     """
     proc = subprocess.run(EXEC_OUT_DUMP_CMD,
-                          shell=True, check=True, capture_output=True)
+                          shell=True, check=True, capture_output=True,
+                          creationflags=win_process.creation_flags())
     # exec-out 输出为字节流，errors="replace" 容忍设备端编码噪声
     text = strip_xml_noise(proc.stdout.decode("utf-8", errors="replace"))
     if "<?xml" not in text and "<hierarchy" not in text:
@@ -114,10 +117,12 @@ def _dump_ui_xml_dump_pull():
     """旧两步法回退路径：dump 到设备文件 → adb pull 拉回本地再读取。"""
     # 1. 导出当前屏幕的 UI 层级 XML
     subprocess.run(f"adb shell uiautomator dump {REMOTE_DUMP_PATH}",
-                   shell=True, check=True, capture_output=True)
+                   shell=True, check=True, capture_output=True,
+                   creationflags=win_process.creation_flags())
     # 2. 拉取 XML 到本地再读取
     subprocess.run(f"adb pull {REMOTE_DUMP_PATH} {LOCAL_DUMP_PATH}",
-                   shell=True, check=True, capture_output=True)
+                   shell=True, check=True, capture_output=True,
+                   creationflags=win_process.creation_flags())
     with open(LOCAL_DUMP_PATH, "r", encoding="utf-8") as f:
         return f.read()
 

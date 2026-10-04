@@ -102,7 +102,7 @@ class AdbToolsTests(unittest.TestCase):
             result = adb_tools.adb_screenshot()
         mrun.assert_called_once_with(
             f"adb exec-out screencap -p > {adb_tools.SCREENSHOT_PATH}",
-            shell=True, check=True)
+            shell=True, check=True, creationflags=mock.ANY)   # 尾巴 A：无窗标志
         self.assertEqual(result, f"✅ 手机屏幕截图已保存至: {adb_tools.SCREENSHOT_PATH}")
 
     def test_adb_screenshot_failure(self):
@@ -115,7 +115,8 @@ class AdbToolsTests(unittest.TestCase):
     def test_adb_tap_command(self):
         with mock.patch.object(adb_tools.subprocess, "run") as mrun:
             result = adb_tools.adb_tap(100, 200)
-        mrun.assert_called_once_with("adb shell input tap 100 200", shell=True, check=True)
+        mrun.assert_called_once_with("adb shell input tap 100 200", shell=True, check=True,
+                                     creationflags=mock.ANY)   # 尾巴 A
         self.assertEqual(result, "✅ 已模拟点击坐标: (100, 200)")
 
     def test_adb_tap_failure(self):
@@ -129,14 +130,16 @@ class AdbToolsTests(unittest.TestCase):
         with mock.patch.object(adb_tools.subprocess, "run") as mrun:
             result = adb_tools.adb_swipe(500, 1500, 500, 500)
         mrun.assert_called_once_with(
-            "adb shell input swipe 500 1500 500 500 300", shell=True, check=True)
+            "adb shell input swipe 500 1500 500 500 300", shell=True, check=True,
+            creationflags=mock.ANY)   # 尾巴 A
         self.assertEqual(result, "✅ 已模拟滑动: 从(500,1500)到(500,500)")
 
     def test_adb_swipe_command_custom_duration(self):
         with mock.patch.object(adb_tools.subprocess, "run") as mrun:
             adb_tools.adb_swipe(0, 0, 1080, 2400, 800)
         mrun.assert_called_once_with(
-            "adb shell input swipe 0 0 1080 2400 800", shell=True, check=True)
+            "adb shell input swipe 0 0 1080 2400 800", shell=True, check=True,
+            creationflags=mock.ANY)   # 尾巴 A
 
     def test_adb_swipe_failure(self):
         import subprocess as sp
@@ -310,7 +313,8 @@ class UiTapElementTests(unittest.TestCase):
         # 单次往返：仅一条 exec-out 命令，不再 dump+pull 两次通信
         mrun.assert_called_once_with(
             android_ui_tools.EXEC_OUT_DUMP_CMD,
-            shell=True, check=True, capture_output=True)
+            shell=True, check=True, capture_output=True,
+            creationflags=mock.ANY)   # 尾巴 A：无窗标志
 
         # 命中元素 → bounds 中心点点击
         tap.assert_called_once_with(200, 300)

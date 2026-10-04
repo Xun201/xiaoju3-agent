@@ -9,22 +9,32 @@
   assets/、前端三件套、.env.example。plugins 不进 datas——插件为静态
   import（main.py from plugins.xxx import），列 hiddenimports 进 PYZ
   （对方案 §4 的一处实施修正）。
-- excludes playwright：link_logger 为延迟导入 + 中文提示优雅降级（既有
-  机制），exe 形态不打 Chromium（约 200MB），/gen_log 首机需另行安装。
+- playwright 收录（2026-10-04 拍板②方案 A）：lib + driver 进包（实测
+  107.5MB），待办提取/链接日志的 DeepSeek 分享页抓取在冻结形态可用；
+  Chromium 浏览器**不打包**（ms-playwright 缓存实测 705.6MB，远超拍板
+  体积带）——运行期走目标机 ms-playwright 用户缓存目录（LOCALAPPDATA
+  下；无缓存机器触发 link_logger 既有优雅降级文案，需自备浏览器缓存
+  或设 PLAYWRIGHT_BROWSERS_PATH 环境变量指向缓存目录）。
 - 产物 dist/xiaoju3.exe 不入库（*.exe 拒绝规则，b8507dc 口径）。
 """
+
+from PyInstaller.utils.hooks import collect_all
+
+# playwright lib+driver 收录（无官方 hook，hooks-contrib 2026.8 零命中；
+# collect_all 覆盖包数据 + driver 二进制 + 全部子模块）
+pw_datas, pw_binaries, pw_hiddenimports = collect_all('playwright')
 
 a = Analysis(
     ['desktop_launcher.py'],
     pathex=[],
-    binaries=[],
+    binaries=pw_binaries,
     datas=[
         ('assets', 'assets'),              # 桌宠素材（pet/normal_half|full）+ ASSETS.md
         ('index.html', '.'),               # 前端三件套（dashboard 从资源根直读）
         ('console.js', '.'),
         ('desktop-pet.js', '.'),
         ('.env.example', '.'),             # 首启配置模板（数据根引导用）
-    ],
+    ] + pw_datas,
     hiddenimports=[
         # ── pywebview Windows 后端链（6.x 默认 WinForms + WebView2 via pythonnet）──
         'webview',
@@ -79,12 +89,12 @@ a = Analysis(
         'plugins.help_menu',
         'plugins.link_logger',
         'plugins.qq_send_image',
-    ],
+        'plugins.todo_extractor',
+    ] + pw_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'playwright',                       # exe 不打 Chromium（优雅降级既有机制）
         'tkinter',
         'pytest',
         'IPython',

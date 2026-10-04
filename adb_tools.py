@@ -7,6 +7,8 @@
 """
 import os
 import subprocess
+
+import win_process
 import tempfile
 
 # 截图落盘路径（vision_tools 亦从此路径读取）
@@ -16,7 +18,8 @@ SCREENSHOT_PATH = os.path.join(tempfile.gettempdir(), "adb_screen.png")
 def adb_screenshot():
     """通过 ADB 截取手机屏幕"""
     try:
-        subprocess.run(f"adb exec-out screencap -p > {SCREENSHOT_PATH}", shell=True, check=True)
+        subprocess.run(f"adb exec-out screencap -p > {SCREENSHOT_PATH}", shell=True, check=True,
+                          creationflags=win_process.creation_flags())
         return f"✅ 手机屏幕截图已保存至: {SCREENSHOT_PATH}"
     except Exception as e:
         return f"❌ ADB 截图失败: {e}"
@@ -25,7 +28,8 @@ def adb_screenshot():
 def adb_tap(x, y):
     """模拟点击手机屏幕坐标"""
     try:
-        subprocess.run(f"adb shell input tap {x} {y}", shell=True, check=True)
+        subprocess.run(f"adb shell input tap {x} {y}", shell=True, check=True,
+                          creationflags=win_process.creation_flags())
         return f"✅ 已模拟点击坐标: ({x}, {y})"
     except Exception as e:
         return f"❌ ADB 点击失败: {e}"
@@ -34,7 +38,8 @@ def adb_tap(x, y):
 def adb_swipe(x1, y1, x2, y2, duration=300):
     """模拟滑动手机屏幕"""
     try:
-        subprocess.run(f"adb shell input swipe {x1} {y1} {x2} {y2} {duration}", shell=True, check=True)
+        subprocess.run(f"adb shell input swipe {x1} {y1} {x2} {y2} {duration}", shell=True, check=True,
+                          creationflags=win_process.creation_flags())
         return f"✅ 已模拟滑动: 从({x1},{y1})到({x2},{y2})"
     except Exception as e:
         return f"❌ ADB 滑动失败: {e}"

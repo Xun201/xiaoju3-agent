@@ -557,14 +557,15 @@ class SmartAskToolTests(unittest.TestCase):
     def tearDown(self):
         brain.tool_fuse.reset()
 
-    def test_whitelist_matches_fourteen_tools(self):
-        # 2026-10-02 权限重构：+restart_service（14 项）
+    def test_whitelist_matches_fifteen_tools(self):
+        # 2026-10-02 权限重构：+restart_service（14 项）；2026-10-04：+extract_todos（15 项）
         self.assertEqual(
             sorted(brain.TOOL_WHITELIST),
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
                     "vision_tap_element", "ui_tap_element", "web_search",
-                    "system_manage", "read_core_memory", "restart_service"]))
+                    "system_manage", "read_core_memory", "restart_service",
+                    "extract_todos"]))
 
     def test_build_messages_keeps_wired_system_entries(self):
         """前情提要/长期记忆注入的 system 条目应保留，其余 system 剔除（§10 #2/#3 接线）。"""
@@ -4168,6 +4169,51 @@ class AntiRepeatPromptTests(unittest.TestCase):
         self.assertIn("<think>用户又在呼唤我，直接回应即可。</think>", content)  # 正确示例
         # 约束位于系统提示词末尾（用户口径"在系统提示词末尾加一句约束"）
         self.assertTrue(content.rstrip().endswith("有啥需要帮忙的吗？）"))
+
+
+class TodoLinkModeTests(unittest.TestCase):
+    """尾巴 D 防回归（2026-10-04）：DeepSeek 分享链接消息强制云端工具链路——
+    跳过本地大脑（ask_local 零调用）、跳过 URL 抓取总结注入（requests.get
+    零调用）、落到云端 ask_cloud；普通 URL 消息仍走抓取总结分流。"""
+
+    SHARE = "https://chat.deepseek.com/share/abc123"
+
+    def _run(self, message):
+        with mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local") as ask_local, \
+                mock.patch.object(brain, "ask_cloud", return_value="好的。") as ask_cloud, \
+                mock.patch.object(brain, "requests") as req_mock, \
+                mock.patch.object(brain, "save_memory"), \
+                mock.patch.object(brain, "_remember_user_facts"), \
+                mock.patch.object(brain, "_extract_location_from_user_message"):
+            reply, source = brain.smart_ask(message, [])
+        return reply, source, ask_local, ask_cloud, req_mock
+
+    def test_share_link_forces_cloud_no_local_no_fetch(self):
+        reply, source, ask_local, ask_cloud, req_mock = self._run(
+            f"帮我记下这个链接里的待办：{self.SHARE}")
+        ask_local.assert_not_called()       # 强制云端（本地小模型不出工具 JSON）
+        req_mock.get.assert_not_called()    # 跳过 URL 抓取总结注入
+        ask_cloud.assert_called_once()
+        # 注入的 messages 里不得出现"直接总结，不要输出任何 JSON"（那会短路工具）
+        sent = ask_cloud.call_args[0][0]
+        self.assertFalse(any("不要输出任何 JSON" in m.get("content", "")
+                             for m in sent if isinstance(m, dict)))
+
+    def test_normal_url_still_fetch_summarizes(self):
+        # 对照：普通 URL 保持既有分流（抓取注入 → 总结短路）
+        req_resp = mock.MagicMock()
+        req_resp.text = "<html><body>正文内容</body></html>"
+        with mock.patch.object(brain, "probe_local", return_value=False), \
+                mock.patch.object(brain, "ask_cloud", return_value="总结好的内容"), \
+                mock.patch.object(brain, "requests") as req_mock, \
+                mock.patch.object(brain, "save_memory"), \
+                mock.patch.object(brain, "_remember_user_facts"), \
+                mock.patch.object(brain, "_extract_location_from_user_message"):
+            req_mock.get.return_value = req_resp
+            reply, source = brain.smart_ask("https://example.com/article", [])
+        req_mock.get.assert_called_once()
+        self.assertIn("总结", source)
 
 
 if __name__ == "__main__":

@@ -69,8 +69,10 @@ import psutil
 import requests
 from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
 
+from agent_state.state_manager import state_manager  # 待办清单存储（2026-10-04）
 from brain import load_memory, save_memory, smart_ask  # 直连大脑（架构设计文档 §2：仪表盘 /api/chat 绕过路由层）
 from migration import health_bp  # 迁移守望探测端点（架构 §8，原 :5002 注册点迁入）
+from plugins import todo_extractor  # 最近提取任务状态（待办卡片"⏳ 正在阅读"）
 from web_sanitize import sanitize_for_web  # Web 出口 CQ 码净化（QQ 通道不经此处）
 from xiaoju3 import (AGENT_STATE_DIR, CLOUD_BALANCE_URL, CLOUD_KEY,
                      DASHBOARD_PORT, MAX_MESSAGES, TTS_VOICE,
@@ -543,6 +545,59 @@ def api_status():
     })
 
 
+@app.route("/api/todos")
+def api_todos():
+    """待办清单 API（2026-10-04 待办提取，docs/TODO_EXTRACT_DESIGN.md §6）：
+    {code, data:{todos, pending_count, done_count, last_job}}。
+
+    todos 含全部状态（前端自行分组渲染）；last_job 为最近一次链接提取任务
+    状态（todo_extractor 单槽，无任务时 None），卡片据此显示"⏳ 正在阅读"。
+    """
+    todos = state_manager.get_todos(limit=200)   # 尾巴 G：卡片全量口径（旧默认 50 会截断）
+    pending_count = sum(1 for t in todos if t["status"] == "pending")
+    return jsonify({
+        "code": 200,
+        "data": {
+            "todos": todos,
+            "pending_count": pending_count,
+            "done_count": len(todos) - pending_count,
+            "last_job": todo_extractor.last_job(),
+        }
+    })
+
+
+@app.route("/api/todos/<int:todo_id>/done", methods=["POST"])
+def api_todo_done(todo_id):
+    """标记待办完成。安全注记（设计稿 §6 如实口径）：dashboard 现绑
+    0.0.0.0（§11 遗留④加固候选未落地），LAN 内可匿名调本端点——影响面=
+    标记待办完成（低危）；127.0.0.1 加固落地后自动收窄。"""
+    todo = state_manager.complete_todo(todo_id)
+    if not todo:
+        return jsonify({"code": 404, "data": {"ok": False}}), 404
+    return jsonify({"code": 200, "data": {"ok": True, "todo": todo}})
+
+
+@app.route("/api/todos/<int:todo_id>/reopen", methods=["POST"])
+def api_todo_reopen(todo_id):
+    """把已完成待办翻回未完成（2026-10-04 尾巴 1：复选框取消钩；
+    与 done 端点对称的低危写端点，安全口径同 api_todo_done）。"""
+    todo = state_manager.reopen_todo(todo_id)
+    if not todo:
+        return jsonify({"code": 404, "data": {"ok": False}}), 404
+    return jsonify({"code": 200, "data": {"ok": True, "todo": todo}})
+
+
+@app.route("/api/todos/<int:todo_id>/priority", methods=["POST"])
+def api_todo_priority(todo_id):
+    """设置待办优先级（2026-10-04 尾巴 C：前端 P0/P1/P2 pill；
+    低危写端点，安全口径同 api_todo_done；非法 priority 归一 P1）。"""
+    body = request.get_json(silent=True) or {}
+    todo = state_manager.set_todo_priority(todo_id, body.get("priority"))
+    if not todo:
+        return jsonify({"code": 404, "data": {"ok": False}}), 404
+    return jsonify({"code": 200, "data": {"ok": True, "todo": todo}})
+
+
 @app.route("/api/first_run/status")
 def api_first_run_status():
     """首装判定（安装器方案步 A3）：ENV_FILE 不存在即 first_run。"""
@@ -702,6 +757,25 @@ def api_chat():
                 "code": 200,
                 "data": {"reply": sanitize_for_web(main.handle_creator_command()),
                          "source": "⚙️ 系统"}
+            })
+
+        # 📋 待办指令族拦截（2026-10-04 Bug 1 修复 + 尾巴 3 过程卡片）：控制台
+        # 与 QQ 同一指令链（main.handle_todo_command），命中即返回——不进模型、
+        # 不落对话历史，与 /creator 特判同口径；user_id/group_id 传 None：门禁
+        # 走全局等级，提取完成通知仅打印控制台日志（无 QQ 上下文）。
+        # 尾巴 3：复用 <think> 协议出"指令处理"折叠卡——console.js 渲染入口
+        # 对任何含 <think> 的回复出卡（THINK_BLOCK_RE 全局守卫），QQ 链路剥
+        # <think> 故过程仅控制台可见，与模型消息同一渲染管线、零前端改动。
+        todo_steps = []
+        todo_reply = main.handle_todo_command(user_msg, user_msg, None, None,
+                                              steps=todo_steps)
+        if todo_reply is not None:
+            process = "".join("\n· " + s for s in todo_steps)
+            reply = "<think>[指令处理]" + process + "</think>" + todo_reply
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(reply),
+                         "source": "⚙️ 指令"}
             })
 
         history = data.get("history") or []

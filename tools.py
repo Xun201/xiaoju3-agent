@@ -52,7 +52,10 @@ import sys
 import subprocess
 import time
 
+import win_process
 from xiaoju3 import WORKSPACE, AGENT_STATE_DIR, VISION_MODEL, VISION_KEY
+from plugins import todo_extractor
+from plugins.link_logger import LinkFetchError, validate_share_url
 import home_tools
 from home_tools import get_ha_devices, control_ha_device
 from adb_tools import adb_screenshot, adb_tap, adb_swipe
@@ -60,22 +63,23 @@ from vision_tools import vision_tap_element
 from android_ui_tools import ui_tap_element
 from search_tools import web_search
 
-# 工具白名单（14 项，2026-10-02 权限重构 +restart_service）：与
-# prompts.py 工具协议一致。注意：brain.TOOL_WHITELIST（大脑入口白名单）
-# 需同步追加，工具才可经 smart_ask 链路触发。
+# 工具白名单（15 项，2026-10-02 权限重构 +restart_service；2026-10-04 待办提取
+# +extract_todos）：与 prompts.py 工具协议一致。注意：brain.TOOL_WHITELIST
+# （大脑入口白名单）需同步追加，工具才可经 smart_ask 链路触发。
 TOOL_WHITELIST = [
     "list_files", "read_file", "write_file", "get_ha_devices",
     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
     "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
-    "read_core_memory", "restart_service",
+    "read_core_memory", "restart_service", "extract_todos",
 ]
 
 # 高危工具集合（语义更新为 §7 新门禁，逐工具门禁见模块 docstring 与
 # execute_tool 内实现，不再共用单一 LV3 前置门禁）
 DANGER_TOOLS = {"write_file", "adb_tap", "adb_swipe", "control_ha_device"}
 
-# 需 Lv.2 / Lv.3 / Lv.4 等级的工具分组（2026-10-02 权限重构定稿）
-_LV2_TOOLS = {"read_file", "list_files"}
+# 需 Lv.2 / Lv.3 / Lv.4 等级的工具分组（2026-10-02 权限重构定稿；
+# 2026-10-04 +extract_todos——待办提取为个人低危数据，LV2 与指令层同门禁）
+_LV2_TOOLS = {"read_file", "list_files", "extract_todos"}
 _LV3_TOOLS = {"write_file"}
 # Lv.4 主人级工具（2026-10-02 定稿：ADB 全套升 Lv4；send_image 能力声明
 # ——其实际门禁在 main.py /send_image 指令（本批不动 main.py，批次②对齐
@@ -228,6 +232,17 @@ def _is_in_workspace(filepath):
     return target.startswith(base + os.sep)
 
 
+def _run_extract_job(url):
+    """待办提取后台线程体（方案 A）：结果只进 todos 库与 _LAST_JOB，
+    受理回复早已发出；线程内任何异常仅落日志，不影响已完成应答。"""
+    try:
+        result = todo_extractor.extract_todos_from_url_sync(url)
+        print(f"✅ [待办提取] 完成: {url} "
+              f"新增 {result.get('inserted', 0)} 条（跳过 {result.get('skipped', 0)}）")
+    except Exception as e:
+        print(f"⚠️ [待办提取] 后台报错: {e}")
+
+
 def _is_private_state_path(filepath):
     """纵深防御：目标落在隔离状态目录（agent_state/，记忆/身份/对话）之内
     即属私有数据，仅 Lv.4（read_private_memory）可访问——即便工作区被误配置
@@ -264,7 +279,8 @@ def _system_manage(action, component):
         cmd = [sys.executable, "-m", "pip", "uninstall", "-y", component]
         verb = "卸载"
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                              creationflags=win_process.creation_flags())
     except Exception as e:
         return f"❌ 组件 {component} {verb}失败: {e}"
     if proc.returncode == 0:
@@ -439,6 +455,25 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
             if not query:
                 return "❌ 缺少参数：需要提供 query (搜索关键词)"
             return web_search(query, args.get("max_results", 5))
+
+        # === 待办提取（LV2；后台线程执行、立即受理——docs/TODO_EXTRACT_DESIGN.md §4。
+        #     同步等待定案=方案 A：抓取 30-180 秒绝不阻塞 /api/chat 同步链路，
+        #     完成感知走控制台待办卡片轮询与 /todos，QQ 通知仅指令路径挂 notify） ===
+        elif tool_name == "extract_todos":
+            url = str(args.get("url") or "").strip()
+            if not url:
+                return "❌ 缺少参数：需要提供 url（DeepSeek 分享链接）"
+            try:
+                validate_share_url(url)   # 非法链接起线程前就拒，不碰浏览器
+            except LinkFetchError as e:
+                return str(e)
+            if todo_extractor.check_recent_url(url):
+                return "⚠️ 这条链接 24 小时内已提取过，发 /todos 或看左侧待办面板即可。"
+            todo_extractor.mark_url(url)   # 受理即登记；失败由 unmark 放行重试
+            threading.Thread(target=_run_extract_job, args=(url,),
+                             daemon=True).start()
+            return ("🔄 已受理！正在后台阅读链接并提炼待办（约 1 分钟），"
+                    "完成后会出现在左侧待办面板。")
 
         # === 系统组件一键装卸（Lv.4 等级门禁；操作级双因子已删，2026-10-02） ===
         elif tool_name == "system_manage":

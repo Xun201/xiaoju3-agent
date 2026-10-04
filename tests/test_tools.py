@@ -172,17 +172,25 @@ class ToolsTestBase(unittest.TestCase):
 
 
 class WhitelistTests(ToolsTestBase):
-    """白名单 14 项与 DANGER_TOOLS 集合语义。"""
+    """白名单 15 项与 DANGER_TOOLS 集合语义。"""
 
-    def test_whitelist_has_fourteen_tools(self):
-        # 13 项 + 新增 restart_service = 14 项（2026-10-02 权限重构）
-        self.assertEqual(len(tools.TOOL_WHITELIST), 14)
+    def test_whitelist_has_fifteen_tools(self):
+        # 14 项 + extract_todos = 15 项（2026-10-04 待办提取）
+        self.assertEqual(len(tools.TOOL_WHITELIST), 15)
         self.assertEqual(
             sorted(tools.TOOL_WHITELIST),
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
                     "vision_tap_element", "ui_tap_element", "web_search",
-                    "system_manage", "read_core_memory", "restart_service"]))
+                    "system_manage", "read_core_memory", "restart_service",
+                    "extract_todos"]))
+
+    def test_brain_whitelist_in_sync_with_tools(self):
+        # 大脑入口白名单与工具层白名单逐元素一致（extract_todos 漏加 brain 侧
+        # 会导致模型调不动该工具，本锚防回归）
+        import brain
+        self.assertEqual(sorted(tools.TOOL_WHITELIST),
+                         sorted(brain.TOOL_WHITELIST))
 
     def test_danger_tools_constant(self):
         # 旧集合成员不变，门禁语义升级为 §7 新表（见各专项测试）
@@ -1418,6 +1426,63 @@ class SanitizeThinkPassthroughTests(unittest.TestCase):
         from web_sanitize import sanitize_for_web
         self.assertEqual(sanitize_for_web(None), "")
         self.assertEqual(sanitize_for_web(123), "123")
+
+
+class ExtractTodosToolTests(ToolsTestBase):
+    """extract_todos 工具（2026-10-04 待办提取，docs/TODO_EXTRACT_DESIGN.md §4）：
+    LV2 门禁 / 参数与链接校验 / 24h 查重 / 后台受理（方案 A）。"""
+
+    URL = "https://chat.deepseek.com/share/abc123"
+
+    @staticmethod
+    def _immediate_thread():
+        class ImmediateThread:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+                if target:
+                    target(*args, **(kwargs or {}))
+
+            def start(self):
+                pass
+
+        return ImmediateThread
+
+    def test_lv1_rejected(self):
+        reply = tools.execute_tool("extract_todos", {"url": self.URL}, self._pm("Lv.1"))
+        self.assertTrue(reply.startswith("❌"))
+        self.assertIn("Lv.2", reply)
+
+    def test_lv2_accepted_runs_background(self):
+        extract_mock = mock.MagicMock(return_value={"ok": True})
+        with mock.patch("tools.threading.Thread", self._immediate_thread()), \
+                mock.patch("tools.todo_extractor.extract_todos_from_url_sync", extract_mock), \
+                mock.patch("tools.todo_extractor.mark_url") as mark_mock:
+            reply = tools.execute_tool("extract_todos", {"url": self.URL},
+                                       self._pm("Lv.2"))
+        self.assertTrue(reply.startswith("🔄"))
+        mark_mock.assert_called_once_with(self.URL)
+        extract_mock.assert_called_once_with(self.URL)
+
+    def test_missing_url_param(self):
+        reply = tools.execute_tool("extract_todos", {}, self._pm("Lv.2"))
+        self.assertTrue(reply.startswith("❌"))
+        self.assertIn("url", reply)
+
+    def test_invalid_url_rejected_before_thread(self):
+        with mock.patch("tools.threading.Thread") as thread_mock:
+            reply = tools.execute_tool("extract_todos", {"url": "https://example.com/x"},
+                                       self._pm("Lv.2"))
+        self.assertTrue(reply.startswith("❌"))
+        self.assertIn("链接格式不对", reply)
+        thread_mock.assert_not_called()
+
+    def test_recent_url_rejected(self):
+        extract_mock = mock.MagicMock()
+        with mock.patch("tools.todo_extractor.check_recent_url", return_value=True), \
+                mock.patch("tools.todo_extractor.extract_todos_from_url_sync", extract_mock):
+            reply = tools.execute_tool("extract_todos", {"url": self.URL}, self._pm("Lv.2"))
+        self.assertTrue(reply.startswith("⚠️"))
+        self.assertIn("24 小时内已提取过", reply)
+        extract_mock.assert_not_called()
 
 
 if __name__ == "__main__":

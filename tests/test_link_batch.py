@@ -597,5 +597,71 @@ class RunLinkLogTest(unittest.TestCase):
         fake_sum.assert_called_once_with("RAW", run_link_log.CLOUD_KEY, run_link_log.CLOUD_URL)
 
 
+class FrozenBrowsersPathTests(unittest.TestCase):
+    """冻结形态浏览器路径修正（2026-10-04 尾巴 1）：frozen 时
+    PLAYWRIGHT_BROWSERS_PATH setdefault 指向用户缓存；已设值不覆盖；
+    非冻结零变化。"""
+
+    def setUp(self):
+        self.cache_dir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                                      "ms-playwright")
+        self._env_patch = mock.patch.dict(os.environ, {}, clear=False)
+        self._env_patch.start()
+        os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        self._frozen_patch = mock.patch.object(sys, "frozen", True, create=True)
+        self._frozen_patch.start()
+        self.addCleanup(self._frozen_patch.stop)
+        self.addCleanup(self._env_patch.stop)
+
+    def test_frozen_sets_cache_path(self):
+        link_logger.ensure_frozen_browsers_path()
+        self.assertEqual(os.environ["PLAYWRIGHT_BROWSERS_PATH"], self.cache_dir)
+
+    def test_frozen_preserves_user_preset(self):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "D:/my-browsers"
+        link_logger.ensure_frozen_browsers_path()
+        self.assertEqual(os.environ["PLAYWRIGHT_BROWSERS_PATH"], "D:/my-browsers")
+
+    def test_non_frozen_is_noop(self):
+        with mock.patch.object(sys, "frozen", False, create=True):
+            link_logger.ensure_frozen_browsers_path()
+        self.assertNotIn("PLAYWRIGHT_BROWSERS_PATH", os.environ)
+
+    def test_called_from_fetch_page_text_before_degradation(self):
+        # 接线锚：fetch_page_text 首行调用——缺 playwright 降级抛错时 env
+        # 修正已生效（frozen 修正在降级之前，装了浏览器的冻结包能救回）
+        with mock.patch.dict(sys.modules, {"playwright": None,
+                                           "playwright.async_api": None}):
+            with self.assertRaises(link_logger.LinkFetchError):
+                asyncio.run(link_logger.fetch_page_text(VALID_URL))
+        self.assertEqual(os.environ["PLAYWRIGHT_BROWSERS_PATH"], self.cache_dir)
+
+
+class ChromiumChannelAnchorTests(unittest.TestCase):
+    """尾巴 A2 根治锚：launch 走 channel="chromium"（完整 chrome.exe 是 GUI
+    子系统，零 conhost 闪窗）——headless_shell 为 console 子系统，node spawn
+    它时 Windows 配发可见 conhost（psutil 实测 conhost 父=chrome-headless-shell）。"""
+
+    def test_launch_back_to_headless_shell_with_driver_patch(self):
+        # 尾巴 A2 终版（2026-10-04）：撤销 channel=chromium（chrome 全家桶引入
+        # crashpad-handler 新闪源且 chromium 内核层无法根除），回归默认
+        # headless_shell（无 crashpad）；其 conhost 由 node driver 层
+        # windowsHide:true 根治（_dev/patch_playwright_windows_hide.py，
+        # build_exe.bat [2.5/5] 自动执行）
+        src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "plugins", "link_logger.py"),
+                   encoding="utf-8").read()
+        self.assertIn("p.chromium.launch(headless=True)", src)
+        self.assertNotIn('channel="chromium"', src)
+        self.assertIn("headless_shell 无 crashpad", src)
+        patch_script = open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "_dev", "patch_playwright_windows_hide.py"), encoding="utf-8").read()
+        self.assertIn("windowsHide: true", patch_script)
+        bat = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "build_exe.bat"), encoding="utf-8").read()
+        self.assertIn("patch_playwright_windows_hide.py", bat)   # 构建链接线在位
+
+
 if __name__ == "__main__":
     unittest.main()
