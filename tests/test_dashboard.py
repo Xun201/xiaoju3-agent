@@ -59,6 +59,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 import warnings
 from unittest import mock
@@ -488,6 +489,184 @@ class ChatApiTests(HistoryApiTestsBase):
             self.assertEqual(resp.get_json()["data"]["source"], "⚙️ 系统")
             self.assertIn("指令菜单", resp.get_json()["data"]["reply"])
             ms.assert_not_called()
+
+
+class ConsoleSlashWiringTests(HistoryApiTestsBase):
+    """控制台斜杠指令接线（C' 第一批，2026-10-04）：_console_slash_intercept
+    复用 main 既有函数（main.py 零改动）——每条命中处理器、不落 LLM；
+    等级门同口径；/clear 只清控制台历史（QQ 记忆文件反向锚）；
+    /lv4_auth 两步流；清单一致性（拦截集 ⊆ main 分发集，/send_image 排除）。
+    权限方法一律 mock（接线测试不触真实 identity/agent_state）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.pm = main.permission_manager
+
+    def _post(self, message):
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            resp = self.client.post("/api/chat", json={"message": message})
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload["code"], 200)
+        ms.assert_not_called()   # 命中拦截 = 不落 LLM（逐条铁律）
+        return payload["data"]
+
+    # ---------- ⚙️ /clear：只清控制台历史 ----------
+    def test_clear_console_history_only(self):
+        self._write_history([{"role": "user", "content": "旧对话"}])
+        qq_before = list(main.messages_qq)
+        web_before = list(main.messages_web)
+        data = self._post("/clear")
+        self.assertIn("控制台对话记忆已清空", data["reply"])
+        self.assertEqual(data["source"], "⚙️ 系统")
+        with open(dashboard.HISTORY_FILE, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), [])   # 控制台历史已清
+        self.assertEqual(list(main.messages_qq), qq_before)  # QQ 记忆不动
+        self.assertEqual(list(main.messages_web), web_before)
+
+    # ---------- 🔑 权限族：复用 permission_manager（mock 收口） ----------
+    def test_register_wired_with_args(self):
+        with mock.patch.object(
+                self.pm, "register_user",
+                return_value="✅ 注册成功，等级 Lv.2") as mu:
+            data = self._post("/register reg-pass-123 小白")
+        self.assertIn("注册成功", data["reply"])
+        self.assertEqual(data["source"], "🔑 权限")
+        mu.assert_called_once_with("console", "reg-pass-123", name="小白")
+
+    def test_coder_auth_wired(self):
+        with mock.patch.object(
+                self.pm, "activate_lv3",
+                return_value="✅ Lv.3 已激活") as mu:
+            data = self._post("/coder_auth 123456")
+        self.assertIn("Lv.3", data["reply"])
+        mu.assert_called_once_with("console", "123456")
+
+    def test_sudo_usage_and_window(self):
+        data = self._post("/sudo")
+        self.assertIn("用法", data["reply"])
+        with mock.patch.object(
+                self.pm, "open_operation_window",
+                return_value="✅ 写操作窗口已开启") as mu:
+            data = self._post("/sudo 654321")
+        self.assertIn("窗口", data["reply"])
+        mu.assert_called_once_with(None, totp_code="654321")
+
+    def test_lv4_auth_two_step_flow(self):
+        # 第一步（无参）：类 Root 警告（真实 root_warning，纯文本无副作用）
+        data = self._post("/lv4_auth")
+        self.assertIn("双因子授权", data["reply"])
+        # 第二步 confirm：mfa 通过 → grant_lv4（mock 收口）
+        with mock.patch.object(
+                self.pm, "lv4_mfa_check",
+                return_value=(True, "OK")) as mfa, \
+             mock.patch.object(
+                 self.pm, "grant_lv4",
+                 return_value="✅ Lv.4 授权生效") as grant:
+            data = self._post("/lv4_auth confirm 123456")
+        self.assertIn("Lv.4", data["reply"])
+        mfa.assert_called_once()
+        grant.assert_called_once()
+        # mfa 未通过：明细透传
+        with mock.patch.object(self.pm, "lv4_mfa_check",
+                               return_value=(False, "动态密码错误")):
+            data = self._post("/lv4_auth confirm 000000")
+        self.assertIn("未通过", data["reply"])
+        self.assertIn("动态密码错误", data["reply"])
+
+    def test_lv4_revoke_wired(self):
+        with mock.patch.object(
+                self.pm, "revoke_lv4",
+                return_value="✅ 主人级权限已撤销") as mu:
+            data = self._post("/lv4_revoke")
+        self.assertIn("撤销", data["reply"])
+        mu.assert_called_once_with("console")
+
+    # ---------- 🧠 / 🧪 灵魂备份：等级门（真实门）+ 接线（mock） ----------
+    def test_soul_export_lv1_denied_by_real_gate(self):
+        with mock.patch.object(self.pm, "current_level", "Lv.1"), _quiet():
+            data = self._post("/soul_export")
+        self.assertTrue(data["reply"].startswith("❌"))   # 真实等级门拒绝
+
+    def test_soul_commands_wired(self):
+        with mock.patch.object(
+                main, "handle_soul_command",
+                return_value="✅ 灵魂备份完成") as mu:
+            data = self._post("/soul_export")
+        self.assertIn("灵魂备份", data["reply"])
+        mu.assert_called_once()
+        with mock.patch.object(
+                main, "handle_soul_command",
+                return_value="✅ 灵魂恢复完成") as mu2:
+            data = self._post("/soul_import x.zip")
+        self.assertIn("灵魂恢复", data["reply"])
+        mu2.assert_called_once()
+
+    # ---------- ⚙️ /name /reset_fuse /gen_log ----------
+    def test_name_wired(self):
+        with mock.patch.object(
+                self.pm, "claim_name",
+                return_value="✅ 称呼已设为「小白」") as mu:
+            data = self._post("/name 小白")
+        self.assertIn("小白", data["reply"])
+        self.assertEqual(data["source"], "⚙️ 系统")
+        mu.assert_called_once_with("console", "小白")
+
+    def test_reset_fuse_level_gate_and_wiring(self):
+        with mock.patch.object(self.pm, "current_level", "Lv.1"), _quiet():
+            data = self._post("/reset_fuse")
+        self.assertIn("Lv.2", data["reply"])   # 等级门拒绝
+        with mock.patch.object(self.pm, "current_level", "Lv.2"), \
+             mock.patch.object(main, "reset_tool_fuse") as mu, _quiet():
+            data = self._post("/reset_fuse")
+        self.assertIn("已重置", data["reply"])
+        mu.assert_called_once_with()
+
+    def test_gen_log_gate_format_and_wiring(self):
+        good = "/gen_log https://chat.deepseek.com/share/abc123"
+        with mock.patch.object(self.pm, "current_level", "Lv.1"), _quiet():
+            data = self._post(good)
+        self.assertIn("Lv.3", data["reply"])   # 等级门拒绝
+        with mock.patch.object(self.pm, "current_level", "Lv.3"), _quiet():
+            data = self._post("/gen_log 不是链接")
+        self.assertIn("分享链接", data["reply"])   # 格式门
+        fake = types.ModuleType("run_link_log")
+        fake.run_link_log = mock.MagicMock()
+        with mock.patch.object(self.pm, "current_level", "Lv.3"), \
+             mock.patch.dict(sys.modules, {"run_link_log": fake}), \
+             _quiet():
+            data = self._post(good)
+        self.assertIn("后台", data["reply"])   # 受理（后台线程跑 fake）
+        self.assertEqual(data["source"], "⚙️ 系统")
+        time.sleep(0.2)   # 让 daemon 线程跑完 fake，避免 patch 退出后竞态
+
+    # ---------- 回归与一致性 ----------
+    def test_unmatched_slash_still_goes_to_llm(self):
+        """回归锚：未命中斜杠仍走 LLM（拦截不吞正常对话）。"""
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("模型回复", "🏠 本地")
+            resp = self.client.post("/api/chat",
+                                    json={"message": "/not_a_command"})
+        self.assertEqual(resp.get_json()["data"]["reply"], "模型回复")
+        ms.assert_called_once_with("/not_a_command", [])
+
+    def test_wiring_set_subset_of_main_dispatch(self):
+        """清单一致性锚：控制台拦截集 ⊆ main 分发集（防平行清单漂移）；
+        /send_image 永久排除（QQ 专属）。"""
+        src_path = os.path.join(PROJECT_ROOT, "xiaoju3_dashboard.py")
+        with open(src_path, encoding="utf-8") as f:
+            dash_src = f.read()
+        main_path = os.path.join(PROJECT_ROOT, "main.py")
+        with open(main_path, encoding="utf-8") as f:
+            main_src = f.read()
+        wired = ["/clear", "/name", "/reset_fuse", "/register",
+                 "/coder_auth", "/sudo", "/lv4_auth", "/lv4_revoke",
+                 "/soul_export", "/soul_import", "/gen_log"]
+        for cmd in wired:
+            self.assertIn(cmd, dash_src, f"控制台拦截缺 {cmd}")
+            self.assertIn(cmd, main_src, f"main 分发缺 {cmd}")
+        # /send_image 永久排除（QQ 专属）：无分发分支（注释提及不受限）
+        self.assertNotIn('startswith("/send_image")', dash_src)
 
     def test_chat_empty_message_rejected(self):
         """空消息：业务码 400 + 中文错误提示（参考口径：HTTP 200、body 携带 code）。"""

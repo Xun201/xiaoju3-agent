@@ -36,6 +36,11 @@
 参考文档留档。
 注：`/lv4_auth` 在 /help 菜单双段出现——🛡️ 主人级段为「查看类 Root 警告」
 行，🔑 权限段为 confirm 步骤行，故分类列并列两个段名。
+注：**控制台接线（2026-10-04，C' 第一批）**——除 /send_image（QQ 专属
+CQ 通道，永久排除）外，上表全部指令在控制台（dashboard api_chat）可用：
+/help、位置、儿童锁、/creator、待办族为既有拦截；其余 11 条经
+`_console_slash_intercept` 复用 main 既有函数（main.py 零改动），等级门
+同口径（tests/test_dashboard.ConsoleSlashWiringTests 锚定）。
 
 ## 二、自然语言能力（💬 对话直达 · 无需指令，直达意图）
 
