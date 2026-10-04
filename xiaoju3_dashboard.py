@@ -583,6 +583,20 @@ def api_todo_collapsed_groups():
     return jsonify({"code": 200, "data": {"ok": True, "collapsed_groups": saved}})
 
 
+@app.route("/api/todos/<int:todo_id>/note", methods=["POST"])
+def api_todo_note(todo_id):
+    """保存待办说明（2026-10-05 #239 待办说明折叠：编辑模式的 textarea
+    保存入口；低危 UI 状态写端点，安全口径同 api_todo_done）。"""
+    body = request.get_json(silent=True) or {}
+    note = body.get("note")
+    if not isinstance(note, str):
+        return jsonify({"code": 400, "error": "note 必须是字符串"}), 400
+    todo = state_manager.set_todo_note(todo_id, note)
+    if todo is None:
+        return jsonify({"code": 404, "error": f"待办 #{todo_id} 不存在"}), 404
+    return jsonify({"code": 200, "data": {"ok": True, "todo": todo}})
+
+
 @app.route("/api/todos/<int:todo_id>/done", methods=["POST"])
 def api_todo_done(todo_id):
     """标记待办完成。安全注记（设计稿 §6 如实口径）：dashboard 现绑
