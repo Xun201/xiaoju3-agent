@@ -48,6 +48,25 @@ class HelpMenuCategoryTests(unittest.TestCase):
         self.assertIn("/lv4_auth", get_help_menu("Lv.3"))
         self.assertNotIn("升级指引", get_help_menu("Lv.4"))   # 满级无指引
 
+    def test_menu_no_markdown_symbols(self):
+        """纯文本化（2026-10-04 修排版）：菜单零 Markdown 符号——控制台
+        （textContent 注入）与 QQ（文本消息）都不渲染 Markdown，** 与
+        反引号必然裸露。四个等级全查。"""
+        for lv in ("Lv.1", "Lv.2", "Lv.3", "Lv.4"):
+            menu = get_help_menu(lv)
+            self.assertNotIn("**", menu, f"{lv} 菜单裸露 **")
+            self.assertNotIn("`", menu, f"{lv} 菜单裸露反引号")
+
+    def test_todos_clear_confirm_not_in_menu(self):
+        """二次确认口径（2026-10-04）：/todos clear 的 confirm 第二步
+        不进菜单——直接发带 confirm 的消息会跳过安全提示一步清空；
+        /todos clear 本身保留；/lv4_auth confirm 属完成授权必经步骤
+        （无码无法授权），保留口径不受影响。"""
+        menu = get_help_menu("Lv.4")
+        self.assertNotIn("clear confirm", menu)
+        self.assertIn("/todos clear", menu)
+        self.assertIn("/lv4_auth confirm", menu)
+
 
 class HelpMenuVisibilityTests(unittest.TestCase):
     """可见性口径（2026-10-02 锚延续 + 分类化保持）：低等级不见高等级段。"""
