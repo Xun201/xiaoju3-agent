@@ -58,11 +58,14 @@
 【打包规划（已实施：xiaoju3.spec + build_exe.bat，见 docs/EXE_PACKAGING_PLAN.md；
   spawn-self 三角色由 argv 标志分流，route_argv/ROLE_* 常量）】
 """
+import glob
 import os
 import signal
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -345,6 +348,116 @@ def _supervise_backend(state, stop_event, respawn_fn, out=None,
         stop_event.wait(poll_interval)
 
 
+# 旧 _MEI 残留清理阈值（秒，2026-10-04 启动优化拍板③：30 分钟——双开安全
+# 余量比 10 分钟更大；目录 mtime 30 分钟内动过就绝不判残留）
+MEI_STALE_SECONDS = 30 * 60
+
+
+def _dir_size_quiet(path):
+    """目录字节数（os.walk 求和，仅用于清理日志）；任何失败按 0 计。"""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total
+
+
+def _has_other_own_instance():
+    """存在其它本应用冻结实例运行中（进程可执行文件与当前同名且非本
+    pid）→ True。双开第一保险：mtime 只能防"新并行实例"，防不了"长驻
+    实例仍在用"（长驻 >30 分钟的解包目录 mtime 必然过期）——只要有同名
+    实例活着就整体跳过本轮清理（卫生项机会主义，宁漏勿误）。psutil 未装
+    或枚举失败返回 False（退回 mtime 单判，不阻塞）。"""
+    try:
+        import psutil
+    except ImportError:
+        return False
+    try:
+        me = os.getpid()
+        image = os.path.basename(sys.executable).lower()
+        for proc in psutil.process_iter(["pid", "exe"]):
+            info = proc.info
+            if info.get("pid") == me:
+                continue
+            exe = info.get("exe")
+            if exe and os.path.basename(exe).lower() == image:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _meipass_in_use(path):
+    """单目录存活探测：任一进程的可执行文件位于 path 下 → True（本应用
+    崩溃后 playwright node 驱动等子进程可能滞留，仍握着旧解包目录）。
+    psutil 未装/枚举失败返回 False（退回 mtime 单判）。"""
+    try:
+        import psutil
+    except ImportError:
+        return False
+    try:
+        norm = os.path.normcase(os.path.normpath(path)) + os.sep
+        for proc in psutil.process_iter(["exe"]):
+            exe = proc.info.get("exe")
+            if exe and os.path.normcase(os.path.normpath(exe)).startswith(norm):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _cleanup_stale_meipass():
+    """清理 Temp 下历史残留的 _MEI* 解包目录（2026-10-04 启动优化拍板③；
+    frozen 才执行，main() 最早期调用）。正常退出 PyInstaller 自清，强杀/
+    崩溃残留（实测 10 代 5 目录 868MB）。安全序：① 其它同名实例存活 →
+    整体跳过（防长驻实例的解包目录被 mtime 误判）；② 跳过自身
+    sys._MEIPASS 与非目录项；③ 30 分钟内动过的不碰（MEI_STALE_SECONDS）；
+    ④ 仍有进程握着该目录（_meipass_in_use）的跳过；⑤ 删除静默容错
+    （rmtree ignore_errors——Explorer/杀软句柄占用不报错不阻塞），只对
+    删净的目录计释放量并打一行 🧹 日志。对启动耗时无直接收益（onefile
+    每次新解包不复用），纯磁盘卫生项；任何异常静默吞掉，绝不影响启动。"""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        if _has_other_own_instance():
+            return
+        own = os.path.normcase(os.path.normpath(
+            getattr(sys, "_MEIPASS", "")))
+        cutoff = time.time() - MEI_STALE_SECONDS
+        stale = []
+        for path in glob.glob(os.path.join(tempfile.gettempdir(), "_MEI*")):
+            if not os.path.isdir(path):
+                continue
+            if own and os.path.normcase(os.path.normpath(path)) == own:
+                continue
+            try:
+                if os.path.getmtime(path) > cutoff:
+                    continue
+            except OSError:
+                continue
+            if _meipass_in_use(path):
+                continue
+            stale.append(path)
+        if not stale:
+            return
+        freed = 0
+        cleaned = 0
+        for path in stale:
+            size = _dir_size_quiet(path)
+            shutil.rmtree(path, ignore_errors=True)
+            if not os.path.exists(path):
+                cleaned += 1
+                freed += size
+        if cleaned:
+            _print(f"🧹 已清理 {cleaned} 处历史解包残留，"
+                   f"释放 {freed / (1024 * 1024):.0f} MB")
+    except Exception:
+        pass   # 卫生项：任何异常（tempdir 不可用等）静默，绝不影响启动
+
+
 def main(argv=None):
     """入口：缺 pywebview 中文提示退出；拉后台服务 → 占位窗 → 就绪导航 →
     关闭全清理（端口修复 P2：内置随机服务退役，窗口直挂 :5003）。
@@ -352,6 +465,7 @@ def main(argv=None):
     返回退出码：0 正常（窗口关闭并清理完成）；1 环境不满足（缺 pywebview）。
     argv 参数保留兼容既有调用形态（launcher.main([])），当前不消费。
     """
+    _cleanup_stale_meipass()   # 🧹 上代 _MEI 残留清理（拍板③）：frozen 才执行，静默不阻塞
     from xiaoju3_launcher import _redirect_stdio  # 延迟导入：非 frozen 依赖面零变化
     _redirect_stdio("desktop")  # frozen 入口重定向（步 3）；非 frozen 空操作
     try:
