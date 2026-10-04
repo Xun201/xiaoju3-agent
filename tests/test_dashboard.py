@@ -2010,8 +2010,7 @@ class TestVersionBadge(unittest.TestCase):
         resp = self.client.get("/api/status")
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()["data"]
-        self.assertEqual(data["version"], xiaoju3.XIAOJU3_VERSION)
-        self.assertEqual(data["version"], "1.0.1")
+        self.assertEqual(data["version"], xiaoju3.XIAOJU3_VERSION)  # 单一事实源透传 + 版本钉（引常量，升版零改动）
 
     def test_header_version_element_in_console_html(self):
         """/console 页（index.html）含 header-version 徽标元素与样式锚

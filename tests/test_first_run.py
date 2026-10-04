@@ -225,7 +225,7 @@ class FirstRunEndpointsTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()["data"]
         self.assertTrue(data["first_run"])
-        self.assertEqual(data["version"], "1.0.1")
+        self.assertEqual(data["version"], xiaoju3.XIAOJU3_VERSION)  # 引常量，升版零改动
 
         with mock.patch.object(first_run, "is_first_run", return_value=False), \
              mock.patch.object(first_run, "run_probes",
