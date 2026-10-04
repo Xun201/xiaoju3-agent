@@ -66,6 +66,41 @@ class DesktopPetFlipSnapTests(unittest.TestCase):
         # 核心判定：centerX < 中线 → 朝右（左半边朝右、右半边朝左，朝向中心）
         self.assertRegex(self.js, r"centerX\s*<\s*midLine\s*\?\s*'right'\s*:\s*'left'")
 
+
+class DesktopPetResizeGeometryTests(unittest.TestCase):
+    """窗口缩放几何（2026-10-04 尾巴 3+4）：底界含输入框 + 右/下贴边锚点跟随
+    + 缩球态守卫 + 视口记忆基线。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = PET_JS.read_text(encoding="utf-8")
+
+    def _resize_body(self):
+        start = self.js.index("window.addEventListener('resize'")
+        end = self.js.index("});", start)
+        return self.js[start:end]
+
+    def test_resize_bottom_limit_uses_input_area(self):
+        # 尾巴 A：resize 收钳底界与拖拽/出生位同口径（输入框上沿），
+        # 不得再出现裸 window.innerHeight 直接收钳 top 的旧写法
+        body = self._resize_body()
+        self.assertIn("chat-input-area", body)
+        self.assertIn("limitBottom", body)
+
+    def test_resize_anchor_follows_edges(self):
+        # 尾巴 B：右/下贴边锚点跟随（旧窗距离 + ε 容差 + 贴边保持）
+        body = self._resize_body()
+        self.assertIn("distRight", body)
+        self.assertIn("distBottom", body)
+        self.assertIn("ANCHOR_EPSILON", body)
+
+    def test_resize_guard_and_viewport_memory(self):
+        # 缩球态守卫（display:none 早退）+ lastViewport 视口记忆基线
+        body = self._resize_body()
+        self.assertIn("display === 'none'", body)
+        self.assertIn("captureViewport()", self.js)
+        self.assertIn("lastViewport", self.js)
+
     def test_old_drag_direction_flip_removed(self):
         # 旧的"拖拽水平位移方向决定面向"逻辑已移除（翻错方向的根因）
         self.assertNotIn("dx > 0 ? 'right' : 'left'", self.js)

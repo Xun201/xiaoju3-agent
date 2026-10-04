@@ -424,6 +424,7 @@
         // 出生/校准位置后按位置定面向（默认出生右下角 → 朝左即朝向屏幕中心）
         updateFacingByPosition();
         positionInitialized = true;   // 成功定位后置位：后续换图 load 只刷渲染模式，不再动坐标
+        captureViewport();            // 出生位即视口记忆基线（resize 锚点对比用）
     }
 
     function pressDown() { body.style.transform = 'scaleY(0.88) scaleX(1.05)'; }
@@ -569,13 +570,60 @@
         drag = null;
     });
 
+    // ==================== 窗口缩放几何（2026-10-04 尾巴 3+4 重写） ====================
+    // 视口记忆：resize 前后对比基准——右/下贴边锚点需要"旧窗下"的距离；
+    // initPosition 与本处理器末尾各 capture 一次。
+    let lastViewport = { w: window.innerWidth, h: window.innerHeight, inputTop: null };
+
+    function captureViewport() {
+        const inputArea = document.querySelector('.chat-input-area');
+        lastViewport = {
+            w: window.innerWidth,
+            h: window.innerHeight,
+            inputTop: inputArea ? inputArea.getBoundingClientRect().top : null,
+        };
+    }
+
     window.addEventListener('resize', () => {
+        // 缩球态守卫：display:none 下 rect 全 0，会把垃圾坐标写进 state
+        // （与 initPosition 守卫同口径）
+        if (getComputedStyle(root).display === 'none') {
+            captureViewport();
+            return;
+        }
         applyPetScale();
         const rect = root.getBoundingClientRect();
-        state.left = Math.min(state.left, window.innerWidth - rect.width);
-        state.top = Math.min(state.top, window.innerHeight - rect.height);
+
+        // 旧窗基准下的右/下缘距离（底界含输入框上沿——与拖拽/出生位同口径）
+        const oldLimitBottom = lastViewport.inputTop !== null
+            ? Math.min(lastViewport.h, lastViewport.inputTop)
+            : lastViewport.h;
+        const distRight = lastViewport.w - (state.left + rect.width);
+        const distBottom = oldLimitBottom - (state.top + rect.height);
+
+        // 新窗可用域：底界取输入框上沿（尾巴 A 根因即旧代码此处漏算输入框，
+        // 缩窗后桌宠被 window.innerHeight 收钳压进发送条）
+        let limitBottom = window.innerHeight;
+        const inputArea = document.querySelector('.chat-input-area');
+        if (inputArea) limitBottom = inputArea.getBoundingClientRect().top;
+        let limitLeft = 0;
+        const chatArea = document.querySelector('.chat-area');
+        if (chatArea) limitLeft = chatArea.getBoundingClientRect().left;
+        const maxX = window.innerWidth - rect.width;
+        const maxY = limitBottom - rect.height;
+
+        // 右/下贴边锚点跟随（尾巴 B）：缩窗时贴着右/下边的桌宠，放大窗口后
+        // 保持贴边——旧代码只做 Math.min 收钳，放大后旧坐标原样保留，桌宠
+        // 滞留"中间"（ε=2px 容差判定"贴边"，吸附后的贴边距恒 0）
+        const ANCHOR_EPSILON = 2;
+        state.left = (distRight <= ANCHOR_EPSILON) ? maxX
+            : Math.max(limitLeft, Math.min(state.left, maxX));
+        state.top = (distBottom <= ANCHOR_EPSILON) ? maxY
+            : Math.max(0, Math.min(state.top, maxY));
+
         express();
         updateFacingByPosition();   // 窗口剧变可能导致所在半区变化，按新位置重算
+        captureViewport();
     });
 
     // 请求后端获取真实余额（余额 + 今日已用）
