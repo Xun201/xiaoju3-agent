@@ -67,7 +67,7 @@ from intent_router import dispatch, route
 from migration import PeerWatch, export_soul_bundle, import_soul_bundle
 from permission import permission_manager
 from plugins.context_manager import compress_context
-from plugins.todo_extractor import check_recent_url, extract_todos_from_url_sync, mark_url
+from plugins.todo_extractor import check_recent_url, clear_recent_urls, extract_todos_from_url_sync, mark_url
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool, get_recent_actions
 from xiaoju3 import (AGENT_STATE_DIR, CHILD_LOCK_ENABLED, CLOUD_KEY,
@@ -649,6 +649,26 @@ def handle_todo_command(raw_message, message, user_id, group_id, steps=None):
             return ("❌ 权限不足，待办查询需要 Lv.2（普通用户）权限。"
                     "请先 /register <密码> 注册升级。")
         steps.append("门禁通过（Lv.2 及以上）")
+        if "/todos clear" in raw_message:
+            # 🗑️ 清空全部待办（2026-10-04）：破坏性操作，Lv.3 门禁 + 无状态
+            # 二次确认（首次提示、confirm 才真清，不记忆"待确认"状态）
+            if permission_manager.level_value() < 3:
+                steps.append("门禁拒绝：清空为破坏性操作，需要 Lv.3，当前 "
+                             + permission_manager.current_level)
+                return ("❌ 安全拒绝：清空待办是破坏性操作，需要 Lv.3（代码编写者）"
+                        "权限。请先 /coder_auth <动态密码> 升级。")
+            if "/todos clear confirm" in raw_message:
+                deleted = state_manager.clear_todos()
+                clear_recent_urls()   # 同步清内存防抖层：清空后同链接可重提
+                steps.append(f"已清空 {deleted} 条待办（pending+done）")
+                return ("🗑️ 已清空全部待办。"
+                        f"24 小时提取查重也已重置，任何链接都可以重新提取。")
+            pending_count = len(state_manager.get_todos(status="pending", limit=200))
+            done_count = len(state_manager.get_todos(status="done", limit=1000))
+            steps.append(f"二次确认提示：将清空 pending {pending_count} 条 + done {done_count} 条")
+            return (f"⚠️ 将清空全部待办 {pending_count + done_count} 条"
+                    f"（未完成 {pending_count} + 已完成 {done_count}），不可恢复。\n"
+                    f"确认请回复：/todos clear confirm")
         if "/todos done" in raw_message:
             done_arg = (_arg_after(raw_message, "/todos done") or "").strip()
             try:

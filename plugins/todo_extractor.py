@@ -78,6 +78,12 @@ def unmark_url(url):
     _RECENT_URLS.pop(normalize_url(url), None)
 
 
+def clear_recent_urls():
+    """清空进程内 URL 防抖表（/todos clear confirm 时同步调用——todos 表
+    已清则持久查重层随之失效，内存层不清会与"清空后可重提"语义冲突）。"""
+    _RECENT_URLS.clear()
+
+
 def build_extraction_prompt(chunk_text):
     """分片提炼 prompt（设计稿 §3.2 逐字定稿；规则 3 = 提示注入主防线）。
 

@@ -222,6 +222,21 @@ class StateManager:
         return next((t for t in self.get_todos(status="pending", limit=1000)
                      if t["id"] == int(todo_id)), None)
 
+    def clear_todos(self):
+        """清空 todos 表全部行（pending + done；2026-10-04 /todos clear）。
+
+        返回删除条数。注意：不清 memories 等其他表；24h 提取查重的
+        todos.created_at 依赖随之清空 → 清空后同链接可重新提取（预期语义，
+        调用方需同步 todo_extractor.clear_recent_urls() 清内存防抖层）。
+        """
+        conn = sqlite3.connect(self.memory_db)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM todos")
+        conn.commit()
+        deleted = cursor.rowcount
+        conn.close()
+        return deleted
+
     def save_conversation(self, source, messages):
         """把对话历史独立出来，避免污染代码（只保留最近 MAX_MESSAGES 条）"""
         conv_dir = os.path.join(self.base_dir, "conversations")
