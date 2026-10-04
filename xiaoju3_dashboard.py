@@ -809,6 +809,19 @@ def api_chat():
                          "source": "⚙️ 系统"}
             })
 
+        # === 🛡️ 控制台斜杠指令接线（C' 第一批，2026-10-04）：位置/儿童锁/
+        # creator/待办族/help 由上方既有拦截块负责，其余斜杠走本拦截——
+        # 只复用 main 既有函数与 permission_manager 单例，main.py 零改动；
+        # /send_image 永久排除（QQ 专属 CQ 通道）
+        intercept = _console_slash_intercept(user_msg)
+        if intercept is not None:
+            reply, source = intercept
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(reply),
+                         "source": source}
+            })
+
         history = data.get("history") or []
         print(f"[香橙派收到消息] {user_msg}")
         reply, source = smart_ask(user_msg, history)
@@ -1008,6 +1021,122 @@ def _sync_todos_from_source(target_db=None):
         return f"ok: 已同步 {count} 条待办（源: {source}）"
     except Exception as e:
         return f"❌ 待办同步失败（目标保持原状，下次启动重试）: {e}"
+
+
+def _console_slash_intercept(user_msg):
+    """控制台斜杠指令拦截（C' 第一批，2026-10-04）：main 分发块
+    （main.py:739-883）的控制台复用适配层——只调用 main 既有函数与
+    permission_manager 全局单例，main.py 零改动。
+
+    返回 (reply, source) = 命中；None = 未命中（继续走 smart_ask）。
+    - /send_image 永久排除：QQ 专属（CQ:image 回 OneBot），控制台无意义；
+    - 位置/儿童锁//creator/待办族/help 由 api_chat 既有拦截块负责，不在
+      本函数（防重复接线）；
+    - /clear 控制台口径：只清 history_console.json（_clear_console_history），
+      不动 QQ 双通道记忆文件；
+    - 等级门与 main.py 各分支同口径（permission_manager 全局单例，
+      控制台单一用户 user_id='console'，权限执行仍收口在既有函数）。
+    """
+    text = user_msg.strip()
+
+    # ⚙️ 清空会话记忆（/clear | /reset | 清空记忆 | 重置记忆）——控制台
+    # 口径：只清控制台历史，QQ 双通道记忆文件不动（与 main.py:739 分叉）
+    if text in ("/clear", "/reset", "清空记忆", "重置记忆"):
+        _clear_console_history()
+        return ("✨ 控制台对话记忆已清空（仅控制台历史，QQ 通道不受影响）。",
+                "⚙️ 系统")
+
+    # 🔑 /register <密码> [昵称]：注册 / 更新注册 → Lv.2（自助）
+    if text.startswith("/register"):
+        parts = main._arg_after(user_msg, "/register").strip().split(None, 1)
+        password = parts[0] if parts else ""
+        name = parts[1].strip() if len(parts) > 1 else None
+        return (main.permission_manager.register_user(
+                    "console", password, name=name), "🔑 权限")
+
+    # ⚙️ /name <昵称>：认领称呼（Lv.2 门在 claim_name 内）
+    if text.startswith("/name"):
+        return (main.permission_manager.claim_name(
+                    "console", main._arg_after(user_msg, "/name")),
+                "⚙️ 系统")
+
+    # ⚙️ /reset_fuse：重置工具熔断（Lv.2 门同 main.py:827）
+    if text.startswith("/reset_fuse"):
+        if main.permission_manager.level_value() < 2:
+            return ("❌ 权限不足，该指令需要 Lv.2（普通用户）权限。"
+                    "请先 /register <密码> 注册升级。", "⚙️ 系统")
+        main.reset_tool_fuse()
+        return ("✅ 防死循环熔断计数已重置，工具调用权限已恢复。", "⚙️ 系统")
+
+    # 🔑 /coder_auth <6位动态密码>：TOTP 激活 Lv.3（持久生效）
+    if text.startswith("/coder_auth"):
+        return (main.permission_manager.activate_lv3(
+                    "console", main._arg_after(user_msg, "/coder_auth")),
+                "🔑 权限")
+
+    # 🔑 /sudo <6位动态密码>：120 秒写操作窗口（Lv.3 兼容保留，同 main.py:794）
+    if text.startswith("/sudo"):
+        code = main._arg_after(user_msg, "/sudo")
+        if not code:
+            return ("用法：/sudo <6位动态密码>——开启 120 秒写操作窗口"
+                    "（Lv.3 已可直接写文件，本指令为兼容保留）。", "🔑 权限")
+        return (main.permission_manager.open_operation_window(
+                    None, totp_code=code), "🔑 权限")
+
+    # 🔑 /lv4_auth 两步流：类 Root 警告 → confirm 双因子授权（同 main.py:802）
+    if text.startswith("/lv4_auth"):
+        main._ensure_biometric_sim()
+        rest = main._arg_after(user_msg, "/lv4_auth")
+        if not rest:
+            return (main.root_warning(print_warning=False) +
+                    "\n\n理解并接受上述风险后，请发送 "
+                    "/lv4_auth confirm <6位动态密码> 完成双因子授权。",
+                    "🔑 权限")
+        if rest.startswith("confirm"):
+            totp = rest[len("confirm"):].strip()
+            ok, detail = main.permission_manager.lv4_mfa_check(
+                "console", {"totp": totp, "biometric": "biometric"})
+            if not ok:
+                return (f"❌ Lv.4 双因子认证未通过：\n{detail}", "🔑 权限")
+            return (main.permission_manager.grant_lv4(
+                        "console", {"confirmed": True, "totp": totp,
+                                    "biometric": "biometric"}), "🔑 权限")
+        return ("用法：/lv4_auth 查看类 Root 警告；"
+                "/lv4_auth confirm <6位动态密码> 完成授权。", "🔑 权限")
+
+    # 🔑 /lv4_revoke：撤销主人级权限（立即生效）
+    if text.startswith("/lv4_revoke"):
+        return (main.permission_manager.revoke_lv4("console"), "🔑 权限")
+
+    # 🧠 灵魂备份（Lv.3+）/ 恢复（Lv.4）——main 既有函数内含等级门
+    if text.startswith("/soul_export") or text.startswith("/soul_import"):
+        return (main.handle_soul_command(text, user_msg), "🧠 记忆")
+
+    # ⚙️ /gen_log <分享链接>：后台提取开发日志（Lv.3；控制台完成即静默
+    # 落 dev_logs 文件夹——QQ 通知路径不适用，其余同 main.py:834）
+    if "/gen_log" in user_msg:
+        if main.permission_manager.level_value() < 3:
+            return ("❌ 权限不足，开发日志提取需要 Lv.3（代码编写者）权限。\n"
+                    "请先发送 /coder_auth <6位动态密码> 升级后再试。",
+                    "⚙️ 系统")
+        log_url = main._arg_after(user_msg, "/gen_log")
+        if not log_url.startswith(main.SHARE_PREFIX):
+            return ("⚠️ 请提供正确的 DeepSeek 分享链接，格式："
+                    "/gen_log https://chat.deepseek.com/share/...", "⚙️ 系统")
+
+        def _run_console_log_extraction(target_url):
+            try:
+                import run_link_log
+                run_link_log.run_link_log(target_url)
+            except Exception as e:
+                print(f"⚠️ 控制台日志提取后台报错: {e}")
+
+        threading.Thread(target=_run_console_log_extraction,
+                         args=(log_url,), daemon=True).start()
+        return ("🔄 收到链接啦！小橘3号正在后台阅读和总结（大约需要 1 分钟）。"
+                "完成后日志会自动保存到 dev_logs 文件夹里！", "⚙️ 系统")
+
+    return None
 
 
 def serve():
