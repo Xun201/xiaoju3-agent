@@ -2477,5 +2477,20 @@ class FrozenSpecPlaywrightAnchorTests(unittest.TestCase):
         self.assertIn("+ pw_hiddenimports", spec)
 
 
+class OpenAiPreheatAnchorTests(unittest.TestCase):
+    """openai 后台预热接线静态锚（2026-10-04 启动优化拍板①）：dashboard
+    serve() 在 app.run 前调 vision_tools.preheat_openai_async()——防预热
+    挂钩被误删回退到"视觉首用卡 ≈0.6s 导入"的旧口径。"""
+
+    def test_serve_calls_preheat_before_app_run(self):
+        with open(os.path.join(PROJECT_ROOT, "xiaoju3_dashboard.py"),
+                  "r", encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn("import vision_tools", src)
+        call_at = src.index("vision_tools.preheat_openai_async()")
+        app_run_at = src.index("app.run(host=")
+        self.assertLess(call_at, app_run_at)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -149,6 +149,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 
 import win_process
 import tempfile
@@ -158,13 +159,61 @@ from adb_tools import adb_screenshot, adb_tap, SCREENSHOT_PATH
 from android_ui_tools import file_md5
 from xiaoju3 import VISION_MODEL, VISION_KEY, VISION_API_URL
 
-# 官方 SDK：延迟可用性检查——未安装时模块仍可导入，调用时给清晰中文提示
-try:
-    from openai import OpenAI as _OpenAIClient
-    import openai as _openai
-except ImportError:  # pragma: no cover - 依赖缺失场景
-    _OpenAIClient = None
-    _openai = None
+# 官方 SDK 惰性导入（2026-10-04 启动优化拍板①）：openai 及其依赖链
+# （aiohttp/pydantic_core 等）import 耗时 ≈0.6s，且主进程/dashboard 子进程
+# 各走一遍同链——原顶层 try-import 只防缺库不延迟时机，改为首次真实调用
+# 时导入（_ensure_openai）+ 服务就绪后后台预热（preheat_openai_async，
+# dashboard serve() 拉起）。状态语义：None=尚未尝试；False=缺库哨兵（不再
+# 重试）；openai 模块对象=已就绪。异常判定门由"is not None"改真值
+# （_is_network_error/_http_status_of——None 与 False 均为假）。
+_OpenAIClient = None  # openai.OpenAI 类（就绪后赋值；测试注入 mock 时不覆盖）
+_openai = None        # openai 模块对象（就绪后赋值）
+
+
+def _ensure_openai():
+    """首次真实调用时导入 openai SDK（2026-10-04 启动优化拍板①）。幂等 +
+    线程安全：import 有缓存、赋值结果一致，并发重复导入无害。缺库置
+    False 哨兵并保留"调用时清晰中文提示"口径；外部注入过 _OpenAIClient
+    （测试 mock 形态）时只补载模块对象、不覆盖客户端类——异常 isinstance
+    判定依赖真模块，客户端构造仍走注入方。"""
+    global _OpenAIClient, _openai
+    if _openai is not None:
+        return
+    try:
+        import openai as _mod
+        from openai import OpenAI as _cls
+    except ImportError:  # pragma: no cover - 依赖缺失场景
+        _OpenAIClient = False
+        _openai = False
+        return
+    _openai = _mod
+    if _OpenAIClient is None:
+        _OpenAIClient = _cls
+
+
+# 后台预热延迟（秒，2026-10-04 拍板①）：服务就绪后再等这么久才导入，
+# 避开启动竞速窗口——用户几乎不可能在界面出来后几秒内就触发视觉回退
+OPENAI_PREHEAT_DELAY = 5.0
+
+
+def preheat_openai_async(delay=OPENAI_PREHEAT_DELAY):
+    """后台 daemon 线程预热 openai SDK（2026-10-04 启动优化拍板①）：
+    启动路径零 openai 开销，服务就绪后延迟导入——用户真用到视觉回退
+    点击时 SDK 已就绪不卡首用；预热完成前就调用的罕见场景由
+    vision_tap_element 入口 _ensure_openai 同步导入兜底（一次 ≈0.6s）。
+    幂等：已就绪/已判缺库时空转。预热是尽力而为：任何异常静默吞掉，
+    真调用时 _ensure_openai 会再给出缺库提示。返回线程对象（测试 join
+    收口用；生产忽略返回值）。"""
+    def _worker():
+        time.sleep(delay)
+        try:
+            _ensure_openai()
+        except Exception:
+            pass
+    thread = threading.Thread(target=_worker, name="openai-preheat",
+                              daemon=True)
+    thread.start()
+    return thread
 
 # 排查指引：只进控制台诊断日志，不随错误串返回聊天框（2026-09-30 用户指令）
 _GUIDANCE_FULL = (
@@ -286,7 +335,7 @@ def _print_request_failure(endpoint, status, body_summary, note=None):
 def _is_network_error(e):
     """是否网络类错误（可重试）：连接被重置/超时等。ConnectionResetError
     （10054）是 ConnectionError 子类，天然覆盖。"""
-    if _openai is not None and isinstance(
+    if _openai and isinstance(
             e, (_openai.APIConnectionError, _openai.APITimeoutError)):
         return True
     return isinstance(e, (ConnectionError, TimeoutError))
@@ -294,7 +343,7 @@ def _is_network_error(e):
 
 def _http_status_of(e):
     """从异常中提取 HTTP 状态码；非 HTTP 层错误返回 None。"""
-    if _openai is not None and isinstance(e, _openai.APIStatusError):
+    if _openai and isinstance(e, _openai.APIStatusError):
         return getattr(e, "status_code", None) or "未知"
     return None
 
@@ -620,7 +669,8 @@ def _page_change_outcome(before_snapshot):
 
 def vision_tap_element(element_name):
     """AI 看图 -> 识别元素像素坐标 -> 换算真实坐标 -> 自动点击"""
-    if _OpenAIClient is None:
+    _ensure_openai()  # 惰性导入兜底（拍板①）：预热未完成时此处同步补载
+    if not _OpenAIClient:
         return "❌ 未安装 openai SDK（pip install openai），无法使用视觉点击功能。"
     if not VISION_KEY:
         return "❌ 未配置视觉 API Key，无法使用视觉点击功能。"

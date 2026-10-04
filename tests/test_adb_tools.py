@@ -54,12 +54,17 @@ y=847/2712=31.2% 被强推到 y=982 误点"我的设备"的漂移；≥40% →
 屏高两级疑似区 → 返回串追加"⚠️ 视觉模型可能识别到了顶部区域（如
 账号/搜索框），建议手动确认。"，≥40% 不追加，单次点击（无二次确认）
 路径同样追加）与 android_ui_tools.file_md5（stdlib hashlib，失败
-返回 None）。
+返回 None）。openai 惰性导入与后台预热（2026-10-04 启动优化拍板①）：
+vision_tools 顶层零 openai（子进程锚：干净解释器导入后 sys.modules 无
+openai 且惰性状态 None/None）、_ensure_openai 真实导入 / 就绪早退 /
+注入客户端不覆盖三语义、缺库 False 哨兵走"未安装"提示且不二次导入、
+preheat_openai_async daemon 线程延迟调 _ensure_openai 恰一次。
 """
 import contextlib
 import importlib.util
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1817,6 +1822,81 @@ class EnvExampleVisionModelTests(unittest.TestCase):
         vision_lines = [ln.strip() for ln in content.splitlines()
                         if ln.strip().startswith("VISION_MODEL=")]
         self.assertEqual(vision_lines, ["VISION_MODEL=qwen-vl-max-latest"])
+
+
+class VisionLazyImportTests(unittest.TestCase):
+    """openai 惰性导入 + 后台预热（2026-10-04 启动优化拍板①）：
+    vision_tools 顶层不再拉 openai 及其依赖链（importtime 实测 openai 链
+    609ms 为全链最大单点，冷启动按进程数翻倍）；首次真实调用由
+    _ensure_openai 同步导入兜底；dashboard serve() 就绪后 daemon 线程
+    延迟预热（接线锚在 test_dashboard.OpenAiPreheatAnchorTests）。子进程
+    锚保证与"测试进程顶层已 import openai"的现实隔离——本文件头即
+    import openai，sys.modules 断言只有干净子进程才有意义。"""
+
+    def test_import_vision_tools_does_not_load_openai(self):
+        """子进程锚：导入 vision_tools 后 openai 不在 sys.modules、
+        惰性状态为"尚未尝试"（None/None）。"""
+        code = (
+            "import sys, vision_tools; "
+            "assert 'openai' not in sys.modules, 'openai 被顶层导入'; "
+            "assert vision_tools._openai is None; "
+            "assert vision_tools._OpenAIClient is None"
+        )
+        result = subprocess.run([sys.executable, "-c", code], cwd=_ROOT,
+                                capture_output=True, text=True, timeout=180)
+        self.assertEqual(
+            result.returncode, 0,
+            "vision_tools 顶层不应导入 openai:\n" + result.stderr)
+
+    def test_ensure_openai_loads_module_and_class(self):
+        """真实导入路径：None/None 起步 → 模块与类就绪（开发环境 openai
+        必装——本文件顶层已 import openai）。"""
+        with mock.patch.object(vision_tools, "_openai", None), \
+             mock.patch.object(vision_tools, "_OpenAIClient", None):
+            vision_tools._ensure_openai()
+            self.assertIs(vision_tools._openai, openai)
+            self.assertIs(vision_tools._OpenAIClient, openai.OpenAI)
+
+    def test_ensure_openai_ready_short_circuits(self):
+        """幂等早退：_openai 已就绪（非 None）→ 直接返回不再导入（若误
+        导入，_openai 会被改写成真模块，哨兵同一性断言即失败）。"""
+        sentinel = object()
+        with mock.patch.object(vision_tools, "_openai", sentinel):
+            vision_tools._ensure_openai()
+            self.assertIs(vision_tools._openai, sentinel)
+
+    def test_ensure_openai_preserves_injected_client(self):
+        """注入过 _OpenAIClient（VisionToolsTests._patch_client 的 mock
+        形态）→ 只补载模块对象供异常 isinstance 判定，不覆盖注入的客户端
+        类（真类冲掉 mock 会让请求断言全部落空）。"""
+        injected = mock.MagicMock()
+        with mock.patch.object(vision_tools, "_openai", None), \
+             mock.patch.object(vision_tools, "_OpenAIClient", injected):
+            vision_tools._ensure_openai()
+            self.assertIs(vision_tools._openai, openai)
+            self.assertIs(vision_tools._OpenAIClient, injected)
+
+    def test_missing_sdk_sentinel_keeps_hint_and_no_retry(self):
+        """缺库哨兵（False）语义：入口给既定"未安装"提示，哨兵不被重置
+        （不二次导入）。"""
+        with mock.patch.object(vision_tools, "_openai", False), \
+             mock.patch.object(vision_tools, "_OpenAIClient", False):
+            self.assertEqual(
+                vision_tools.vision_tap_element("设置"),
+                "❌ 未安装 openai SDK（pip install openai），无法使用视觉点击功能。")
+            self.assertIs(vision_tools._openai, False)
+            self.assertIs(vision_tools._OpenAIClient, False)
+
+    def test_preheat_async_runs_ensure_in_daemon_thread(self):
+        """预热接线：daemon 线程延迟 delay 后调一次 _ensure_openai
+        （mock 收口不真导入；delay=0 立即触发，join 限时防悬挂）。"""
+        recorder = mock.MagicMock()
+        with mock.patch.object(vision_tools, "_ensure_openai", recorder):
+            thread = vision_tools.preheat_openai_async(delay=0)
+            thread.join(timeout=10)
+        self.assertTrue(thread.daemon)
+        self.assertEqual(thread.name, "openai-preheat")
+        recorder.assert_called_once_with()
 
 
 if __name__ == "__main__":
