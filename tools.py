@@ -53,6 +53,7 @@ import subprocess
 import time
 
 import win_process
+import tool_registry
 from xiaoju3 import WORKSPACE, AGENT_STATE_DIR, VISION_MODEL, VISION_KEY
 from plugins import todo_extractor
 from plugins.link_logger import LinkFetchError, validate_share_url
@@ -63,29 +64,21 @@ from vision_tools import vision_tap_element
 from android_ui_tools import ui_tap_element
 from search_tools import web_search
 
-# 工具白名单（15 项，2026-10-02 权限重构 +restart_service；2026-10-04 待办提取
-# +extract_todos）：与 prompts.py 工具协议一致。注意：brain.TOOL_WHITELIST
-# （大脑入口白名单）需同步追加，工具才可经 smart_ask 链路触发。
-TOOL_WHITELIST = [
-    "list_files", "read_file", "write_file", "get_ha_devices",
-    "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
-    "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
-    "read_core_memory", "restart_service", "extract_todos",
-]
+# 工具白名单（15 项）：唯一真相 = tool_registry.TOOL_MANIFEST（2026-10-04
+# model_tool 合并钩子，docs/ARCHITECTURE_BOUNDARY.md §3.3）——白名单/权限组/
+# prompts 工具协议段三处全部由登记表派生，brain 侧直接引用本清单（双清单
+# 手工同步退役）；锚：tests/test_tools.py 一致性 + test_brain.py 数量（15 不变）。
+TOOL_WHITELIST = tool_registry.whitelist_names()
 
 # 高危工具集合（语义更新为 §7 新门禁，逐工具门禁见模块 docstring 与
-# execute_tool 内实现，不再共用单一 LV3 前置门禁）
-DANGER_TOOLS = {"write_file", "adb_tap", "adb_swipe", "control_ha_device"}
+# execute_tool 内实现，不再共用单一 LV3 前置门禁）——登记表派生（2026-10-04）
+DANGER_TOOLS = tool_registry.danger_set()
 
-# 需 Lv.2 / Lv.3 / Lv.4 等级的工具分组（2026-10-02 权限重构定稿；
-# 2026-10-04 +extract_todos——待办提取为个人低危数据，LV2 与指令层同门禁）
-_LV2_TOOLS = {"read_file", "list_files", "extract_todos"}
-_LV3_TOOLS = {"write_file"}
-# Lv.4 主人级工具（2026-10-02 定稿：ADB 全套升 Lv4；send_image 能力声明
-# ——其实际门禁在 main.py /send_image 指令（本批不动 main.py，批次②对齐
-# 数值）；restart_service 分支见 execute_tool）
-_LV4_TOOLS = {"adb_screenshot", "adb_tap", "adb_swipe", "ui_tap_element",
-              "vision_tap_element", "send_image", "restart_service"}
+# 需 Lv.2 / Lv.3 / Lv.4 等级的工具分组（2026-10-02 权限重构定稿）——
+# 登记表 level 字段派生（含 send_image 非协议能力声明，level=4、不进白名单）
+_LV2_TOOLS = tool_registry.level_set(2)
+_LV3_TOOLS = tool_registry.level_set(3)
+_LV4_TOOLS = tool_registry.level_set(4)
 
 # 沙箱越界拒绝文案
 _DENY_OUTSIDE = "❌ 安全拒绝：不允许访问工作区以外的文件！"
@@ -155,7 +148,7 @@ RECENT_ACTIONS_FILE = os.path.join(AGENT_STATE_DIR, "recent_actions.json")
 RECENT_ACTIONS_LIMIT = 5
 
 # 设备操作类工具（写入型，执行成功才记录）；读取类如 adb_screenshot 不算
-ACTION_TOOLS = {"control_ha_device", "adb_tap", "adb_swipe"}
+ACTION_TOOLS = tool_registry.action_set()   # 登记表 is_action 字段派生（2026-10-04）
 
 
 def _summarize_action(tool_name, args):
@@ -501,6 +494,15 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
             timer.daemon = False   # 回复先经 Flask 刷出，再执行退出
             timer.start()
             return result
+
+        # === 插件模型工具统一分派（2026-10-04 合并钩子，docs/
+        #     ARCHITECTURE_BOUNDARY.md §3.3）：handler 字符串登记在
+        #     tool_registry.TOOL_MANIFEST，importlib 动态解析，加载/执行
+        #     失败返回中文 ❌ 串（绝不拖垮主链）——新增插件工具只登记、
+        #     不改本链；spec hiddenimports 按登记表 module 字段补录 ===
+        entry = tool_registry.find_entry(tool_name)
+        if entry is not None and "handler" in entry:
+            return tool_registry.dispatch_plugin_tool(tool_name, args)
 
         return "未知工具"
     except Exception as e:

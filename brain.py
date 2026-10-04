@@ -105,7 +105,7 @@ from xiaoju3 import (AGENT_STATE_DIR, CLOUD_KEY, CLOUD_URL, CLOUD_MODEL,
                      LOCAL_PROBE_URL, LOCAL_TIMEOUT, USER_CITY, USER_DISTRICT)
 from permission import permission_manager
 from prompts import SYSTEM_PROMPT
-from tools import execute_tool
+from tools import execute_tool, TOOL_WHITELIST
 
 # 模块日志器：WRAPPED_TEXT 诊断日志走 DEBUG 级别（2026-10-02 用户口径降噪——
 # 默认终端不再输出；排查时 logging.getLogger("xiaoju3.brain").setLevel(
@@ -141,15 +141,10 @@ try:
 except (TypeError, ValueError):
     LLM_TEMPERATURE = DEFAULT_TEMPERATURE
 
-# 工具白名单：与 tools.py 的分发、prompts.py 的工具协议一致
-# （文档 §5；第二阶段 §10 #5 新增 web_search、§7 权限调整新增 system_manage、
-# 2026-10-04 待办提取新增 extract_todos）
-TOOL_WHITELIST = [
-    "list_files", "read_file", "write_file", "get_ha_devices",
-    "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
-    "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
-    "read_core_memory", "restart_service", "extract_todos",
-]
+# 工具白名单：经 tools 引用 tool_registry.TOOL_MANIFEST 派生值（2026-10-04
+# model_tool 合并钩子，docs/ARCHITECTURE_BOUNDARY.md §3.3）——双清单手工同步
+# 退役，本名即 tools.TOOL_WHITELIST 同一对象；锚：tests/test_tools.py 一致性
+# （sorted 相等）与 tests/test_brain.py 数量（15 项不变）。
 
 
 # ==================== CoT 思考提取（<think> 包装，前端推理卡片契约） ====================
