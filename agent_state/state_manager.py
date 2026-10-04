@@ -237,6 +237,34 @@ class StateManager:
         conn.close()
         return deleted
 
+    # ==================== 待办 UI 状态（分区折叠；WebView2 InPrivate 下
+    # localStorage 跨启动即焚 → 服务端 JSON 承载，2026-10-04 尾巴 I） ====================
+
+    @property
+    def todo_ui_state_file(self):
+        """待办 UI 状态文件路径（base_dir 下 todo_ui_state.json）。"""
+        return os.path.join(self.base_dir, "todo_ui_state.json")
+
+    def get_todo_collapsed_groups(self):
+        """读取折叠分区列表（["P2", "P3"]）；文件缺失/损坏/非数组 → []。"""
+        try:
+            with open(self.todo_ui_state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return []
+        groups = data.get("collapsed_groups") if isinstance(data, dict) else None
+        if not isinstance(groups, list):
+            return []
+        return [str(g) for g in groups if isinstance(g, str)]
+
+    def save_todo_collapsed_groups(self, groups):
+        """保存折叠分区列表（全量覆盖写；非字符串项跳过）。"""
+        clean = [str(g) for g in (groups or []) if isinstance(g, str)]
+        data = {"collapsed_groups": clean, "updated_at": time.time()}
+        with open(self.todo_ui_state_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return clean
+
     def save_conversation(self, source, messages):
         """把对话历史独立出来，避免污染代码（只保留最近 MAX_MESSAGES 条）"""
         conv_dir = os.path.join(self.base_dir, "conversations")

@@ -2085,6 +2085,19 @@ class TodosApiTests(unittest.TestCase):
         again = self.client.post("/api/todos/1/done")   # 已 done → 404（幂等）
         self.assertEqual(again.status_code, 404)
 
+    def test_collapsed_groups_roundtrip(self):
+        # 尾巴 I 服务端承载：GET 下发 / POST 保存（非法体 400）
+        resp = self.client.post("/api/todos/collapsed_groups",
+                                json={"collapsed_groups": ["P2", "P3"]})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["data"]["collapsed_groups"], ["P2", "P3"])
+        data = self.client.get("/api/todos").get_json()["data"]
+        self.assertEqual(data["collapsed_groups"], ["P2", "P3"])
+        bad = self.client.post("/api/todos/collapsed_groups", json={"collapsed_groups": "P2"})
+        self.assertEqual(bad.status_code, 400)
+        empty = self.client.post("/api/todos/collapsed_groups", json={})
+        self.assertEqual(empty.status_code, 400)
+
     def test_priority_migration_and_default(self):
         # 尾巴 C：新库建列 + 默认 P1（迁移路径由 test_state_manager 旧库用例覆盖）
         import sqlite3
@@ -2202,19 +2215,32 @@ class TodosFrontendAnchorTests(unittest.TestCase):
 
     def test_console_collapsible_groups(self):
         # 尾巴 I：分区折叠——标题带 data-pr/箭头/条数、折叠分区不输出条目、
-        # localStorage 读写持久化（todos_collapsed_groups）
+        # 状态服务端承载（WebView2 InPrivate 下 localStorage 跨启动即焚，
+        # 同 first_run 方案 C 口径）
         with open(os.path.join(PROJECT_ROOT, "console.js"),
                   "r", encoding="utf-8") as f:
             js = f.read()
-        self.assertIn("todos_collapsed_groups", js)
-        self.assertIn("localStorage.getItem(TODOS_COLLAPSED_KEY)", js)
-        self.assertIn("localStorage.setItem(TODOS_COLLAPSED_KEY", js)
         self.assertIn('class="todo-group-title" data-pr="${pr}"', js)
         self.assertIn("if (collapsed) continue;", js)   # 折叠分区不输出条目
         self.assertIn("toggleGroup(title.dataset.pr)", js)
+        # 回归锚（v12 死代码根因）：标题折叠必须在 click 监听器内，
+        # 不得回流 change 监听器（标题无值变化，change 永不触发）
+        click_start = js.index("todosListEl.addEventListener('click'")
+        click_body = js[click_start:js.index("});", click_start)]
+        self.assertIn("toggleGroup(title.dataset.pr)", click_body)
+        change_start = js.index("todosListEl.addEventListener('change'")
+        change_body = js[change_start:js.index("});", change_start)]
+        self.assertNotIn("todo-group-title", change_body)
         arrow_anchor = "'%s' : '%s'" % (chr(0x25B8), chr(0x25BE))
         self.assertIn(arrow_anchor, js)                  # 折叠/展开箭头
         self.assertIn("(${group.length})", js)          # 标题显示条数
+        # 服务端承载：渲染时装载下发状态、切换 POST collapsed_groups
+        self.assertIn("collapsedGroups = data.collapsed_groups", js)
+        self.assertIn("fetch('/api/todos/collapsed_groups', {", js)
+        self.assertIn("JSON.stringify({ collapsed_groups: collapsedGroups })", js)
+        # localStorage 口径退役（InPrivate 即焚，不回流）
+        self.assertNotIn("todos_collapsed_groups", js)
+        self.assertNotIn("readCollapsedGroups", js)
 
     def test_index_group_title_style(self):
         with open(os.path.join(PROJECT_ROOT, "index.html"),

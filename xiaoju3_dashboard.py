@@ -562,8 +562,23 @@ def api_todos():
             "pending_count": pending_count,
             "done_count": len(todos) - pending_count,
             "last_job": todo_extractor.last_job(),
+            # 尾巴 I：折叠分区（服务端 JSON 承载——WebView2 InPrivate 下
+            # localStorage 跨启动即焚，同 first_run 方案 C 口径）
+            "collapsed_groups": state_manager.get_todo_collapsed_groups(),
         }
     })
+
+
+@app.route("/api/todos/collapsed_groups", methods=["POST"])
+def api_todo_collapsed_groups():
+    """保存折叠分区列表（2026-10-04 尾巴 I：分区折叠持久化；
+    低危 UI 状态写端点，安全口径同 api_todo_done）。"""
+    body = request.get_json(silent=True) or {}
+    groups = body.get("collapsed_groups")
+    if not isinstance(groups, list):
+        return jsonify({"code": 400, "error": "collapsed_groups 必须是数组"}), 400
+    saved = state_manager.save_todo_collapsed_groups(groups)
+    return jsonify({"code": 200, "data": {"ok": True, "collapsed_groups": saved}})
 
 
 @app.route("/api/todos/<int:todo_id>/done", methods=["POST"])
