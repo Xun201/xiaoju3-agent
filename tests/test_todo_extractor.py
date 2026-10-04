@@ -42,6 +42,13 @@ class ParseTodoJsonTests(unittest.TestCase):
             '[{"content": "A", "priority": "urgent"}]'),
             [{"content": "A", "priority": "P1"}])
 
+    def test_priority_six_levels_accepted(self):
+        # 尾巴 C 扩展：P0-P5 六档全部合法
+        out = todo_extractor.parse_todo_json(
+            '[{"content": "A", "priority": "P0"}, {"content": "B", "priority": "P3"},'
+            ' {"content": "C", "priority": "P4"}, {"content": "D", "priority": "P5"}]')
+        self.assertEqual([e["priority"] for e in out], ["P0", "P3", "P4", "P5"])
+
     def test_priority_case_insensitive(self):
         self.assertEqual(todo_extractor.parse_todo_json(
             '[{"content": "A", "priority": "p0"}]'),
@@ -105,11 +112,17 @@ class PromptTests(unittest.TestCase):
         self.assertIn("对话正文片段", todo_extractor.build_extraction_prompt("对话正文片段"))
 
     def test_priority_rubric_anchor(self):
-        # 尾巴 C：P0/P1/P2 判据进 prompt
+        # 尾巴 C 扩展：P0-P5 时间尺度分层判据进 prompt（六档）。
+        # 断言打在去空白归一面上（prompt 源码换行会把词组拆行）。
         prompt = todo_extractor.build_extraction_prompt("XX")
+        norm = "".join(prompt.split())
         self.assertIn('"priority": "P0"', prompt)
-        self.assertIn("截止时限的为 \"P0\"", prompt)
-        self.assertIn("常规记录性的为 \"P2\"", prompt)
+        for rubric in ("今天/明天必须做（硬截止）", "本周内完成（重要）",
+                       "本月内完成（常规）", "长期规划（季度级）",
+                       "未来半年", "想法/待定/不急"):
+            self.assertIn(rubric, norm)
+        for level in ("P1", "P2", "P3", "P4", "P5"):
+            self.assertIn(f'"{level}"', prompt)
 
 
 class RecentUrlTests(unittest.TestCase):

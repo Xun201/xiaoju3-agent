@@ -690,7 +690,7 @@ def handle_todo_command(raw_message, message, user_id, group_id, steps=None):
         steps.append(f"查询待办：未完成 {len(todos)} 条 / 已完成 {done_count} 条")
         if not todos:
             return "📋 暂无待办。发 /todo_from_link <DeepSeek分享链接> 让我帮你记。"
-        order = {"P0": 0, "P1": 1, "P2": 2}
+        order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4, "P5": 5}
         grouped = sorted(
             todos,
             key=lambda t: (order.get(t.get("priority", "P1"), 1), -t["id"]))

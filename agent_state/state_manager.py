@@ -85,9 +85,9 @@ class StateManager:
 
     @staticmethod
     def _normalize_priority(value):
-        """优先级归一：P0/P1/P2 之外的输入一律回落 P1（LLM 输出容错）。"""
+        """优先级归一：P0-P5 之外的输入一律回落 P1（LLM 输出容错）。"""
         text = str(value or "").strip().upper()
-        return text if text in ("P0", "P1", "P2") else "P1"
+        return text if text in ("P0", "P1", "P2", "P3", "P4", "P5") else "P1"
 
     def save_todos(self, items, source_url=""):
         """批量写入待办（status='pending'）。
