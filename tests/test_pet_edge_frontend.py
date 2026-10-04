@@ -217,7 +217,8 @@ class MemoryProgressBarTests(unittest.TestCase):
 
     def test_mem_bar_driven_by_api_status_memory(self):
         """console.js：fetchStatus 消费 /api/status 的 memory 字段渲染
-        mem-text/mem-bar（2s 轮询，加载即请求一次）。"""
+        mem-text/mem-bar（2s 轮询，加载即请求一次）。尾巴 H：经 applyBar
+        三档变色（与 CPU 同一阈值常量、独立判定）。"""
         js = self.js
         self.assertIn("fetch('/api/status')", js)
         self.assertIn("setInterval(fetchStatus, 2000)", js)
@@ -226,13 +227,25 @@ class MemoryProgressBarTests(unittest.TestCase):
         self.assertIn("getElementById('mem-text')", body)
         self.assertIn("getElementById('mem-bar')", body)
         self.assertIn("memText.textContent = d.memory + '%'", body)
-        self.assertIn("memBar.style.width = d.memory + '%'", body)
+        self.assertIn("applyBar(memBar, d.memory)", body)
+
+    def test_mem_bar_three_level_thresholds(self):
+        """尾巴 H：三档阈值常量与三档 CSS 类（<60 绿 / 60–85 黄 / >85 红）。"""
+        js = self.js
+        self.assertIn("const BAR_THRESHOLDS = { mid: 60, high: 85 };", js)
+        self.assertIn("barEl.classList.add('bar-' + level)", js)
+        css = self.html[self.html.index("<style>"):self.html.index("</style>")]
+        for cls in (".stat-bar-fill.bar-low", ".stat-bar-fill.bar-mid",
+                    ".stat-bar-fill.bar-high"):
+            self.assertIn(cls, css)
 
     def test_mem_bar_threshold_red(self):
-        """>80% 变红 #e0433f、正常绿 #2fa24c——内存与 CPU 同一阈值口径。"""
+        """尾巴 H 三档口径：高档红 #e0433f、低档绿 #2fa24c——内存与 CPU
+        同一阈值常量（BAR_THRESHOLDS），经 applyBar 统一驱动。"""
         js = self.js
-        self.assertIn("d.memory > 80 ? '#e0433f' : '#2fa24c'", js)
-        self.assertIn("d.cpu > 80 ? '#e0433f' : '#2fa24c'", js)
+        self.assertIn("const BAR_COLORS = { low: '#2fa24c', mid: '#eab308', high: '#e0433f' };", js)
+        self.assertIn("applyBar(memBar, d.memory)", js)
+        self.assertIn("applyBar(cpuBar, d.cpu)", js)
 
 
 # ---------------------------------------------------------------------------

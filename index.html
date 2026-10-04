@@ -94,6 +94,10 @@
         .stat-label { font-size: 14px; color: var(--color-text-secondary); display: flex; justify-content: space-between; }
         .stat-bar-bg { width: 100%; height: 8px; background-color: var(--color-progress-track); border-radius: 4px; overflow: hidden; }
         .stat-bar-fill { height: 100%; background-color: var(--color-success); border-radius: 4px; transition: width 0.3s ease, background-color 0.3s ease; }
+        /* 尾巴 H：进度条三档变色（<60 绿 / 60–85 黄 / >85 红，阈值在 console.js 常量） */
+        .stat-bar-fill.bar-low { background-color: #2fa24c; }
+        .stat-bar-fill.bar-mid { background-color: #eab308; }
+        .stat-bar-fill.bar-high { background-color: #e0433f; }
         .stat-value { font-size: 24px; font-weight: bold; color: var(--color-primary); }
 
         /* ==================== 右侧聊天区域 ==================== */

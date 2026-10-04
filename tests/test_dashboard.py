@@ -796,10 +796,12 @@ class FrontendStaticTests(unittest.TestCase):
     def test_console_js_polling_and_threshold(self):
         js = self.console_js
         self.assertIn("setInterval(fetchStatus, 2000)", js)   # 2 秒轮询
-        self.assertIn("d.cpu > 80", js)                       # >80% 阈值
-        self.assertIn("d.memory > 80", js)
-        self.assertIn("'#e0433f'", js)                        # 变红
-        self.assertIn("'#2fa24c'", js)                        # 正常绿
+        # 尾巴 H：三档阈值常量（CPU/内存各自独立 applyBar）
+        self.assertIn("const BAR_THRESHOLDS = { mid: 60, high: 85 };", js)
+        self.assertIn("applyBar(cpuBar, d.cpu)", js)
+        self.assertIn("applyBar(memBar, d.memory)", js)
+        self.assertIn("'#e0433f'", js)                        # 高档红
+        self.assertIn("'#2fa24c'", js)                        # 低档绿
         self.assertIn("fetchStatus();", js)                   # 加载即请求一次
         # 聊天行为
         self.assertIn("小橘3号正在思考... 🧠", js)             # 占位气泡
@@ -2214,6 +2216,41 @@ class TodosFrontendAnchorTests(unittest.TestCase):
         self.assertIn("user-select: text", html)
         self.assertIn(".user-message ::selection", html)
         self.assertIn(".bot-message ::selection", html)
+
+
+class BarThresholdAnchorTests(unittest.TestCase):
+    """尾巴 H：CPU/内存进度条三档变色静态锚——阈值常量、各自独立判定、
+    三档 CSS 类在位、旧两档硬编码退役。"""
+
+    def _js(self):
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_threshold_constants_and_branch(self):
+        js = self._js()
+        self.assertIn("const BAR_THRESHOLDS = { mid: 60, high: 85 };", js)
+        self.assertIn("function barLevel(percent)", js)
+        self.assertIn("if (percent > BAR_THRESHOLDS.high) return 'high';", js)
+        self.assertIn("if (percent >= BAR_THRESHOLDS.mid) return 'mid';", js)
+
+    def test_cpu_and_mem_independent(self):
+        js = self._js()
+        self.assertIn("applyBar(cpuBar, d.cpu)", js)
+        self.assertIn("applyBar(memBar, d.memory)", js)   # 内存独立三档（旧版无变色）
+
+    def test_three_level_css_classes(self):
+        with open(os.path.join(PROJECT_ROOT, "index.html"),
+                  "r", encoding="utf-8") as f:
+            html = f.read()
+        for cls in (".stat-bar-fill.bar-low", ".stat-bar-fill.bar-mid",
+                    ".stat-bar-fill.bar-high"):
+            self.assertIn(cls, html)
+        js = self._js()
+        self.assertIn("barEl.classList.add('bar-' + level)", js)
+        # 旧两档硬编码退役
+        self.assertNotIn("d.cpu > 80 ? '#e0433f' : '#2fa24c'", js)
+        self.assertNotIn("d.memory > 80 ? '#e0433f' : '#2fa24c'", js)
 
 
 class TodoCommandInterceptTests(unittest.TestCase):
