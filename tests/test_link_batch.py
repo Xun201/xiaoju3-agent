@@ -7,9 +7,13 @@
 超时/步数护栏、失败重试、浏览器内核缺失中文提示、4000 字分片边界、
 倒叙合并顺序、dev_log 自动编号。
 真实浏览器冒烟另见 tests/test_genlog_live.py（需 XIAOJU3_LIVE_TEST=1）。
+dev_logger 已归档（2026-10-04 架构边界 chore 笔：被 link_logger +
+batch_logger 组合替代，移 _dev/archive/ 零消费死代码），本文件经归档
+路径按文件位置加载保持其替身链路测试活性（docs/ARCHITECTURE_BOUNDARY.md §1.3）。
 """
 import asyncio
 import contextlib
+import importlib.util
 import io
 import itertools
 import os
@@ -24,9 +28,19 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from plugins import batch_logger, dev_logger, link_logger  # noqa: E402
+from plugins import batch_logger, link_logger  # noqa: E402
 from plugins.link_logger import LinkFetchError  # noqa: E402
 import run_link_log  # noqa: E402
+
+# dev_logger 归档加载（2026-10-04 架构边界 chore 笔）：模块已移
+# _dev/archive/dev_logger.py（零消费死代码，仅存档），按文件位置加载
+# 供 DevLoggerTest 替身链路测试继续覆盖（只依赖 stdlib re/time，可独立执行）。
+_dev_logger_path = os.path.join(PROJECT_ROOT, "_dev", "archive", "dev_logger.py")
+_dev_logger_spec = importlib.util.spec_from_file_location(
+    "dev_logger", _dev_logger_path)
+dev_logger = importlib.util.module_from_spec(_dev_logger_spec)
+sys.modules["dev_logger"] = dev_logger
+_dev_logger_spec.loader.exec_module(dev_logger)
 
 VALID_URL = "https://chat.deepseek.com/share/abc123"
 
