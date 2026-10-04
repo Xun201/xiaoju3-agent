@@ -67,7 +67,11 @@ import threading
 import time
 
 import paths  # 双根路径锚（方案 §1）：frozen 分支按 RESOURCE/DATA_ROOT 分流
-from xiaoju3_dashboard import app   # 装配 dashboard 路由单例（PyInstaller 收录锚；import 不产生端口）
+# xiaoju3_dashboard 不再顶层 import（2026-10-04 启动优化拍板②）：全链
+# ≈1.1s 曾把占位窗拖到 ≈3.8s 才出现。收录职责由 xiaoju3.spec hiddenimports
+# 静态承担（xiaoju3_dashboard/main 等显式在列）；运行时唯一引用点 =
+# __main__ 的 dashboard 角色分流（本就函数内延迟导入）。防回流锚：
+# tests/test_desktop_launcher.py（ast 断言模块体顶层零 dashboard import）。
 
 WINDOW_TITLE = "小橘3号 · 控制台"      # 桌面窗口标题（用户口径）
 WINDOW_WIDTH = 1200                   # 窗口尺寸（用户口径 1200x800）
@@ -89,14 +93,21 @@ ROLE_DASHBOARD_FLAG = "--xj3-role=dashboard"
 _WIN_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 # 控制台页完整 URL（端口修复 P2：窗口直接挂 5003 主服务，随机内置服务已退役）
 CONSOLE_URL = f"http://{DEFAULT_HOST}:{DASHBOARD_APP_PORT}/console"
-# 占位页（先出窗后导航：create_window 先显示，就绪后 load_url 切控制台）
+# 占位页（先出窗后导航：create_window 先显示，就绪后 load_url 切控制台）。
+# 品牌化骨架（2026-10-04 启动优化拍板②/A 增强 2）：深色底 + 橘色主体 +
+# 三步进度文案——静态版（真实进度需 JS 桥接 launcher 轮询，按设计稿
+# "纯静态文案亦可"口径落地，视觉素材后续可替换）
 PLACEHOLDER_HTML = (
     "<!doctype html><html><head><meta charset='utf-8'>"
     "<style>body{font-family:system-ui,sans-serif;background:#101828;"
     "color:#e8eefc;display:flex;align-items:center;justify-content:center;"
-    "height:100vh;margin:0}div{text-align:center}h2{margin:0 0 8px}"
-    "p{opacity:.7;margin:0}</style></head><body><div>"
-    "<h2>🍊 正在启动主程序…</h2>"
+    "height:100vh;margin:0}div{text-align:center}"
+    "h2{margin:0 0 10px;font-size:26px}.accent{color:#ff9a3c}"
+    "p{opacity:.65;margin:4px 0;font-size:14px}"
+    ".steps{margin:14px 0 0;font-size:13px;opacity:.85;letter-spacing:1px}"
+    "</style></head><body><div>"
+    "<h2>🍊 <span class='accent'>小橘3号</span> 正在醒来…</h2>"
+    "<div class='steps'>① 准备资源　→　② 启动服务　→　③ 打开界面</div>"
     "<p>首次启动约需数秒，窗口将自动进入控制台</p></div></body></html>"
 )
 

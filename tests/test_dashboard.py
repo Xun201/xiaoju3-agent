@@ -2492,5 +2492,25 @@ class OpenAiPreheatAnchorTests(unittest.TestCase):
         self.assertLess(call_at, app_run_at)
 
 
+class ConnectingHintAnchorTests(unittest.TestCase):
+    """前端失败加载态锚（2026-10-04 启动优化拍板② B/C 小补）：console.js
+    fetchStatus/loadTodos 失败 catch 调 markConnecting()——失败显"连接中…"
+    而非静止旧值像"没数据"（下一轮 2s/30s 轮询自愈，无重试逻辑）。"""
+
+    def _console_js(self):
+        with open(os.path.join(PROJECT_ROOT, "console.js"), "r",
+                  encoding="utf-8") as f:
+            return f.read()
+
+    def test_markconnecting_defined_and_wired_to_both_catches(self):
+        js = self._console_js()
+        self.assertIn("function markConnecting()", js)
+        self.assertIn("'连接中…'", js)
+        status_at = js.index("console.error('获取系统状态失败', err)")
+        todos_at = js.index("console.error('获取待办失败', err)")
+        self.assertIn("markConnecting()", js[status_at:status_at + 200])
+        self.assertIn("markConnecting()", js[todos_at:todos_at + 200])
+
+
 if __name__ == "__main__":
     unittest.main()

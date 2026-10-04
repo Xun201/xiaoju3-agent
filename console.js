@@ -288,6 +288,19 @@
         barEl.classList.add('bar-' + level);
     }
 
+    function markConnecting() {
+        // 失败加载态（2026-10-04 启动优化拍板② B/C 小补）：状态/待办拉取
+        // 失败（多为轮询竞态或服务冷启动瞬间）→ UI 显"连接中…"而非静止
+        // 旧值像"没数据"；下一轮轮询自动恢复（fetchStatus 2s / loadTodos
+        // 30s），不加重试逻辑
+        const cpuText = document.getElementById('cpu-text');
+        const memText = document.getElementById('mem-text');
+        if (cpuText) cpuText.textContent = '连接中…';
+        if (memText) memText.textContent = '连接中…';
+        const listEl = document.getElementById('todos-list');
+        if (listEl) listEl.innerHTML = '<li class="todos-empty">连接中…</li>';
+    }
+
     function fetchStatus() {
         fetch('/api/status')
             .then(res => res.json())
@@ -331,7 +344,10 @@
                     // 署名不受影响。creator 字段仍随 /api/status 下发。
                 }
             })
-            .catch(err => console.error('获取系统状态失败', err));
+            .catch(err => {
+                console.error('获取系统状态失败', err);
+                markConnecting();
+            });
     }
 
     fetchStatus();
@@ -370,7 +386,10 @@
             .then(res => {
                 if (res.code === 200) renderTodos(res.data);
             })
-            .catch(err => console.error('获取待办失败', err));
+            .catch(err => {
+                console.error('获取待办失败', err);
+                markConnecting();
+            });
     }
 
     function renderTodos(data) {
