@@ -1593,6 +1593,46 @@ class TestTodoCommands(_MainCase):
         self.assertIn("#1 [P1] A", reply)
         self.assertLess(reply.index("#3"), reply.index("#1"))   # C(新) 在 A(旧) 前
 
+    def test_todos_clear_requires_lv3(self):
+        # 破坏性操作：Lv.2 也拒（与查询的 Lv.2 不同级）
+        self.pm.current_level = "Lv.2"
+        main.state_manager.save_todos(["A"], source_url="u1")
+        reply = main.handle_message('web', 'u', None, "/todos clear")
+        self.assertTrue(reply.startswith("❌"))
+        self.assertIn("Lv.3", reply)
+        self.assertEqual(len(main.state_manager.get_todos()), 1)   # 未清
+
+    def test_todos_clear_first_call_only_prompts(self):
+        # 无状态二次确认：首次只提示，不清
+        self.pm.current_level = "Lv.3"
+        main.state_manager.save_todos(["A", "B"], source_url="u1")
+        main.state_manager.complete_todo(1)
+        reply = main.handle_message('web', 'u', None, "/todos clear")
+        self.assertTrue(reply.startswith("⚠️"))
+        self.assertIn("将清空全部待办 2 条", reply)
+        self.assertIn("/todos clear confirm", reply)
+        self.assertEqual(len(main.state_manager.get_todos()), 2)   # 未清
+
+    def test_todos_clear_confirm_deletes_all(self):
+        self.pm.current_level = "Lv.3"
+        main.state_manager.save_todos(["A", "B"], source_url="u1")
+        main.state_manager.complete_todo(1)
+        reply = main.handle_message('web', 'u', None, "/todos clear confirm")
+        self.assertIn("已清空全部待办", reply)
+        self.assertEqual(main.state_manager.get_todos(), [])       # pending+done 全清
+
+    def test_todos_clear_confirm_on_empty_reports_zero(self):
+        self.pm.current_level = "Lv.3"
+        reply = main.handle_message('web', 'u', None, "/todos clear confirm")
+        self.assertIn("已清空全部待办", reply)   # 空表也如实报（0 条）
+
+    def test_todos_clear_resets_recent_urls(self):
+        # 清空后 24h 查重内存层同步失效（同链接可重新提取的预期语义）
+        self.pm.current_level = "Lv.3"
+        with patch("main.clear_recent_urls") as clear_mock:
+            main.handle_message('web', 'u', None, "/todos clear confirm")
+        clear_mock.assert_called_once()
+
     def test_todos_done_success(self):
         self.pm.current_level = "Lv.2"
         main.state_manager.save_todos(["A"], source_url=self.URL)

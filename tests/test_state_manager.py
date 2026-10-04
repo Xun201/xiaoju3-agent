@@ -263,6 +263,15 @@ class TodoStoreTests(unittest.TestCase):
         self.assertIn("priority", cols)
         self.assertEqual(legacy_row, ("旧", "P1"))
 
+    def test_clear_todos_deletes_all_and_reports_count(self):
+        # /todos clear 存储侧：pending+done 全清、返回删除条数、重复清返回 0
+        self.sm.save_todos(["A", "B", "C"], source_url="u1")
+        self.sm.complete_todo(1)
+        deleted = self.sm.clear_todos()
+        self.assertEqual(deleted, 3)
+        self.assertEqual(self.sm.get_todos(), [])
+        self.assertEqual(self.sm.clear_todos(), 0)   # 空表再清 → 0
+
     def test_check_constraint_rejects_bad_status(self):
         conn = sqlite3.connect(self.sm.memory_db)
         with self.assertRaises(sqlite3.IntegrityError):
