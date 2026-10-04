@@ -84,7 +84,6 @@ a = Analysis(
         'plugins.accounting',
         'plugins.batch_logger',
         'plugins.context_manager',
-        'plugins.dev_logger',
         'plugins.ebook_export',
         'plugins.help_menu',
         'plugins.link_logger',
