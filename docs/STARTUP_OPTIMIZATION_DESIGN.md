@@ -96,7 +96,16 @@
 
 Temp\_MEI* 强杀（Stop-Process/taskkill）残留累积实测 **5 目录 868MB**（10 代 ×85-173MB）；正常退出 PyInstaller 自清。
 
-### 3.2 方案：desktop_launcher 启动早期自清旧 _MEI（frozen 才执行）
+### 3.2 方案：desktop_launcher 启动早期自清旧 _MEI（frozen 才执行）——✅ 已拍板（2026-10-04）
+
+> **拍板结果**：做，阈值 **30 分钟**（原案 10 分钟——双开安全余量更大）。
+> 实施较原案加两道保险：① `_has_other_own_instance()`——其它同名冻结
+> 实例存活时整体跳过本轮（mtime 防得了新双开、防不了长驻 >30 分钟实例
+> 的过期目录，这道闸把长驻误删也封死，宁漏勿误）；
+> ② `_meipass_in_use()` 单目录存活探测——崩溃后滞留子进程（playwright
+> node 驱动等）仍握着的目录跳过。已实施：desktop_launcher.py
+> `_cleanup_stale_meipass()`，main() 体最早期（_redirect_stdio 之前）调用；
+> 测试 7 条（沙箱 Temp + mtime 拨针 + 探测全 mock）。
 
 - **位置**：desktop_launcher.py `main()` 最早期（import paths 之后、重量 import 之前）——此时尚未创建本进程 _MEIPASS 依赖之外的窗口/资源。
 - **安全约束（三条全满足）**：

@@ -29,10 +29,12 @@ socket / subprocess / os.path / 服务启停全部 mock.patch 还原，绝不污
 import contextlib
 import io
 import os
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import types
 import unittest
@@ -618,6 +620,123 @@ class StartupUxTests(unittest.TestCase):
         self.assertIn("② 启动服务", html)
         self.assertIn("③ 打开界面", html)
         self.assertIn("自动进入控制台", html)
+
+
+class MeiCleanupTests(unittest.TestCase):
+    """旧 _MEI 残留清理（2026-10-04 启动优化拍板③，阈值 30 分钟）：
+    frozen 才执行 / 跳过自身 _MEIPASS / 30 分钟内动过绝不判残留 / 其它
+    同名实例存活整体跳过（防长驻实例误删）/ 仍有进程握着的目录跳过 /
+    非 frozen 零副作用。存活探测一律 mock（测试不依赖宿主机进程表），
+    Temp 重定向到独立沙箱目录（绝不触碰真实 Temp\\_MEI*）。"""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="xj3_mei_test_")
+        redirect = mock.patch.object(launcher.tempfile, "gettempdir",
+                                     return_value=self._tmp)
+        redirect.start()
+        self.addCleanup(redirect.stop)
+        self.addCleanup(
+            lambda: shutil.rmtree(self._tmp, ignore_errors=True))
+        probe = mock.patch.object(launcher, "_meipass_in_use",
+                                  return_value=False)
+        probe.start()
+        self.addCleanup(probe.stop)
+        other = mock.patch.object(launcher, "_has_other_own_instance",
+                                  return_value=False)
+        other.start()
+        self.addCleanup(other.stop)
+
+    def _make(self, name, age_s):
+        """造一个假 _MEI 目录（含 1KB payload），目录 mtime 拨回 age_s
+        秒前（os.utime，判定走的是目录 mtime 而非内部文件）。"""
+        path = os.path.join(self._tmp, name)
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "payload.bin"), "wb") as f:
+            f.write(b"x" * 1024)
+        old = time.time() - age_s
+        os.utime(path, (old, old))
+        return path
+
+    def _frozen(self, own_meipass=None):
+        """注入 frozen 形态（sys.frozen + sys._MEIPASS，测试进程本无此
+        二属性，create=True；mock 自动还原）。"""
+        fp = mock.patch.object(launcher.sys, "frozen", True, create=True)
+        fp.start()
+        self.addCleanup(fp.stop)
+        mp = mock.patch.object(
+            launcher.sys, "_MEIPASS",
+            own_meipass or os.path.join(self._tmp, "_MEIown"), create=True)
+        mp.start()
+        self.addCleanup(mp.stop)
+
+    def test_stale_removed_recent_and_own_kept(self):
+        """核心安全约束：1 小时前残留删净；1 分钟内目录（新并行实例）与
+        自身 _MEIPASS（即便 mtime 过期）绝不碰。"""
+        stale = self._make("_MEI1111", age_s=3600)
+        recent = self._make("_MEI2222", age_s=60)
+        own = self._make("_MEIown", age_s=3600)
+        self._frozen(own_meipass=own)
+        launcher._cleanup_stale_meipass()
+        self.assertFalse(os.path.exists(stale))
+        self.assertTrue(os.path.exists(recent))
+        self.assertTrue(os.path.exists(own))
+
+    def test_threshold_30min_boundary(self):
+        """拍板阈值 30 分钟边界：29 分钟（双开安全余量内）保留、31 分钟
+        判残留清理。"""
+        keep = self._make("_MEIkeep", age_s=29 * 60)
+        gone = self._make("_MEIgone", age_s=31 * 60)
+        self._frozen()
+        launcher._cleanup_stale_meipass()
+        self.assertTrue(os.path.exists(keep))
+        self.assertFalse(os.path.exists(gone))
+
+    def test_not_frozen_noop(self):
+        """非 frozen（开发态 python 直跑）零副作用：不枚举不删除。"""
+        target = self._make("_MEI3333", age_s=3600)
+        fp = mock.patch.object(launcher.sys, "frozen", False, create=True)
+        fp.start()
+        self.addCleanup(fp.stop)
+        launcher._cleanup_stale_meipass()
+        self.assertTrue(os.path.exists(target))
+
+    def test_other_instance_alive_skips_all(self):
+        """双开第一保险：其它同名实例存活 → 本轮整体跳过（长驻实例的
+        解包目录 mtime 必然过期，mtime 单判防不住，宁漏勿误）。"""
+        target = self._make("_MEI4444", age_s=3600)
+        self._frozen()
+        with mock.patch.object(launcher, "_has_other_own_instance",
+                               return_value=True):
+            launcher._cleanup_stale_meipass()
+        self.assertTrue(os.path.exists(target))
+
+    def test_in_use_probe_skips_that_dir(self):
+        """单目录存活探测：仍有进程握着的目录跳过，同批其它残留照常
+        清理（崩溃后 node 驱动滞留场景）。"""
+        used = self._make("_MEI5555", age_s=3600)
+        stale = self._make("_MEI6666", age_s=3600)
+        self._frozen()
+
+        def probe(path):
+            return os.path.normcase(path) == os.path.normcase(used)
+
+        with mock.patch.object(launcher, "_meipass_in_use",
+                               side_effect=probe):
+            launcher._cleanup_stale_meipass()
+        self.assertTrue(os.path.exists(used))
+        self.assertFalse(os.path.exists(stale))
+
+    def test_cleanup_wired_into_main_early(self):
+        """接线锚：main() 体最早期调用 _cleanup_stale_meipass()（在
+        _redirect_stdio 之前），防接线被误删回退。"""
+        src_path = os.path.join(os.path.dirname(launcher.__file__),
+                                "desktop_launcher.py")
+        with open(src_path, "r", encoding="utf-8") as f:
+            src = f.read()
+        main_at = src.index("def main(argv=None):")
+        call_at = src.index("_cleanup_stale_meipass()", main_at)
+        redirect_at = src.index('_redirect_stdio("desktop")', main_at)
+        self.assertLess(call_at, redirect_at)
 
 
 if __name__ == "__main__":
