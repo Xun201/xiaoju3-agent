@@ -347,6 +347,33 @@
     let todoEditing = false;   // 尾巴 F：优先级编辑模式（默认锁定 pill）
     let gearEl = null;
 
+    // 尾巴 I：分区折叠状态（localStorage 持久化，刷新后保留）
+    const TODOS_COLLAPSED_KEY = 'todos_collapsed_groups';
+
+    function readCollapsedGroups() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(TODOS_COLLAPSED_KEY) || '[]');
+            return Array.isArray(raw) ? raw : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function writeCollapsedGroups(groups) {
+        try {
+            localStorage.setItem(TODOS_COLLAPSED_KEY, JSON.stringify(groups));
+        } catch (e) { /* localStorage 不可用时静默（主题/音效同款惯例） */ }
+    }
+
+    let collapsedGroups = readCollapsedGroups();
+
+    function toggleGroup(pr) {
+        const i = collapsedGroups.indexOf(pr);
+        if (i >= 0) collapsedGroups.splice(i, 1);
+        else collapsedGroups.push(pr);
+        writeCollapsedGroups(collapsedGroups);
+    }
+
     function loadTodos() {
         fetch('/api/todos')
             .then(res => res.json())
@@ -386,28 +413,39 @@
             listEl.innerHTML = '<li class="todos-empty">暂无待办</li>';
             return;
         }
-        const byPriority = { P0: [], P1: [], P2: [] };
+        // 尾巴 C 扩展修复（2026-10-04）：六档字典——旧三档初始化遇 P3+ 条目
+        // 时 byPriority[pr] 为 undefined，分组循环读 .length 即 TypeError，
+        // renderTodos 整体中断（卡片"暂无待办"+ 齿轮点击视觉失效的根因）
+        const byPriority = { P0: [], P1: [], P2: [], P3: [], P4: [], P5: [] };
         items.forEach(t => {
             (byPriority[t.priority || 'P1'] || byPriority.P1).push(t);
         });
         let html = '';
-        for (const pr of ['P0', 'P1', 'P2']) {
-            const group = byPriority[pr];
+        for (const pr of ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']) {
+            const group = byPriority[pr] || [];   // 防御兜底：未知档位不崩
             if (!group.length) continue;   // 空分区不显示
-            html += `<li class="todo-group-title">── ${pr} ──</li>`;
+            // 尾巴 I：分区可折叠——标题显示条数与箭头，折叠分区不输出条目
+            const collapsed = collapsedGroups.includes(pr);
+            const arrow = collapsed ? '▸' : '▾';
+            html += `<li class="todo-group-title" data-pr="${pr}" title="点击折叠/展开">` +
+                `${arrow} ── ${pr} ── (${group.length})</li>`;
+            if (collapsed) continue;
             html += group.map(t => {
                 const doneCls = t.status === 'done' ? ' done' : '';
                 const checked = t.status === 'done' ? ' checked' : '';
                 // 尾巴 F 改（用户精确要求）：锁定时 pills 完全不渲染（隐藏而非灰显）
-            const pills = todoEditing
-                ? ['P0', 'P1', 'P2'].map(p =>
-                    `<button class="todo-pr${p === pr ? ' active' : ''}" data-pr="${p}"` +
-                    ` title="设为 ${p}">${p}</button>`).join('')
-                : '';
+            // 尾巴 C 扩展（用户拍板）：优先级下拉选择器——编辑态原生 select
+            // 六项（P0-P5，可上下滚动），选择即 POST priority；锁定态只读
+            // 徽标显示当前值（不可改）
+            const prOptions = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5'].map(p =>
+                `<option value="${p}"${p === pr ? ' selected' : ''}>${p}</option>`).join('');
+            const prControl = todoEditing
+                ? `<select class="todo-pr-select" title="优先级">${prOptions}</select>`
+                : `<span class="todo-pr-badge" title="点 ⚙️ 进入编辑模式后可改">${pr}</span>`;
                 return `<li class="todo-item${doneCls}" data-id="${t.id}">` +
                     `<input type="checkbox" class="todo-check"${checked} title="勾选=完成，取消=恢复">` +
                     `<span class="todo-text">${escapeHtml(t.content)}</span>` +
-                    `<span class="todo-pills">${pills}</span></li>`;
+                    `${prControl}</li>`;
             }).join('');
         }
         listEl.innerHTML = html;
@@ -425,27 +463,36 @@
     if (todosListEl) {
         // 复选框：勾=完成、取消=恢复（done / reopen 对称端点）
         todosListEl.addEventListener('change', function (ev) {
+            // 复选框：勾=完成、取消=恢复（done / reopen 对称端点）
             const box = ev.target.closest('input.todo-check');
-            if (!box) return;
-            const li = box.closest('li.todo-item');
-            if (!li) return;
-            const action = box.checked ? 'done' : 'reopen';
-            fetch(`/api/todos/${li.dataset.id}/${action}`, { method: 'POST' })
-                .then(() => loadTodos())
-                .catch(err => console.error('切换待办状态失败', err));
-        });
-        // 优先级 pill：点即改（POST priority 端点）
-        todosListEl.addEventListener('click', function (ev) {
-            const pill = ev.target.closest('button.todo-pr');
-            if (!pill || pill.disabled) return;
-            const li = pill.closest('li.todo-item');
-            if (!li || pill.classList.contains('active')) return;
-            fetch(`/api/todos/${li.dataset.id}/priority`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ priority: pill.dataset.pr })
-            }).then(() => loadTodos())
-              .catch(err => console.error('设置待办优先级失败', err));
+            if (box) {
+                const li = box.closest('li.todo-item');
+                if (!li) return;
+                const action = box.checked ? 'done' : 'reopen';
+                fetch(`/api/todos/${li.dataset.id}/${action}`, { method: 'POST' })
+                    .then(() => loadTodos())
+                    .catch(err => console.error('切换待办状态失败', err));
+                return;
+            }
+            // 尾巴 I：分区标题点击 → 折叠/展开（localStorage 持久化）
+            const title = ev.target.closest('li.todo-group-title');
+            if (title) {
+                toggleGroup(title.dataset.pr);
+                loadTodos();
+                return;
+            }
+            // 优先级下拉：选择即改（POST priority 端点，编辑态才渲染 select）
+            const sel = ev.target.closest('select.todo-pr-select');
+            if (sel) {
+                const li = sel.closest('li.todo-item');
+                if (!li) return;
+                fetch(`/api/todos/${li.dataset.id}/priority`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ priority: sel.value })
+                }).then(() => loadTodos())
+                  .catch(err => console.error('设置待办优先级失败', err));
+            }
         });
     }
 

@@ -2160,10 +2160,10 @@ class TodosFrontendAnchorTests(unittest.TestCase):
                   "r", encoding="utf-8") as f:
             js = f.read()
         self.assertIn("let todoEditing = false;", js)
-        # 尾巴 F 改：锁定=条件渲染不输出 pills（隐藏而非灰显）
-        self.assertIn("const pills = todoEditing", js)
-        self.assertIn(": '';", js)
-        self.assertNotIn("' disabled'", js)
+        # 尾巴 C 扩展：锁定=只读徽标（不可改），编辑态=六档下拉选择器
+        self.assertIn("const prControl = todoEditing", js)
+        self.assertIn('select class="todo-pr-select"', js)
+        self.assertIn('span class="todo-pr-badge"', js)
         self.assertIn("todoEditing = !todoEditing;", js)
         self.assertIn("gearEl.classList.toggle('editing', todoEditing)", js)   # F2：状态类
         self.assertNotIn("'🔓'", js)                                            # F2：单图标
@@ -2180,8 +2180,9 @@ class TodosFrontendAnchorTests(unittest.TestCase):
         self.assertIn("limit=200", src)
 
     def test_console_priority_pills_and_grouping(self):
-        # 尾巴 C 精确版：分区视图（── Px ── 标题、空分区 continue 跳过）、
-        # pill 点即改 POST priority、pill 后 loadTodos 全量刷新=实时移动
+        # 尾巴 C 精确版+扩展：分区视图（── Px ── 标题、空分区 continue 跳过，
+        # P0-P5 六档）、下拉选择器选择即改 POST priority、改后 loadTodos
+        # 全量刷新=实时移动分区
         with open(os.path.join(PROJECT_ROOT, "console.js"),
                   "r", encoding="utf-8") as f:
             js = f.read()
@@ -2189,10 +2190,31 @@ class TodosFrontendAnchorTests(unittest.TestCase):
         self.assertIn("── ${pr} ──", js)
         self.assertIn("if (!group.length) continue;", js)   # 空分区不显示
         self.assertIn("byPriority[t.priority || 'P1']", js)
-        self.assertIn("button.todo-pr", js)
+        self.assertIn("['P0', 'P1', 'P2', 'P3', 'P4', 'P5']", js)   # 六档
+        # 回归锚（v11 齿轮失效根因）：分组字典必须六键齐全 + 循环防御兜底
+        self.assertIn(
+            "const byPriority = { P0: [], P1: [], P2: [], P3: [], P4: [], P5: [] };", js)
+        self.assertIn("const group = byPriority[pr] || [];", js)
+        self.assertIn('select class="todo-pr-select"', js)
         self.assertIn("/priority`, {", js)
-        self.assertIn("JSON.stringify({ priority: pill.dataset.pr })", js)
+        self.assertIn("JSON.stringify({ priority: sel.value })", js)
         self.assertIn(".then(() => loadTodos())", js)       # 改后刷新=实时移动
+
+    def test_console_collapsible_groups(self):
+        # 尾巴 I：分区折叠——标题带 data-pr/箭头/条数、折叠分区不输出条目、
+        # localStorage 读写持久化（todos_collapsed_groups）
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("todos_collapsed_groups", js)
+        self.assertIn("localStorage.getItem(TODOS_COLLAPSED_KEY)", js)
+        self.assertIn("localStorage.setItem(TODOS_COLLAPSED_KEY", js)
+        self.assertIn('class="todo-group-title" data-pr="${pr}"', js)
+        self.assertIn("if (collapsed) continue;", js)   # 折叠分区不输出条目
+        self.assertIn("toggleGroup(title.dataset.pr)", js)
+        arrow_anchor = "'%s' : '%s'" % (chr(0x25B8), chr(0x25BE))
+        self.assertIn(arrow_anchor, js)                  # 折叠/展开箭头
+        self.assertIn("(${group.length})", js)          # 标题显示条数
 
     def test_index_group_title_style(self):
         with open(os.path.join(PROJECT_ROOT, "index.html"),
