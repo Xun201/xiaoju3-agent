@@ -362,6 +362,8 @@
 
     let todoEditing = false;   // 尾巴 F：优先级编辑模式（默认锁定 pill）
     let gearEl = null;
+    // #239 待办说明折叠：展开态本会话 JS 记忆（不持久化，默认每次收起）
+    let expandedNotes = [];
 
     // 尾巴 I（改服务端承载，2026-10-04）：WebView2 InPrivate 下 localStorage
     // 跨启动即焚（同 first_run 方案 C 前科）→ 折叠状态由 GET /api/todos 下发
@@ -454,10 +456,29 @@
             const prControl = todoEditing
                 ? `<select class="todo-pr-select" title="优先级">${prOptions}</select>`
                 : `<span class="todo-pr-badge" title="点 ⚙️ 进入编辑模式后可改">${pr}</span>`;
-                return `<li class="todo-item${doneCls}" data-id="${t.id}">` +
+            // #239 待办说明折叠（2026-10-05）：note 非空 → 主任务下渲染
+            // "淡淡说明"行（默认收起，▸/▾ 切换，本会话 JS 记忆展开态）；
+            // 编辑模式下说明行变 textarea + 保存（POST /api/todos/<id>/note）
+            const note = (t.note || '').trim();
+            const expanded = expandedNotes.includes(t.id);
+            let noteHtml = '';
+            if (note || todoEditing) {
+                if (todoEditing) {
+                    noteHtml = `<div class="todo-item" style="padding:0 4px 4px 20px;">` +
+                        `<textarea class="todo-note-edit" data-id="${t.id}">${escapeHtml(note)}</textarea>` +
+                        `<button class="todo-note-save" data-id="${t.id}" title="保存说明">保存</button></div>`;
+                } else if (note) {
+                    const arrowN = expanded ? '▾' : '▸';
+                    noteHtml = `<div class="todo-item" style="padding:0 4px 4px 20px;">` +
+                        `<span class="todo-note-toggle" data-id="${t.id}" title="展开/收起说明">${arrowN}</span>` +
+                        (expanded ? `<div class="todo-note">${escapeHtml(note)}</div>` : '') +
+                        `</div>`;
+                }
+            }
+            return `<li class="todo-item${doneCls}" data-id="${t.id}">` +
                     `<input type="checkbox" class="todo-check"${checked} title="勾选=完成，取消=恢复">` +
                     `<span class="todo-text">${escapeHtml(t.content)}</span>` +
-                    `${prControl}</li>`;
+                    `${prControl}</li>` + noteHtml;
             }).join('');
         }
         listEl.innerHTML = html;
@@ -477,9 +498,35 @@
         // change 永不触发；v12 曾误放 change 监听器内成死代码，已纠）
         todosListEl.addEventListener('click', function (ev) {
             const title = ev.target.closest('li.todo-group-title');
-            if (!title) return;
-            toggleGroup(title.dataset.pr);
-            loadTodos();
+            if (title) {
+                toggleGroup(title.dataset.pr);
+                loadTodos();
+                return;
+            }
+            // #239：说明折叠切换（▸/▾）
+            const toggle = ev.target.closest('span.todo-note-toggle');
+            if (toggle) {
+                const tid = parseInt(toggle.dataset.id, 10);
+                const i = expandedNotes.indexOf(tid);
+                if (i >= 0) expandedNotes.splice(i, 1);
+                else expandedNotes.push(tid);
+                loadTodos();
+                return;
+            }
+            // #239：编辑模式说明保存
+            const saveBtn = ev.target.closest('button.todo-note-save');
+            if (saveBtn) {
+                const tid = parseInt(saveBtn.dataset.id, 10);
+                const box = todosListEl.querySelector(
+                    `textarea.todo-note-edit[data-id="${tid}"]`);
+                if (!box) return;
+                fetch(`/api/todos/${tid}/note`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ note: box.value })
+                }).then(() => loadTodos())
+                  .catch(err => console.error('保存待办说明失败', err));
+            }
         });
         // 复选框 + 优先级下拉：值变化类交互走 change（勾=完成/取消=恢复、
         // 下拉选优先级即改）

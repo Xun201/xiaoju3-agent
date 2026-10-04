@@ -18,7 +18,8 @@ class StateManager:
     """长期记忆与会话历史的持久化管理器。"""
 
     # todos 表 DDL（2026-10-04 拆库）：memory_db 与分离 todos.db 共用一份，
-    # 两库表结构严格一致
+    # 两库表结构严格一致。note（2026-10-05 待办说明折叠 #239）：浅色小字
+    # 展示的"淡淡说明"——主任务放 content，细则/说明放 note
     _TODOS_DDL = '''
         CREATE TABLE IF NOT EXISTS todos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,7 +28,8 @@ class StateManager:
             status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done')),
             priority TEXT NOT NULL DEFAULT 'P1',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            done_at DATETIME
+            done_at DATETIME,
+            note TEXT DEFAULT ''
         )
     '''
 
@@ -68,6 +70,9 @@ class StateManager:
         cols = [row[1] for row in cursor.execute("PRAGMA table_info(todos)")]
         if "priority" not in cols:
             cursor.execute("ALTER TABLE todos ADD COLUMN priority TEXT NOT NULL DEFAULT 'P1'")
+        # note 列迁移（2026-10-05 待办说明折叠 #239）：旧库补列，既有行默认 ''
+        if "note" not in cols:
+            cursor.execute("ALTER TABLE todos ADD COLUMN note TEXT DEFAULT ''")
         conn.commit()
         conn.close()
 
@@ -91,6 +96,11 @@ class StateManager:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS todos_meta "
                 "(key TEXT PRIMARY KEY, value TEXT)")
+            # note 列迁移（2026-10-05 #239）：旧共享库补列，既有行默认 ''
+            cols = [row[1] for row in
+                    conn.execute("PRAGMA table_info(todos)")]
+            if "note" not in cols:
+                conn.execute("ALTER TABLE todos ADD COLUMN note TEXT DEFAULT ''")
             conn.commit()
             target_count = conn.execute(
                 "SELECT COUNT(*) FROM todos").fetchone()[0]
@@ -205,15 +215,16 @@ class StateManager:
         if status in ("pending", "done"):
             order = "ASC" if status == "pending" else "DESC"
             cursor.execute(
-                "SELECT id, content, source_url, status, priority, created_at, done_at "
+                "SELECT id, content, source_url, status, priority, created_at, done_at, note "
                 f"FROM todos WHERE status = ? ORDER BY id {order} LIMIT ?",
                 (status, limit))
         else:
             cursor.execute(
-                "SELECT id, content, source_url, status, priority, created_at, done_at "
+                "SELECT id, content, source_url, status, priority, created_at, done_at, note "
                 "FROM todos ORDER BY id DESC LIMIT ?", (limit,))
         rows = [{"id": r[0], "content": r[1], "source_url": r[2], "status": r[3],
-                 "priority": r[4], "created_at": r[5], "done_at": r[6]}
+                 "priority": r[4], "created_at": r[5], "done_at": r[6],
+                 "note": r[7] or ""}
                 for r in cursor.fetchall()]
         conn.close()
         return rows
@@ -304,6 +315,25 @@ class StateManager:
         deleted = cursor.rowcount
         conn.close()
         return deleted
+
+    def set_todo_note(self, todo_id, note):
+        """设置待办说明（2026-10-05 #239：折叠 UI 的编辑保存入口）。
+
+        note 存"淡淡说明"文本（多行允许，前端浅色小字展示）；空串 = 清空
+        说明。返回更新后的行 dict（经 get_todos 读取，与优先级编辑同款
+        返回口径）；id 不存在 → None。
+        """
+        conn = sqlite3.connect(self.todos_db)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE todos SET note = ? WHERE id = ?",
+                       (str(note or ""), int(todo_id)))
+        conn.commit()
+        updated = cursor.rowcount > 0
+        conn.close()
+        if not updated:
+            return None
+        return next((t for t in self.get_todos(limit=1000)
+                     if t["id"] == int(todo_id)), None)
 
     # ==================== 待办 UI 状态（分区折叠；WebView2 InPrivate 下
     # localStorage 跨启动即焚 → 服务端 JSON 承载，2026-10-04 尾巴 I） ====================
