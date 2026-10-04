@@ -21,6 +21,12 @@ if not defined XJ3_VER (
 )
 echo     版本 %XJ3_VER%
 
+echo [2.5/5] playwright driver windowsHide 补丁（防冻结抓取闪黑框）...
+python _dev\patch_playwright_windows_hide.py
+if errorlevel 1 (
+    echo [WARN] driver 补丁失败——继续构建（可能表现为抓取时闪黑框）。
+)
+
 echo [3/5] PyInstaller 构建 exe（onefile，无控制台，含版本资源与图标）...
 python -m PyInstaller xiaoju3.spec --noconfirm
 if errorlevel 1 (

@@ -10,8 +10,12 @@ playwright 做函数内延迟导入：缺库或浏览器内核缺失时抛出可
 LinkFetchError（中文提示），绝不影响模块 import（import 本文件零副作用）。
 """
 import asyncio
+import os
 import re
+import sys
 import time
+
+import win_process
 
 # DeepSeek 分享链接前缀（run_link_log 的编排校验与此保持一致）
 SHARE_PREFIX = "https://chat.deepseek.com/share/"
@@ -39,6 +43,53 @@ _NOISE_LINE_PREFIXES = ("登录", "注册", "下载", "分享", "复制", "编�
 
 class LinkFetchError(Exception):
     """分享页抓取失败（链接非法 / playwright 缺库 / 浏览器内核缺失 / 异常）。"""
+
+
+def ensure_frozen_browsers_path():
+    """冻结形态浏览器路径修正（2026-10-04 尾巴 1，方案 2）。
+
+    playwright 1.63 在 PyInstaller/Nuitka 冻结态会强制
+    PLAYWRIGHT_BROWSERS_PATH=0（_impl/_transport.py:110-112 "For
+    pyinstaller and Nuitka"）→ driver 去 包内 .local-browsers 找浏览器，
+    而浏览器并不随包分发（spec 只收 lib+driver，705.6MB 的浏览器缓存
+    远超拍板体积带）→ 冻结包报 "Executable doesn't exist"。
+
+    修法：冻结时指回用户缓存目录（%LOCALAPPDATA%\\ms-playwright）；
+    setdefault 不覆盖用户预设（与方案 1 的 setx 不冲突）；非冻结
+    （dev）不进此分支，行为零变化。
+    """
+    if getattr(sys, "frozen", False):
+        os.environ.setdefault(
+            "PLAYWRIGHT_BROWSERS_PATH",
+            os.path.join(os.environ["LOCALAPPDATA"], "ms-playwright"))
+
+
+class _QuietChildWindows:
+    """抓取期间抑制子进程控制台闪窗（2026-10-04 尾巴 A）。
+
+    playwright driver（node.exe）由库内 `asyncio.create_subprocess_exec`
+    以模块命名空间访问启动——无控制台的冻结 exe 里每次抓取都闪黑框
+    （库只设了 SW_HIDE，对新 console 进程不够）。本上下文在 win32 下
+    给该入口运行期注入 CREATE_NO_WINDOW（不覆盖调用方已有的
+    creationflags），退出恢复原函数；非 Windows 空操作。
+    """
+
+    def __enter__(self):
+        self._orig = None
+        if sys.platform == "win32":
+            self._orig = asyncio.create_subprocess_exec
+
+            def _quiet_exec(*args, **kwargs):
+                kwargs.setdefault("creationflags", win_process.CREATE_NO_WINDOW)
+                return self._orig(*args, **kwargs)
+
+            asyncio.create_subprocess_exec = _quiet_exec
+        return self
+
+    def __exit__(self, *exc):
+        if self._orig is not None:
+            asyncio.create_subprocess_exec = self._orig
+        return False
 
 
 def validate_share_url(url):
@@ -99,6 +150,13 @@ async def _fetch_with_browser(async_playwright, url, deadline):
         for attempt in range(1, MAX_ATTEMPTS + 1):
             if time.monotonic() >= deadline:
                 break
+            # 回归默认 headless_shell（2026-10-04 尾巴 A2 终版）：channel=chromium
+            # 虽消 headless_shell 的 conhost，但 chrome.exe 全家桶引入
+            # crashpad-handler（console 子系统）新的 conhost 闪源且无法根除
+            # （chromium 内核层）——headless_shell 无 crashpad，其 conhost 由
+            # _dev/patch_playwright_windows_hide.py 在 node driver 层
+            # windowsHide:true 根治（SW_HIDE：conhost 窗口创建即隐藏），
+            # build_exe.bat 构建前自动执行该补丁。
             browser = await p.chromium.launch(headless=True)
             try:
                 page = await browser.new_page()
@@ -126,6 +184,8 @@ async def fetch_page_text(url, timeout_seconds=None):
 
     供 fetch_deepseek_url（带前缀校验）与真实浏览器冒烟测试复用。
     """
+    ensure_frozen_browsers_path()   # 冻结形态浏览器路径修正（尾巴 1）
+
     # 延迟导入：playwright 缺库时优雅降级（清晰中文提示，可捕获）
     try:
         from playwright.async_api import async_playwright
@@ -139,7 +199,8 @@ async def fetch_page_text(url, timeout_seconds=None):
     deadline = time.monotonic() + (
         FETCH_DEADLINE_SECONDS if timeout_seconds is None else float(timeout_seconds))
     print("🌐 正在打开链接，请稍候... (这可能需要 30-60 秒)")
-    raw_text = await _fetch_with_browser(async_playwright, url, deadline)
+    with _QuietChildWindows():
+        raw_text = await _fetch_with_browser(async_playwright, url, deadline)
 
     text = clean_text(raw_text)
     print(f"✅ 抓取完成，共提取 {len(text.splitlines())} 行文本。")

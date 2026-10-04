@@ -141,13 +141,14 @@ try:
 except (TypeError, ValueError):
     LLM_TEMPERATURE = DEFAULT_TEMPERATURE
 
-# 工具白名单：与 tools.py 的 12 项分发、prompts.py 的工具协议一致
-# （文档 §5；第二阶段 §10 #5 新增 web_search、§7 权限调整新增 system_manage）
+# 工具白名单：与 tools.py 的分发、prompts.py 的工具协议一致
+# （文档 §5；第二阶段 §10 #5 新增 web_search、§7 权限调整新增 system_manage、
+# 2026-10-04 待办提取新增 extract_todos）
 TOOL_WHITELIST = [
     "list_files", "read_file", "write_file", "get_ha_devices",
     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
     "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
-    "read_core_memory", "restart_service",
+    "read_core_memory", "restart_service", "extract_todos",
 ]
 
 
@@ -1669,7 +1670,15 @@ def smart_ask(message, history=None, session_key="default"):
         print(f"⚠️ 静默期聊天拦截判定异常（跳过）: {e}")
 
     # === 第一步：如果用户输入里有 URL，先抓网页正文（剔除 script/style） ===
+    # 📋 DeepSeek 分享链接例外（2026-10-04 尾巴 D）：提取链接的待办要走
+    # extract_todos 工具链（后台 Playwright 抓取 + 分片提炼），URL 抓取
+    # 总结分流会把它短路成"网页总结"（第三步 if url_match 直接 return，
+    # 永远到不了第四步工具解析）——todo 链接消息跳过本步与第三步短路，
+    # 且强制云端（本地小模型工具遵循不可靠，工具循环只在云端链路）。
     url_match = re.search(r'(https?://[^\s]+)', message)
+    todo_link_mode = bool(url_match
+                          and url_match.group(1).startswith(
+                              "https://chat.deepseek.com/share/"))
     messages = _build_messages(message, history)
     # 🗜️ 前情提要压缩接线（§10 #2）：历史 >20 条 → 旧消息浓缩为约 50 字
     # 前情提要 + 最近 10 条明细（结果持久化缓存；失败回退既有硬截断口径）
@@ -1679,7 +1688,7 @@ def smart_ask(message, history=None, session_key="default"):
     # 📍 主人位置状态注入（搜索指代消解配套，2026-10-02 隐私口径）：告知
     # 模型位置已知（直接使用）/未知（先询问主人 + [LOCATION:] 标记协议）
     messages = _inject_location_context(messages)
-    if url_match:
+    if url_match and not todo_link_mode:
         url = url_match.group(1)
         try:
             headers = {'User-Agent': 'Mozilla/5.0'}
@@ -1703,7 +1712,12 @@ def smart_ask(message, history=None, session_key="default"):
 
     # 🧭 硬件自适应路由：按 DEVICE_TIER 决定本地/云端优先级与模型档位
     tier = _resolve_tier()
-    if tier == "low":
+    if todo_link_mode:
+        # 📋 DeepSeek 链接待办提取（尾巴 D）：强制云端——工具循环保留在
+        # 云端链路，本地小模型不输出工具 JSON（真机实测走本地只出总结）
+        local_online = False
+        print("📋 待办链接模式：跳过本地大脑，直接使用云端（工具链路）。")
+    elif tier == "low":
         # low：跳过本地探测（省 1 秒等待），直接依赖云端
         local_online = False
         print("📱 低配模式（low）：跳过本地探测，直接使用云端大脑。")
@@ -1750,7 +1764,8 @@ def smart_ask(message, history=None, session_key="default"):
     label = "🏠 本地" if used_local else "☁️ 云端"
 
     # === 第三步：如果是抓网页的，直接返回总结 ===
-    if url_match:
+    # （todo_link_mode 不在此列：分享链接要走第四步工具解析，见第一步）
+    if url_match and not todo_link_mode:
         # 🧠 裸 CoT 封口：总结文本若带模型原生 [思考]/[计划]，包装成卡片不裸漏
         return _seal_bare_cot(raw_reply), f"{label} (总结)"
 

@@ -46,6 +46,15 @@ def _ask_cloud(messages, api_key, cloud_url):
         return None
 
 
+def ask_cloud(prompt, api_key, cloud_url):
+    """公开薄封装（2026-10-04 待办提取拍板②）：单条 prompt 的云端问答。
+
+    返回回复文本或 None（失败，含 ⚠️/❌ 降级串口径）。外部模块（如
+    todo_extractor）只依赖本公开函数，禁止直调 _ask_cloud。
+    """
+    return _ask_cloud([{"role": "user", "content": prompt}], api_key, cloud_url)
+
+
 def summarize_long_text(text, api_key, cloud_url, chunk_size=4000):
     """长文按 chunk_size 分片逐片总结，再按"倒叙说书人"风格汇总成篇。"""
     chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]

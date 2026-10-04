@@ -1498,6 +1498,157 @@ class TestCommandAtPrefix(_MainCase):
         self.assertIn("指令菜单", self.napcat_payload()["message"])
 
 
+class TestTodoCommands(_MainCase):
+    """待办提取三指令（2026-10-04，docs/TODO_EXTRACT_DESIGN.md §5）：
+    /todo_from_link /todos /todos done，LV2 与工具层同门禁。"""
+
+    URL = "https://chat.deepseek.com/share/abc123"
+
+    @staticmethod
+    def _immediate_thread():
+        """把 Thread 换成同步执行（同 test_gen_log_valid_link 口径）。"""
+
+        class ImmediateThread:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+                if target:
+                    target(*args, **(kwargs or {}))
+
+            def start(self):
+                pass
+
+        return ImmediateThread
+
+    def test_todo_from_link_requires_lv2(self):
+        self.pm.current_level = "Lv.1"
+        with patch("main.threading.Thread") as thread_mock:
+            reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
+        self.assertTrue(reply.startswith("❌"))
+        self.assertIn("Lv.2", reply)
+        thread_mock.assert_not_called()
+
+    def test_todo_from_link_invalid_link(self):
+        self.pm.current_level = "Lv.2"
+        reply = main.handle_message('web', 'u', None, "/todo_from_link https://example.com/x")
+        self.assertTrue(reply.startswith("⚠️"))
+
+    def test_todo_from_link_recent_url_rejected(self):
+        self.pm.current_level = "Lv.2"
+        with patch("main.threading.Thread") as thread_mock, \
+                patch("main.check_recent_url", return_value=True):
+            reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
+        self.assertIn("24 小时内已提取过", reply)
+        thread_mock.assert_not_called()
+
+    def test_todo_from_link_accepted_runs_background(self):
+        self.pm.current_level = "Lv.2"
+        extract_mock = MagicMock(return_value={"ok": True, "inserted": 1,
+                                               "skipped": 0, "items": ["A"]})
+        with patch("main.threading.Thread", self._immediate_thread()), \
+                patch("main.extract_todos_from_url_sync", extract_mock), \
+                patch("main.mark_url") as mark_mock:
+            reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
+        self.assertTrue(reply.startswith("🔄"))
+        mark_mock.assert_called_once_with(self.URL)
+        extract_mock.assert_called_once()
+        self.assertEqual(extract_mock.call_args[0][0], self.URL)
+        self.assertIsNotNone(extract_mock.call_args[1].get("notify"))
+
+    def test_todo_from_link_marks_url_before_failure(self):
+        # 提取失败也标记过 URL（受理即登记）；unmark 由 todo_extractor 兜底
+        self.pm.current_level = "Lv.2"
+        extract_mock = MagicMock(side_effect=RuntimeError("boom"))
+        with patch("main.threading.Thread", self._immediate_thread()), \
+                patch("main.extract_todos_from_url_sync", extract_mock), \
+                patch("main.mark_url"), \
+                patch("main.check_recent_url", return_value=False):
+            reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
+        self.assertTrue(reply.startswith("🔄"))   # 受理不受后台失败影响
+
+    def test_todos_requires_lv2(self):
+        self.pm.current_level = "Lv.1"
+        reply = main.handle_message('web', 'u', None, "/todos")
+        self.assertTrue(reply.startswith("❌"))
+
+    def test_todos_empty(self):
+        self.pm.current_level = "Lv.2"
+        reply = main.handle_message('web', 'u', None, "/todos")
+        self.assertIn("暂无待办", reply)
+        self.assertIn("/todo_from_link", reply)
+
+    def test_todos_lists_pending_with_done_count(self):
+        self.pm.current_level = "Lv.2"
+        main.state_manager.save_todos(["A", "B"], source_url=self.URL)
+        main.state_manager.complete_todo(1)
+        reply = main.handle_message('web', 'u', None, "/todos")
+        self.assertIn("未完成 1 条", reply)
+        self.assertIn("#2 [P1] B", reply)          # 尾巴 C：清单带优先级前缀
+        self.assertIn("已完成 1 条", reply)
+
+    def test_todos_lists_newest_first_with_priority(self):
+        # 尾巴 G：清单 id 倒序（最新在前）——旧口径 ASC 恒显最旧条目
+        self.pm.current_level = "Lv.2"
+        main.state_manager.save_todos(["A", "B", "C"], source_url="u1")
+        reply = main.handle_message('web', 'u', None, "/todos")
+        self.assertIn("#3 [P1] C", reply)
+        self.assertIn("#1 [P1] A", reply)
+        self.assertLess(reply.index("#3"), reply.index("#1"))   # C(新) 在 A(旧) 前
+
+    def test_todos_done_success(self):
+        self.pm.current_level = "Lv.2"
+        main.state_manager.save_todos(["A"], source_url=self.URL)
+        reply = main.handle_message('web', 'u', None, "/todos done 1")
+        self.assertTrue(reply.startswith("✅"))
+        self.assertIn("A", reply)
+        self.assertEqual(main.state_manager.get_todos(status="pending"), [])
+
+    def test_todos_done_invalid_number(self):
+        self.pm.current_level = "Lv.2"
+        reply = main.handle_message('web', 'u', None, "/todos done abc")
+        self.assertTrue(reply.startswith("⚠️"))
+        self.assertIn("用法", reply)
+
+    def test_todos_done_missing_id(self):
+        self.pm.current_level = "Lv.2"
+        main.state_manager.save_todos(["A"], source_url=self.URL)
+        reply = main.handle_message('web', 'u', None, "/todos done 999")
+        self.assertIn("没有找到未完成的待办 #999", reply)
+
+    def test_notify_todo_done_group_uses_group_msg(self):
+        notify = main._notify_todo_done({"group_id": 456})
+        notify({"ok": True, "inserted": 6, "skipped": 0, "items": [
+            {"content": c, "priority": "P1"} for c in ("A", "B", "C", "D", "E", "F")]})
+        self.napcat.post.assert_called_once()
+        self.assertIn("send_group_msg", self.napcat.post.call_args[0][0])
+        msg = self.napcat.post.call_args[1]["json"]["message"]
+        self.assertIn("新增 6 条", msg)
+        self.assertIn("5. [P1] E", msg)     # 只列前 5 条（尾巴 C：带优先级）
+        self.assertNotIn("6. [P1] F", msg)  # 第 6 条不入预览
+
+    def test_notify_todo_done_private_and_zero_items(self):
+        notify = main._notify_todo_done({"user_id": "u1"})
+        notify({"ok": True, "inserted": 0, "skipped": 0, "items": []})
+        self.assertIn("send_private_msg", self.napcat.post.call_args[0][0])
+        self.assertIn("没有发现待办事项", self.napcat.post.call_args[1]["json"]["message"])
+
+    def test_notify_preview_uses_dict_items(self):
+        # 尾巴 C：编排产出 dict 条目（content+priority），预览按 [P] 前缀渲染
+        notify = main._notify_todo_done({"user_id": "u1"})
+        notify({"ok": True, "inserted": 1, "skipped": 0,
+                "items": [{"content": "A", "priority": "P0"}]})
+        msg = self.napcat.post.call_args[1]["json"]["message"]
+        self.assertIn("1. [P0] A", msg)
+
+    def test_notify_todo_done_failure_message(self):
+        notify = main._notify_todo_done({})   # 无 QQ 上下文 → 仅打印不报错
+        notify({"ok": False, "error": "超时"})
+        self.napcat.post.assert_not_called()
+
+    def test_notify_todo_done_send_failure_swallowed(self):
+        self.napcat.post.side_effect = RuntimeError("network down")
+        notify = main._notify_todo_done({"user_id": "u1"})
+        notify({"ok": True, "inserted": 1, "skipped": 0, "items": ["A"]})   # 不抛错
+
+
 if __name__ == "__main__":
 
     unittest.main()

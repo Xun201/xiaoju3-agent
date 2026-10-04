@@ -545,6 +545,8 @@ def _get_help_menu():
             "【基础指令】\n"
             "· /help 或 菜单/帮助/指令：查看此菜单\n"
             "· /gen_log <DeepSeek分享链接>：抓取链接自动生成开发日志\n"
+            "· /todo_from_link <DeepSeek分享链接>：抓取链接自动记待办\n"
+            "· /todos：查看待办清单（/todos done <编号> 标记完成）\n"
             "· /exit：保存记忆并退出\n\n"
             "---\n"
             f"你当前的权限等级：{level}\n"

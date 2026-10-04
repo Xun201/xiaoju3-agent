@@ -149,6 +149,8 @@ import json
 import os
 import re
 import subprocess
+
+import win_process
 import tempfile
 import time
 
@@ -529,7 +531,8 @@ def get_screen_size():
     此前静默回退缺省 1080x2400（缩放比算错导致点击偏差却无从排查），
     现打印一行 ⚠️ 警告，让"静默错误"变成"可见错误"。"""
     try:
-        result = subprocess.run("adb shell wm size", shell=True, capture_output=True, text=True)
+        result = subprocess.run("adb shell wm size", shell=True, capture_output=True, text=True,
+                       creationflags=win_process.creation_flags())
         match = re.search(r'(\d+)x(\d+)', result.stdout)
         if match:
             return int(match.group(1)), int(match.group(2))

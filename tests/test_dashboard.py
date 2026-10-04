@@ -73,6 +73,7 @@ import main  # noqa: E402  QQ 接入层业务模块（/onebot 迁移路由打桩
 import xiaoju3  # noqa: E402
 import xiaoju3_dashboard as dashboard  # noqa: E402
 from agent_state.state_manager import StateManager  # noqa: E402
+from permission import PermissionManager  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -2022,6 +2023,373 @@ class TestVersionBadge(unittest.TestCase):
                   "r", encoding="utf-8") as f:
             js = f.read()
         self.assertIn("header-version", js)
+
+
+class TodosApiTests(unittest.TestCase):
+    """待办 API（2026-10-04 待办提取，docs/TODO_EXTRACT_DESIGN.md §6）：
+    GET /api/todos 与 POST /api/todos/<id>/done，storage 走 tmp 隔离。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xiaoju3_dash_todos_")
+        self.sm = StateManager(base_dir=self.tmp)
+        self._state_patcher = mock.patch("xiaoju3_dashboard.state_manager", self.sm)
+        self._state_patcher.start()
+        self._job_patcher = mock.patch("plugins.todo_extractor.last_job",
+                                       return_value=None)
+        self._job_patcher.start()
+        self.client = dashboard.app.test_client()
+
+    def tearDown(self):
+        self._job_patcher.stop()
+        self._state_patcher.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_get_empty(self):
+        resp = self.client.get("/api/todos")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        self.assertEqual(data["todos"], [])
+        self.assertEqual(data["pending_count"], 0)
+        self.assertEqual(data["done_count"], 0)
+        self.assertIsNone(data["last_job"])
+
+    def test_get_with_counts_and_last_job(self):
+        self.sm.save_todos(["A", "B"], source_url="u1")
+        self.sm.complete_todo(1)
+        with mock.patch("plugins.todo_extractor.last_job",
+                        return_value={"state": "done", "inserted": 2}):
+            resp = self.client.get("/api/todos")
+        data = resp.get_json()["data"]
+        self.assertEqual(data["pending_count"], 1)
+        self.assertEqual(data["done_count"], 1)
+        self.assertEqual(data["last_job"]["state"], "done")
+
+    def test_post_done_200_then_404(self):
+        self.sm.save_todos(["A"], source_url="u1")
+        ok = self.client.post("/api/todos/1/done")
+        self.assertEqual(ok.status_code, 200)
+        self.assertTrue(ok.get_json()["data"]["ok"])
+        self.assertEqual(ok.get_json()["data"]["todo"]["status"], "done")
+        missing = self.client.post("/api/todos/999/done")
+        self.assertEqual(missing.status_code, 404)
+        # GET 侧状态翻转（pending → done）
+        data = self.client.get("/api/todos").get_json()["data"]
+        self.assertEqual(data["pending_count"], 0)
+        self.assertEqual(data["done_count"], 1)
+
+    def test_post_done_is_idempotent_404(self):
+        self.sm.save_todos(["A"], source_url="u1")
+        self.client.post("/api/todos/1/done")
+        again = self.client.post("/api/todos/1/done")   # 已 done → 404（幂等）
+        self.assertEqual(again.status_code, 404)
+
+    def test_priority_migration_and_default(self):
+        # 尾巴 C：新库建列 + 默认 P1（迁移路径由 test_state_manager 旧库用例覆盖）
+        import sqlite3
+        conn = sqlite3.connect(self.sm.memory_db)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(todos)")]
+        conn.close()
+        self.assertIn("priority", cols)
+        self.sm.save_todos(["X"], source_url="u")
+        self.assertEqual(self.sm.get_todos()[0]["priority"], "P1")
+
+    def test_post_priority_sets_and_normalizes(self):
+        # 尾巴 C：pill 端点——合法值落库、非法归一 P1、不存在 404
+        self.sm.save_todos([{"content": "A", "priority": "P2"}], source_url="u1")
+        resp = self.client.post("/api/todos/1/priority", json={"priority": "P0"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["data"]["todo"]["priority"], "P0")
+        bad = self.client.post("/api/todos/1/priority", json={"priority": "urgent"})
+        self.assertEqual(bad.status_code, 200)
+        self.assertEqual(bad.get_json()["data"]["todo"]["priority"], "P1")
+        missing = self.client.post("/api/todos/999/priority", json={"priority": "P0"})
+        self.assertEqual(missing.status_code, 404)
+
+    def test_post_reopen_restores_pending(self):
+        # 尾巴 1：复选框取消钩——reopen 翻回 pending，GET 计数随之翻转
+        self.sm.save_todos(["A"], source_url="u1")
+        self.client.post("/api/todos/1/done")
+        resp = self.client.post("/api/todos/1/reopen")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json()["data"]["ok"])
+        self.assertEqual(resp.get_json()["data"]["todo"]["status"], "pending")
+        data = self.client.get("/api/todos").get_json()["data"]
+        self.assertEqual(data["pending_count"], 1)
+        self.assertEqual(data["done_count"], 0)
+        missing = self.client.post("/api/todos/1/reopen")   # 已是 pending → 404
+        self.assertEqual(missing.status_code, 404)
+
+
+class TodosFrontendAnchorTests(unittest.TestCase):
+    """待办卡片前端静态锚：卡片标记存在 + console.js 轮询/标完成链路在位。"""
+
+    def test_index_has_todos_card(self):
+        with open(os.path.join(PROJECT_ROOT, "index.html"),
+                  "r", encoding="utf-8") as f:
+            html = f.read()
+        for anchor in ('id="todos-list"', 'id="todos-job-line"',
+                       'id="todos-count-text"', "todos-card"):
+            self.assertIn(anchor, html)
+
+    def test_console_js_polls_and_marks_done(self):
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("fetch('/api/todos')", js)
+        self.assertIn("TODOS_REFRESH_MS = 30000", js)
+        # 尾巴 1：复选框双向——勾=done、取消=reopen（动态 action 端点）
+        self.assertIn("class=\"todo-check\"", js)
+        self.assertIn("box.checked ? 'done' : 'reopen'", js)
+        self.assertIn("/${action}`, { method: 'POST' }", js)
+        self.assertIn("escapeHtml(t.content)", js)   # XSS 防护：待办文本转义渲染
+
+    def test_console_todo_items_retain_done_entries(self):
+        # 尾巴 1：完成态保留显示（不再折叠消失）——全量渲染 + 划线灰显类
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("const items = data.todos;", js)               # 全量渲染
+        self.assertIn("todo-item${doneCls}", js)                     # 完成态类随行
+        self.assertNotIn("done.slice(0, 3)", js)                     # 旧"只显 3 条"折叠口径退役
+
+    def test_gear_edit_mode_lock(self):
+        # 尾巴 F：⚙️ 齿轮编辑模式——默认锁定（disabled）、点击切换重渲染
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("let todoEditing = false;", js)
+        # 尾巴 F 改：锁定=条件渲染不输出 pills（隐藏而非灰显）
+        self.assertIn("const pills = todoEditing", js)
+        self.assertIn(": '';", js)
+        self.assertNotIn("' disabled'", js)
+        self.assertIn("todoEditing = !todoEditing;", js)
+        self.assertIn("gearEl.classList.toggle('editing', todoEditing)", js)   # F2：状态类
+        self.assertNotIn("'🔓'", js)                                            # F2：单图标
+        with open(os.path.join(PROJECT_ROOT, "index.html"),
+                  "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn('id="todos-edit-gear"', html)
+        self.assertIn(".todo-pr:disabled", html)
+
+    def test_todos_card_full_quota(self):
+        # 尾巴 G：卡片全量口径（dashboard 侧 limit=200，不再默认 50 截断）
+        import inspect
+        src = inspect.getsource(dashboard.api_todos)
+        self.assertIn("limit=200", src)
+
+    def test_console_priority_pills_and_grouping(self):
+        # 尾巴 C 精确版：分区视图（── Px ── 标题、空分区 continue 跳过）、
+        # pill 点即改 POST priority、pill 后 loadTodos 全量刷新=实时移动
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("todo-group-title", js)
+        self.assertIn("── ${pr} ──", js)
+        self.assertIn("if (!group.length) continue;", js)   # 空分区不显示
+        self.assertIn("byPriority[t.priority || 'P1']", js)
+        self.assertIn("button.todo-pr", js)
+        self.assertIn("/priority`, {", js)
+        self.assertIn("JSON.stringify({ priority: pill.dataset.pr })", js)
+        self.assertIn(".then(() => loadTodos())", js)       # 改后刷新=实时移动
+
+    def test_index_group_title_style(self):
+        with open(os.path.join(PROJECT_ROOT, "index.html"),
+                  "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn("todo-group-title", html)
+
+    def test_index_xss_guard_note(self):
+        # 待办内容含 HTML 时由 escapeHtml 转义——锚定渲染处不直接插值原文
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertNotIn("${t.content}", js)          # 禁止未转义插值
+
+    def test_bubble_text_selectable(self):
+        # 尾巴 2：气泡文本显式可选中 + 深浅两底高可见选区
+        with open(os.path.join(PROJECT_ROOT, "index.html"),
+                  "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn(".message,\n        .message .bubble-content {", html)
+        self.assertIn("user-select: text", html)
+        self.assertIn(".user-message ::selection", html)
+        self.assertIn(".bot-message ::selection", html)
+
+
+class TodoCommandInterceptTests(unittest.TestCase):
+    """控制台待办指令拦截（2026-10-04 Bug 1 修复）：/api/chat 命中 todo 指令族
+    时不进模型（smart_ask 零调用），门禁与 QQ 路径同一份（main.handle_todo_command）；
+    非待办消息照常进模型（拦截透明）。尾巴 3：指令回复带 <think> 过程卡片。"""
+
+
+class ThinkProgressiveAnchorTests(unittest.TestCase):
+    """尾巴 2：思维链渐进展示静态锚——进行中展开（打字机）、完成后自动折叠、
+    手动可重开，三类来源（模型/指令/工具）共用 appendBotMessage 单渲染管线。"""
+
+    def _js(self):
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_progressive_pipeline_intact(self):
+        js = self._js()
+        # 进行中展开：新消息默认走打字机动画（animateThink !== false）
+        self.assertIn("startThinkTypewriter(botMsg, thinkParts.think, options.animateThink !== false)", js)
+        # 完成后自动折叠：打完 → 延时 → 动画折叠 → think-collapsed
+        self.assertIn("scheduleThinkCollapse(card, msgEl)", js)
+        self.assertIn("think-collapsed", js)
+        # 手动可重开：折叠态点击标题可再展开（toggle 处理在位）
+        self.assertIn("think-card-header", js)
+
+    def test_command_reply_shares_same_pipeline(self):
+        # 指令/模型回复同一渲染单点：sendMessage 对 /api/chat 的返回无差别
+        # 走 appendBotMessage（⚙️ 指令的 <think> 因此自动获得同款渐进卡片）
+        js = self._js()
+        self.assertIn("appendBotMessage(res.data.reply, res.data.source, text)", js)
+
+    def test_history_replay_stays_collapsed(self):
+        # 历史回放 animateThink:false 直接折叠全文——正确的非渐进特例，防误改
+        js = self._js()
+        self.assertIn("animateThink: false", js)
+
+
+class TodoCommandInterceptTests(unittest.TestCase):
+    """控制台待办指令拦截（2026-10-04 Bug 1 修复）：/api/chat 命中 todo 指令族
+    时不进模型（smart_ask 零调用），门禁与 QQ 路径同一份（main.handle_todo_command）；
+    非待办消息照常进模型（拦截透明）。尾巴 3：指令回复带 <think> 过程卡片。"""
+
+    URL = "https://chat.deepseek.com/share/abc123"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xiaoju3_dash_cmd_")
+        self.sm = StateManager(base_dir=self.tmp)
+        self.pm = PermissionManager()
+        self._patches = [
+            mock.patch("xiaoju3_dashboard.state_manager", self.sm),
+            mock.patch("xiaoju3_dashboard.smart_ask"),
+            mock.patch("main.state_manager", self.sm),
+            mock.patch("main.permission_manager", self.pm),
+            mock.patch("main.extract_todos_from_url_sync"),
+            mock.patch("main.check_recent_url", return_value=False),
+            mock.patch("main.mark_url"),
+        ]
+        for p in self._patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.client = dashboard.app.test_client()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _chat(self, msg):
+        resp = self.client.post("/api/chat", json={"message": msg, "history": []})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        return data["reply"], data["source"]
+
+    @staticmethod
+    def _body(reply):
+        """取 <think> 包裹后的正文（尾巴 3：指令回复带过程卡片）。"""
+        assert "<think>" in reply and "</think>" in reply, reply
+        return reply.split("</think>", 1)[1]
+
+    def test_todos_lv1_rejected_without_model(self):
+        self.pm.current_level = "Lv.1"
+        reply, source = self._chat("/todos")
+        body = self._body(reply)
+        self.assertTrue(body.startswith("❌"))
+        self.assertIn("Lv.2", body)
+        self.assertIn("门禁拒绝：需要 Lv.2，当前 Lv.1", reply)   # 过程卡片步骤
+        self.assertEqual(source, "⚙️ 指令")
+        dashboard.smart_ask.assert_not_called()
+
+    def test_todo_from_link_lv1_rejected_without_model(self):
+        self.pm.current_level = "Lv.1"
+        reply, source = self._chat(f"/todo_from_link {self.URL}")
+        body = self._body(reply)
+        self.assertTrue(body.startswith("❌"))
+        self.assertIn("Lv.2", body)
+        self.assertIn("收到指令 /todo_from_link", reply)
+        self.assertEqual(source, "⚙️ 指令")
+        dashboard.smart_ask.assert_not_called()
+
+    def test_todos_lv2_lists_from_shared_store(self):
+        self.pm.current_level = "Lv.2"
+        self.sm.save_todos(["A", "B"], source_url="u1")
+        self.sm.complete_todo(1)
+        reply, source = self._chat("/todos")
+        body = self._body(reply)
+        self.assertIn("未完成 1 条", body)
+        self.assertIn("#2 [P1] B", body)   # 尾巴 C：清单带优先级前缀
+        self.assertIn("查询待办：未完成 1 条 / 已完成 1 条", reply)   # 过程步骤
+        self.assertEqual(source, "⚙️ 指令")
+        dashboard.smart_ask.assert_not_called()
+
+    def test_todo_from_link_lv2_accepted_background(self):
+        self.pm.current_level = "Lv.2"
+        extract_mock = mock.MagicMock(return_value={"ok": True, "inserted": 1})
+        with mock.patch("main.threading.Thread", _immediate_thread()), \
+                mock.patch("main.extract_todos_from_url_sync", extract_mock):
+            reply, source = self._chat(f"/todo_from_link {self.URL}")
+        body = self._body(reply)
+        self.assertTrue(body.startswith("🔄"))
+        self.assertIn("后台提取线程已启动", reply)   # 过程步骤
+        self.assertEqual(source, "⚙️ 指令")
+        extract_mock.assert_called_once_with(
+            self.URL, mock.ANY, mock.ANY, notify=mock.ANY)
+        dashboard.smart_ask.assert_not_called()
+
+    def test_non_todo_message_reaches_model(self):
+        self.pm.current_level = "Lv.2"
+        dashboard.smart_ask.return_value = ("模型回复", "☁️ 云端")
+        reply, source = self._chat("今天天气怎么样")
+        self.assertEqual(reply, "模型回复")
+        dashboard.smart_ask.assert_called_once()
+
+    def test_handle_todo_command_signature_has_steps_outparam(self):
+        # 尾巴 3 锚：steps 出参在签名上（QQ 链路不传=行为不变，控制台传=收步骤）
+        import inspect
+        params = inspect.signature(main.handle_todo_command).parameters
+        self.assertIn("steps", params)
+        self.assertEqual(params["steps"].default, None)
+
+
+def _immediate_thread():
+    """把 Thread 换成同步执行（同 test_main 待办指令测试口径）。"""
+
+    class ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            if target:
+                target(*args, **(kwargs or {}))
+
+        def start(self):
+            pass
+
+    return ImmediateThread
+
+
+class FrozenSpecPlaywrightAnchorTests(unittest.TestCase):
+    """spec 收录 playwright 静态锚（2026-10-04 拍板②方案 A）：excludes 除名 +
+    collect_all 在位——防回退到"exe 不打 playwright"旧口径（那会让待办提取
+    在冻结形态永远抓不了页面）。"""
+
+    def _spec_text(self):
+        with open(os.path.join(PROJECT_ROOT, "xiaoju3.spec"),
+                  "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_playwright_not_in_excludes(self):
+        spec = self._spec_text()
+        excludes_start = spec.index("excludes=[")
+        excludes_end = spec.index("]", excludes_start)
+        self.assertNotIn("playwright", spec[excludes_start:excludes_end])
+
+    def test_collect_all_wired_into_analysis(self):
+        spec = self._spec_text()
+        self.assertIn("collect_all('playwright')", spec)
+        self.assertIn("binaries=pw_binaries", spec)
+        self.assertIn("+ pw_datas", spec)
+        self.assertIn("+ pw_hiddenimports", spec)
 
 
 if __name__ == "__main__":
