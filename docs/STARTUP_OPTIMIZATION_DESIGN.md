@@ -61,7 +61,13 @@
 - **风险**：低——首用（视觉回退点击）时一次 ~0.6s 的 openai 导入延迟，发生频率极低且非交互关键路径；无循环依赖（openai 不回引项目）；线程安全（import 原子性 + 幂等）。
 - **先例**：link_logger 的 playwright 延迟导入同模式（项目既有惯例）。
 
-### 2.2 desktop_launcher 顶层 dashboard-import 延迟（占位窗提前 ≈0.7-1.1s）
+### 2.2 desktop_launcher 顶层 dashboard-import 延迟（占位窗提前 ≈0.7-1.1s）——✅ 已拍板（2026-10-04）
+
+> **拍板结果**：做（随 UX 稿 A 增强 1 + 品牌化占位页 + console.js
+> "连接中…"失败态一并实施）。已落地：desktop_launcher.py:70 顶层 import
+> 删除（spec hiddenimports 静态收录已核）+ PLACEHOLDER_HTML 三步文案 +
+> console.js markConnecting()；防回流锚 ast 级（模块体顶层零 dashboard
+> import，__main__ 角色分流嵌套导入不受限）。
 
 - **现状**：desktop_launcher.py:70 顶层 `from xiaoju3_dashboard import app`（注释"PyInstaller 收录锚"）——**1.1s 全链在占位窗创建之前执行**。
 - **策略**：顶层 import 移除；收录依赖已由 **xiaoju3.spec hiddenimports 静态收录**（`xiaoju3_dashboard`/`main` 等均在列表）——运行时 import 不承担收录职责；:435 `serve()` 分支已有函数内延迟导入（先例），`app` 的引用面经 grep **无其它消费点**。

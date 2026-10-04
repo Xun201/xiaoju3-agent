@@ -580,5 +580,45 @@ class WaitForDashboardReadyTests(unittest.TestCase):
             sleep_fn=lambda _s: None))
 
 
+class StartupUxTests(unittest.TestCase):
+    """启动体验优化锚（2026-10-04 启动优化拍板②）：顶层 dashboard import
+    退役（占位窗创建不再被 ≈1.1s 全链拖住，提前 ≈0.7-1.1s 见窗）+ 占位页
+    品牌化三步进度文案。"""
+
+    def test_no_top_level_dashboard_import(self):
+        """ast 级防回流锚：desktop_launcher 模块体（顶层）零
+        xiaoju3_dashboard 导入；__main__ 分支的函数内延迟导入（dashboard
+        角色分流）不受限（ast 只看 Module 直接子节点，嵌套 Import 不算）。"""
+        import ast
+        src_path = os.path.join(os.path.dirname(launcher.__file__),
+                                "desktop_launcher.py")
+        with open(src_path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        offenders = []
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and \
+                    node.module == "xiaoju3_dashboard":
+                offenders.append(node.lineno)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "xiaoju3_dashboard":
+                        offenders.append(node.lineno)
+        self.assertEqual(
+            offenders, [],
+            "desktop_launcher 顶层不得 import xiaoju3_dashboard，"
+            f"行号: {offenders}")
+
+    def test_placeholder_branded_three_step_copy(self):
+        """占位页品牌化锚：橘色 accent + 三步进度文案 + 安抚行在位
+        （视觉素材后续可替换，文案骨架先行锁定）。"""
+        html = launcher.PLACEHOLDER_HTML
+        self.assertIn("小橘3号", html)
+        self.assertIn("#ff9a3c", html)          # 橘色 accent
+        self.assertIn("① 准备资源", html)
+        self.assertIn("② 启动服务", html)
+        self.assertIn("③ 打开界面", html)
+        self.assertIn("自动进入控制台", html)
+
+
 if __name__ == "__main__":
     unittest.main()
