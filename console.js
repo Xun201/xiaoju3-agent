@@ -347,31 +347,21 @@
     let todoEditing = false;   // 尾巴 F：优先级编辑模式（默认锁定 pill）
     let gearEl = null;
 
-    // 尾巴 I：分区折叠状态（localStorage 持久化，刷新后保留）
-    const TODOS_COLLAPSED_KEY = 'todos_collapsed_groups';
-
-    function readCollapsedGroups() {
-        try {
-            const raw = JSON.parse(localStorage.getItem(TODOS_COLLAPSED_KEY) || '[]');
-            return Array.isArray(raw) ? raw : [];
-        } catch (e) {
-            return [];
-        }
-    }
-
-    function writeCollapsedGroups(groups) {
-        try {
-            localStorage.setItem(TODOS_COLLAPSED_KEY, JSON.stringify(groups));
-        } catch (e) { /* localStorage 不可用时静默（主题/音效同款惯例） */ }
-    }
-
-    let collapsedGroups = readCollapsedGroups();
+    // 尾巴 I（改服务端承载，2026-10-04）：WebView2 InPrivate 下 localStorage
+    // 跨启动即焚（同 first_run 方案 C 前科）→ 折叠状态由 GET /api/todos 下发
+    // （服务端 todo_ui_state.json），切换经 POST /api/todos/collapsed_groups
+    let collapsedGroups = [];   // 最近一次服务端下发（toggle 时基于它切换）
 
     function toggleGroup(pr) {
         const i = collapsedGroups.indexOf(pr);
         if (i >= 0) collapsedGroups.splice(i, 1);
         else collapsedGroups.push(pr);
-        writeCollapsedGroups(collapsedGroups);
+        fetch('/api/todos/collapsed_groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ collapsed_groups: collapsedGroups })
+        }).then(() => loadTodos())
+          .catch(err => console.error('保存折叠状态失败', err));
     }
 
     function loadTodos() {
@@ -408,6 +398,9 @@
         // 尾巴 1+C 精确版（2026-10-04）：P0/P1/P2 分区视图——各区带标题行
         // （── Px ──），空分区不显示；pill 点即改后 loadTodos 全量刷新 =
         // 条目实时移动到对应分区；分区内沿用 items 既有顺序（id 倒序）
+        if (Array.isArray(data.collapsed_groups)) {
+            collapsedGroups = data.collapsed_groups;   // 尾巴 I：服务端下发折叠状态
+        }
         const items = data.todos;
         if (!items.length) {
             listEl.innerHTML = '<li class="todos-empty">暂无待办</li>';
@@ -461,9 +454,17 @@
 
     const todosListEl = document.getElementById('todos-list');
     if (todosListEl) {
-        // 复选框：勾=完成、取消=恢复（done / reopen 对称端点）
+        // 尾巴 I：分区标题点击 → 折叠/展开（click 事件——标题无值变化，
+        // change 永不触发；v12 曾误放 change 监听器内成死代码，已纠）
+        todosListEl.addEventListener('click', function (ev) {
+            const title = ev.target.closest('li.todo-group-title');
+            if (!title) return;
+            toggleGroup(title.dataset.pr);
+            loadTodos();
+        });
+        // 复选框 + 优先级下拉：值变化类交互走 change（勾=完成/取消=恢复、
+        // 下拉选优先级即改）
         todosListEl.addEventListener('change', function (ev) {
-            // 复选框：勾=完成、取消=恢复（done / reopen 对称端点）
             const box = ev.target.closest('input.todo-check');
             if (box) {
                 const li = box.closest('li.todo-item');
@@ -474,14 +475,6 @@
                     .catch(err => console.error('切换待办状态失败', err));
                 return;
             }
-            // 尾巴 I：分区标题点击 → 折叠/展开（localStorage 持久化）
-            const title = ev.target.closest('li.todo-group-title');
-            if (title) {
-                toggleGroup(title.dataset.pr);
-                loadTodos();
-                return;
-            }
-            // 优先级下拉：选择即改（POST priority 端点，编辑态才渲染 select）
             const sel = ev.target.closest('select.todo-pr-select');
             if (sel) {
                 const li = sel.closest('li.todo-item');
