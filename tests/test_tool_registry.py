@@ -36,7 +36,7 @@ _LEGACY_PROMPT_BLOCK = """1. list_files - 列出工作区内的所有文件。�
 2. read_file - 读取工作区内指定文件的内容。参数：filename
 3. write_file - 在工作区内创建一个新文件并写入内容。参数：filename, content
 4. get_ha_devices - 获取所有智能家居设备及其当前状态。参数：无
-5. control_ha_device - 控制智能家居设备。参数：entity_id (设备ID), action (turn_on/turn_off/toggle)
+5. control_ha_device - 控制智能家居设备。参数：entity_id (设备ID), action (turn_on/turn_off/toggle/set_temperature), temperature (set_temperature 时的目标温度，数字，如 26)
 6. adb_screenshot - 截取手机屏幕图片。参数：无
 7. adb_tap - 点击手机屏幕坐标。参数：x (横坐标), y (纵坐标)
 8. adb_swipe - 滑动手机屏幕。参数：x1, y1, x2, y2
@@ -76,6 +76,14 @@ class ToolRegistrySnapshotTests(unittest.TestCase):
     def test_prompt_lines_match_legacy_block(self):
         self.assertEqual("\n".join(tool_registry.prompt_tool_lines()),
                          _LEGACY_PROMPT_BLOCK)
+
+    def test_control_ha_device_exposes_set_temperature(self):
+        # H1（2026-10-05）：温度设定暴露给模型——"空调调到26度"口径
+        # （功能文档 §8.4），登记表 params 必须含 set_temperature/temperature
+        entry = next(t for t in tool_registry.TOOL_MANIFEST
+                     if t["name"] == "control_ha_device")
+        self.assertIn("set_temperature", entry["params"])
+        self.assertIn("temperature", entry["params"])
 
 
 class ThreeSitesDeriveFromRegistryTests(unittest.TestCase):

@@ -46,7 +46,8 @@ TOOL_MANIFEST = [
     {"name": "get_ha_devices", "desc": "获取所有智能家居设备及其当前状态",
      "params": "无"},
     {"name": "control_ha_device", "desc": "控制智能家居设备",
-     "params": "entity_id (设备ID), action (turn_on/turn_off/toggle)",
+     "params": "entity_id (设备ID), action (turn_on/turn_off/toggle/set_temperature), "
+               "temperature (set_temperature 时的目标温度，数字，如 26)",
      "dangerous": True, "is_action": True},
     # ── ADB 手机接管（全套 Lv.4）──
     {"name": "adb_screenshot", "desc": "截取手机屏幕图片", "params": "无",
