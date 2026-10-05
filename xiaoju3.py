@@ -222,7 +222,7 @@ MAX_MESSAGES = int(os.environ.get("MAX_MESSAGES", "50"))
 
 # 版本号（单一事实源，安装器方案步 A1：/api/status 下发、前端徽标、
 # build_exe.bat 构建时抓取注入 spec/Inno——手写处仅此一处）
-XIAOJU3_VERSION = "1.0.3"
+XIAOJU3_VERSION = "1.0.4"
 
 # 状态目录（会话记忆 / 身份 / 长期记忆库）
 AGENT_STATE_DIR = os.environ.get(
