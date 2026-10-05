@@ -69,3 +69,25 @@
 ThreadingWSGI 并发实证：local-2 流式进行中并发 GET /api/status ×3 = **0.505s / 0.505s / 0.505s**（恒定，与平时无差，流式占线程不阻塞轮询）。
 
 结论：设计稿风险预估"Ollama 首 token 2-5s"为**冷启动**保守值，热模型实测 0.1-0.7s（逐段观感优于预期）；云端受理即回亚秒级；werkzeug 并发无忧。cloud 轮无 think 帧为预期（deepseek-chat 非 reasoning 模型，C1 消费器按 <think> 标签分流，无标签全走 answer）。
+
+---
+
+## 傍晚（0910ecf 之后，2 个提交）
+
+> 本时段主线：v1.0.4 发布车两段收官（7c22aa6 版本号+构建+双部署+双版冒烟+
+> tag+Release，资产 sha256 双端核验）→ 比赛线情报入档（#213 AIC 官方截止
+> 10-15 20:00/赛道拍板赛题2；#214 CACC 评估后放弃留档）→ #238 待办单条删除。
+> 顺带：正式版两次"自己退出"定位=ZCode 后台任务空闲回收连带杀树，根治配方
+> =schtasks 计划任务拉起（进程归系统服务，脱离回收），已入记忆档。
+
+### `3aaa955` feat(todos): #238 单条删除——垃圾桶(仅已完成项)+confirm 二次确认+DELETE 硬删
+- **文件**：6 个，+91/−1（agent_state/state_manager.py、xiaoju3_dashboard.py、console.js、index.html、tests/test_state_manager.py、tests/test_dashboard.py）
+- **内容**：①state_manager 新增 `delete_todo`（通用单条硬删，后端不限 status=方案 A 拍板——#238 原文"删不掉单条"的完整解法；连接写法对齐 clear_todos）②dashboard 新增 `DELETE /api/todos/<int:todo_id>`（HTTP 方法与写系 POST 区分；404/200 code 口径对齐 done/reopen；安全口径同 api_todo_done）③console.js 垃圾桶仅对已完成项渲染（pending 无入口，拍板①）+click 委托第四分支 window.confirm 二次确认（拍板②）→DELETE 硬删（拍板③）→loadTodos④index.html `.todo-del` 红色系样式⑤锚 +3（state 单删/路由 404 链/前端静态锚含分支在 click 委托体内防 v12 式回流）。
+- **测试**：1839→1842 全绿 skipped=4（只增不减）。
+- **真机（dev 实例五发全过）**：done 项垃圾桶渲染 ✓/pending 无入口（对照行 delOnPending=0）✓/confirm 取消路径（dismiss 行还在）✓/确认路径（accept 行消失）✓/reload 持久=真删库 ✓；收尾用新 DELETE 端点实战清理测试行（200）。
+- **附注**：dev 仓 .env 无 XIAOJU3_TODOS_DB_PATH → dev 实例回退本地库（long_term.db），真机验证全程用 dev 本地库插删测试行，生产共享 todos.db 零触碰；console.js+dashboard 均进 onefile 包，**部署随下一批重建**（不单独发车）。
+- **动机**：#238"现在只能标记完成或全清，删不掉单条"；用户三拍板（仅已完成显示/confirm/硬删）+方案 A（后端通用删除）。
+- **关联提交**：a67d59c（同面板脏数据防御）、15c0a2b（拆库，todos_db 路径）。
+
+### `0910ecf` docs: C3b 归档 + C3c 首 token 观测数据（#244 关账）
+- docs/dev_changelog_20261005.md 追加 C3b 条目与 C3c 观测数据节（见上文）；#244 同日打 done。
