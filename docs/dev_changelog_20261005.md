@@ -115,3 +115,44 @@ ThreadingWSGI 并发实证：local-2 流式进行中并发 GET /api/status ×3 =
 - **部署后复验**：H2 QQ 事件→"📚 电子书已生成"+EPUB 落盘 1929B ✓；#247 控制台 /api/chat 记账直达（⚙️ 指令 + 正式版账本 -30 元落盘）✓ → **#247 done**（待办库 pending 29→28）。
 - **挂起**：H9 三拍演练三次半途断链（Pi relay 闪断：复探 200 数分钟内即断）——演练脚本已备（$TEMP/h9_three_beats.py，每步探活自愈），链路稳定后一键重跑；灯/开关或停中间态，恢复后先归位再演练。
 - **附注**：Pi 链路抖动坐实 HA 迁移动机（方案 B：本机 Docker 跑 HA——侦察已出稿：Docker/WSL2 本机均未装，Pi 22/8123 端口瞬时可通但 SSH 无免密凭证，设计稿待拍板）。
+
+## 深夜（5298cf5：#248/#249/方向③ 控灯链路车）
+
+> 本时段主线：控灯误路由三连修（#248 A+C → #249 B 案 → 方向③ 强制云端）
+> + 正式版 HA 凭证空值实锤补齐 + H9/H1 真机双 PASS + PDF 干净版收口。
+
+### `00f1fcc` fix(prompts): #248 控灯误路由 A+C 修复
+- 【家电控制铁律】独立段（触发词清单→必走 control_ha_device→正例）+ registry 双向描述
+  （control_ha_device 带触发词"必用此工具"；ui_tap/vision 标"仅限手机，家电控制禁止"）
+  +【静默回退铁律】只增一句纠偏通道（家电误路由改道，不得中止文案收场）；+3 锚。
+- 根因诊断：静默回退铁律（为真实手机点击链设计）把误路由后的纠偏通道锁死——
+  误路由×铁律=必死，两发实测精确死在"❌ 视觉模型未连通"固定文案上。
+
+### `328f781` feat(brain): #249 B 案家电上下文注入
+- _inject_home_context：家电词命中首轮预喂【当前设备列表】（延迟导入 home_tools、
+  1500 字符截断、静默降级），smart_ask/stream 双链挂载；+4 锚。
+- 动机：本地小模型"查列表→控制"两跳工具环第二跳弃任务（两发复现）。
+
+### `5298cf5` feat(brain): 方向③家电词强制云端
+- 本地小模型工具遵循根本不可靠（四死法全实测：误路由点击/两跳弃任务/幻觉执行谎称
+  "操作已完成"/纯闲聊无视请求）——仿 todo_link_mode 同构，smart_ask 插 elif home_cloud
+  分支、stream 条件行同挂 home_cloud；+2 锚。云端全场景正确（温度两跳/关灯逻辑/铁律遵循）。
+
+### 真机（三合一 ALL PASS，部署 exe 94,207,823B @22:39）
+- **控灯两发**：☁️ 云端 (工具) 路由 + 灯真实翻转 on→off ×2。
+- **H1 端到端**："把演示空调调到26度"→ 云端单跳直出 control_ha_device set_temperature
+  （回复原话"设备ID已从列表中确认"——B 案+方向③协同）→ climate.yan_shi_kong_diao
+  temperature 7→26.0 持久生效（演示空调=用户 File Editor 方式新造 generic_thermostat；
+  state 停 off 系 target_sensor 挂时间戳实体不联动 heater，temp 达标即验收主指标）。
+- **非家电不受影响**："今天天气不错"仍 🏠 本地。
+- **H9 三拍 PASS**（此前挂三车后落地）：开关→检测器 off→on 联动 → 心跳 70s → 规则①命中
+  （日志"📋 场景规则命中 1 条动作（本地规则，0 token）"+"⚡ turn_on 成功"）→ 灯自动开。
+
+### 附带实锤与修正
+- **正式版 .env HA_URL/HA_TOKEN 空值**：安装模板从未填过——正式版 HA/心跳此前一直
+  "未配置"静默跳过；已从 dev 隔离区补齐（tokens 不进 git）。此前所有 HA 真机验证
+  实际走的是 dev 实例+dev 隔离区凭证。
+- #247 控制台意图路由 done（ba2e06e 三通道共用 handle_intent_command）；#248/#249 done。
+- 技术方案 PDF 干净版收口（6be88c8）：MD 源稿本已无"秋季"污染段，工作树 docx/pdf
+  经 python-docx 读回验证零残留 + 首页渲染抽验 PASS，入账。
+- .gitignore 逐文件忽略 _dev/PROJECT_CONTEXT.md 与 _dev/ENVIRONMENT.md（环境事实档案新建）。
