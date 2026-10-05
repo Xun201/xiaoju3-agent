@@ -302,6 +302,13 @@ class PollAccessFilterTests(unittest.TestCase):
     def test_end_to_end_suppression_via_logger(self):
         """端到端：经 werkzeug logger 实发——/api/status 不达 handler，
         /api/chat 正常到达（filter 返回 False 即整条记录不再输出）。"""
+        # 防御性清标记（同 HeartbeatAccessFilterTests.setUp 口径）：上游
+        # meta_event 用例经 /onebot 视图置 is_meta_event=True，测试客户端
+        # 不发访问日志、无人消费；残留到本线程时 /api/status 先被
+        # _PollAccessFilter 短路拦下（轮不到消费标记），紧随的 /api/chat
+        # 被 _HeartbeatAccessFilter 消费性拦截 → records 变 0（全量跑
+        # test_main 在前时的真实现场，单跑本文件不复现）。
+        dashboard._onebot_meta_local.__dict__.pop("is_meta_event", None)
         wz = logging.getLogger("werkzeug")
         records = []
 
