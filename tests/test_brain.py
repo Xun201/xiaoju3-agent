@@ -4216,5 +4216,54 @@ class TodoLinkModeTests(unittest.TestCase):
         self.assertIn("总结", source)
 
 
+class HomeContextInjectionTests(unittest.TestCase):
+    """家电上下文注入（#249 B 案）：家电词首轮预喂【当前设备列表】，
+    消掉本地小模型两跳工具环的弃任务第二跳。get_ha_devices 经
+    sys.modules 注入 fake home_tools（延迟导入在调用时解析）。"""
+
+    def _fake_home_tools(self, devices):
+        fake = types.ModuleType("home_tools")
+        fake.get_ha_devices = mock.MagicMock(return_value=devices)
+        return mock.patch.dict(sys.modules, {"home_tools": fake}), fake
+
+    def test_home_message_injects_device_list(self):
+        patcher, fake = self._fake_home_tools(
+            "- 模拟客厅灯灯组 (ID: light.mo_ni_ke_ting_deng_deng_zu) 当前状态: on")
+        with patcher:
+            msgs = brain._inject_home_context(
+                [{"role": "user", "content": "把客厅灯关了"}], "把客厅灯关了")
+        self.assertEqual(len(msgs), 2)
+        self.assertEqual(msgs[-1]["role"], "system")
+        self.assertIn("【当前设备列表】", msgs[-1]["content"])
+        self.assertIn("light.mo_ni_ke_ting_deng_deng_zu", msgs[-1]["content"])
+        fake.get_ha_devices.assert_called_once()
+
+    def test_non_home_message_zero_cost(self):
+        patcher, fake = self._fake_home_tools("- x (ID: y) on")
+        with patcher:
+            msgs = brain._inject_home_context(
+                [{"role": "user", "content": "今天天气不错"}], "今天天气不错")
+        self.assertEqual(len(msgs), 1)   # 未命中：原样返回零成本
+        fake.get_ha_devices.assert_not_called()
+
+    def test_ha_unconfigured_falls_back_silently(self):
+        for bad in ("❌ 未配置 HA_URL（Home Assistant 地址），无法获取设备列表。",
+                    "当前没有发现可控设备。", ""):
+            patcher, _ = self._fake_home_tools(bad)
+            with patcher:
+                msgs = brain._inject_home_context(
+                    [{"role": "user", "content": "开灯"}], "开灯")
+            self.assertEqual(len(msgs), 1)   # ❌/空列表：静默不注入不阻塞
+
+    def test_injection_wired_into_both_chains(self):
+        # 源码级静态锚：smart_ask 与 smart_ask_stream 两条组装链都挂了
+        # _inject_home_context（防单侧漏接导致流式/同步行为分叉）
+        src_path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "brain.py")
+        with open(src_path, encoding="utf-8") as f:
+            src = f.read()
+        self.assertEqual(src.count("messages = _inject_home_context(messages, message)"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -887,6 +887,45 @@ def _inject_location(query):
         return query
 
 
+# 家电上下文注入触发词（#249 B 案；与 prompts【家电控制铁律】同清单口径）
+_HOME_CONTEXT_KEYWORDS = ("灯", "开关", "空调", "插座", "窗帘", "传感器",
+                          "加湿器", "家电")
+# 【当前设备列表】system 条目截断上限（防超大家庭列表撑爆上下文）
+_HOME_CONTEXT_MAX_CHARS = 1500
+
+
+def _inject_home_context(messages, message):
+    """家电词命中 → 首轮预喂【当前设备列表】（#249 B 案，2026-10-05）。
+
+    动机：本地小模型"查列表→控制"两跳工具环的第二跳会弃任务（首轮按
+    【家电控制铁律】get_ha_devices，结果喂回后转闲聊不输出控制 JSON，
+    两发复现）——首轮直接注入列表消掉第一跳，单跳直出 control_ha_device
+    （H1 实测：本地+有列表+单跳完美输出）。
+
+    - 消息不含家电词 → 原样返回（零成本）；
+    - 延迟导入 home_tools（保持 brain 顶部依赖面不变）；
+    - HA 未配置/拉取失败/返回 ❌/列表空 → 原样返回，静默不阻塞对话；
+    - 注入形态仿【主人位置】：system 条目，截 _HOME_CONTEXT_MAX_CHARS。
+    """
+    try:
+        if not any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS):
+            return messages
+        from home_tools import get_ha_devices
+        devices = get_ha_devices()
+        if (not devices or devices.startswith("❌")
+                or "未配置" in devices or "没有发现" in devices):
+            return messages
+        messages.append({
+            "role": "system",
+            "content": ("【当前设备列表】以下是家中 HA 设备实时状态，"
+                        "家电控制直接据此输出 control_ha_device，"
+                        "无需再调用 get_ha_devices：\n"
+                        + devices[:_HOME_CONTEXT_MAX_CHARS])})
+    except Exception as e:
+        print(f"⚠️ 家电上下文注入异常（跳过）: {e}")
+    return messages
+
+
 def _inject_location_context(messages):
     """向模型注入主人位置状态（搜索指代消解配套，2026-10-02 隐私口径）。
 
@@ -1683,6 +1722,8 @@ def smart_ask(message, history=None, session_key="default"):
     # 📍 主人位置状态注入（搜索指代消解配套，2026-10-02 隐私口径）：告知
     # 模型位置已知（直接使用）/未知（先询问主人 + [LOCATION:] 标记协议）
     messages = _inject_location_context(messages)
+    # 🏠 家电上下文注入（#249 B 案）：家电词命中预喂设备列表（单跳直出）
+    messages = _inject_home_context(messages, message)
     if url_match and not todo_link_mode:
         url = url_match.group(1)
         try:
@@ -2002,6 +2043,8 @@ def smart_ask_stream(message, history=None, session_key="default",
     messages = _compress_history(messages, session_key)
     messages = _inject_memory_context(messages)
     messages = _inject_location_context(messages)
+    # 🏠 家电上下文注入（#249 B 案）：与 smart_ask 同款，流式/同步一致
+    messages = _inject_home_context(messages, message)
     if url_match and not todo_link_mode:
         url = url_match.group(1)
         try:
