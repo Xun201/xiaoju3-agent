@@ -143,8 +143,10 @@ class AutoTTSFrontendTests(unittest.TestCase):
         判定 / requestEdgeTTS 携 voice）与浏览器自动降级（.catch 回退链）；
         关闭时仅手动点播放朗读（自动链路全部经 autoTTSEnabled() 守卫）。"""
         js = self.console_js
-        self.assertEqual(js.count("if (autoTTSEnabled()) speakMessageEl("), 2,
-                         msg="自动播报仅 sendMessage/refreshMsg 两处接线")
+        # 2026-10-05 C2 真流式：+1 处合法接线（sendMessage 流式 done 收尾
+        # ——回复到达即播报，语义与 legacy 分支相同），共 3 处
+        self.assertEqual(js.count("if (autoTTSEnabled()) speakMessageEl("), 3,
+                         msg="自动播报仅 sendMessage 流式+legacy/refreshMsg 三处接线")
         start = js.index("window.playMsg = function")
         end = js.index("const EDGE_TTS_TIMEOUT_MS", start)
         body = js[start:end]

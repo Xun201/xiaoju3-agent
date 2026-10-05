@@ -1188,6 +1188,127 @@
             statusIdx += 1;
         }, THINKING_ROTATE_MS);
 
+        // 🌊 思维链真流式（2026-10-05 C2，#244）：优先走 SSE 流式端点，
+        // 失败/异常回退旧 /api/chat（口径零回退）。历史回放/刷新重试仍走
+        // appendBotMessage 旧管线（本次只改发送链）。
+        sendMessageStream(text, loadingMsg, rotateTimer)
+            .catch(() => sendMessageLegacy(text, loadingMsg, rotateTimer));
+    };
+
+    // 流式分支：fetch POST + getReader 手解 SSE（EventSource 不支持 POST）
+    function sendMessageStream(text, loadingMsg, rotateTimer) {
+        return fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text })
+        }).then(res => {
+            if (!res.ok || !res.body) throw new Error('stream unavailable');
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '';
+            let thinkCard = null;     // 渐进思考卡（首个 think 块建卡）
+            let thinkBodyEl = null;
+            let thinkAcc = '';        // 累计思考原文（分段判定用）
+            let answerEl = null;      // 正文气泡（首个 answer 块建）
+            let answerAcc = '';
+            let toolEl = null;
+
+            function ensureThinkCard() {
+                if (thinkCard) return;
+                clearInterval(rotateTimer);
+                if (loadingMsg.parentNode) loadingMsg.parentNode.removeChild(loadingMsg);
+                thinkCard = document.createElement('div');
+                thinkCard.className = 'think-card';
+                const head = document.createElement('div');
+                head.className = 'think-card-header';
+                head.textContent = '🧠 思考过程（实时）';
+                thinkBodyEl = document.createElement('div');
+                thinkBodyEl.className = 'think-card-body';
+                thinkCard.appendChild(head);
+                thinkCard.appendChild(thinkBodyEl);
+                history.appendChild(thinkCard);
+            }
+
+            function renderThinkProgressive() {
+                ensureThinkCard();
+                // 逐段渲染：按 THINK_STAGE_RE 分段，已渲染段数之前的不重绘
+                const lines = thinkAcc.split('\n');
+                thinkBodyEl.textContent = thinkAcc;   // textContent 整体刷新（安全口径，行数多时可改 append 模式）
+                history.scrollTop = history.scrollHeight;
+            }
+
+            function ensureAnswerEl() {
+                if (answerEl) return;
+                clearInterval(rotateTimer);
+                if (loadingMsg.parentNode) loadingMsg.parentNode.removeChild(loadingMsg);
+                answerEl = document.createElement('div');
+                answerEl.className = 'message bot-message';
+                const bubble = document.createElement('div');
+                bubble.className = 'bubble-content';
+                answerEl.appendChild(bubble);
+                history.appendChild(answerEl);
+                history.scrollTop = history.scrollHeight;
+            }
+
+            function handleEvent(etype, data) {
+                if (etype === 'think') {
+                    thinkAcc += (data.delta || '');
+                    renderThinkProgressive();
+                } else if (etype === 'tool') {
+                    if (thinkCard) {
+                        if (!toolEl) {
+                            toolEl = document.createElement('div');
+                            toolEl.className = 'todo-empty';
+                            toolEl.style.padding = '2px 4px';
+                            thinkCard.appendChild(toolEl);
+                        }
+                        toolEl.textContent = '🔧 正在执行工具：' + (data.name || '');
+                    }
+                } else if (etype === 'answer') {
+                    ensureAnswerEl();
+                    answerAcc += (data.delta || '');
+                    answerEl.querySelector('.bubble-content').textContent = answerAcc;
+                    history.scrollTop = history.scrollHeight;
+                } else if (etype === 'done') {
+                    // 收尾：移除流式过程件，最终态走既有 appendBotMessage
+                    // 管线（同形最终串：净化/表情/工具栏/落盘口径一致）
+                    if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);
+                    if (toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
+                    if (answerEl && answerEl.parentNode) answerEl.parentNode.removeChild(answerEl);
+                    const botMsg = appendBotMessage(data.reply, data.source, text);
+                    if (window.xiaoju3Sound) window.xiaoju3Sound.ding();
+                    if (autoTTSEnabled()) speakMessageEl(botMsg);
+                } else if (etype === 'error') {
+                    throw new Error(data.error || 'stream error');
+                }
+            }
+
+            function pump() {
+                return reader.read().then(({ done, value }) => {
+                    if (done) return;
+                    buf += decoder.decode(value, { stream: true });
+                    let idx;
+                    while ((idx = buf.indexOf('\n\n')) !== -1) {
+                        const frame = buf.slice(0, idx);
+                        buf = buf.slice(idx + 2);
+                        let etype = 'message';
+                        let payload = '';
+                        frame.split('\n').forEach(l => {
+                            if (l.startsWith('event:')) etype = l.slice(6).trim();
+                            else if (l.startsWith('data:')) payload += l.slice(5).trim();
+                        });
+                        if (!payload) continue;
+                        handleEvent(etype, JSON.parse(payload));
+                    }
+                    return pump();
+                });
+            }
+            return pump();
+        });
+    }
+
+    // 旧路分支（回退用；原实现原样保留）
+    function sendMessageLegacy(text, loadingMsg, rotateTimer) {
         fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
