@@ -2338,6 +2338,22 @@ class TodosApiTests(unittest.TestCase):
         missing = self.client.post("/api/todos/1/reopen")   # 已是 pending → 404
         self.assertEqual(missing.status_code, 404)
 
+    def test_delete_hard_deletes_and_404s_missing(self):
+        # #238：DELETE 硬删单条——200 后行消失（done_count 归零）、
+        # 再删 404、其余端点对该 id 也 404
+        self.sm.save_todos(["A", "B"], source_url="u1")
+        self.client.post("/api/todos/1/done")
+        resp = self.client.delete("/api/todos/1")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json()["data"]["ok"])
+        data = self.client.get("/api/todos").get_json()["data"]
+        self.assertEqual(data["done_count"], 0)
+        self.assertEqual(len(data["todos"]), 1)      # 邻行不伤
+        missing = self.client.delete("/api/todos/1") # 已删 → 404
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(
+            self.client.post("/api/todos/1/done").status_code, 404)
+
 
 class TodosFrontendAnchorTests(unittest.TestCase):
     """待办卡片前端静态锚：卡片标记存在 + console.js 轮询/标完成链路在位。"""
@@ -2416,6 +2432,26 @@ class TodosFrontendAnchorTests(unittest.TestCase):
         self.assertIn("/priority`, {", js)
         self.assertIn("JSON.stringify({ priority: sel.value })", js)
         self.assertIn(".then(() => loadTodos())", js)       # 改后刷新=实时移动
+
+    def test_console_delete_button_anchor(self):
+        # #238：垃圾桶仅对已完成项渲染 + confirm 二次确认 + DELETE 硬删 +
+        # click 委托内第四分支（防回流 change/渲染模板漏挂）
+        with open(os.path.join(PROJECT_ROOT, "console.js"),
+                  "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("const delBtn = t.status === 'done'", js)   # 仅 done 渲染
+        self.assertIn('class="todo-del" data-id="${t.id}"', js)
+        self.assertIn("${prControl}${delBtn}</li>", js)           # 模板已挂
+        self.assertIn("确定删除这条已完成的待办？删除后不可恢复。", js)
+        self.assertIn("fetch(`/api/todos/${tid}`, { method: 'DELETE' })", js)
+        del_start = js.index("button.todo-del')")          # 分支必须在 click 委托体内
+        click_start = js.index("todosListEl.addEventListener('click'")
+        self.assertGreater(del_start, click_start)
+        self.assertLess(del_start, js.index("addEventListener('change'", click_start))
+        with open(os.path.join(PROJECT_ROOT, "index.html"),
+                  "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn(".todo-del {", html)                 # 红色样式在位
 
     def test_console_collapsible_groups(self):
         # 尾巴 I：分区折叠——标题带 data-pr/箭头/条数、折叠分区不输出条目、

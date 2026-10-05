@@ -191,6 +191,13 @@
         .todo-note-save { font-size: 10px; cursor: pointer; border: 1px solid var(--color-border);
             background: var(--color-card); color: var(--color-primary); border-radius: 4px;
             padding: 2px 6px; flex: none; }
+        /* #238：删除已完成待办的垃圾桶按钮（红色系，透明底 hover 浅红） */
+        .todo-del {
+            margin-left: 6px; padding: 1px 6px; font-size: 12px; line-height: 1.4;
+            border: none; background: transparent; color: #e0433f;
+            cursor: pointer; flex: none; opacity: .7; border-radius: 4px;
+        }
+        .todo-del:hover { opacity: 1; background: rgba(224, 67, 63, .10); }
         .todo-pr {
             border: 1px solid var(--color-border); background: var(--color-card);
             color: var(--color-text-hint); font-size: 10px; line-height: 1;

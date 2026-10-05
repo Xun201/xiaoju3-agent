@@ -272,6 +272,17 @@ class TodoStoreTests(unittest.TestCase):
         self.assertEqual(self.sm.get_todos(), [])
         self.assertEqual(self.sm.clear_todos(), 0)   # 空表再清 → 0
 
+    def test_delete_todo_hard_deletes_single_row(self):
+        # #238 存储侧：通用单条硬删（后端不限 status）——存在删 True 且
+        # 行消失、不存在 False、邻行不伤
+        self.sm.save_todos(["A", "B", "C"], source_url="u1")
+        self.sm.complete_todo(1)   # A → done（前端入口仅 done，存储侧通用）
+        self.assertTrue(self.sm.delete_todo(1))
+        ids = sorted(t["id"] for t in self.sm.get_todos())
+        self.assertEqual(ids, [2, 3])
+        self.assertFalse(self.sm.delete_todo(1))     # 已删 → False
+        self.assertFalse(self.sm.delete_todo(999))   # 不存在 → False
+
     def test_check_constraint_rejects_bad_status(self):
         conn = sqlite3.connect(self.sm.memory_db)
         with self.assertRaises(sqlite3.IntegrityError):

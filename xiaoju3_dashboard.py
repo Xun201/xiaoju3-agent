@@ -630,6 +630,18 @@ def api_todo_priority(todo_id):
     return jsonify({"code": 200, "data": {"ok": True, "todo": todo}})
 
 
+@app.route("/api/todos/<int:todo_id>", methods=["DELETE"])
+def api_todo_delete(todo_id):
+    """硬删单条待办（2026-10-05 #238：前端垃圾桶仅对已完成项显示、
+    window.confirm 二次确认后调用。HTTP 方法用 DELETE 与写系 POST
+    区分；安全口径同 api_todo_done（LAN 匿名可达为 §11 遗留④，
+    127.0.0.1 加固落地后自动收窄）。"""
+    ok = state_manager.delete_todo(todo_id)
+    if not ok:
+        return jsonify({"code": 404, "data": {"ok": False}}), 404
+    return jsonify({"code": 200, "data": {"ok": True}})
+
+
 @app.route("/api/first_run/status")
 def api_first_run_status():
     """首装判定（安装器方案步 A3）：ENV_FILE 不存在即 first_run。"""
