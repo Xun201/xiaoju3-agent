@@ -491,6 +491,95 @@ class ChatApiTests(HistoryApiTestsBase):
             ms.assert_not_called()
 
 
+class ConsoleIntentRouteTests(HistoryApiTestsBase):
+    """控制台意图路由直达（#247，2026-10-05）：api_chat/stream 复用
+    main.handle_intent_command——记账/电子书/搜索三意图不落 LLM；
+    未命中/❌ 透传 smart_ask（绝不吞消息，与 QQ 链路同语义）；
+    export_ebook 注入通道历史（非 system，截最近 50 条）；
+    流式命中单帧 done（与斜杠拦截同模式）。route/dispatch 一律 mock
+    （不触真实账本/导出）。"""
+
+    def _fake_intent(self, name="accounting_add", args=None):
+        intent = mock.MagicMock()
+        intent.name = name
+        intent.args = dict(args or {})
+        return intent
+
+    def test_accounting_message_hits_direct_not_llm(self):
+        with mock.patch.object(main, "route",
+                               return_value=self._fake_intent()), \
+             mock.patch.object(main, "dispatch",
+                               return_value="✅（测试）已记账"), \
+             mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            resp = self.client.post(
+                "/api/chat", json={"message": "记一下账 花了30元"})
+        data = resp.get_json()["data"]
+        self.assertEqual(data["source"], "⚙️ 指令")
+        self.assertIn("已记账", data["reply"])
+        ms.assert_not_called()   # 直达铁律：不落 LLM
+
+    def test_ebook_intent_gets_history_injected_and_trimmed(self):
+        history = [{"role": "system", "content": "置顶提示词"}] + [
+            {"role": "user" if i % 2 == 0 else "assistant",
+             "content": f"m{i}"} for i in range(55)]
+        captured = {}
+
+        def fake_dispatch(intent):
+            captured["args"] = dict(intent.args or {})
+            return "📚 电子书已生成（共 3 章）：x.epub"
+
+        with mock.patch.object(
+                main, "route",
+                return_value=self._fake_intent("export_ebook")), \
+             mock.patch.object(main, "dispatch",
+                               side_effect=fake_dispatch), \
+             mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            resp = self.client.post("/api/chat", json={
+                "message": "把对话导出成电子书", "history": history})
+        self.assertIn("电子书", resp.get_json()["data"]["reply"])
+        ms.assert_not_called()
+        injected = captured["args"]["history"]
+        self.assertEqual(len(injected), 50)   # 截最近 50 条（对齐 QQ 口径）
+        self.assertTrue(all(m.get("role") != "system" for m in injected))
+        self.assertEqual(injected[-1]["content"], "m54")   # 保留最新
+
+    def test_unmatched_message_falls_through_to_llm(self):
+        with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("模型回复", "🏠 本地")
+            resp = self.client.post(
+                "/api/chat", json={"message": "今天天气不错"})
+        self.assertEqual(resp.get_json()["data"]["reply"], "模型回复")
+        ms.assert_called_once_with("今天天气不错", [])   # 空记录不注入
+
+    def test_dispatch_error_reply_falls_through_to_llm(self):
+        # ❌ 透传语义与 QQ 链路一致：dispatch 失败不吞消息
+        with mock.patch.object(main, "route",
+                               return_value=self._fake_intent()), \
+             mock.patch.object(main, "dispatch",
+                               return_value="❌ 意图执行失败"), \
+             mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
+            ms.return_value = ("模型回复", "🏠 本地")
+            resp = self.client.post("/api/chat", json={"message": "记一下账"})
+        self.assertEqual(resp.get_json()["data"]["reply"], "模型回复")
+        ms.assert_called_once()
+
+    def test_stream_intent_hits_single_done_frame(self):
+        with mock.patch.object(main, "route",
+                               return_value=self._fake_intent()), \
+             mock.patch.object(main, "dispatch",
+                               return_value="✅（测试）已记账"), \
+             mock.patch.object(dashboard.brain, "smart_ask_stream") as mss, \
+             _quiet():
+            resp = self.client.post(
+                "/api/chat/stream", json={"message": "记一下账"})
+        body = resp.get_data(as_text=True)
+        self.assertEqual(body.count("event: done"), 1)   # 单帧收口
+        self.assertNotIn("event: think", body)
+        self.assertNotIn("event: answer", body)
+        self.assertIn("⚙️ 指令", body)
+        mss.assert_not_called()
+
+
 class ConsoleSlashWiringTests(HistoryApiTestsBase):
     """控制台斜杠指令接线（C' 第一批，2026-10-04）：_console_slash_intercept
     复用 main 既有函数（main.py 零改动）——每条命中处理器、不落 LLM；
