@@ -59,6 +59,13 @@ class PromptsTests(unittest.TestCase):
                      "ui_tap_element", "vision_tap_element", "adb_swipe"):
             self.assertIn(f'{{"tool": "{name}"', self.content, name)
 
+    def test_set_temperature_example_visible(self):
+        # H1（2026-10-05）：温度设定暴露给模型——"空调调到26度"场景模型
+        # 能看见 set_temperature/temperature 参数（功能文档 §8.4 口径落地）
+        self.assertIn('"action": "set_temperature"', self.content)
+        self.assertIn('"temperature": 26', self.content)
+        self.assertIn("set_temperature", self.content)  # 工具清单参数行
+
     def test_ui_tap_priority_rule(self):
         self.assertIn("必须优先使用 `ui_tap_element`", self.content)
         self.assertIn("回退使用 `vision_tap_element`", self.content)
