@@ -885,6 +885,11 @@ def api_chat_stream():
     回调转生成器经闭包队列；流式期间本请求线程被占用，并发由
     ThreadingWSGIServer 多线程承担）。原 /api/chat 一字不动（QQ/刷新/
     回放/TTS/回退共用）。
+
+    斜杠指令拦截（2026-10-05 C3a，修 C' 在流式通道失效的回归）：
+    generator 起始处先过 _console_slash_intercept（与 api_chat 同款），
+    命中 → 不流式，直接发一个 done 事件（reply+source 已净化），前端
+    照常渲染——指令不是流式内容，一次性 done 最简。
     """
     data = request.get_json(silent=True) or {}
     user_msg = data.get("message", "")
@@ -894,6 +899,15 @@ def api_chat_stream():
     print(f"[香橙派收到消息][流式] {user_msg}")
 
     def generate():
+        # 🛡️ 斜杠指令拦截（C3a）：与 api_chat 同款，命中 → 一次性 done
+        # （指令不是流式内容；/help 等指令消息不得进模型——C' 接线成果
+        # 在流式通道的回归修复）
+        intercept = _console_slash_intercept(user_msg)
+        if intercept is not None:
+            reply, source = intercept
+            yield _sse_frame("done", {
+                "reply": sanitize_for_web(reply), "source": source})
+            return
         import json as _json
         import queue
         q = queue.Queue()
@@ -1057,9 +1071,17 @@ def _console_slash_intercept(user_msg):
     """
     text = user_msg.strip()
 
+    # ⚙️ /help | 菜单 | 帮助 | 指令：指令菜单（api_chat 有独立 /help 块
+    # 在本函数之前——此处补一份，供流式端点等直调场景使用）
+    if text in ("/help", "菜单", "帮助", "指令"):
+        from plugins.help_menu import get_help_menu
+        return (get_help_menu(main.permission_manager.current_level),
+                "⚙️ 系统")
+
     # ⚙️ 清空会话记忆（/clear | /reset | 清空记忆 | 重置记忆）——控制台
     # 口径：只清控制台历史，QQ 双通道记忆文件不动（与 main.py:739 分叉）
     if text in ("/clear", "/reset", "清空记忆", "重置记忆"):
+        _clear_console_history()
         _clear_console_history()
         return ("✨ 控制台对话记忆已清空（仅控制台历史，QQ 通道不受影响）。",
                 "⚙️ 系统")
