@@ -108,18 +108,48 @@ class ChatStreamSseTests(unittest.TestCase):
             resp = self.client.post("/api/chat", json={"message": "你好"})
         self.assertEqual(resp.get_json()["data"]["reply"], "同步回复")
 
-    def test_intercept_still_works_on_stream(self):
-        """流式端点同样吃前置拦截？——否：拦截块在 api_chat 内，stream
-        端点直连 brain（/help 等指令应从 stream 收口为 done 单帧）。"""
-        # 本锚如实记录现状：stream 不走指令拦截，指令消息也会进模型。
-        # C3 打磨候选：stream 复用 _console_slash_intercept。
+    def test_intercept_on_stream_slash_help(self):
+        """C3a 修复锚：stream 发 /help → 命中指令拦截，done 单帧返回
+        菜单（不进模型）；done 帧格式正确（reply 净化 + source）。"""
         with mock.patch.object(
                 dashboard.brain, "smart_ask_stream",
-                side_effect=self._mock_stream(reply="LLM 回复")), _quiet():
+                side_effect=self._mock_stream(reply="LLM 回复")) as ms, \
+             _quiet():
             resp = self.client.post("/api/chat/stream",
                                     json={"message": "/help"})
         frames = _parse_sse(resp.get_data(as_text=True))
-        self.assertEqual(frames[-1][1]["reply"], "LLM 回复")   # 现状：直进模型
+        self.assertEqual([e for e, _ in frames], ["done"])   # 单帧收口
+        done = frames[-1][1]
+        self.assertIn("指令菜单", done["reply"])
+        self.assertEqual(done["source"], "⚙️ 系统")
+        ms.assert_not_called()   # 不进模型
+
+    def test_intercept_on_stream_lv4_auth(self):
+        """stream 发 /lv4_auth → 权限警告（不进模型）。"""
+        with mock.patch.object(
+                dashboard.brain, "smart_ask_stream",
+                side_effect=self._mock_stream(reply="LLM 回复")) as ms, \
+             _quiet():
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "/lv4_auth"})
+        frames = _parse_sse(resp.get_data(as_text=True))
+        self.assertEqual([e for e, _ in frames], ["done"])
+        self.assertIn("双因子授权", frames[-1][1]["reply"])
+        ms.assert_not_called()
+
+    def test_stream_normal_message_still_streams(self):
+        """回归锚：普通消息仍逐块流式（think/answer 帧在位），拦截
+        不误吞正常对话。"""
+        with mock.patch.object(
+                dashboard.brain, "smart_ask_stream",
+                side_effect=self._mock_stream()), _quiet():
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "你好"})
+        frames = _parse_sse(resp.get_data(as_text=True))
+        types = [e for e, _ in frames]
+        self.assertIn("think", types)
+        self.assertIn("done", types)
+        self.assertEqual(types.count("done"), 1)
 
 
 def tempfile_dir():
