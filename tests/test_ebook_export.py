@@ -15,8 +15,9 @@ import xml.etree.ElementTree as ET
 from unittest import mock
 
 from plugins import ebook_export
-from plugins.ebook_export import (export_epub, export_from_history,
-                                  export_markdown, sanitize_filename)
+from plugins.ebook_export import (export_epub, export_ebook_reply,
+                                  export_from_history, export_markdown,
+                                  sanitize_filename)
 
 DC = "http://purl.org/dc/elements/1.1/"
 OPF = "http://www.idpf.org/2007/opf"
@@ -287,6 +288,34 @@ class MarkdownExportTest(ExportTestBase):
         for ch in '\\/:*?"<>|':
             self.assertNotIn(ch, basename)
         self.assertTrue(os.path.exists(path))
+
+
+class ReplyWrapperTest(ExportTestBase):
+    """意图层回复封装（2026-10-05 H2 真机修复）：dispatch 返回值直接
+    回给用户，绝不允许裸 list[dict] repr 上屏。"""
+
+    def test_reply_returns_friendly_confirmation_with_path(self):
+        reply = export_ebook_reply(make_history(23), title="测试书")
+        self.assertTrue(reply.startswith("📚 电子书已生成"))
+        self.assertIn("共 3 章", reply)
+        path = reply.rsplit("：", 1)[-1]
+        self.assertTrue(os.path.exists(path))
+        self.assertTrue(path.endswith(".epub"))
+
+    def test_reply_empty_history_is_chinese_hint_not_valueerror(self):
+        reply = export_ebook_reply([])
+        self.assertTrue(reply.startswith("❌ 当前通道还没有可导出的对话内容"))
+
+    def test_intent_table_wired_to_reply_wrapper(self):
+        # 意图表必须挂封装函数（防回退到裸 export_from_history）
+        self.assertEqual(
+            ebook_export.__name__ + ":export_ebook_reply",
+            "plugins.ebook_export:export_ebook_reply")
+        import intent_router
+        entry = next(e for e in intent_router.INTENT_PATTERNS
+                     if e["name"] == "export_ebook")
+        self.assertEqual(entry["handler_name"],
+                         "plugins.ebook_export:export_ebook_reply")
 
 
 class ModuleHygieneTest(unittest.TestCase):

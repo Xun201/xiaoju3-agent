@@ -53,8 +53,10 @@ class RuleLayerDocExamplesTest(unittest.TestCase):
         result = route("把这段对话导出成电子书")
         self.assertIsNotNone(result)
         self.assertEqual(result.name, "export_ebook")
+        # 2026-10-05 H2 真机修复：裸 export_from_history 回 list[dict]
+        # repr 给用户——改挂 export_ebook_reply（章节→EPUB→中文确认）
         self.assertEqual(result.handler,
-                         "plugins.ebook_export:export_from_history")
+                         "plugins.ebook_export:export_ebook_reply")
 
     def test_search_sentence_extracts_query(self):
         result = route("帮我搜一下天气")
@@ -166,7 +168,7 @@ class IntentTableMetaTest(unittest.TestCase):
         # 延迟字符串引用：模块解耦，import intent_router 不应拉起 handler
         handlers = [entry["handler_name"] for entry in INTENT_PATTERNS]
         self.assertIn("plugins.accounting:add_record", handlers)
-        self.assertIn("plugins.ebook_export:export_from_history", handlers)
+        self.assertIn("plugins.ebook_export:export_ebook_reply", handlers)
         self.assertIn("search_tools:web_search", handlers)
 
 

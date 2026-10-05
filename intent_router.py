@@ -142,7 +142,7 @@ INTENT_PATTERNS = [
             r"电子书.{0,6}导出",
         ],
         "extractor": _extract_ebook_args,
-        "handler_name": "plugins.ebook_export:export_from_history",
+        "handler_name": "plugins.ebook_export:export_ebook_reply",
     },
     {
         "name": "accounting_query",
