@@ -316,6 +316,17 @@ class StateManager:
         conn.close()
         return deleted
 
+    def delete_todo(self, todo_id):
+        """硬删单条待办（2026-10-05 #238：垃圾桶图标；通用单条删，
+        后端不限 status，前端仅对已完成项显示入口。不可逆。"""
+        conn = sqlite3.connect(self.todos_db)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
+        conn.commit()
+        deleted = cursor.rowcount
+        conn.close()
+        return deleted > 0
+
     def set_todo_note(self, todo_id, note):
         """设置待办说明（2026-10-05 #239：折叠 UI 的编辑保存入口）。
 

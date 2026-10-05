@@ -462,6 +462,10 @@
             const prControl = todoEditing
                 ? `<select class="todo-pr-select" title="优先级">${prOptions}</select>`
                 : `<span class="todo-pr-badge" title="点 ⚙️ 进入编辑模式后可改">${pr}</span>`;
+            // #238：垃圾桶仅对已完成项渲染（pending 无删除入口）
+            const delBtn = t.status === 'done'
+                ? `<button class="todo-del" data-id="${t.id}" title="删除这条已完成待办">🗑️</button>`
+                : '';
             // #239 待办说明折叠（2026-10-05）：note 非空 → 主任务下渲染
             // "淡淡说明"行（默认收起，▸/▾ 切换，本会话 JS 记忆展开态）；
             // 编辑模式下说明行变 textarea + 保存（POST /api/todos/<id>/note）
@@ -484,7 +488,7 @@
             return `<li class="todo-item${doneCls}" data-id="${t.id}">` +
                     `<input type="checkbox" class="todo-check"${checked} title="勾选=完成，取消=恢复">` +
                     `<span class="todo-text">${escapeHtml(t.content)}</span>` +
-                    `${prControl}</li>` + noteHtml;
+                    `${prControl}${delBtn}</li>` + noteHtml;
             }).join('');
         }
         listEl.innerHTML = html;
@@ -532,6 +536,15 @@
                     body: JSON.stringify({ note: box.value })
                 }).then(() => loadTodos())
                   .catch(err => console.error('保存待办说明失败', err));
+            }
+            // #238：删除单条待办（仅已完成项有入口；confirm 二次确认 → DELETE 硬删）
+            const delBtn = ev.target.closest('button.todo-del');
+            if (delBtn) {
+                const tid = parseInt(delBtn.dataset.id, 10);
+                if (!window.confirm('确定删除这条已完成的待办？删除后不可恢复。')) return;
+                fetch(`/api/todos/${tid}`, { method: 'DELETE' })
+                    .then(() => loadTodos())
+                    .catch(err => console.error('删除待办失败', err));
             }
         });
         // 复选框 + 优先级下拉：值变化类交互走 change（勾=完成/取消=恢复、
