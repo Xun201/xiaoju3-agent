@@ -91,3 +91,27 @@ ThreadingWSGI 并发实证：local-2 流式进行中并发 GET /api/status ×3 =
 
 ### `0910ecf` docs: C3b 归档 + C3c 首 token 观测数据（#244 关账）
 - docs/dev_changelog_20261005.md 追加 C3b 条目与 C3c 观测数据节（见上文）；#244 同日打 done。
+
+## 夜间（2117cee 之后：半成品接线车 + 部署车）
+
+> 本时段主线：H1/H2 半成品接线（68eec4e/0ad013c）+ 侦察翻案文档批（2117cee）
+> 三笔推送 → 控制台意图路由接线（ba2e06e，#247）→ 下一车部署+真机验收。
+
+### `68eec4e` feat(home): 温度设定暴露给模型（H1）
+- tool_registry params 补 set_temperature/temperature + prompts 示例行与【工具适用边界】边界规则（本地小模型曾把"调空调"误路由到 ui_tap_element 点手机屏）+ 快照锚 _LEGACY_PROMPT_BLOCK 第 5 行同步；+2 锚（registry/prompts 参数可见性）。
+- 真模型验证：本地两轮工具环精确输出 climate.demo_ac + set_temperature + 26；云端行为正确（先取设备列表）。假欠账消除：功能文档 §8.4"温度设定尚未实现"实为已实现未暴露。
+
+### `0ad013c` fix(ebook): 导出意图改挂 export_ebook_reply（H2）
+- 真机抓到 bug：dispatch 直透 export_from_history 的 list[dict]，用户收到裸 Python repr。新增 export_ebook_reply 封装（历史→EPUB→"📚 已生成+章数+路径"，空历史转中文提示），意图表改挂；+3 锚。
+
+### `2117cee` docs: 半成品侦察翻案批
+- 架构文档 §5 三处"未接线"（前情提要/长期记忆/save_identity）核实实为已接线改"已接线（2026-10-05 核实）"；qq_send_image 标 P2 归档候选、dev_logger 标已归档；功能文档记账/电子书翻绿、安装器 🟡→🟢、§2.3 改已接入；DEMO_PACK soul ②口径刷新（控制台已接，HTTP API 未实现）。
+
+### `ba2e06e` feat(console): 控制台意图路由直达（#247）
+- **文件**：3 个，+147/−18（main.py 抽 handle_intent_command 三通道共用——route→ebook 历史注入〔非 system 截 50 条〕→dispatch→❌ 透传；_brain_reply 改调它，QQ/web 行为零变化 / xiaoju3_dashboard.py api_chat+stream 双挂拦截 + 两通道 _inject_recent_actions 补齐指代消解 / tests/test_dashboard.py +5 锚）。
+- **闭包坑**：generate() 内赋值 history 须 `nonlocal`（RHS 读到未绑定名，流式锚当场抓住）。
+- **真机（dev :5005 三发全过）**：记账直达 ⚙️ 指令不落 LLM ✓ / 电子书直达 EPUB 落盘 ✓ / 普通消息流式 31 帧 think+done（🏠 本地）✓。
+- **部署（下一车）**：重建 exe 94,206,090B（20:44，含 ba2e06e+H1/H2）→ 双目录 cp（正式/测试）→ schtasks 拉起 health 200 + 4 进程 ✓。
+- **部署后复验**：H2 QQ 事件→"📚 电子书已生成"+EPUB 落盘 1929B ✓；#247 控制台 /api/chat 记账直达（⚙️ 指令 + 正式版账本 -30 元落盘）✓ → **#247 done**（待办库 pending 29→28）。
+- **挂起**：H9 三拍演练三次半途断链（Pi relay 闪断：复探 200 数分钟内即断）——演练脚本已备（$TEMP/h9_three_beats.py，每步探活自愈），链路稳定后一键重跑；灯/开关或停中间态，恢复后先归位再演练。
+- **附注**：Pi 链路抖动坐实 HA 迁移动机（方案 B：本机 Docker 跑 HA——侦察已出稿：Docker/WSL2 本机均未装，Pi 22/8123 端口瞬时可通但 SSH 无免密凭证，设计稿待拍板）。
