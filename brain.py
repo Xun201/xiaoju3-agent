@@ -1713,6 +1713,9 @@ def smart_ask(message, history=None, session_key="default"):
     todo_link_mode = bool(url_match
                           and url_match.group(1).startswith(
                               "https://chat.deepseek.com/share/"))
+    # 🏠 家电强制云端判定（方向③，2026-10-05）：触发词与【家电控制铁律】
+    # 同清单，与待办链接强制云端同构
+    home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
     messages = _build_messages(message, history)
     # 🗜️ 前情提要压缩接线（§10 #2）：历史 >20 条 → 旧消息浓缩为约 50 字
     # 前情提要 + 最近 10 条明细（结果持久化缓存；失败回退既有硬截断口径）
@@ -1753,6 +1756,12 @@ def smart_ask(message, history=None, session_key="default"):
         # 云端链路，本地小模型不输出工具 JSON（真机实测走本地只出总结）
         local_online = False
         print("📋 待办链接模式：跳过本地大脑，直接使用云端（工具链路）。")
+    elif home_cloud:
+        # 🏠 家电控制强制云端（方向③，2026-10-05）：本地小模型工具遵循
+        # 根本不可靠（误路由点击/两跳弃任务/幻觉执行/纯闲聊四死法全实测），
+        # 云端全场景正确——与待办链接强制云端同构
+        local_online = False
+        print("🏠 家电控制模式：强制云端大脑（本地小模型工具遵循不可靠）。")
     elif tier == "low":
         # low：跳过本地探测（省 1 秒等待），直接依赖云端
         local_online = False
@@ -2039,6 +2048,8 @@ def smart_ask_stream(message, history=None, session_key="default",
     todo_link_mode = bool(url_match
                           and url_match.group(1).startswith(
                               "https://chat.deepseek.com/share/"))
+    # 🏠 家电强制云端判定（方向③）：与 smart_ask 同款
+    home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
     messages = _build_messages(message, history)
     messages = _compress_history(messages, session_key)
     messages = _inject_memory_context(messages)
@@ -2067,7 +2078,7 @@ def smart_ask_stream(message, history=None, session_key="default",
         messages.append({"role": "system", "content": TOOL_FUSE_SYSTEM_NOTE})
 
     tier = _resolve_tier()
-    if todo_link_mode or tier == "low":
+    if todo_link_mode or home_cloud or tier == "low":
         local_online = False
     else:
         local_online = probe_local()

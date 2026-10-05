@@ -4264,6 +4264,35 @@ class HomeContextInjectionTests(unittest.TestCase):
             src = f.read()
         self.assertEqual(src.count("messages = _inject_home_context(messages, message)"), 2)
 
+    def test_home_message_forces_cloud(self):
+        # 方向③（2026-10-05）：家电词 → 强制云端——本地小模型工具遵循
+        # 根本不可靠（误路由/弃任务/幻觉执行/纯闲聊四死法全实测）
+        patcher, fake = self._fake_home_tools(
+            "- 模拟客厅灯灯组 (ID: light.mo_ni_ke_ting_deng_deng_zu) 当前状态: on")
+        with patcher, \
+                mock.patch.object(brain, "probe_local", return_value=True), \
+                mock.patch.object(brain, "ask_local") as ml, \
+                mock.patch.object(brain, "ask_cloud",
+                                  return_value="好嘞，客厅灯已关闭！"), \
+                mock.patch.object(brain, "save_memory"), \
+                mock.patch.object(brain, "_remember_user_facts"), \
+                mock.patch.object(brain, "_extract_location_from_user_message"):
+            reply, source = brain.smart_ask("把客厅灯关了", [])
+        ml.assert_not_called()   # 强制云端铁律：本地大脑绝不接家电消息
+        self.assertIn("灯", reply)
+        self.assertIn("☁️", source)
+        fake.get_ha_devices.assert_called_once()   # B 案注入仍生效（云端+列表）
+
+    def test_home_cloud_mode_wired_both_chains(self):
+        # 静态锚：smart_ask elif 分支 + stream 条件行都挂 home_cloud
+        src_path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "brain.py")
+        with open(src_path, encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn("elif home_cloud:", src)
+        self.assertIn('if todo_link_mode or home_cloud or tier == "low":', src)
+        self.assertEqual(src.count("home_cloud = any("), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
