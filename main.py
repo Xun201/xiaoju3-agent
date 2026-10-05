@@ -469,6 +469,38 @@ def _compress_and_save(messages, filepath):
     save_memory(persist, filepath)
 
 
+def handle_intent_command(message, history=None):
+    """意图路由直达（QQ/网页/控制台三通道共用，2026-10-05 自 _brain_reply
+    抽出——控制台 #247 接线复用同一实现，防双份清单漂移）。
+
+    按清洗前原文识别（保留标点与小数点，"12.5元"不被清洗破坏）：
+    route 命中 → dispatch 直达并返回回复文本；export_ebook 注入通道
+    历史（非 system 消息，截最近 50 条——对齐 QQ 滚动截断口径，防
+    控制台客户端超大 payload）；未命中、路由异常或 dispatch 返回 ❌
+    一律返回 None（调用方透传原 smart_ask 链路，绝不吞消息）。
+    """
+    intent = None
+    try:
+        intent = route(_strip_cq(message))
+    except Exception as e:
+        print(f"⚠️ 意图路由异常，走正常对话: {e}")
+    if intent is None:
+        return None
+    if intent.name == "export_ebook" and "history" not in (intent.args or {}):
+        # 电子书导出需要会话历史：把当前通道的非 system 消息填进参数
+        trimmed = [m for m in (history or [])
+                   if isinstance(m, dict) and m.get("role") != "system"]
+        intent.args["history"] = trimmed[-50:]
+    try:
+        dispatched = dispatch(intent)
+    except Exception as e:
+        print(f"⚠️ 意图执行异常，走正常对话: {e}")
+        return None
+    if dispatched and not (isinstance(dispatched, str) and dispatched.startswith("❌")):
+        return str(dispatched)
+    return None
+
+
 def _brain_reply(source, message, messages, user_id, new_session=False):
     """进入大脑前的主链路编排，返回回复文本。
 
@@ -483,24 +515,10 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
     if new_session:
         reset_tool_fuse(session_key)
 
-    # 意图路由按清洗前原文识别（保留标点与小数点，"12.5元"不被清洗破坏）
-    intent = None
-    try:
-        intent = route(_strip_cq(message))
-    except Exception as e:
-        print(f"⚠️ 意图路由异常，走正常对话: {e}")
-    if intent is not None:
-        if intent.name == "export_ebook" and "history" not in (intent.args or {}):
-            # 电子书导出需要会话历史：把当前通道的非 system 消息填进参数
-            intent.args["history"] = [m for m in messages
-                                      if isinstance(m, dict) and m.get("role") != "system"]
-        try:
-            dispatched = dispatch(intent)
-        except Exception as e:
-            print(f"⚠️ 意图执行异常，走正常对话: {e}")
-            dispatched = None
-        if dispatched and not (isinstance(dispatched, str) and dispatched.startswith("❌")):
-            return str(dispatched)
+    # ② 意图路由（三通道共用公共函数：route → dispatch → ❌ 透传）
+    intent_reply = handle_intent_command(message, messages)
+    if intent_reply is not None:
+        return intent_reply
 
     history = _inject_long_term_memories(messages)
     history = _inject_recent_actions(history)

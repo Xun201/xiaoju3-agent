@@ -850,6 +850,18 @@ def api_chat():
             })
 
         history = data.get("history") or []
+        # 🎯 意图路由直达（#247，2026-10-05）：与 QQ 链路同源 main 共用函数
+        # ——记账/电子书/联网搜索三意图控制台直达不进模型；未命中/❌ 返回
+        # None 透传 smart_ask（绝不吞消息）。最近设备操作注入顺带补齐
+        # （指代消解上下文，与 QQ 链路对齐）。
+        history = main._inject_recent_actions(history)
+        intent_reply = main.handle_intent_command(user_msg, history)
+        if intent_reply is not None:
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(intent_reply),
+                         "source": "⚙️ 指令"}
+            })
         print(f"[香橙派收到消息] {user_msg}")
         reply, source = smart_ask(user_msg, history)
         print(f"[香橙派生成回复] 来源: {source}")
@@ -919,6 +931,16 @@ def api_chat_stream():
             reply, source = intercept
             yield _sse_frame("done", {
                 "reply": sanitize_for_web(reply), "source": source})
+            return
+        # 🎯 意图路由直达（#247，2026-10-05）：与 api_chat 同源共用函数；
+        # 命中 → 单帧 done（指令不是流式内容，与上方斜杠拦截同模式）。
+        # 最近设备操作注入同款补齐，保证流式/非流式上下文一致。
+        nonlocal history   # 重绑外层历史（闭包内赋值须显式声明）
+        history = main._inject_recent_actions(history)
+        intent_reply = main.handle_intent_command(user_msg, history)
+        if intent_reply is not None:
+            yield _sse_frame("done", {
+                "reply": sanitize_for_web(intent_reply), "source": "⚙️ 指令"})
             return
         import json as _json
         import queue
