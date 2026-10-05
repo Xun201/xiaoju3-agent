@@ -192,6 +192,42 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
         self.assertIn("appendBotMessage(data.reply, data.source, text)",
                       js)                          # done 走既有单渲染管线
 
+    def test_stream_interrupt_cleanup_and_legacy_guard(self):
+        """C3b：半途断流——sendMessageStream 内层闭包清过程件再 rethrow
+        （外层 catch 才转 legacy 重答）；legacy 主路径收 loadingMsg
+        contains 防御（流式回退时 loadingMsg 可能已被过程卡消费，
+        裸 removeChild 会 DOMException → 误落红字、重答不发生）。"""
+        js = self._js()
+        self.assertIn("return pump().catch", js)         # 内层清理挂钩
+        self.assertIn("if (thinkCard && thinkCard.parentNode)", js)
+        self.assertIn("if (toolEl && toolEl.parentNode)", js)
+        self.assertIn("if (answerEl && answerEl.parentNode)", js)
+        self.assertIn(
+            "if (history.contains(loadingMsg)) history.removeChild(loadingMsg)",
+            js)                                          # 与 1344 catch 分支口径对称
+        # 作用域解耦：两分支开头自取 chat-history（裸 history 解析到
+        # window.history 内置对象，appendChild/contains 全炸——C2 遗留，
+        # "实时卡"从未渲染、回退回复不显示，全靠轮询兜底掩盖）
+        self.assertIn(
+            "const history = document.getElementById('chat-history');\n        return fetch('/api/chat/stream'",
+            js)
+        self.assertIn(
+            "const history = document.getElementById('chat-history');\n        fetch('/api/chat'",
+            js)
+
+    def test_think_append_mode_and_tool_gate(self):
+        """C3b：think 渐进 append 模式——完整行 append、末行整刷（chunk
+        边收边长，末行必须随增量同步更新）；tool 事件无卡也建卡
+        （不再静默丢）。textContent 安全口径不变。"""
+        js = self._js()
+        self.assertNotIn("thinkBodyEl.textContent = thinkAcc",
+                         js)                             # 整刷退役（反锚）
+        self.assertIn("thinkBodyEl.appendChild(row)", js)
+        self.assertIn("renderedLines", js)
+        self.assertIn("lastRowEl.textContent = lines[lines.length - 1] || ''",
+                      js)                                # 末行整刷随 chunk 更新
+        self.assertIn("ensureThinkCard();   // C3b：无卡也建", js)
+
 
 if __name__ == "__main__":
     unittest.main()

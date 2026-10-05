@@ -1203,6 +1203,11 @@
 
     // 流式分支：fetch POST + getReader 手解 SSE（EventSource 不支持 POST）
     function sendMessageStream(text, loadingMsg, rotateTimer) {
+        // C3b 修复：本函数与 sendMessageLegacy 都是顶层函数，裸 history 会
+        // 解析到 window.history 内置对象（无 appendChild/contains）——渐进卡
+        // 第一行 DOM 操作即 TypeError → 静默回退，"实时卡"从未渲染过。自取
+        // 元素与作用域解耦（同 appendBotMessage:1016 惯例）
+        const history = document.getElementById('chat-history');
         return fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1218,6 +1223,8 @@
             let answerEl = null;      // 正文气泡（首个 answer 块建）
             let answerAcc = '';
             let toolEl = null;
+            let renderedLines = 0;    // C3b:append 模式已渲染行数
+            let lastRowEl = null;     // C3b:末行行元素（chunk 增长中，整刷）
 
             function ensureThinkCard() {
                 if (thinkCard) return;
@@ -1237,9 +1244,20 @@
 
             function renderThinkProgressive() {
                 ensureThinkCard();
-                // 逐段渲染：按 THINK_STAGE_RE 分段，已渲染段数之前的不重绘
+                // C3b append 模式：完整行 append，末行整刷——chunk 边收边长，
+                // 末行必须随增量同步更新，否则最后一行文字卡住
                 const lines = thinkAcc.split('\n');
-                thinkBodyEl.textContent = thinkAcc;   // textContent 整体刷新（安全口径，行数多时可改 append 模式）
+                while (renderedLines < lines.length - 1) {
+                    const row = document.createElement('div');
+                    row.textContent = lines[renderedLines];
+                    thinkBodyEl.appendChild(row);
+                    renderedLines++;
+                }
+                if (!lastRowEl) {
+                    lastRowEl = document.createElement('div');
+                    thinkBodyEl.appendChild(lastRowEl);
+                }
+                lastRowEl.textContent = lines[lines.length - 1] || '';
                 history.scrollTop = history.scrollHeight;
             }
 
@@ -1261,15 +1279,14 @@
                     thinkAcc += (data.delta || '');
                     renderThinkProgressive();
                 } else if (etype === 'tool') {
-                    if (thinkCard) {
-                        if (!toolEl) {
-                            toolEl = document.createElement('div');
-                            toolEl.className = 'todo-empty';
-                            toolEl.style.padding = '2px 4px';
-                            thinkCard.appendChild(toolEl);
-                        }
-                        toolEl.textContent = '🔧 正在执行工具：' + (data.name || '');
+                    ensureThinkCard();   // C3b：无卡也建（工具事件不再静默丢）
+                    if (!toolEl) {
+                        toolEl = document.createElement('div');
+                        toolEl.className = 'todo-empty';
+                        toolEl.style.padding = '2px 4px';
+                        thinkCard.appendChild(toolEl);
                     }
+                    toolEl.textContent = '🔧 正在执行工具：' + (data.name || '');
                 } else if (etype === 'answer') {
                     ensureAnswerEl();
                     answerAcc += (data.delta || '');
@@ -1309,12 +1326,22 @@
                     return pump();
                 });
             }
-            return pump();
+            // C3b：半途断流——闭包内清理过程件再 rethrow（外层 catch 才转
+            // legacy 重答；宽 DOM 查询会误删历史消息，必须用闭包引用）
+            return pump().catch(function (err) {
+                if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);
+                if (toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
+                if (answerEl && answerEl.parentNode) answerEl.parentNode.removeChild(answerEl);
+                throw err;
+            });
         });
     }
 
     // 旧路分支（回退用；原实现原样保留）
     function sendMessageLegacy(text, loadingMsg, rotateTimer) {
+        // C3b 修复：同 sendMessageStream——自取 history，裸名解析到
+        // window.history 使 .then/.catch 全链 DOM 操作炸、回复不渲染
+        const history = document.getElementById('chat-history');
         fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1323,7 +1350,7 @@
         .then(res => res.json())
         .then(res => {
             clearInterval(rotateTimer);   // 收到回复：停止轮换并替换为正常气泡
-            history.removeChild(loadingMsg);
+            if (history.contains(loadingMsg)) history.removeChild(loadingMsg);   // C3b：流式回退时 loadingMsg 可能已被过程卡消费
             if (res.code === 200) {
                 // T4a 常驻诊断①（用户指定文案）：打印后端原始回复全文——
                 // <think> 包装块应在此可见；F12 若连本行都看不到，说明
