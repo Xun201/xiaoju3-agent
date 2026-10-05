@@ -66,6 +66,20 @@ class PromptsTests(unittest.TestCase):
         self.assertIn('"temperature": 26', self.content)
         self.assertIn("set_temperature", self.content)  # 工具清单参数行
 
+    def test_home_appliance_iron_rule(self):
+        # #248（2026-10-05）：控灯误路由修复——【家电控制铁律】独立段
+        # （触发词清单→必走 control_ha_device，正例句"把客厅灯关了"）
+        self.assertIn("【家电控制铁律】", self.content)
+        self.assertIn("把客厅灯关了", self.content)
+        self.assertIn("先调用 get_ha_devices 查设备列表", self.content)
+        # 旧尾巴行已升级为独立段（防双份口径回流）
+        self.assertNotIn("工具适用边界：control_ha_device 只用于", self.content)
+
+    def test_silent_fallback_allows_appliance_reroute(self):
+        # #248：纠偏通道锚——家电误路由不得用中止文案收场，改道 HA 工具
+        self.assertIn("必须立即改道 control_ha_device", self.content)
+        self.assertIn("绝不得用中止文案收场", self.content)
+
     def test_ui_tap_priority_rule(self):
         self.assertIn("必须优先使用 `ui_tap_element`", self.content)
         self.assertIn("回退使用 `vision_tap_element`", self.content)

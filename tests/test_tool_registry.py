@@ -36,12 +36,12 @@ _LEGACY_PROMPT_BLOCK = """1. list_files - 列出工作区内的所有文件。�
 2. read_file - 读取工作区内指定文件的内容。参数：filename
 3. write_file - 在工作区内创建一个新文件并写入内容。参数：filename, content
 4. get_ha_devices - 获取所有智能家居设备及其当前状态。参数：无
-5. control_ha_device - 控制智能家居设备。参数：entity_id (设备ID), action (turn_on/turn_off/toggle/set_temperature), temperature (set_temperature 时的目标温度，数字，如 26)
+5. control_ha_device - 控制家中家电设备（灯/开关/空调/传感器/插座等）——凡是开灯、关灯、调温等家电请求必用此工具。参数：entity_id (设备ID), action (turn_on/turn_off/toggle/set_temperature), temperature (set_temperature 时的目标温度，数字，如 26)
 6. adb_screenshot - 截取手机屏幕图片。参数：无
 7. adb_tap - 点击手机屏幕坐标。参数：x (横坐标), y (纵坐标)
 8. adb_swipe - 滑动手机屏幕。参数：x1, y1, x2, y2
-9. ui_tap_element - 通过系统底层 UI 解析精准点击屏幕元素。参数：element_name (要点击的元素的文字，如 “设置”、“确认”)
-10. vision_tap_element - 视觉识别点击（仅在 ui_tap_element 失效时备用）。参数：element_name
+9. ui_tap_element - 通过系统底层 UI 解析精准点击手机屏幕元素（仅限手机/平板界面，家电控制禁止用此工具）。参数：element_name (要点击的元素的文字，如 “设置”、“确认”)
+10. vision_tap_element - 视觉识别点击（仅在 ui_tap_element 失效时备用，仅限手机屏幕）。参数：element_name
 11. web_search - 联网搜索，检索互联网上的公开信息。参数：query (搜索关键词), max_results (可选，结果条数，默认 5)
 12. system_manage - 一键安装/卸载系统组件（仅 Lv.4 主人级可用）。参数：action (install/uninstall), component (组件名，仅允许字母数字._-)
 13. read_core_memory - 读取核心记忆库（仅 Lv.4 主人级可用）。参数：limit (可选，条数，默认 5)
@@ -84,6 +84,21 @@ class ToolRegistrySnapshotTests(unittest.TestCase):
                      if t["name"] == "control_ha_device")
         self.assertIn("set_temperature", entry["params"])
         self.assertIn("temperature", entry["params"])
+
+    def test_home_appliance_trigger_words_and_phone_scope(self):
+        # #248（2026-10-05）：控灯误路由修复——C 腿双向描述改造：
+        # control_ha_device 带家电触发词+必用话术；点击类工具标"仅限手机"
+        ha = next(t for t in tool_registry.TOOL_MANIFEST
+                  if t["name"] == "control_ha_device")
+        self.assertIn("必用此工具", ha["desc"])
+        self.assertIn("灯", ha["desc"])
+        ui = next(t for t in tool_registry.TOOL_MANIFEST
+                  if t["name"] == "ui_tap_element")
+        vi = next(t for t in tool_registry.TOOL_MANIFEST
+                  if t["name"] == "vision_tap_element")
+        self.assertIn("仅限手机", ui["desc"])
+        self.assertIn("家电控制禁止", ui["desc"])
+        self.assertIn("仅限手机", vi["desc"])
 
 
 class ThreeSitesDeriveFromRegistryTests(unittest.TestCase):

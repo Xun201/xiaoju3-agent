@@ -45,7 +45,7 @@ TOOL_MANIFEST = [
     # ── 智能家居（感知 Lv.1 / 控制 Lv.3+高危）──
     {"name": "get_ha_devices", "desc": "获取所有智能家居设备及其当前状态",
      "params": "无"},
-    {"name": "control_ha_device", "desc": "控制智能家居设备",
+    {"name": "control_ha_device", "desc": "控制家中家电设备（灯/开关/空调/传感器/插座等）——凡是开灯、关灯、调温等家电请求必用此工具",
      "params": "entity_id (设备ID), action (turn_on/turn_off/toggle/set_temperature), "
                "temperature (set_temperature 时的目标温度，数字，如 26)",
      "dangerous": True, "is_action": True},
@@ -57,11 +57,11 @@ TOOL_MANIFEST = [
      "level": 4, "dangerous": True, "is_action": True},
     {"name": "adb_swipe", "desc": "滑动手机屏幕", "params": "x1, y1, x2, y2",
      "level": 4, "dangerous": True, "is_action": True},
-    {"name": "ui_tap_element", "desc": "通过系统底层 UI 解析精准点击屏幕元素",
+    {"name": "ui_tap_element", "desc": "通过系统底层 UI 解析精准点击手机屏幕元素（仅限手机/平板界面，家电控制禁止用此工具）",
      "params": "element_name (要点击的元素的文字，如 “设置”、“确认”)",
      "level": 4},
     {"name": "vision_tap_element", "desc": "视觉识别点击（仅在 ui_tap_element "
-     "失效时备用）", "params": "element_name", "level": 4},
+     "失效时备用，仅限手机屏幕）", "params": "element_name", "level": 4},
     # ── 信息与系统能力 ──
     {"name": "web_search", "desc": "联网搜索，检索互联网上的公开信息",
      "params": "query (搜索关键词), max_results (可选，结果条数，默认 5)"},
