@@ -432,6 +432,12 @@
         // renderTodos 整体中断（卡片"暂无待办"+ 齿轮点击视觉失效的根因）
         const byPriority = { P0: [], P1: [], P2: [], P3: [], P4: [], P5: [] };
         items.forEach(t => {
+            // 防再犯（2026-10-05）：priority 不在六档白名单时原逻辑静默回退
+            // P1 组，脏数据伪装成正常条目（#242/#243 content↔priority 颠倒
+            // 即此相——文字 P3/标签 P1）。缺省空值走 || 'P1' 不算非法，不警告
+            if (t.priority && !byPriority[t.priority]) {
+                console.warn(`[todos] 非法 priority: "${t.priority}"（id=${t.id}），已回退至 P1 组`);
+            }
             (byPriority[t.priority || 'P1'] || byPriority.P1).push(t);
         });
         let html = '';
