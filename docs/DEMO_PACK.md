@@ -105,7 +105,8 @@ PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_dow
 #   /soul_import <zip绝对路径>   （Lv.4）→ import_soul_bundle()：MANIFEST.json 强校验
 #                                 后覆盖式恢复；回复含 [安全警告] + 建议重启生效
 # ===== 仍未实现（保持规划）=====
-# ② HTTP API（:5003）与网页控制台入口——未实现
+# ② HTTP API（:5003）——未实现（网页控制台入口已随 C' 接线：
+#   /soul_export、/soul_import 控制台直达，22d9980）
 # ③ CLI——migration.py 自带 __main__ 仅覆盖旧口径函数（export_bundle/import_bundle）
 # ④ 守望联动（已留钩子）：on_peer_down → 告警日志 + export_bundle 留最新备份；
 #   新设备拉起后 /api/health 恢复心跳，PeerWatch 快照翻绿
