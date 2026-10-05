@@ -251,6 +251,22 @@ def export_from_history(history, title="小橘3号对话导出"):
     return chapters
 
 
+def export_ebook_reply(history, title="", out_path=None):
+    """意图层回复封装（dispatch 返回值直接回给用户）：历史 → EPUB → 中文确认。
+
+    export_from_history 返回 list[dict] 章节结构，裸回给用户是 Python
+    repr（2026-10-05 真机实测踩坑）；本封装转调 export_from_history +
+    export_epub，返回"📚 已生成 + 章数 + 落盘路径"。空历史不给 ValueError
+    裸错，转中文提示。
+    """
+    book_title = title or "小橘3号对话导出"
+    chapters = export_from_history(history or [], title=book_title)
+    if not chapters:
+        return "❌ 当前通道还没有可导出的对话内容，先聊几句再来导出吧～"
+    path = export_epub(book_title, chapters, out_path=out_path)
+    return f"📚 电子书已生成（共 {len(chapters)} 章）：{path}"
+
+
 def export_markdown(title, chapters, out_path=None):
     """附赠 Markdown 版（EPUB 阅读器不可用时的兜底），返回落盘路径。"""
     title = _normalize_title(title)
