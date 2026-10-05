@@ -1881,6 +1881,260 @@ def smart_ask(message, history=None, session_key="default"):
     return final, label
 
 
+# ==================== 流式消费器与流式决策入口（2026-10-05 C1，#244） ====================
+# 设计稿 docs/STREAMING_COT_IMPL.md：原 ask_local/ask_cloud/smart_ask
+# 保留不动（QQ/CLI/心跳同步链路零风险）；本节新增流式平行链——
+# 消费器逐块回调，smart_ask_stream 复刻工具环状态机。C1 纯后端不接线，
+# C2 由 dashboard /api/chat/stream（SSE）消费。
+
+def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
+    """Ollama NDJSON 流式消费器（stream:true 逐行 JSON）。逐块回调
+    on_event({"type": event_type, "delta": 增量})，返回完整文本；任何
+    网络异常向上抛（由 smart_ask_stream 热切换云端）。"""
+    payload = {"model": model or LOCAL_MODEL, "messages": msgs,
+               "stream": True, "keep_alive": -1,
+               "options": {"temperature": LLM_TEMPERATURE}}
+    chunks = []
+    with requests.post(LOCAL_URL, json=payload, stream=True,
+                       timeout=LOCAL_GENERATE_TIMEOUT) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            delta = (obj.get("message") or {}).get("content", "")
+            if delta:
+                chunks.append(delta)
+                if on_event is not None:
+                    on_event({"type": event_type, "delta": delta})
+            if obj.get("done"):
+                break
+    return "".join(chunks)
+
+
+def _ask_cloud_stream(messages, on_event, event_type="answer"):
+    """DeepSeek SSE 流式消费器（stream:true，data: {...delta...} 逐行，
+    data: [DONE] 结束）。逐块回调同上；API 报错/连接异常时返回 ⚠️ 文案
+    （与同步版 ask_cloud 失败口径一致，由调用方判定双脑全挂）。"""
+    headers = {"Authorization": f"Bearer {CLOUD_KEY}",
+               "Content-Type": "application/json"}
+    payload = {"model": CLOUD_MODEL, "messages": messages, "stream": True,
+               "temperature": LLM_TEMPERATURE}
+    chunks = []
+    try:
+        with requests.post(CLOUD_URL, headers=headers, json=payload,
+                           stream=True, timeout=CLOUD_TIMEOUT) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except (ValueError, TypeError):
+                    continue
+                try:
+                    delta = obj["choices"][0]["delta"].get("content") or ""
+                except (KeyError, IndexError, AttributeError):
+                    continue
+                if delta:
+                    chunks.append(delta)
+                    if on_event is not None:
+                        on_event({"type": event_type, "delta": delta})
+    except Exception as e:
+        if not chunks:
+            return f"⚠️ 云端连接异常: {e}"
+        print(f"⚠️ 云端流式中途断开（已收 {len(chunks)} 块），按已收内容返回")
+    return "".join(chunks)
+
+
+def smart_ask_stream(message, history=None, session_key="default",
+                     on_event=None):
+    """smart_ask 的流式平行版（C1，#244）：复刻双脑路由/工具环/封口
+    全状态机，模型增量经 on_event 逐块回调；返回与 smart_ask 同形的
+    (reply, source)，落盘与熔断口径一致（落盘仍由调用方执行）。
+
+    事件协议：{"type": "think"|"answer", "delta": str}（增量）与
+    {"type": "tool", "name": 工具名}（工具执行前通知）。on_event 传
+    None 时不回调（静默消费，测试友好）。与同步版的行为对齐口径：
+    同一 mock 模型下最终 reply 结构一致（_seal_* 封口与 <think> 包装
+    完全同函数）。
+
+    与同步版的刻意差异：URL 抓网页总结分流按同步版同口径保留，但增量
+    只覆盖模型生成段（抓取等待无增量）。本函数为 C2 SSE 接线预留，
+    当前不接 dashboard。
+    """
+    message = "" if message is None else str(message)
+
+    def _emit(event):
+        if on_event is not None:
+            try:
+                on_event(event)
+            except Exception as e:
+                print(f"⚠️ 流式回调异常（忽略，不影响主链）: {e}")
+
+    # 与同步版同序的前置副作用（记忆提取/位置提取/静默期拦截）
+    _remember_user_facts(message)
+    _extract_location_from_user_message(message)
+    try:
+        _chat_city, _chat_district, _chat_source = _resolve_user_location()
+        if (not (_chat_city or _chat_district)
+                and _location_in_clear_grace()
+                and any(k in message for k in LOCATION_SENSITIVE_KEYWORDS)):
+            print("🛑 [位置][流式] 静默期 + 位置未知 + 地点敏感 → 强制询问")
+            _mark_waiting_location()
+            reply = _force_chat_think(LOCATION_ASK_REPLY)
+            _emit({"type": "answer", "delta": reply})
+            return reply, "📍 询问位置"
+    except Exception as e:
+        print(f"⚠️ [流式] 静默期拦截判定异常（跳过）: {e}")
+
+    url_match = re.search(r'(https?://[^\s]+)', message)
+    todo_link_mode = bool(url_match
+                          and url_match.group(1).startswith(
+                              "https://chat.deepseek.com/share/"))
+    messages = _build_messages(message, history)
+    messages = _compress_history(messages, session_key)
+    messages = _inject_memory_context(messages)
+    messages = _inject_location_context(messages)
+    if url_match and not todo_link_mode:
+        url = url_match.group(1)
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            res = requests.get(url, headers=headers, timeout=FETCH_TIMEOUT)
+            res.encoding = 'utf-8'
+            text = re.sub(r'<script.*?</script>', '', res.text, flags=re.DOTALL)
+            text = re.sub(r'<style.*?</style>', '', text, flags=re.DOTALL)
+            text = re.sub(r'<[^>]+>', '', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            messages.append({"role": "system",
+                             "content": f"已为你抓取好网页，请直接总结，不要输出任何 JSON！\n\n网页内容：\n{text[:FETCH_MAX_CHARS]}"})
+        except Exception as e:
+            reply = _force_chat_think(f"❌ 抓取网页失败: {e}")
+            _emit({"type": "answer", "delta": reply})
+            return reply, "❌ 失败"
+
+    fused = tool_fuse.is_tripped(session_key)
+    if fused:
+        messages.append({"role": "system", "content": TOOL_FUSE_SYSTEM_NOTE})
+
+    tier = _resolve_tier()
+    if todo_link_mode or tier == "low":
+        local_online = False
+    else:
+        local_online = probe_local()
+
+    # —— 首轮（流式；think/answer 事件类型按"是否解析出工具调用"在消费后
+    #     无法回溯，故统一以 answer 事件流出增量，前端按 <think> 包装块
+    #     解析卡片——与同步版 reply 结构一致的口径天然成立） ——
+    raw_reply = ""
+    used_local = False
+    if local_online:
+        try:
+            raw_reply = _ask_local_stream(messages, _emit,
+                                          model=_local_model_for(tier))
+            used_local = True
+        except Exception as e:
+            print(f"⚠️ [流式] 本地大脑连接不稳定（{e}），自动切换云端...")
+            raw_reply = ""
+    if not raw_reply:
+        raw_reply = _ask_cloud_stream(messages, _emit)
+    raw_reply = raw_reply if isinstance(raw_reply, str) else str(raw_reply)
+    if raw_reply.startswith("⚠️ 云端连接异常") or not raw_reply.strip():
+        reply = _force_chat_think(
+            f"❌ 大脑连接失败，请检查网络。错误：{raw_reply}")
+        _emit({"type": "answer", "delta": reply})
+        return reply, "❌ 失败"
+    raw_reply = raw_reply.strip()
+    label = "🏠 本地" if used_local else "☁️ 云端"
+
+    if url_match and not todo_link_mode:
+        final = _seal_bare_cot(raw_reply)
+        _maybe_mark_waiting_location(final)
+        _emit({"type": "done_hint", "final": final})
+        return final, f"{label} (总结)"
+
+    if fused:
+        final = _seal_bare_cot(raw_reply)
+        _maybe_mark_waiting_location(final)
+        return final, label
+
+    json_str = _extract_tool_json(raw_reply)
+    if json_str:
+        try:
+            tool_call = json.loads(json_str)
+            tool_name = tool_call.get("tool")
+            tool_args = tool_call.get("args", {})
+            if tool_name in TOOL_WHITELIST:
+                thinking = _capture_thinking(raw_reply) or \
+                    _tool_thinking_placeholder(tool_name)
+                _emit({"type": "tool", "name": tool_name})
+                try:
+                    if (tool_name == "web_search"
+                            and isinstance(tool_args, dict)
+                            and not _inject_location(tool_args)):
+                        reply = _wrap_think(
+                            thinking, LOCATION_ASK_REPLY)
+                        _emit({"type": "answer", "delta": LOCATION_ASK_REPLY})
+                        return reply, "📍 询问位置"
+                    tool_result = execute_tool(tool_name, tool_args,
+                                               permission_manager)
+                except Exception as e:
+                    reply = _wrap_think(
+                        thinking, _strip_bare_cot(str(e)))
+                    return reply, label
+                if str(tool_result).startswith("❌"):
+                    # ⛔ 防死循环硬拦截（与同步版 brain.py:1826 同口径）：
+                    # 被拒结果不喂回模型，直接作为本轮回答；连续被拒触发熔断
+                    tool_fuse.record_rejection(session_key, tool_name,
+                                               tool_args)
+                    if tool_fuse.is_tripped(session_key):
+                        reply = _wrap_think(thinking, TOOL_FUSE_NOTICE)
+                        return reply, "⛔ 熔断"
+                    reply = _wrap_think(
+                        thinking, _strip_bare_cot(tool_result))
+                    return reply, label
+                tool_fuse.record_success(session_key)
+                messages.append({"role": "assistant", "content": json_str})
+                messages.append({"role": "system",
+                                 "content": f"工具执行结果：{tool_result}\n\n请根据这个结果，用自然语言回答用户，绝对不要再输出 JSON！"})
+                tool_source = "☁️ 云端 (工具)"
+                final_reply = ""
+                if tier == "high" and local_online:
+                    try:
+                        final_reply = _ask_local_stream(
+                            messages, _emit, model=_local_model_for(tier),
+                            event_type="answer")
+                    except Exception as e:
+                        print(f"⚠️ [流式] 本地汇总失败（{e}），转云端...")
+                if isinstance(final_reply, str) and final_reply.strip():
+                    tool_source = "🏠 本地 (工具)"
+                else:
+                    final_reply = _ask_cloud_stream(
+                        messages, _emit, event_type="answer")
+                    if not isinstance(final_reply, str) or \
+                            not final_reply.strip():
+                        reply = _wrap_think(
+                            thinking, f"❌ 工具执行后汇总失败: {final_reply}")
+                        return reply, "❌ 失败"
+                final = _seal_tool_summary(thinking, final_reply)
+                _maybe_mark_waiting_location(final)
+                return final, tool_source
+            else:
+                print(f"⚠️ 工具 {tool_name} 不在白名单内，已拒绝执行。")
+        except Exception as e:
+            print(f"⚠️ [流式] 工具解析失败，按普通回复处理: {e}")
+
+    final = _seal_bare_cot(raw_reply)
+    _maybe_mark_waiting_location(final)
+    return final, label
+
+
 # ==================== 表情包（§5，已接入回复链） ====================
 
 # [EMOJI:标签] 占位符（translate_emoji 解析与安全封口共用）
