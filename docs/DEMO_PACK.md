@@ -4,10 +4,10 @@
 | --- | --- |
 | 项目 | 小橘3号（xiaoju3-agent）——住在家用设备里的私人 AI 管家 |
 | 文档名 | 四大创新点演示包（DEMO_PACK） |
-| 编制日期 | 2026-10-02（同日深夜同步至最新代码状态） |
+| 编制日期 | 2026-10-02（初版）/ 2026-10-05（通用刷新，同步至 v1.0.4） |
 | 仓库 | https://github.com/Xun201/xiaoju3-agent（main） |
-| 基线 | 43b5515（1527 项离线测试全绿） |
-| 用途 | 演示/评审四大创新点的"是什么 → 代码在哪 → 怎么验证"一页通；`[SCREENSHOT: …]` 为截图占位，补图后即为完整演示稿 |
+| 基线 | 84795c4（全仓 1843 passed + 4 skipped） |
+| 用途 | 演示/评审四大创新点的"是什么 → 代码在哪 → 怎么验证"一页通；`[SCREENSHOT: …]` 为截图占位，补图后即为完整演示稿；亦可作参赛作品说明底稿（通用创新叙事，赛道定制另行叠加） |
 
 状态标记沿用三份主文档口径：🟢 已实现（代码可核对）｜🟡 模块已就绪·接线中｜🔜 规划中。
 
@@ -17,8 +17,8 @@
 | --- | --- | --- | --- |
 | 1 | 物理安全底线 + 软件四级权限 | 物理开关绝对优先于一切软件等级（含 Lv.4），软件侧再叠四级门禁 + 儿童锁人在环路 | 🟢 |
 | 2 | 设备自动迁移 / 灵魂备份 | 一个 zip 带走"自己是谁、记得什么"，新设备解包即活；多设备互相守望 | 🟢（/soul_export //soul_import 已落地，7b14fe2；PeerWatch 已接线，8ea0b8c） |
-| 3 | 本地优先双脑 + 完整设备接管链 | 本地模型优先、云端兜底；同一具身体控手机、控家电、控文件 | 🟢 |
-| 4 | QQ 家庭入口 + 桌宠人格 | 全家人用现成的 QQ 就能召唤它；桌面狐狸娘是它的"脸" | 🟢（桌宠已回归上线，与加速球共存） |
+| 3 | 本地优先双脑 + 完整设备接管链 + 实时思维链 | 本地模型优先、云端兜底；同一具身体控手机、控家电、控文件；思考过程逐段实时可见 | 🟢 |
+| 4 | QQ 家庭入口 + 桌宠人格 + 待办管家 + 控制台第二入口 | 全家人用现成的 QQ 就能召唤它；甩个链接自动提炼待办；网页控制台全功能操作面 | 🟢（桌宠已回归上线，与加速球共存） |
 
 ---
 
@@ -48,7 +48,7 @@
 
 ### 可验证证据
 
-- **离线可复跑**：`tests/test_permission.py`、`tests/test_tools.py`、`tests/test_home_tools.py` 全绿（全仓 1482 测试内）。
+- **离线可复跑**：`tests/test_permission.py`、`tests/test_tools.py`、`tests/test_home_tools.py` 全绿（全仓 1843 passed + 4 skipped 内）。
 - **现场演示脚本**（QQ 端三连）：
   1. Lv.1 账号说"把工作区里写个 test.txt" → 工具门禁拒绝并引导 `/register`；
   2. `/coder_auth <动态密码>` 升 Lv.3 → 控"客厅灯"成功；说"开车库门"（危险实体）→ Lv.4 拒绝文案；
@@ -146,9 +146,9 @@ PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_dow
 | 工具白名单 `TOOL_WHITELIST` | `brain.py:146-153` |
 | 工具执行唯一入口与分级门禁 | `tools.py:276` `execute_tool`（门禁 `:284-303`） |
 
-### 10→14 项工具白名单（brain.py:146）
+### 15 项工具白名单（tools.py:71 `TOOL_WHITELIST = tool_registry.whitelist_names()`）
 
-> 注：创新点立项时的白名单为前 10 项；1.0 冲刺中已扩至 14 项（后 4 项为第二阶段新增：联网搜索、系统组件管理、核心记忆读取、重启自身）。如实列出：
+> 注：创新点立项时白名单为前 10 项；1.0 冲刺扩至 14 项；2026-10 待办提取线加入 `extract_todos` 后为 **15 项**（实调 `from tools import TOOL_WHITELIST` 核对）。派生机制已升级：白名单/等级分组/高危集合全部由 `tool_registry` 统一登记表派生（2026-10-04 架构边界批次，单一事实源）。如实列出：
 
 | # | 工具 | 接管对象 | 门禁 |
 | --- | --- | --- | --- |
@@ -166,12 +166,40 @@ PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_dow
 | 12 | `system_manage` | 系统组件装卸 | Lv.4 |
 | 13 | `read_core_memory` | 核心记忆库 | Lv.4 |
 | 14 | `restart_service` | 重启小橘自身进程（无 OS 级调用面） | Lv.4 |
+| 15 | `extract_todos` | 待办提取（链接→后台抓取→分片提炼入库） | Lv.1+（链接受理） |
 
 ### 可验证证据
 
 - **终端日志**：本地在线时启动/对话可见 `🏠 本地大脑在线，优先使用本地算力！`（brain.py:1717）——截图占位见下。
 - **离线**：`tests/test_brain.py`（双脑切换、白名单校验、熔断）、`tests/test_tools.py`（分级门禁）全绿。
 - **现场演示**：拔网线（断云端）→ 群里继续对话、继续控灯——本地大脑独立成事；插回网线无感恢复。
+
+### 实时思维链：双脑链路的真流式（2026-10-05，v1.0.4 主打）🟢
+
+#### 是什么
+
+上述双脑链路的"实时化"升级：控制台对话不再"转圈等整段回复"，而是 **DeepSeek 式逐段实时展开**——思考过程卡片随模型输出逐段增长（`[思考]/[计划]/[行动]` 分段可见），工具执行间隙卡片内插"🔧 正在执行工具"行，回答增量写入正文，完成后走既有折叠节奏。模型两端原生流式（Ollama NDJSON / DeepSeek SSE），中间层为 Flask SSE 五事件协议（`think/tool/answer/done/error`），前端 `fetch + getReader()` 手解；**流式失败自动回退旧一次性链路（口径零回退）**，QQ 通道与 `/api/chat` 原样保留零风险并存。
+
+**实测性能**（2026-10-05，本地 Ollama 热模型）：首事件 **0.09~0.73s**（逐段观感远优于冷启动预估）；流式进行中并发轮询 `/api/status` 恒 0.505s——流式占线程不阻塞其他请求（ThreadingWSGIServer 多线程实证）。
+
+#### 代码位置
+
+| 证据 | 位置 |
+| --- | --- |
+| 双脑流式消费器（Ollama NDJSON / DeepSeek SSE，`iter_lines` 逐行） | `brain.py:1890` `_ask_local_stream` / `brain.py:1918` `_ask_cloud_stream` |
+| `smart_ask_stream`（复刻同步版全状态机，on_event 回调吐增量） | `brain.py:1956` |
+| SSE 端点：生产者线程 + queue 桥接，五事件协议 | `xiaoju3_dashboard.py:883` `api_chat_stream`（:968 `Response(generate(), mimetype="text/event-stream")`） |
+| 指令拦截复用（/help 等斜杠指令在流式通道不进模型） | `xiaoju3_dashboard.py:917`（生成器起始处，单帧 done 收口） |
+| 前端渐进渲染：getReader 手解 + 逐段 append + 末行整刷 | `console.js:1218` `sendMessageStream` / `:1258` `renderThinkProgressive` |
+| 断流回退：半途断流闭包内清过程件再转旧路重答 | `console.js:1354` `sendMessageLegacy`（回退路径） |
+
+#### 可验证证据
+
+- **离线**：`tests/test_chat_stream.py`（SSE 协议/错误事件/回退/拦截/渐进锚）全绿；流式与同步输出逐字节一致锚。
+- **现场**：控制台发一条消息 → 思考卡标题带"（实时）"字样、内容随生成逐段增长 → 完成后自动折叠为完整卡片。断网半途 → 残件清理+自动转旧路重答。
+- **性能**：首 token 数据见上文实测（本地 0.1~0.7s；云端受理即回亚秒级）。
+
+![实时思维链——完成后展开态（思考卡 [思考]/[计划] 分段；增长过程因本地热模型生成亚秒级，录屏可证）](img/demo_05_streaming.png)
 
 ### 本地模型 + 控手机 + 控家电 + 控文件，为什么这个组合稀缺
 
@@ -216,6 +244,51 @@ PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_dow
 
 > 📷 截图占位 [SCREENSHOT: 双拼左=QQ 群 @小橘3号 对话（含戳一戳彩蛋），右=控制台右下角桌宠半身吸附 + 台词气泡]
 
+### 待办管家：QQ 甩链接，自动提炼与管理（2026-10 待办线）🟢
+
+#### 是什么
+
+家庭场景的高频动作"**把这个分享链接记下来**"被产品化：QQ 里发一条 `chat.deepseek.com/share/…` 链接 → 受理即回"丢给后台去啃" → 后台 Playwright 无头抓取对话正文（零可见窗口）→ 长文分片提炼 → **优先级六档（P0-P5，时间尺度分层判据）自动判级入库** → 控制台待办面板分区展示。管理闭环：分区折叠（服务端持久化）、每条可挂"淡淡说明"（折叠/展开/编辑）、单条硬删（垃圾桶图标+二次确认）、24 小时持久查重（同链接不重复提取，清空指令可重置）。
+
+**拆库设计**：待办库（todos.db）与长期记忆/身份/对话历史分离——测试版与正式版**共用同一份待办**，而各自的"灵魂"（身份/记忆）互不干扰。
+
+#### 代码位置
+
+| 证据 | 位置 |
+| --- | --- |
+| 提取编排：抓取 → 分片提炼 → 容错解析 → 入库 → 任务状态 | `plugins/todo_extractor.py:167` `extract_todos_from_url`（:220 同步封装） |
+| 分片提炼 prompt（提示注入主防线） | `plugins/todo_extractor.py:88` |
+| 待办库路径（env 可指共享库，缺省向后兼容） | `agent_state/state_manager.py:46` `self.todos_db` |
+| 单条硬删 API（DELETE 方法，与写系 POST 区分） | `xiaoju3_dashboard.py` `api_todo_delete`（DELETE /api/todos/&lt;id&gt;） |
+| 前端面板：六档分区/折叠/说明/垃圾桶 | `console.js` renderTodos / click 委托 |
+
+#### 可验证证据
+
+- **离线**：`tests/test_todo_extractor.py`、`tests/test_todos_db.py`、`tests/test_state_manager.py` 全绿。
+- **现场**：QQ 发分享链接 → 受理回复 → 稍后控制台面板出现新条目（带自动判级）；同链接 24h 内重发被持久查重拦截。
+
+![待办面板——六档分区折叠（P1-P4 各 1 条示例）+ 已完成项垃圾桶入口](img/demo_06_todo_panel.png)
+
+### 网页控制台：第二入口（QQ 之外的全功能操作面）🟢
+
+#### 是什么
+
+`:5003/console` 单页控制台是 QQ 之外的完整操作面：**流式对话**（见创新点 3）、**斜杠指令全面接线**（11 条指令控制台直达——`/help` 七分类菜单、`/lv4_auth` 两步流、`/soul_export`、`/todos` 等，命中即走本地函数**不进模型**，零幻觉零等待）、**待办面板**（见待办管家）、桌宠人格与系统状态卡。指令接线与 QQ 通道共用同一套权限等级（全局单例 identity.json），控制台视为成人设备。
+
+#### 代码位置
+
+| 证据 | 位置 |
+| --- | --- |
+| 斜杠指令拦截器（清单 ⊆ main.handle_message，复用既有函数） | `xiaoju3_dashboard.py:1070` `_console_slash_intercept`（:843 api_chat、:917 stream 双通道挂载） |
+| 控制台流式/回退（同创新点 3） | `console.js:1218` / `:1354` |
+
+#### 可验证证据
+
+- **离线**：`tests/test_dashboard.py`（指令拦截锚/清单一致性/等级门真实拒绝）、`tests/test_console_slash.py` 全绿。
+- **现场**：控制台输入 `/help` → 七分类菜单即时返回（大脑来源徽标"⚙️ 指令"）；输入普通消息 → 走流式对话。
+
+![控制台 /help 指令菜单——七分类（示例为前三类）+ "大脑来源：⚙️ 系统"徽标](img/demo_07_help_menu.png)
+
 ---
 
 ## 附：演示前检查单
@@ -224,4 +297,4 @@ PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_dow
 - [ ] 本地 Ollama 在线（创新点 3 的 🏠 日志与断网演示）
 - [ ] `CHILD_LOCK_ENABLED=true` 且儿童/成人两账号就位（创新点 1 三连演示）
 - [ ] 四张 `[SCREENSHOT: …]` 补图完成
-- [ ] 全仓测试基线：`python -m unittest discover`（1482 全绿）
+- [ ] 全仓测试基线：`python -m pytest -q`（1843 passed + 4 skipped）
