@@ -32,3 +32,40 @@
 | 49c763d | feat(stream): C1 后端流式消费器 + smart_ask_stream（纯后端） |
 | 178e0a7 | feat(stream): C2 SSE 路由 + 前端流式接收 + 渐进卡片 |
 | b0f32db | fix(stream): stream 端点复用指令拦截（C' 流式通道回归修复） |
+
+---
+
+## 下午（a67d59b 之后至 8dedb0d，2 个提交 + C3c 观测）
+
+> 本时段主线：待办脏数据修复（a67d59b）→ push 老规矩固化（a12b262）→
+> C3b 前端断流打磨（8dedb0d）→ C3c 首 token 观测（#244 关账数据）。
+> 顺带：_dev/PROJECT_CONTEXT.md 接续上下文固化（不进 git）。
+
+### `8dedb0d` fix(stream): C3b 前端断流打磨——救活半途断流回退 + 流式渲染层作用域修复
+- **文件**：2 个，+75/−12（console.js、tests/test_chat_stream.py）
+- **重大发现（C2 遗留）**：sendMessageStream/sendMessageLegacy 均为顶层函数，裸 `history` 解析到 window.history 内置对象（无 appendChild/contains）——流式渐进卡第一行 DOM 操作即 TypeError，**"实时卡"自 C2 起从未渲染过**（MutationObserver 现行实锤）；legacy .then/.catch 全链 DOM 操作炸，回退回复不显示，靠 appendBotMessage 自取元素+历史轮询兜底掩盖。修复=两函数开头自取 chat-history。
+- **内容**：①pump().catch 闭包级清 thinkCard/toolEl/answerEl 再 rethrow（半途断流残件清理）②legacy loadingMsg contains 防御（流式回退时已被过程卡消费，裸 removeChild 会 DOMException）③think 渐进 append 模式（完整行 append+末行整刷，收 textContent 整刷 TODO）④tool 事件无卡也建卡⑤锚 +2。
+- **验证**：全仓 1839 passed+4 skipped；dev 假流注入四项全过（残件清理/legacy 重答真渲染/零红字零 UNHANDLED/末行随 chunk）；真流式首验 liveCardSeen=true（C2 以来首次）。
+- **动机**：C3 原定义"断流恢复"——半途断流三重坏（残件残留+removeChild DOMException+红字不重答），真机假流模拟暴露渲染层作用域断裂是其底座。
+
+### C3c 首 token 观测（2026-10-05 下午，#244 关账数据，_dev/observe_first_token.py 直连流式端点掐表）
+
+本地（Ollama，热模型）×3：
+
+| 轮 | 消息 | 首事件 | done | 事件分布 |
+|---|---|---|---|---|
+| local-1 | 用一句话介绍你自己 | **0.73s** | 1.31s | think×23+done |
+| local-2 | 数到三 | **0.10s** | 0.38s | think×11+done |
+| local-3 | 今天星期几（试探） | **0.09s** | 0.40s | think×12+done |
+
+云端（DeepSeek，假链接强制云端，受理即回——链接提取为后台 job 不阻塞流）×3：
+
+| 轮 | 首事件 | done | 事件分布 |
+|---|---|---|---|
+| cloud-1（zcodeprobe07） | **0.36s** | 0.91s | answer×76+done |
+| cloud-2（zcodeprobe08） | **0.83s** | 1.50s | answer×123+done |
+| cloud-3（zcodeprobe09） | **0.92s** | 1.71s | answer×146+done |
+
+ThreadingWSGI 并发实证：local-2 流式进行中并发 GET /api/status ×3 = **0.505s / 0.505s / 0.505s**（恒定，与平时无差，流式占线程不阻塞轮询）。
+
+结论：设计稿风险预估"Ollama 首 token 2-5s"为**冷启动**保守值，热模型实测 0.1-0.7s（逐段观感优于预期）；云端受理即回亚秒级；werkzeug 并发无忧。cloud 轮无 think 帧为预期（deepseek-chat 非 reasoning 模型，C1 消费器按 <think> 标签分流，无标签全走 answer）。
