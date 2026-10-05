@@ -72,6 +72,7 @@ import requests
 from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
 
 from agent_state.state_manager import state_manager  # 待办清单存储（2026-10-04）
+import brain  # 流式路由用 brain.smart_ask_stream（C2）；同步链仍用下方 smart_ask 具名导入
 from brain import load_memory, save_memory, smart_ask  # 直连大脑（架构设计文档 §2：仪表盘 /api/chat 绕过路由层）
 from migration import health_bp  # 迁移守望探测端点（架构 §8，原 :5002 注册点迁入）
 from plugins import todo_extractor  # 最近提取任务状态（待办卡片"⏳ 正在阅读"）
@@ -858,6 +859,89 @@ def api_chat():
         import traceback
         print(traceback.format_exc())
         return jsonify({"code": 500, "error": str(e)}), 500
+
+
+def _sse_frame(event, payload):
+    """SSE 帧构造（event + 单行 JSON data，帧尾双换行）。"""
+    import json as _json
+    return f"event: {event}\ndata: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.route("/api/chat/stream", methods=["POST"])
+def api_chat_stream():
+    """思维链真流式 SSE 端点（2026-10-05 C2，#244；docs/
+    STREAMING_COT_IMPL.md §三）：直连 brain.smart_ask_stream，增量经
+    think/tool/answer 事件流出，done 事件收口（含净化后完整 reply +
+    source，与旧 /api/chat 最终态同形并同样落盘）。
+
+    事件协议（text/event-stream）：
+      event: think   data: {"delta": "..."}   首轮增量（含思考块）
+      event: tool    data: {"name": "..."}    工具执行前通知
+      event: answer  data: {"delta": "..."}   汇总轮增量
+      event: done    data: {"reply": 全文, "source": 标签}
+      event: error   data: {"error": "..."}   异常（前端据此回退旧路）
+
+    实现：generator 内同步调 smart_ask_stream（on_event 直接 yield——
+    回调转生成器经闭包队列；流式期间本请求线程被占用，并发由
+    ThreadingWSGIServer 多线程承担）。原 /api/chat 一字不动（QQ/刷新/
+    回放/TTS/回退共用）。
+    """
+    data = request.get_json(silent=True) or {}
+    user_msg = data.get("message", "")
+    if not user_msg:
+        return jsonify({"code": 400, "error": "消息不能为空"}), 400
+    history = data.get("history") or []
+    print(f"[香橙派收到消息][流式] {user_msg}")
+
+    def generate():
+        import json as _json
+        import queue
+        q = queue.Queue()
+        DONE = object()   # 哨兵：smart_ask_stream 返回后通知 generator 收口
+        holder = {}
+
+        def on_event(event):
+            etype = event.get("type")
+            if etype in ("think", "answer", "tool"):
+                q.put(_sse_frame(etype, {
+                    "delta": event.get("delta", ""),
+                    "name": event.get("name", "")}))
+
+        def runner():
+            try:
+                reply, source = brain.smart_ask_stream(
+                    user_msg, history, on_event=on_event)
+                holder["reply"] = reply
+                holder["source"] = source
+            except Exception as e:
+                holder["error"] = str(e)
+            finally:
+                q.put(DONE)
+
+        import threading
+        threading.Thread(target=runner, daemon=True).start()
+
+        while True:
+            item = q.get()
+            if item is DONE:
+                break
+            yield item
+        if "error" in holder:
+            import traceback
+            print(traceback.format_exc())
+            yield _sse_frame("error", {"error": holder["error"]})
+            return
+        reply = sanitize_for_web(holder.get("reply", ""))
+        source = holder.get("source", "")
+        try:
+            _append_console_history(user_msg, reply, source)
+        except Exception as persist_err:
+            print(f"[控制台历史落盘失败][流式] {persist_err}")
+        yield _sse_frame("done", {"reply": reply, "source": source})
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache",
+                             "X-Accel-Buffering": "no"})
 
 
 # ==================== QQ 接入层 webhook（原 :5002 POST /onebot 原样迁入） ====================
