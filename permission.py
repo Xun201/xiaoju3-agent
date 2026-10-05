@@ -337,14 +337,18 @@ class PermissionManager:
         ok, _ = self.lv4_mfa_check(user_id, credentials)
         return ok
 
-    def register_biometric_verifier(self, verifier):
+    def register_biometric_verifier(self, verifier, label=None):
         """注册生物认证模拟/硬件回调 fn(credential) -> bool（扩展挂载点）。
 
+        label（#243 可选）：注入诚实标签（如"生物认证(模拟：SIM=1 无硬件，
+        实际安全强度=TOTP 单因子)"），因子明细随之如实显示；None=默认文案。
         测试注入 mock verifier 也走这里；注册成功返回 True。
         """
         for factor in self._lv4.factors:
             if isinstance(factor, auth_lv4.BiometricFactor):
                 factor.register_verifier(verifier)
+                if label:
+                    factor.label = label
                 return True
         return False
 

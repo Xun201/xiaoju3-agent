@@ -193,9 +193,10 @@ class BiometricFactor(Factor):
 
     def __init__(self, verifier=None):
         self._verifier = verifier
+        self.label = "生物认证"   # #243：可注入诚实标签（如"模拟:SIM=1 无硬件"）
 
     def register_verifier(self, verifier):
-        """注册自定义生物验证回调 fn(credential) -> bool（扩展挂载点）。"""
+        """注册自定义生物验证回调 fn(credential) -> bool。"""
         self._verifier = verifier
 
     def verify(self, credential):
@@ -205,7 +206,7 @@ class BiometricFactor(Factor):
             ok = bool(self._verifier(credential))
         except Exception as e:
             return False, f"❌ 生物认证器调用异常：{e}"
-        return (True, "✅ 生物认证通过") if ok else (False, "❌ 生物认证未通过")
+        return (True, f"✅ {self.label}通过") if ok else (False, f"❌ {self.label}未通过")
 
 
 # ==================== 类 Root 警告与授予/撤销（界面文档 §8.3 口径） ====================

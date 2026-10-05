@@ -437,6 +437,30 @@ class Lv4MfaTests(PermissionTestBase):
         self.assertIn("动态密码校验通过", msg)
         self.assertIn("生物认证通过", msg)
 
+    def test_biometric_label_honest_detail(self):
+        # #243 可选化：label 注入后因子明细如实显示（默认文案不变=向后兼容）
+        pm = self._pm("Lv.4")
+        with mock.patch.dict(os.environ, self._env_totp()):
+            with mock.patch.object(auth_lv4.time, "time", return_value=1000):
+                code = auth_lv4.generate_totp(RFC_SECRET, 1000)
+                # 默认注册（无 label）→ 文案与历史一致
+                pm.register_biometric_verifier(lambda cred: True)
+                _, detail = pm.lv4_mfa_check(
+                    "xun", {"totp": code, "biometric": "x"})
+                self.assertIn("✅ 生物认证通过", detail)
+                self.assertNotIn("模拟", detail)
+                # 诚实 label 注入（main._ensure_biometric_sim 同款）→ 明细如实
+                pm.register_biometric_verifier(
+                    lambda cred: True,
+                    label="生物认证(模拟：XIAOJU3_BIOMETRIC_SIM=1，本机无硬件，"
+                          "实际安全强度=TOTP 单因子)")
+                ok, detail = pm.lv4_mfa_check(
+                    "xun", {"totp": code, "biometric": "x"})
+        self.assertTrue(ok)
+        self.assertIn("生物认证(模拟：XIAOJU3_BIOMETRIC_SIM=1", detail)
+        self.assertIn("实际安全强度=TOTP 单因子", detail)
+        self.assertNotIn("✅ 生物认证通过\n", detail)   # 默认文案不再出现
+
     def test_mfa_fails_with_wrong_totp(self):
         pm = self._pm("Lv.4")
         pm.register_biometric_verifier(lambda cred: True)

@@ -199,9 +199,14 @@ def _ensure_biometric_sim():
     ⚠️ 仅供测试/演示：恒真回调模拟"生物认证通过"，不代表真实生物识别硬件；
     生产环境请接入真实验证器（permission.register_biometric_verifier）或
     保持该环境变量关闭。幂等：重复调用只覆盖同一回调。
+    #243 诚实化：label 如实标注"模拟/无硬件/实际单因子"——因子明细与
+    /lv4_auth 回复不再谎报"双因子通过"。
     """
     if os.environ.get(BIOMETRIC_SIM_ENV, "").strip() == "1":
-        permission_manager.register_biometric_verifier(lambda credential: True)
+        permission_manager.register_biometric_verifier(
+            lambda credential: True,
+            label="生物认证(模拟：XIAOJU3_BIOMETRIC_SIM=1，本机无硬件，"
+                  "实际安全强度=TOTP 单因子)")
 
 
 # ================= 儿童锁（2026-10-02 权限重构批次②） =================
