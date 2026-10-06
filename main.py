@@ -944,6 +944,20 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             else:
                 return ""
 
+    # 2.5 DeepSeek 分享链接预分流（方案 A，2026-10-06）：标点清洗会剥掉
+    # URL 的 : . ，brain.todo_link_mode 的 https:// 匹配因此失效——群聊 @
+    # + 自然语言+链接实测落本地模型幻觉"操作已完成"、提取链从未触发。
+    # 清洗前检测原文，命中直接转 /todo_from_link 指令形态走既有提取链
+    # （handle_todo_command 从原文取链接，免疫清洗）：受理即回、零 token、
+    # 不进模型。置于群聊防刷屏门之后：群里不 @ 不触发，与对话门一致。
+    if raw_message and "chat.deepseek.com/share/" in raw_message:
+        link_match = re.search(r'https://chat\.deepseek\.com/share/\S+', raw_message)
+        if link_match:
+            todo_cmd = "/todo_from_link " + link_match.group(0)
+            pre_reply = handle_todo_command(todo_cmd, todo_cmd, user_id, group_id)
+            if pre_reply is not None:
+                return pre_reply
+
     # 3. 长期记忆"记住"触发词（架构 §10 #3）：落 SQLite 并回复确认
     remember_match = re.search(r"(?:帮我|请|麻烦|你)*记住[:：,，、]?\s*(.+)", _strip_cq(raw_message))
     if remember_match:
