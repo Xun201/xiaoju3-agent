@@ -682,13 +682,14 @@ def handle_todo_command(raw_message, message, user_id, group_id, steps=None):
                                      "error": "提取超时（3 分钟看门狗触发），请稍后重发链接"})
                     except Exception as ne:
                         print(f"⚠️ [待办提取] 超时通知失败: {ne}")
-                elif not (result_holder.get("r") or {}).get("ok"):
-                    # 失败兜底通知（#260-④）：extractor 自身 notify 已发则此为
-                    # 二次无害提醒；未发（异常路径吞掉）则用户至少收到失败可感知
+                else:
+                    # #260 可观测性：成功路径也留痕（此前"提炼 0 条+静默完成"
+                    # 在日志上与挂死不可区分，排查成本翻倍）
                     r = result_holder.get("r") or {}
-                    if r.get("notified"):
-                        pass
-                    else:
+                    print(f"✅ [待办提取] 结束: {target_url} "
+                          f"ok={r.get('ok')} 新增 {r.get('inserted', 0)} 条"
+                          f"（跳过 {r.get('skipped', 0)}）")
+                    if not r.get("ok"):
                         print(f"⚠️ [待办提取] 结果失败且未见通知: {target_url} → 兜底通知")
                         try:
                             notify_done(r or {"ok": False, "error": "提取失败，请重试"})
