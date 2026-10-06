@@ -1678,6 +1678,48 @@ class ToolLoopFuseTests(unittest.TestCase):
         self.assertEqual(r2, (wrapped, "☁️ 云端 (工具)"))
         self.assertFalse(brain.tool_fuse.is_tripped("default"))
 
+    def test_ha_network_errors_never_trip_fuse(self):
+        # 2026-10-06 口径改进：HA 超时/拒连属网络类异常——旁路熔断计数，
+        # 连续 5 次也不熔断（链路抖动恢复后会话工具权保留）
+        net = "❌ 控制设备失败: HTTPSConnectionPool(host='ha', port=8123): " \
+              "Read timed out. (read timeout=10)"
+        for i in range(5):
+            reply, source = self._round(tool_result=net)
+            self.assertIn("控制设备失败", reply)
+        self.assertFalse(brain.tool_fuse.is_tripped("default"))
+        self.assertEqual(brain.tool_fuse._streaks.get("default", 0), 0)
+
+    def test_permission_denials_still_trip_after_network_bypass(self):
+        # 权限类拒绝 ×3 照常熔断（口径改进后回归锚：网络旁路不削弱原防线）
+        for _ in range(2):
+            self._round(tool_result=self.DENY)
+        reply, source = self._round(tool_result=self.DENY)
+        self.assertEqual(source, "⛔ 熔断")
+        self.assertTrue(brain.tool_fuse.is_tripped("default"))
+
+    def test_mixed_denials_network_transparent_to_streak(self):
+        # 混合场景锁死"网络错误透明化"语义：权限×2 → HA超时（旁路，不打断
+        # 也不累积）→ 权限×1 → 第 3 次权限拒绝即熔断（网络轮像不存在过）
+        net = "❌ 控制设备失败: Read timed out. (read timeout=10)"
+        for _ in range(2):
+            self._round(tool_result=self.DENY)
+        reply, source = self._round(tool_result=net)
+        self.assertIn("控制设备失败", reply)          # 网络轮照常回错误文案
+        self.assertFalse(brain.tool_fuse.is_tripped("default"))
+        reply, source = self._round(tool_result=self.DENY)
+        self.assertEqual(source, "⛔ 熔断")            # 第 3 次权限拒绝触发
+        self.assertTrue(brain.tool_fuse.is_tripped("default"))
+
+    def test_config_error_bypassed_and_labeled(self):
+        # 配置类（未配置 HA_URL）同走旁路 + _bypass_kind 标注 config
+        cfg = "❌ 未配置 HA_URL（Home Assistant 地址），无法获取设备列表。"
+        for _ in range(4):
+            self._round(tool_result=cfg)
+        self.assertFalse(brain.tool_fuse.is_tripped("default"))
+        self.assertEqual(brain._bypass_kind(cfg), "config")
+        self.assertEqual(brain._bypass_kind(
+            "❌ 控制设备失败: timed out"), "network")
+
     def test_third_identical_rejection_trips_fuse(self):
         # 连续 3 次（默认阈值）同一工具 + 相同参数被拒 → 强制打断
         for _ in range(2):
