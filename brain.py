@@ -1260,8 +1260,10 @@ _NETWORK_ERROR_MARKS = (
 _CONFIG_ERROR_MARKS = ("未配置 HA_URL",)
 
 
-def _is_network_error_result(result):
-    """工具 ❌ 结果是否属网络/配置类异常（HA 超时/拒连/未配置等）。
+def _is_bypass_error_result(result):
+    """工具 ❌ 结果是否属"应旁路熔断"类异常（网络抖动/配置错误，HA 超时/拒连/未配置等）。
+
+    （旧名 _is_network_error_result 已更名：职责实为 network+config 两组并集判定）
 
     命中 → 调用方旁路熔断器（不 record_rejection 也不 record_success）；
     未命中（权限拒绝/参数非法/危险实体拦截等）→ 照常计数。
@@ -1918,7 +1920,7 @@ def smart_ask(message, history=None, session_key="default"):
                     # 🛡️ 跨轮熔断计数：同一工具 + 等价参数连续被拒 → 强制打断
                     # （网络/配置类异常旁路——HA 抖动超时不属"被拒重试"死循环
                     # 口径；配置错误与网络抖动日志分别标注，排查语义不同）
-                    if _is_network_error_result(tool_result):
+                    if _is_bypass_error_result(tool_result):
                         print(f"🌐 [熔断旁路:{_bypass_kind(tool_result)}] "
                               f"非权限类失败不计熔断: {tool_result[:80]}")
                     else:
@@ -2195,7 +2197,7 @@ def smart_ask_stream(message, history=None, session_key="default",
                     # ⛔ 防死循环硬拦截（与同步版 brain.py 同口径）：
                     # 被拒结果不喂回模型，直接作为本轮回答；连续被拒触发熔断
                     # （网络/配置类旁路熔断计数，与同步版 2026-10-06 口径一致）
-                    if _is_network_error_result(tool_result):
+                    if _is_bypass_error_result(tool_result):
                         print(f"🌐 [熔断旁路:{_bypass_kind(tool_result)}] "
                               f"非权限类失败不计熔断: {str(tool_result)[:80]}")
                     else:
