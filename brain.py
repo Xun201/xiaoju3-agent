@@ -1241,6 +1241,46 @@ class ToolLoopFuse:
             self._tripped.discard(session_key)
 
 
+# ⛔ 防死循环硬拦截前置：网络类 ❌ 不计入熔断（2026-10-06 口径改进——
+# HA 链路抖动时 read timeout 会被当"拒绝"连数 3 次误熔断，链路恢复后
+# 会话工具权已被剥夺；熔断的防死循环目标针对"权限/参数类被拒重试"，
+# 网络失败重试是合理行为，应旁路）
+_NETWORK_ERROR_MARKS = (
+    # HA 工具层固定前缀（home_tools.py 全部 except 分支）
+    "获取HA设备列表失败", "控制设备失败",
+    # requests 异常名（英文/异常类名形态）
+    "ReadTimeout", "ConnectTimeout", "ConnectionError", "NewConnectionError",
+    "ConnectionRefusedError", "Max retries exceeded",
+    "timed out", "TimeoutError",
+    # Windows 中文系统拒连文案（WinError 10061）
+    "积极拒绝",
+)
+
+# 网络类细分（日志标注用，旁路口径相同——都旁路，只是留痕不同）
+_CONFIG_ERROR_MARKS = ("未配置 HA_URL",)
+
+
+def _is_network_error_result(result):
+    """工具 ❌ 结果是否属网络/配置类异常（HA 超时/拒连/未配置等）。
+
+    命中 → 调用方旁路熔断器（不 record_rejection 也不 record_success）；
+    未命中（权限拒绝/参数非法/危险实体拦截等）→ 照常计数。
+    配置类（未配置 HA_URL）与网络抖动类同走旁路，但日志分别标注
+    （配置错误需人工修 .env；网络抖动等待恢复即可——排查语义不同）。
+    """
+    text = str(result or "")
+    return (any(mark in text for mark in _NETWORK_ERROR_MARKS)
+            or any(mark in text for mark in _CONFIG_ERROR_MARKS))
+
+
+def _bypass_kind(result):
+    """旁路原因标注：config（配置错误）/ network（网络抖动）。"""
+    text = str(result or "")
+    if any(mark in text for mark in _CONFIG_ERROR_MARKS):
+        return "config"
+    return "network"
+
+
 # 模块级熔断器：接入层（main.py）可按通道传 session_key（QQ/网页/仪表盘）
 tool_fuse = ToolLoopFuse()
 
@@ -1876,10 +1916,16 @@ def smart_ask(message, history=None, session_key="default"):
                 # 直接把拒绝文案作为本轮回答返回（单轮内切断）
                 if tool_result.startswith("❌"):
                     # 🛡️ 跨轮熔断计数：同一工具 + 等价参数连续被拒 → 强制打断
-                    tool_fuse.record_rejection(session_key, tool_name, tool_args)
-                    if tool_fuse.is_tripped(session_key):
-                        print("⛔ 防死循环熔断触发：连续多次同一操作被拒，已暂停工具使用。")
-                        return _wrap_think(thinking, TOOL_FUSE_NOTICE), "⛔ 熔断"
+                    # （网络/配置类异常旁路——HA 抖动超时不属"被拒重试"死循环
+                    # 口径；配置错误与网络抖动日志分别标注，排查语义不同）
+                    if _is_network_error_result(tool_result):
+                        print(f"🌐 [熔断旁路:{_bypass_kind(tool_result)}] "
+                              f"非权限类失败不计熔断: {tool_result[:80]}")
+                    else:
+                        tool_fuse.record_rejection(session_key, tool_name, tool_args)
+                        if tool_fuse.is_tripped(session_key):
+                            print("⛔ 防死循环熔断触发：连续多次同一操作被拒，已暂停工具使用。")
+                            return _wrap_think(thinking, TOOL_FUSE_NOTICE), "⛔ 熔断"
                     # 🧠 裸 CoT 防御性封口：❌ 文案主体是工具层固定中文，但个别
                     # 工具（如 vision_tap_element 解析失败）会把模型原文拼进
                     # 返回串——剥净可能混入的裸标记再包装，绝不直出网页
@@ -2146,13 +2192,18 @@ def smart_ask_stream(message, history=None, session_key="default",
                         thinking, _strip_bare_cot(str(e)))
                     return reply, label
                 if str(tool_result).startswith("❌"):
-                    # ⛔ 防死循环硬拦截（与同步版 brain.py:1826 同口径）：
+                    # ⛔ 防死循环硬拦截（与同步版 brain.py 同口径）：
                     # 被拒结果不喂回模型，直接作为本轮回答；连续被拒触发熔断
-                    tool_fuse.record_rejection(session_key, tool_name,
-                                               tool_args)
-                    if tool_fuse.is_tripped(session_key):
-                        reply = _wrap_think(thinking, TOOL_FUSE_NOTICE)
-                        return reply, "⛔ 熔断"
+                    # （网络/配置类旁路熔断计数，与同步版 2026-10-06 口径一致）
+                    if _is_network_error_result(tool_result):
+                        print(f"🌐 [熔断旁路:{_bypass_kind(tool_result)}] "
+                              f"非权限类失败不计熔断: {str(tool_result)[:80]}")
+                    else:
+                        tool_fuse.record_rejection(session_key, tool_name,
+                                                   tool_args)
+                        if tool_fuse.is_tripped(session_key):
+                            reply = _wrap_think(thinking, TOOL_FUSE_NOTICE)
+                            return reply, "⛔ 熔断"
                     reply = _wrap_think(
                         thinking, _strip_bare_cot(tool_result))
                     return reply, label
