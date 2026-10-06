@@ -269,7 +269,8 @@ class AskCloudTests(unittest.TestCase):
             self.assertEqual(kwargs["json"], {"model": xiaoju3.CLOUD_MODEL,
                                               "messages": msgs, "stream": False,
                                               "temperature": brain.LLM_TEMPERATURE})
-            self.assertEqual(kwargs["timeout"], brain.CLOUD_TIMEOUT)
+            # #260 慢滴防御：timeout 元组（connect 短 + read=CLOUD_TIMEOUT 硬上限）
+            self.assertEqual(kwargs["timeout"], (10, brain.CLOUD_TIMEOUT))
             mr.post.return_value.raise_for_status.assert_called_once()
 
     def test_api_error_dict_detail(self):

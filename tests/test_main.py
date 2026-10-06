@@ -32,8 +32,10 @@ import json
 import os
 import shutil
 import re
+import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -1573,15 +1575,23 @@ class TestTodoCommands(_MainCase):
 
     @staticmethod
     def _immediate_thread():
-        """把 Thread 换成同步执行（同 test_gen_log_valid_link 口径）。"""
+        """把 Thread 换成同步执行（同 test_gen_log_valid_link 口径）。
+        #260 起 run_todo_extraction 会调 join()/is_alive()——补兼容壳。"""
 
         class ImmediateThread:
             def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+                self._r = None
                 if target:
-                    target(*args, **(kwargs or {}))
+                    self._r = target(*args, **(kwargs or {}))
 
             def start(self):
                 pass
+
+            def join(self, timeout=None):
+                pass   # 同步已执行完，join 立即返回
+
+            def is_alive(self):
+                return False
 
         return ImmediateThread
 
@@ -1631,6 +1641,86 @@ class TestTodoCommands(_MainCase):
             reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
         self.assertTrue(reply.startswith("🔄"))   # 受理不受后台失败影响
 
+    # ---------- #260 提取管线健壮性（watchdog/兜底通知） ----------
+    def test_watchdog_kills_stuck_extraction_and_notifies(self):
+        """看门狗：内层线程卡死 → join 超时 → unmark 放行 + 超时通知。
+        注入点：TODO_EXTRACT_WATCHDOG_S 缩到 0.15s + _extract_work_thread
+        保持真线程（卡 2s 模拟慢滴挂死）；外层派发线程走 Immediate 同步。"""
+        import threading as _th
+        notified = []
+
+        def stuck(url, *a, **k):
+            time.sleep(2)
+
+        def fake_notify(result):
+            notified.append(result)
+
+        with patch("main.extract_todos_from_url_sync", stuck), \
+                patch("main.mark_url"), \
+                patch("main.check_recent_url", return_value=False), \
+                patch("main._notify_todo_done", return_value=fake_notify), \
+                patch("main.TODO_EXTRACT_WATCHDOG_S", 0.15), \
+                patch("main._extract_work_thread", _th.Thread), \
+                patch("main.threading.Thread", self._immediate_thread()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.pm.current_level = "Lv.2"
+            reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
+        self.assertTrue(reply.startswith("🔄"))
+        # 外层同步执行：watchdog（内层真线程 join 0.15s 超时）已同步完成通知
+        self.assertTrue(any("超时" in str(r.get("error", "")) for r in notified),
+                        notified)   # 超时通知已发（用户可感知）
+
+    def test_failed_result_gets_fallback_notify(self):
+        """失败兜底：extractor 返回 ok=False 且未通知 → main 兜底发失败通知。"""
+        notified = []
+        extract_mock = MagicMock(return_value={"ok": False, "error": "提炼失败"})
+        with patch("main.threading.Thread", self._immediate_thread()), \
+                patch("main.extract_todos_from_url_sync", extract_mock), \
+                patch("main.mark_url"), \
+                patch("main.check_recent_url", return_value=False), \
+                patch("main._notify_todo_done") as nd:
+            nd.return_value = lambda r: notified.append(r)
+            self.pm.current_level = "Lv.2"
+            main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
+        time.sleep(0.2)
+        self.assertTrue(notified, "失败结果应有兜底通知")
+        self.assertFalse(notified[0].get("ok"))
+
+    def test_success_path_no_fallback_notify_beyond_extractor(self):
+        """成功路径：extractor 自身 notify 已发（notified 标记）→ main 不再兜底。"""
+        notified = []
+        extract_mock = MagicMock(
+            return_value={"ok": True, "inserted": 2, "skipped": 0, "notified": True})
+        with patch("main.threading.Thread", self._immediate_thread()), \
+                patch("main.extract_todos_from_url_sync", extract_mock), \
+                patch("main.mark_url"), \
+                patch("main.check_recent_url", return_value=False), \
+                patch("main._notify_todo_done") as nd:
+            nd.return_value = lambda r: notified.append(r)
+            self.pm.current_level = "Lv.2"
+            main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
+        time.sleep(0.2)
+        self.assertEqual(notified, [])   # 已通知，零兜底
+
+    def test_ask_cloud_failures_leave_trace(self):
+        """失败必留痕：batch_logger._ask_cloud brain 路异常/降级串均打日志。"""
+        import importlib
+        bl = importlib.import_module("plugins.batch_logger")
+        fake_brain = types.ModuleType("brain")
+        fake_brain.ask_cloud = MagicMock(side_effect=RuntimeError("net down"))
+        with patch.dict(sys.modules, {"brain": fake_brain}), \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            r1 = bl._ask_cloud([{"role": "user", "content": "x"}], "k", "u")
+        self.assertIsNone(r1)
+        self.assertIn("brain 路异常", buf.getvalue())   # 留痕实锤
+        fake_brain.ask_cloud = MagicMock(return_value="⚠️ 云端连接异常: xx")
+        with patch.dict(sys.modules, {"brain": fake_brain}), \
+                contextlib.redirect_stdout(io.StringIO()) as buf2:
+            r2 = bl._ask_cloud([{"role": "user", "content": "x"}], "k", "u")
+        self.assertIsNone(r2)
+        self.assertIn("brain 降级串", buf2.getvalue())
+
+    # ---------- /todos 门禁与清单 ----------
     def test_todos_requires_lv2(self):
         self.pm.current_level = "Lv.1"
         reply = main.handle_message('web', 'u', None, "/todos")

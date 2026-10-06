@@ -212,6 +212,7 @@ async def extract_todos_from_url(url, api_key=None, cloud_url=None, notify=None)
     if notify:
         try:
             notify(result)
+            result["notified"] = True   # #260：已通知标记（main 兜底判断用）
         except Exception as e:
             print(f"⚠️ 待办完成通知回调失败: {e}")
     return result

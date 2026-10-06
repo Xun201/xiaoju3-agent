@@ -1510,8 +1510,11 @@ def ask_cloud(messages):
                "temperature": LLM_TEMPERATURE}
 
     try:
+        # timeout 元组（#260）：标量值只约束单次 socket 读，防不住"每 29s
+        # 来一个字节"的慢滴连接——connect 短 + read 硬上限，两者任一触发
+        # 即抛异常转 ⚠️ 文案，调用方（含待办提取后台线程）不再无限挂死
         response = requests.post(CLOUD_URL, headers=headers, json=payload,
-                                 timeout=CLOUD_TIMEOUT)
+                                 timeout=(10, CLOUD_TIMEOUT))
         response.raise_for_status()
         resp_json = response.json()
 
