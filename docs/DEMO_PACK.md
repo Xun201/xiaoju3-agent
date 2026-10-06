@@ -6,7 +6,7 @@
 | 文档名 | 四大创新点演示包（DEMO_PACK） |
 | 编制日期 | 2026-10-02（初版）/ 2026-10-05（通用刷新，同步至 v1.0.4） |
 | 仓库 | https://github.com/Xun201/xiaoju3-agent（main） |
-| 基线 | 84795c4（全仓 1843 passed + 4 skipped） |
+| 基线 | 84795c4（全仓 1874 passed + 4 skipped） |
 | 用途 | 演示/评审四大创新点的"是什么 → 代码在哪 → 怎么验证"一页通；`[SCREENSHOT: …]` 为截图占位，补图后即为完整演示稿；亦可作参赛作品说明底稿（通用创新叙事，赛道定制另行叠加） |
 
 状态标记沿用三份主文档口径：🟢 已实现（代码可核对）｜🟡 模块已就绪·接线中｜🔜 规划中。
@@ -48,7 +48,7 @@
 
 ### 可验证证据
 
-- **离线可复跑**：`tests/test_permission.py`、`tests/test_tools.py`、`tests/test_home_tools.py` 全绿（全仓 1843 passed + 4 skipped 内）。
+- **离线可复跑**：`tests/test_permission.py`、`tests/test_tools.py`、`tests/test_home_tools.py` 全绿（全仓 1874 passed + 4 skipped 内）。
 - **现场演示脚本**（QQ 端三连）：
   1. Lv.1 账号说"把工作区里写个 test.txt" → 工具门禁拒绝并引导 `/register`；
   2. `/coder_auth <动态密码>` 升 Lv.3 → 控"客厅灯"成功；说"开车库门"（危险实体）→ Lv.4 拒绝文案；
@@ -298,4 +298,4 @@ PeerWatch().watch_loop(interval=60)         # → 失联 3 次触发 on_peer_dow
 - [ ] 本地 Ollama 在线（创新点 3 的 🏠 日志与断网演示）
 - [ ] `CHILD_LOCK_ENABLED=true` 且儿童/成人两账号就位（创新点 1 三连演示）
 - [ ] 四张 `[SCREENSHOT: …]` 补图完成
-- [ ] 全仓测试基线：`python -m pytest -q`（1843 passed + 4 skipped）
+- [ ] 全仓测试基线：`python -m pytest -q`（1874 passed + 4 skipped）
