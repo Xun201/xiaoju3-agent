@@ -158,3 +158,7 @@ bash install.sh    # 自动检测 Python 版本：3.8 → requirements-py38.txt�
 
 - 降级组合与最新钉版 API 完全兼容（仅用核心 API），**无需改代码**；/gen_log 抓取在 playwright 1.48 上行为一致。
 - 代码全仓通过 Python 3.8 语法与运行时注解审计（52 个文件 0 处不兼容），路径处理统一 `os.path`/`pathlib`，无 Windows 专属依赖。
+
+## License
+
+本项目采用 Apache License 2.0 许可，详见 LICENSE 文件。
