@@ -717,6 +717,73 @@ class TestHandleMessageRouting(_MainCase):
         self.assertEqual(reply, f"[CQ:image,file=file://{img}]")
         self.smart_ask.assert_not_called()
 
+    # ---------- DeepSeek 分享链接预分流（方案 A，2026-10-06） ----------
+    def _todo_cmd_mock(self, accept_reply="🔄 收到链接啦！小橘3号正在后台阅读和总结"):
+        """handle_todo_command 分形态替身：指令形态（/todo_from_link 开头）
+        返回受理文案；其他形态（既有 L879 待办族调用点先于预分流执行）
+        返回 None 放行——ht.call_args_list 的最后一次即预分流调用。"""
+        ht = MagicMock(side_effect=lambda raw_m, *a, **k: (
+            accept_reply if raw_m.startswith("/todo_from_link ") else None))
+        return ht
+
+    def test_share_link_natural_language_prefilters_to_todo_extract(self):
+        """群聊 @ + 自然语言 + 分享链接：清洗前预分流转 /todo_from_link，
+        不落模型（清洗会剥 URL 的 : .，todo_link_mode 匹配必失败——
+        2026-10-06 群聊实测幻觉'操作已完成'）。"""
+        self.pm.current_level = "Lv.1"
+        raw = ("[CQ:at,qq=999] 记下来这些待办 "
+               "https://chat.deepseek.com/share/jmd1v452ojord0z36p")
+        ht = self._todo_cmd_mock()
+        with patch("main.handle_todo_command", ht), \
+                contextlib.redirect_stdout(io.StringIO()):
+            reply = main.handle_message(
+                'qq', 123, 456, raw, self_qq=999)
+        self.assertIn("后台", reply)
+        self.assertGreaterEqual(ht.call_count, 2)   # 既有待办族点 + 预分流
+        last = ht.call_args_list[-1]
+        cmd_raw = last[0][0]
+        self.assertTrue(cmd_raw.startswith("/todo_from_link "))
+        self.assertIn("https://chat.deepseek.com/share/jmd1v452ojord0z36p",
+                      cmd_raw)   # 完整 URL（免疫清洗）
+        self.smart_ask.assert_not_called()   # 不落模型
+
+    def test_share_link_private_chat_also_prefilters(self):
+        """私聊自然语言 + 链接同样预分流（清洗毁 URL 无通道差异）。"""
+        self.pm.current_level = "Lv.1"
+        ht = self._todo_cmd_mock()
+        with patch("main.handle_todo_command", ht), \
+                contextlib.redirect_stdout(io.StringIO()):
+            main.handle_message(
+                'qq', 123, None,
+                "帮我把这个记下来 https://chat.deepseek.com/share/xyz789")
+        last = ht.call_args_list[-1]
+        self.assertTrue(last[0][0].startswith("/todo_from_link "))
+        self.assertIn("https://chat.deepseek.com/share/xyz789", last[0][0])
+        self.smart_ask.assert_not_called()
+
+    def test_cleaning_mangles_url_regression_anchor(self):
+        """回归锚：标点清洗确实毁 URL（: . 被剥）——预分流存在的必要性
+        证明；若未来清洗规则改为保护 URL，本锚提醒复核预分流是否仍需要。"""
+        import re as _re
+        raw = "记一下 https://chat.deepseek.com/share/abc123"
+        cleaned = _re.sub(r'[，。！？、；：""《》【】\[\],.?!;:"\'<>]', '',
+                          raw).strip()
+        self.assertNotIn("https://", cleaned)   # 清洗后 https:// 已毁
+        self.assertIn("https//chatdeepseekcom", cleaned)
+
+    def test_non_share_link_message_not_prefiltered(self):
+        """非 DeepSeek 分享链接（普通 URL）不触发预分流：无 /todo_from_link
+        形态调用，消息照走原对话链路（L879 待办族点的既有调用不算）。"""
+        self.pm.current_level = "Lv.1"
+        ht = MagicMock(return_value=None)   # 既有调用点放行，不替身命中
+        with patch("main.handle_todo_command", ht), \
+                contextlib.redirect_stdout(io.StringIO()):
+            reply = main.handle_message('web', 'u', None,
+                                        "读一下 https://example.com/article")
+        for call in ht.call_args_list:
+            self.assertFalse(call[0][0].startswith("/todo_from_link "))
+        self.assertEqual(reply, "测试回复")   # 走到了 smart_ask（原链路）
+
     # ---------- /gen_log（Lv.3+ 门槛） ----------
     def test_gen_log_requires_lv3_and_skips_thread(self):
         self.pm.current_level = "Lv.1"
