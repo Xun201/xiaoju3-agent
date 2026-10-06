@@ -25,18 +25,22 @@ def _ask_cloud(messages, api_key, cloud_url):
     if brain is not None and hasattr(brain, "ask_cloud"):
         try:
             reply = brain.ask_cloud(messages)
-        except Exception:
+        except Exception as e:
+            # #260 失败必留痕：静默 return None 是待办提取挂死排查的盲区
+            print(f"⚠️ [ask_cloud] brain 路异常: {type(e).__name__}: {e}")
             return None
         if isinstance(reply, str) and reply[:1] in ("⚠", "❌"):
+            print(f"⚠️ [ask_cloud] brain 降级串: {reply[:80]}")
             return None
         return reply
 
-    # 参考实现的直连调用方式
+    # 参考实现的直连调用方式（timeout 元组化，#260 慢滴连接防御）
     try:
         import requests
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload = {"model": "deepseek-chat", "messages": messages, "stream": False}
-        response = requests.post(cloud_url, headers=headers, json=payload, timeout=90)
+        response = requests.post(cloud_url, headers=headers, json=payload,
+                                 timeout=(10, 60))
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"]
         print(f"⚠️ 云端返回状态码: {response.status_code}")

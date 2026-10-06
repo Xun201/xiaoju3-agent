@@ -70,6 +70,11 @@ from plugins.context_manager import compress_context
 from plugins.todo_extractor import check_recent_url, clear_recent_urls, extract_todos_from_url_sync, mark_url
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool, get_recent_actions
+
+# #260 提取看门狗注入点：内层工作线程类与超时常量（测试可 patch 缩短，
+# 生产用真 threading.Thread + 180s）
+_extract_work_thread = threading.Thread
+TODO_EXTRACT_WATCHDOG_S = 180
 from xiaoju3 import (AGENT_STATE_DIR, CHILD_LOCK_ENABLED, CLOUD_KEY,
                      CLOUD_URL, ONEBOT_API_URL, ONEBOT_TOKEN, TRIGGER_WORDS,
                      WORKSPACE)
@@ -651,13 +656,50 @@ def handle_todo_command(raw_message, message, user_id, group_id, steps=None):
 
         def run_todo_extraction(target_url):
             print(f"🚀 收到待办提取指令，开始后台处理链接: {target_url}")
+            chat_target = {"group_id": group_id} if group_id else {"user_id": user_id}
+            notify_done = _notify_todo_done(chat_target)
             try:
-                chat_target = {"group_id": group_id} if group_id else {"user_id": user_id}
-                extract_todos_from_url_sync(
-                    target_url, CLOUD_KEY, CLOUD_URL,
-                    notify=_notify_todo_done(chat_target))
+                result_holder = {}
+
+                def _inner():
+                    result_holder["r"] = extract_todos_from_url_sync(
+                        target_url, CLOUD_KEY, CLOUD_URL, notify=notify_done)
+
+                # #260 看门狗：提取整体 deadline（模块常量，测试可注入缩短）
+                # ——抓取+提炼任一环卡死（如云端慢滴连接）时强杀并通知用户
+                work = _extract_work_thread(target=_inner, daemon=True)
+                work.start()
+                work.join(timeout=TODO_EXTRACT_WATCHDOG_S)
+                if work.is_alive():
+                    print(f"❌ [待办提取] 看门狗超时（180s）: {target_url} — 强杀，通知用户")
+                    from plugins.todo_extractor import unmark_url
+                    try:
+                        unmark_url(target_url)   # 放行重试
+                    except Exception:
+                        pass
+                    try:
+                        notify_done({"ok": False,
+                                     "error": "提取超时（3 分钟看门狗触发），请稍后重发链接"})
+                    except Exception as ne:
+                        print(f"⚠️ [待办提取] 超时通知失败: {ne}")
+                elif not (result_holder.get("r") or {}).get("ok"):
+                    # 失败兜底通知（#260-④）：extractor 自身 notify 已发则此为
+                    # 二次无害提醒；未发（异常路径吞掉）则用户至少收到失败可感知
+                    r = result_holder.get("r") or {}
+                    if r.get("notified"):
+                        pass
+                    else:
+                        print(f"⚠️ [待办提取] 结果失败且未见通知: {target_url} → 兜底通知")
+                        try:
+                            notify_done(r or {"ok": False, "error": "提取失败，请重试"})
+                        except Exception as ne:
+                            print(f"⚠️ [待办提取] 兜底通知失败: {ne}")
             except Exception as e:
                 print(f"⚠️ 待办提取后台报错: {e}")
+                try:
+                    notify_done({"ok": False, "error": f"提取失败: {e}"})
+                except Exception:
+                    pass
 
         threading.Thread(target=run_todo_extraction, args=(todo_url,),
                          daemon=True).start()
