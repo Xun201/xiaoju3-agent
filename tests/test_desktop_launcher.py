@@ -291,9 +291,10 @@ class MainFlowTests(unittest.TestCase):
         window = fake_webview.create_window.return_value
 
         out = io.StringIO()
-        with _fake_webview(fake_webview),                 mock.patch.object(launcher, "ensure_backend_services",
+        with _fake_webview(fake_webview),                 mock.patch.object(launcher, "_acquire_single_instance_lock",
+                                  return_value=(None, False)),                 mock.patch.object(launcher, "ensure_backend_services",
                                   return_value=spawn_proc) as mspawn,                 mock.patch.object(launcher, "_is_main_running",
-                                  return_value=main_running),                 mock.patch.object(launcher, "wait_for_dashboard_ready",
+                                  return_value=main_running) as mp,                 mock.patch.object(launcher, "wait_for_dashboard_ready",
                                   return_value=ready) as mwait,                 mock.patch.object(launcher, "stop_backend_launcher") as mkill,                 contextlib.redirect_stdout(out):
             rc = launcher.main([])
         stubs = types.SimpleNamespace(fake_webview=fake_webview, mspawn=mspawn,
@@ -343,7 +344,8 @@ class MainFlowTests(unittest.TestCase):
         fake_webview = mock.MagicMock()
         fake_webview.start.side_effect = RuntimeError("gui boom")
         proc = mock.MagicMock()
-        with _fake_webview(fake_webview),                 mock.patch.object(launcher, "ensure_backend_services",
+        with _fake_webview(fake_webview),                 mock.patch.object(launcher, "_acquire_single_instance_lock",
+                                  return_value=(None, False)),                 mock.patch.object(launcher, "ensure_backend_services",
                                   return_value=proc),                 mock.patch.object(launcher, "_is_main_running",
                                   return_value=True),                 mock.patch.object(launcher, "stop_backend_launcher") as mkill,                 contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(RuntimeError):
@@ -737,6 +739,55 @@ class MeiCleanupTests(unittest.TestCase):
         call_at = src.index("_cleanup_stale_meipass()", main_at)
         redirect_at = src.index('_redirect_stdio("desktop")', main_at)
         self.assertLess(call_at, redirect_at)
+
+
+class SingleInstanceGateTests(unittest.TestCase):
+    """单实例门（#263，2026-10-07）：互斥体已存在 → 唤起已有窗 + return 0，
+    不开第二窗不重复拉后端；白屏缓解 env（WEBVIEW2_ADDITIONAL_BROWSER_
+    ARGUMENTS）在模块导入期生效。"""
+
+    def test_env_browser_args_setdefault(self):
+        """白屏快改锚：desktop_launcher 导入期即设 WebView2 附加参数
+        （禁最小化挂起/后台化——恢复窗口无整页白闪），setdefault 允许 env 覆盖。"""
+        val = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
+        self.assertIn("--disable-backgrounding-occluded-windows", val)
+        self.assertIn("--disable-renderer-backgrounding", val)
+
+    def test_mutex_fresh_then_held(self):
+        """互斥体语义锚（唯一名防同进程互扰）：首取 fresh；持有时再取 →
+        already=True；释放后可重取（main 收尾释放/测试可重复进出）。"""
+        unique = f"Local\\Xiaoju3_test_{os.getpid()}"
+        handle, already = launcher._acquire_single_instance_lock(name=unique)
+        self.assertIsNotNone(handle)
+        self.assertFalse(already)                       # 首取 fresh
+        if os.name != "nt":
+            return
+        launcher._release_single_instance_lock(handle)
+        handle2, already2 = launcher._acquire_single_instance_lock(name=unique)
+        self.assertFalse(already2)                  # 已释放 → 可重取
+        launcher._release_single_instance_lock(handle2)
+
+    def test_gate_second_instance_exits_zero(self):
+        """门行为锚：互斥体已存在（模拟已有实例）→ main 返回 0 + 提示已在
+        运行 + 已唤起窗口 + 不创建第二窗 + 不重复拉后端。"""
+        import ctypes
+        handle = ctypes.windll.kernel32.CreateMutexW(
+            None, False, launcher._SINGLE_INSTANCE_MUTEX)   # 预持互斥体
+        self.addCleanup(ctypes.windll.kernel32.CloseHandle, handle)
+        activated = mock.MagicMock(return_value=True)
+        fake_webview = mock.MagicMock()
+        out = io.StringIO()
+        with _fake_webview(fake_webview), \
+                mock.patch.object(launcher, "_activate_existing_window",
+                                  activated), \
+                mock.patch.object(launcher, "_is_port_listening",
+                                  return_value=True), \
+                contextlib.redirect_stdout(out):
+            rc = launcher.main([])
+        self.assertEqual(rc, 0)
+        self.assertIn("已在运行", out.getvalue())
+        activated.assert_called_once()
+        fake_webview.create_window.assert_not_called()   # 不开第二窗
 
 
 if __name__ == "__main__":

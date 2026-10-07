@@ -76,6 +76,13 @@ import paths  # 双根路径锚（方案 §1）：frozen 分支按 RESOURCE/DATA
 # __main__ 的 dashboard 角色分流（本就函数内延迟导入）。防回流锚：
 # tests/test_desktop_launcher.py（ast 断言模块体顶层零 dashboard import）。
 
+# 白屏缓解（2026-10-07 拍板：低风险快改）：最小化时 WebView2 渲染器不再被
+# 挂起/后台化——恢复窗口即现，无整页白闪重绘。必须在 WebView2 环境创建
+# （webview 懒导入于 main）之前生效，故放模块导入期；setdefault 允许 env 覆盖。
+os.environ.setdefault(
+    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+    "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding")
+
 WINDOW_TITLE = "小橘3号 · 控制台"      # 桌面窗口标题（用户口径）
 WINDOW_WIDTH = 1200                   # 窗口尺寸（用户口径 1200x800）
 WINDOW_HEIGHT = 800
@@ -458,6 +465,67 @@ def _cleanup_stale_meipass():
         pass   # 卫生项：任何异常（tempdir 不可用等）静默，绝不影响启动
 
 
+# ==================== 单实例门（#263，2026-10-07） ====================
+_SINGLE_INSTANCE_MUTEX = "Local\\Xiaoju3_Desktop_SingleInstance"
+_ERROR_ALREADY_EXISTS = 183
+
+
+def _acquire_single_instance_lock(name=_SINGLE_INSTANCE_MUTEX):
+    """命名互斥体单实例门：返回 (句柄, 是否已有实例)。
+
+    句柄刻意不闭——随进程存活即持锁，进程退出由 OS 回收（无残留）；
+    main() 正常收尾时经 _release_single_instance_lock 主动释放（测试
+    同进程可重复进出）。name 可注入（测试用唯一名防同进程互扰）。
+    非 Windows 回退 (None, False)。
+    """
+    if os.name != "nt":
+        return None, False
+    import ctypes
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, name)
+    already = ctypes.windll.kernel32.GetLastError() == _ERROR_ALREADY_EXISTS
+    return handle, already
+
+
+def _release_single_instance_lock(handle):
+    """释放单实例互斥体（main 收尾用；None/已闭句柄安全跳过）。"""
+    if handle:
+        import ctypes
+        ctypes.windll.kernel32.CloseHandle(int(handle))
+
+
+def _activate_existing_window():
+    """枚举顶层窗口找已有实例（WINDOW_TITLE 前缀）：最小化则恢复、置前台。
+
+    返回 True=已唤起；找不到=False——此时已有实例尚在启动期，其窗口稍后
+    自现，第二实例静默退出即 #263 期望的"跳过"语义（闪任务栏需窗口句柄，
+    第二实例自身无窗，不适用）。"""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    prefix = WINDOW_TITLE.split("·")[0].strip()   # "小橘3号"
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _enum_cb(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            if buf.value.startswith(prefix):
+                found.append(hwnd)
+                return False
+        return True
+
+    user32.EnumWindows(_enum_cb, 0)
+    if not found:
+        return False
+    hwnd = found[0]
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)   # SW_RESTORE
+    user32.SetForegroundWindow(hwnd)
+    return True
+
+
 def main(argv=None):
     """入口：缺 pywebview 中文提示退出；拉后台服务 → 占位窗 → 就绪导航 →
     关闭全清理（端口修复 P2：内置随机服务退役，窗口直挂 :5003）。
@@ -494,6 +562,17 @@ def main(argv=None):
     need_wait = (launcher_proc is not None) or main_ok
     if main_hint:
         _print(MAIN_NOT_RUNNING_HINT)
+
+    # ⓪ 单实例门（#263）：互斥体已存在=已有实例在跑 → 唤起其窗口后本进程
+    #   退出（不开第二窗、不重复拉起后端——5003 已被 ensure_backend_services
+    #   复用）。找不到窗=已有实例仍在启动期，其窗口稍后自现——静默退出即
+    #   #263 期望的"跳过"语义。
+    _si_handle, _si_already = _acquire_single_instance_lock()
+    if _si_already:
+        activated = _activate_existing_window()
+        _print("ℹ️ 小橘3号已在运行"
+               + ("，已唤起已有窗口" if activated else "，窗口启动中"))
+        return 0
 
     # ③ 占位窗先行（先出窗后导航，端口修复 P2）：create_window 先显示
     #   "正在启动主程序…"，GUI 就绪后由 webview.start 回调在后台线程
@@ -542,6 +621,7 @@ def main(argv=None):
         # （旧"停内置服务线程"步骤随内置服务退役移除）
         stop_event.set()   # 先停监督线程：正常关窗不再触发自动重启
         stop_backend_launcher(backend_state["proc"])
+        _release_single_instance_lock(_si_handle)   # 单实例门随窗关闭释放
     return 0
 
 
