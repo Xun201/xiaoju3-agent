@@ -585,19 +585,26 @@ def _notify_todo_done(chat_target):
     """
     def _notify(result):
         if result.get("ok"):
-            items = result.get("items") or []
-            if not items:
-                body = "✅ 链接读完了，这段对话里没有发现待办事项。"
+            if result.get("empty_page"):
+                # #262（2026-10-07）：失效链接提示页（<EMPTY_PAGE_MIN_CHARS，
+                # extractor 跳过提炼直接标记）不再伪装"没发现待办"——明确
+                # 告知失效可重新分享；正常 0 条文案保持不变（防互串）。
+                body = ("⚠️ 这条链接已失效或内容为空，请检查或重新分享"
+                        "（DeepSeek 分享链接几小时后会过期）。")
             else:
-                def _fmt_preview(i_item):
-                    i, it = i_item
-                    if isinstance(it, dict):
-                        return f"{i + 1}. [{it.get('priority', 'P1')}] {it.get('content', '')}"
-                    return f"{i + 1}. {it}"   # 兼容 str 条目（防御形态）
-                preview = "\n".join(map(_fmt_preview, enumerate(items[:5])))
-                body = (f"✅ 待办提取完成！新增 {result.get('inserted', 0)} 条"
-                        f"（跳过重复 {result.get('skipped', 0)} 条）：\n{preview}\n"
-                        f"（全部见 /todos 或控制台待办面板）")
+                items = result.get("items") or []
+                if not items:
+                    body = "✅ 链接读完了，这段对话里没有发现待办事项。"
+                else:
+                    def _fmt_preview(i_item):
+                        i, it = i_item
+                        if isinstance(it, dict):
+                            return f"{i + 1}. [{it.get('priority', 'P1')}] {it.get('content', '')}"
+                        return f"{i + 1}. {it}"   # 兼容 str 条目（防御形态）
+                    preview = "\n".join(map(_fmt_preview, enumerate(items[:5])))
+                    body = (f"✅ 待办提取完成！新增 {result.get('inserted', 0)} 条"
+                            f"（跳过重复 {result.get('skipped', 0)} 条）：\n{preview}\n"
+                            f"（全部见 /todos 或控制台待办面板）")
         else:
             body = f"❌ 待办提取失败：{result.get('error') or '未知原因'}"
         target = chat_target or {}

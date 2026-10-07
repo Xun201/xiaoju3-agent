@@ -198,8 +198,8 @@ class ExtractJobTests(unittest.TestCase):
         self.assertEqual(job["inserted"], 2)
 
     def test_priority_flows_to_storage(self):
-        # 尾巴 C：parse 出的 priority 随入库落库
-        result = self._run("对话正文", ['[{"content": "A", "priority": "P0"}]'])
+        # 尾巴 C：parse 出的 priority 随入库落库（正文≥50 过空页守卫，#262）
+        result = self._run("正" * 60, ['[{"content": "A", "priority": "P0"}]'])
         self.assertTrue(result["ok"])
         row = self.sm.get_todos(status="pending")[0]
         self.assertEqual(row["priority"], "P0")
@@ -223,13 +223,13 @@ class ExtractJobTests(unittest.TestCase):
         notify.assert_called_once_with(result)
 
     def test_all_cloud_failures_yield_zero_items_ok(self):
-        result = self._run("对话正文", [None, None])
+        result = self._run("正" * 60, [None, None])
         self.assertTrue(result["ok"])
         self.assertEqual(result["inserted"], 0)
         self.assertEqual(result["items"], [])
 
     def test_no_todos_found_reports_ok_zero(self):
-        result = self._run("对话正文", ['[]'])
+        result = self._run("正" * 60, ['[]'])
         self.assertTrue(result["ok"])
         self.assertEqual(result["inserted"], 0)
 
@@ -237,7 +237,7 @@ class ExtractJobTests(unittest.TestCase):
         broken = MagicMock()
         broken.save_todos.side_effect = RuntimeError("db locked")
         with patch.object(todo_extractor, "fetch_deepseek_url",
-                          _fake_async_fetch("正文")), \
+                          _fake_async_fetch("正" * 60)), \
              patch.object(todo_extractor, "ask_cloud",
                           return_value='[{"content": "A"}]'), \
              patch.object(todo_extractor, "state_manager", broken):
@@ -246,6 +246,89 @@ class ExtractJobTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("db locked", result["error"])
         self.assertEqual(todo_extractor.last_job()["state"], "failed")
+
+
+class EmptyPageGuardTests(unittest.TestCase):
+    """#262（2026-10-07）：<EMPTY_PAGE_MIN_CHARS 的失效/空内容提示页 →
+    跳过云端提炼直接落 empty_page 态（零 token 防 corpse 幻觉），通知层
+    （main._notify_todo_done）与控制台日志（tools._run_extract_job）据此
+    换明确文案，不再静默"0 条完成"。"""
+
+    URL = "https://chat.deepseek.com/share/abc"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xiaoju3_ep_")
+        self.sm = StateManager(base_dir=self.tmp)
+        todo_extractor._RECENT_URLS.clear()
+        self._orig_job = todo_extractor._LAST_JOB
+        todo_extractor._LAST_JOB = None
+
+    def tearDown(self):
+        todo_extractor._LAST_JOB = self._orig_job
+        todo_extractor._RECENT_URLS.clear()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_empty_page_short_text_skips_llm(self):
+        # 短文本（<50 字符）→ empty_page 标记 + ok=True + 0 条；云端零调用、
+        # 零入库（防 corpse 文本幻觉出条目）
+        with patch.object(todo_extractor, "fetch_deepseek_url",
+                          _fake_async_fetch("该链接已失效")), \
+             patch.object(todo_extractor, "ask_cloud") as ac, \
+             patch.object(todo_extractor, "state_manager", self.sm):
+            result = todo_extractor.extract_todos_from_url_sync(self.URL, "k", "u")
+        self.assertTrue(result["empty_page"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["inserted"], 0)
+        self.assertEqual(result["items"], [])
+        ac.assert_not_called()                      # 零 token：提炼整段跳过
+        self.assertEqual(self.sm.get_todos(status="pending"), [])   # 零入库
+        self.assertEqual(todo_extractor.last_job()["state"], "done")
+        self.assertTrue(todo_extractor.last_job()["empty_page"])
+
+    def test_normal_length_untouched_no_flag(self):
+        # 回归锚：正常长度（≥50）走原提炼路径，empty_page 标记不存在
+        with patch.object(todo_extractor, "fetch_deepseek_url",
+                          _fake_async_fetch("正" * 60)), \
+             patch.object(todo_extractor, "ask_cloud",
+                          return_value='[{"content": "A"}]'), \
+             patch.object(todo_extractor, "state_manager", self.sm):
+            result = todo_extractor.extract_todos_from_url_sync(self.URL, "k", "u")
+        self.assertNotIn("empty_page", result)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["inserted"], 1)
+
+    def test_notify_empty_page_copy(self):
+        # 通知文案：empty_page → 明确"链接已失效或内容为空"；正常 0 条仍是
+        # "没有发现待办事项"（两文案互不串扰）
+        import io
+        import contextlib
+        import main
+        notify = main._notify_todo_done(None)   # 终端路径：打印不发送
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            notify({"ok": True, "empty_page": True, "items": [],
+                    "inserted": 0, "skipped": 0})
+            empty_out = buf.getvalue()
+            notify({"ok": True, "items": [], "inserted": 0, "skipped": 0})
+        self.assertIn("链接已失效或内容为空", empty_out)
+        out = buf.getvalue()
+        self.assertIn("没有发现待办事项", out)
+        self.assertNotIn("没有发现待办事项",
+                         out.split("链接已失效或内容为空")[0])   # 互不串扰
+
+    def test_tools_log_marks_empty_page(self):
+        # 控制台后台线程日志：empty_page → "链接已失效或内容为空" 明确留痕
+        import io
+        import contextlib
+        from unittest.mock import patch as _patch
+        import tools
+        buf = io.StringIO()
+        with _patch("tools.todo_extractor.extract_todos_from_url_sync",
+                    return_value={"ok": True, "empty_page": True,
+                                  "inserted": 0, "skipped": 0}):
+            with contextlib.redirect_stdout(buf):
+                tools._run_extract_job(self.URL)
+        self.assertIn("链接已失效或内容为空", buf.getvalue())
 
 
 if __name__ == "__main__":

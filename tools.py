@@ -230,6 +230,10 @@ def _run_extract_job(url):
     受理回复早已发出；线程内任何异常仅落日志，不影响已完成应答。"""
     try:
         result = todo_extractor.extract_todos_from_url_sync(url)
+        if result.get("empty_page"):
+            # #262：失效/空内容页（extractor 跳过提炼直接标记），日志明确
+            # 留痕，不伪装成正常完成
+            print(f"⚠️ [待办提取] 链接已失效或内容为空: {url}")
         print(f"✅ [待办提取] 完成: {url} "
               f"新增 {result.get('inserted', 0)} 条（跳过 {result.get('skipped', 0)}）")
     except Exception as e:
