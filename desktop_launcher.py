@@ -83,6 +83,19 @@ os.environ.setdefault(
     "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
     "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding")
 
+# 单实例互斥体（#263）：**模块导入期即持锁**——2026-10-07 真机双开实锤：
+# 互斥体若在 main() 里才建，onedir 初始化期（登录风暴下 186MB 依赖导入
+# 10-30 秒）就是双开空窗（自启实例与用户双击双双过门）。导入期建锁后
+# 空窗缩到进程创建的亚秒级。main() 读 _SI_ALREADY 旗标做"唤起+退出"UX。
+_SI_MUTEX = "Local\\Xiaoju3_Desktop_SingleInstance"
+_SI_HANDLE = None
+_SI_ALREADY = False
+if os.name == "nt":
+    import ctypes
+    _SI_HANDLE = ctypes.windll.kernel32.CreateMutexW(None, False, _SI_MUTEX)
+    _SI_ALREADY = bool(
+        ctypes.windll.kernel32.GetLastError() == 183)   # ERROR_ALREADY_EXISTS
+
 WINDOW_TITLE = "小橘3号 · 控制台"      # 桌面窗口标题（用户口径）
 WINDOW_WIDTH = 1200                   # 窗口尺寸（用户口径 1200x800）
 WINDOW_HEIGHT = 800
@@ -312,8 +325,10 @@ def stop_backend_launcher(proc, timeout=5):
                 pass
         elif os.name == "nt":
             # 无 psutil 的 Windows：taskkill /T 连子进程整树强杀
+            # （黑框普查③：补 CREATE_NO_WINDOW——兜底路径原样闪控制台）
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                           capture_output=True, check=False)
+                           capture_output=True, check=False,
+                           creationflags=_WIN_CREATE_NO_WINDOW)
         else:
             # POSIX：向启动时独立成组的进程组发 SIGTERM（组内含全部子进程）
             try:
@@ -563,12 +578,12 @@ def main(argv=None):
     if main_hint:
         _print(MAIN_NOT_RUNNING_HINT)
 
-    # ⓪ 单实例门（#263）：互斥体已存在=已有实例在跑 → 唤起其窗口后本进程
-    #   退出（不开第二窗、不重复拉起后端——5003 已被 ensure_backend_services
-    #   复用）。找不到窗=已有实例仍在启动期，其窗口稍后自现——静默退出即
-    #   #263 期望的"跳过"语义。
-    _si_handle, _si_already = _acquire_single_instance_lock()
-    if _si_already:
+    # ⓪ 单实例门（#263）：互斥体已在**模块导入期**创建（见模块顶部）——
+    #   _SI_ALREADY=True = 已有实例在跑 → 唤起其窗口后本进程退出（不开第二
+    #   窗、不重复拉起后端——5003 已被 ensure_backend_services 复用）。
+    #   找不到窗=已有实例仍在启动期，其窗口稍后自现——静默退出即 #263
+    #   期望的"跳过"语义。
+    if _SI_ALREADY:
         activated = _activate_existing_window()
         _print("ℹ️ 小橘3号已在运行"
                + ("，已唤起已有窗口" if activated else "，窗口启动中"))
@@ -621,7 +636,7 @@ def main(argv=None):
         # （旧"停内置服务线程"步骤随内置服务退役移除）
         stop_event.set()   # 先停监督线程：正常关窗不再触发自动重启
         stop_backend_launcher(backend_state["proc"])
-        _release_single_instance_lock(_si_handle)   # 单实例门随窗关闭释放
+        _release_single_instance_lock(_SI_HANDLE)   # 单实例互斥体随窗关闭释放
     return 0
 
 

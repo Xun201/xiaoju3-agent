@@ -20,6 +20,8 @@
 import platform
 import subprocess
 
+import win_process   # 子进程 CREATE_NO_WINDOW（2026-10-07 黑框普查②：nvidia-smi 无隐藏处理会闪控制台）
+
 try:
     import psutil
 except ImportError:  # pragma: no cover - psutil 属白名单依赖，缺失时降级
@@ -41,7 +43,8 @@ def total_ram_gb():
 def has_discrete_gpu():
     """能否检测到独立显卡（nvidia-smi 可执行且返回 0）；异常一律视为无。"""
     try:
-        result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=2)
+        result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=2,
+                                creationflags=win_process.creation_flags())
         return result.returncode == 0
     except Exception:
         return False
