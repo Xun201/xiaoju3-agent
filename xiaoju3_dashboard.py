@@ -923,6 +923,42 @@ def api_chat_stream():
     print(f"[香橙派收到消息][流式] {user_msg}")
 
     def generate():
+        # 🛡️ 前置系统指令拦截（2026-10-07 A'，修 C3a 拦截缺口）：api_chat
+        # 779-823 的四类前置块（位置/儿童锁/creator/待办族）此前只在同步
+        # 通道存在——_console_slash_intercept 设计上不含这四类（"防重复
+        # 接线"注释假设 api_chat 的块兜底，但流式是独立端点，假设落空），
+        # 流式控制台发 /todos 等会漏进大脑（实测：本地模型幻觉无参
+        # extract_todos 工具调用 → 用户收到"❌ 缺少参数：需要提供 url"）。
+        # 此处与 api_chat 同款平移，命中即 done 单帧短路；口径逐字对齐
+        # （儿童锁 is_console=True 控制台=成人设备、待办族 <think> 指令卡）。
+        location_reply = main.handle_location_command(user_msg)
+        if location_reply is not None:
+            yield _sse_frame("done", {
+                "reply": sanitize_for_web(location_reply),
+                "source": "⚙️ 系统"})
+            return
+        child_reply = main.handle_child_command(user_msg, user_id="console",
+                                                is_console=True)
+        if child_reply is not None:
+            yield _sse_frame("done", {
+                "reply": sanitize_for_web(child_reply),
+                "source": "⚙️ 系统"})
+            return
+        if user_msg.strip() == "/creator":
+            yield _sse_frame("done", {
+                "reply": sanitize_for_web(main.handle_creator_command()),
+                "source": "⚙️ 系统"})
+            return
+        todo_steps = []
+        todo_reply = main.handle_todo_command(user_msg, user_msg, None, None,
+                                              steps=todo_steps)
+        if todo_reply is not None:
+            process = "".join("\n· " + s for s in todo_steps)
+            reply = "<think>[指令处理]" + process + "</think>" + todo_reply
+            yield _sse_frame("done", {
+                "reply": sanitize_for_web(reply),
+                "source": "⚙️ 指令"})
+            return
         # 🛡️ 斜杠指令拦截（C3a）：与 api_chat 同款，命中 → 一次性 done
         # （指令不是流式内容；/help 等指令消息不得进模型——C' 接线成果
         # 在流式通道的回归修复）
