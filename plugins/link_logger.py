@@ -65,13 +65,16 @@ def ensure_frozen_browsers_path():
 
 
 class _QuietChildWindows:
-    """抓取期间抑制子进程控制台闪窗（2026-10-04 尾巴 A）。
+    """抓取期间抑制子进程控制台闪窗（2026-10-04 尾巴 A；2026-10-07 强化根治）。
 
     playwright driver（node.exe）由库内 `asyncio.create_subprocess_exec`
-    以模块命名空间访问启动——无控制台的冻结 exe 里每次抓取都闪黑框
-    （库只设了 SW_HIDE，对新 console 进程不够）。本上下文在 win32 下
-    给该入口运行期注入 CREATE_NO_WINDOW（不覆盖调用方已有的
-    creationflags），退出恢复原函数；非 Windows 空操作。
+    启动——无控制台的冻结 exe 里每次抓取都闪黑框（conhost 先创建可见窗口
+    再被 SW_HIDE 隐藏，采样捕捉到 conhost×2 实锤）。
+    强化（#260 族黑框根治）：库自带的 startupinfo(SW_HIDE) 与注入的
+    CREATE_NO_WINDOW **并存会闪现**（conhost 初始化时序：先按 SHOW 分配
+    窗口再隐藏）——改为强制覆盖 creationflags=CREATE_NO_WINDOW 并移除
+    startupinfo，两者取一，无窗创建即无闪现。退出恢复原函数；非 Windows
+    空操作。
     """
 
     def __enter__(self):
@@ -80,7 +83,8 @@ class _QuietChildWindows:
             self._orig = asyncio.create_subprocess_exec
 
             def _quiet_exec(*args, **kwargs):
-                kwargs.setdefault("creationflags", win_process.CREATE_NO_WINDOW)
+                kwargs["creationflags"] = win_process.CREATE_NO_WINDOW
+                kwargs.pop("startupinfo", None)
                 return self._orig(*args, **kwargs)
 
             asyncio.create_subprocess_exec = _quiet_exec
