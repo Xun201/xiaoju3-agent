@@ -301,3 +301,53 @@ def extract_todos_from_url_sync(url, api_key=None, cloud_url=None, notify=None):
         api_key if api_key is not None else CLOUD_KEY,
         cloud_url if cloud_url is not None else CLOUD_URL,
         notify=notify))
+
+
+async def extract_todos_from_text(text, api_key=None, cloud_url=None, notify=None):
+    """纯文字待办编排（#261，2026-10-07 三拍板）：判级走云端——原文整段
+    喂 build_extraction_prompt（编号/换行/顿号等格式由模型解析），解析六档
+    白名单兜底，save_todos 入库（同源同文 pending 幂等）。
+
+    与 from_url 的差异：无抓取/URL 校验/24h 查重/unmark（纯文本天然无
+    链接语义，重复内容由 save_todos 内容幂等挡）。返回 dict 同形：
+    {"ok", "inserted", "skipped", "items", "error"}；notify 语义同 from_url。
+    """
+    text = str(text or "").strip()
+    result = {"ok": False, "url": "", "inserted": 0, "skipped": 0,
+              "items": [], "error": None}
+    _set_job(url="", state="running",
+             started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+    try:
+        if not text:
+            raise ValueError("待办内容为空，请把要记的事写出来。")
+        reply = ask_cloud(build_extraction_prompt(text),
+                          api_key if api_key is not None else CLOUD_KEY,
+                          cloud_url if cloud_url is not None else CLOUD_URL)
+        items = parse_todo_json(reply)[:MAX_TODOS_PER_RUN]
+        result["items"] = items
+        inserted, skipped = state_manager.save_todos(items, source_url="text")
+        result.update(ok=True, inserted=inserted, skipped=skipped)
+        _set_job(state="done",
+                 finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                 inserted=inserted, skipped=skipped)
+    except Exception as e:  # noqa: BLE001 —— 统一落 failed 态
+        result["error"] = str(e)
+        _set_job(state="failed",
+                 finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                 error=str(e))
+    if notify:
+        try:
+            notify(result)
+            result["notified"] = True
+        except Exception as e:
+            print(f"⚠️ 待办完成通知回调失败: {e}")
+    return result
+
+
+def extract_todos_from_text_sync(text, api_key=None, cloud_url=None, notify=None):
+    """纯文字待办同步编排入口（供 plugins/todo_text 后台 daemon 线程调用）。"""
+    return asyncio.run(extract_todos_from_text(
+        text,
+        api_key if api_key is not None else CLOUD_KEY,
+        cloud_url if cloud_url is not None else CLOUD_URL,
+        notify=notify))

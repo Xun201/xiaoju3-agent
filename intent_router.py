@@ -124,6 +124,13 @@ def _extract_ebook_args(message, match):
     return {"title": m.group(1).strip()} if m else {}
 
 
+def _extract_todo_text(message, match):
+    """纯文字记待办参数（#261）：整条消息原文作为待办素材——编号/换行/
+    顿号等格式解析与 P0-P5 判级交给云端提炼链（build_extraction_prompt
+    同源），本层不做本地解析。"""
+    return {"text": message.strip()}
+
+
 # ==================== 意图表（数据驱动：新增意图只加表项） ====================
 # 字段：name 意图名 / patterns 正则（表序即优先级，先命中先赢）/
 #       extractor 参数抽取 / handler_name 延迟处理器引用 /
@@ -198,6 +205,23 @@ INTENT_PATTERNS = [
         # 不做搜索直达，避免"查一下工作区文件"之类误路由
         "negative_patterns": [
             r"工作区|文件|设备|灯|空调|开关|插座|截图|屏幕|点击|点一下",
+        ],
+    },
+    {
+        "name": "todo_text_add",
+        "desc": "纯文字记待办（帮我记待办：1.xxx 2.xxx，编号/换行/顿号皆可）",
+        "patterns": [
+            r"^(帮我|请|麻烦你?|记得)?(记|添加|加|记录)(一下|个|条)?待办[：:，,。、\s]+\S",
+            r"^待办[：:]\s*\S",
+        ],
+        "extractor": _extract_todo_text,
+        "handler_name": "plugins.todo_text:add_from_message",
+        # 排除词：含 DeepSeek 分享链接 → 走链接提取链（预分流/工具）；
+        # 斜杠指令族 → 指令分发；问用法形态（#270）→ 落正常对话
+        "negative_patterns": [
+            r"chat\.deepseek\.com/share/",
+            r"^\s*/",
+            r"怎么做|怎么用|怎么操作",
         ],
     },
 ]
