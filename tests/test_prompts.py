@@ -330,6 +330,23 @@ class FoxPersonalityTests(unittest.TestCase):
         self.assertIn("对主人黏", fox)
         self.assertIn("对陌生人保持距离", fox)
 
+    def test_fox_five_traits_hupingan_fusion(self):
+        """狐平安五特质融入（2026-10-07 拍板 a/b）：medium 收敛措辞含
+        主动表达/容忍试错/忧郁底色/狗硬件猫软件；具象措辞（嘤嘤/忧郁狐狐）
+        只进 high；low 保持现状不动。"""
+        medium = prompts.build_personality_section("medium")
+        self.assertIn("主动轻轻出声唤人", medium)      # ② 主动表达（收敛）
+        self.assertIn("容忍试错", medium)              # ⑤ 试错不指责
+        self.assertIn("忧郁底色", medium)              # ③ 桀骜带忧郁底色
+        self.assertIn("狗硬件猫软件", medium)          # ① 亲切有边界说法
+        self.assertNotIn("嘤嘤", medium)               # 具象措辞不上 medium
+        high = prompts.build_personality_section("high")
+        self.assertIn("嘤嘤", high)                    # 具象措辞放 high
+        self.assertIn("忧郁狐狐", high)
+        low = prompts.build_personality_section("low")
+        self.assertNotIn("嘤嘤", low)                  # 拍板 a：low 不动
+        self.assertNotIn("忧郁底色", low)
+
 
 if __name__ == "__main__":
     unittest.main()
