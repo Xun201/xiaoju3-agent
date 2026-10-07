@@ -518,6 +518,19 @@ def heartbeat_loop(interval=None, sense_fn=None, ask_fn=None, execute_fn=None,
     rounds = 0
     while True:
         time.sleep(interval)
+        # 🕐 待办时间老化+梯队递补（2026-10-07 四拍板）：每天 1 次，
+        # todos_meta.aging_last_date 幂等闸在 run_daily_aging 内部（同天
+        # 重入返回 None 不打印）；失败静默跳过不干扰心跳主链。已知边界：
+        # HA 未配置时心跳循环不启动（上方离线降级守卫），老化随之停摆
+        # ——正式版 HA 凭证常年在位（2026-10-06 补齐）。
+        try:
+            from plugins.todo_aging import run_daily_aging
+            _aging = run_daily_aging()
+            if _aging is not None:
+                print(f"🕐 [老化] AI 升档 {len(_aging['promoted'])} 条 / "
+                      f"梯队递补 {len(_aging['backfilled'])} 组")
+        except Exception as e:
+            print(f"⚠️ [老化] 执行异常（跳过）: {e}")
         heartbeat_once(sense_fn=sense_fn, ask_fn=ask_fn, execute_fn=execute_fn,
                        sense_states_fn=sense_states_fn)
         rounds += 1

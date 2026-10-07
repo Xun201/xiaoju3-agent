@@ -73,6 +73,11 @@ class StateManager:
         # note 列迁移（2026-10-05 待办说明折叠 #239）：旧库补列，既有行默认 ''
         if "note" not in cols:
             cursor.execute("ALTER TABLE todos ADD COLUMN note TEXT DEFAULT ''")
+        # effective_priority 列迁移（2026-10-07 时间老化/梯队递补）：
+        # NULL=未老化，显示层 COALESCE 回原档
+        if "effective_priority" not in cols:
+            cursor.execute(
+                "ALTER TABLE todos ADD COLUMN effective_priority TEXT DEFAULT NULL")
         conn.commit()
         conn.close()
 
@@ -101,6 +106,10 @@ class StateManager:
                     conn.execute("PRAGMA table_info(todos)")]
             if "note" not in cols:
                 conn.execute("ALTER TABLE todos ADD COLUMN note TEXT DEFAULT ''")
+            # effective_priority 列迁移（2026-10-07 时间老化/梯队递补）
+            if "effective_priority" not in cols:
+                conn.execute(
+                    "ALTER TABLE todos ADD COLUMN effective_priority TEXT DEFAULT NULL")
             conn.commit()
             target_count = conn.execute(
                 "SELECT COUNT(*) FROM todos").fetchone()[0]
@@ -209,25 +218,95 @@ class StateManager:
         """查询待办。status=None 返回全部（id DESC，最新在前）；
         'pending'/'done' 过滤（id ASC，旧号在前便于按序处理）。
         返回 list[dict]：{id, content, source_url, status, priority,
-        created_at, done_at}。"""
+        effective_priority, created_at, done_at}——effective_priority 为
+        COALESCE(老化列, 原档)（2026-10-07 时间老化/梯队递补，未老化=原档），
+        原 priority 列照返（前端"↑已升"标记据此对照）。"""
         conn = sqlite3.connect(self.todos_db)
         cursor = conn.cursor()
         if status in ("pending", "done"):
             order = "ASC" if status == "pending" else "DESC"
             cursor.execute(
-                "SELECT id, content, source_url, status, priority, created_at, done_at, note "
+                "SELECT id, content, source_url, status, priority, "
+                "COALESCE(effective_priority, priority) AS effective_priority, "
+                "created_at, done_at, note "
                 f"FROM todos WHERE status = ? ORDER BY id {order} LIMIT ?",
                 (status, limit))
         else:
             cursor.execute(
-                "SELECT id, content, source_url, status, priority, created_at, done_at, note "
+                "SELECT id, content, source_url, status, priority, "
+                "COALESCE(effective_priority, priority) AS effective_priority, "
+                "created_at, done_at, note "
                 "FROM todos ORDER BY id DESC LIMIT ?", (limit,))
         rows = [{"id": r[0], "content": r[1], "source_url": r[2], "status": r[3],
-                 "priority": r[4], "created_at": r[5], "done_at": r[6],
-                 "note": r[7] or ""}
+                 "priority": r[4], "effective_priority": r[5], "created_at": r[6],
+                 "done_at": r[7], "note": r[8] or ""}
                 for r in cursor.fetchall()]
         conn.close()
         return rows
+
+    def set_effective_priority(self, todo_id, new_priority):
+        """时间老化/梯队递补写 effective_priority（2026-10-07 四拍板）。
+
+        只增不回退：新档 P 编号必须**严格小于**现生效档（effective 优先，
+        无则取原 priority），同档/降档一律 False——封顶 P0 由"严格小于"
+        天然保证；原 priority 列永不改动。仅 pending 行可写。
+        """
+        new_priority = str(new_priority or "").strip().upper()
+        if new_priority not in ("P0", "P1", "P2", "P3", "P4", "P5"):
+            return False
+        conn = sqlite3.connect(self.todos_db)
+        try:
+            row = conn.execute(
+                "SELECT priority, effective_priority, status FROM todos "
+                "WHERE id = ?", (int(todo_id),)).fetchone()
+            if not row or row[2] != "pending":
+                return False
+            cur_eff = row[1] or row[0]
+            if int(new_priority[1]) >= int(str(cur_eff)[1]):
+                return False   # 只升不降；同档重复写无效（幂等友好）
+            conn.execute("UPDATE todos SET effective_priority = ? WHERE id = ?",
+                         (new_priority, int(todo_id)))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def clear_effective_priority(self, todo_id):
+        """清除老化痕迹（effective 回 NULL，显示回归原档）——手动改档时
+        调用（拍板④：手动覆盖自动），api_todo_priority 同步触发。"""
+        conn = sqlite3.connect(self.todos_db)
+        try:
+            conn.execute("UPDATE todos SET effective_priority = NULL "
+                         "WHERE id = ?", (int(todo_id),))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_meta(self, key):
+        """todos_meta 键值读（老化 last_date 等调度状态；无行返回 None）。
+        表在分离库初始化即建；本地库路径按需自建（防御 no such table）。"""
+        conn = sqlite3.connect(self.todos_db)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS todos_meta "
+                         "(key TEXT PRIMARY KEY, value TEXT)")
+            row = conn.execute("SELECT value FROM todos_meta WHERE key = ?",
+                               (key,)).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def set_meta(self, key, value):
+        """todos_meta 键值写（upsert）。"""
+        conn = sqlite3.connect(self.todos_db)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS todos_meta "
+                         "(key TEXT PRIMARY KEY, value TEXT)")
+            conn.execute("INSERT INTO todos_meta (key, value) VALUES (?, ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                         (key, str(value)))
+            conn.commit()
+        finally:
+            conn.close()
 
     def set_todo_priority(self, todo_id, priority):
         """设置待办优先级（尾巴 C：前端 P0/P1/P2 pill）。

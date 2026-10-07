@@ -2511,7 +2511,11 @@ class TodosFrontendAnchorTests(unittest.TestCase):
         self.assertIn("todo-group-title", js)
         self.assertIn("── ${pr} ──", js)
         self.assertIn("if (!group.length) continue;", js)   # 空分区不显示
-        self.assertIn("byPriority[t.priority || 'P1']", js)
+        # 时间老化（2026-10-07）：分组键=生效档 effective_priority（COALESCE，
+        # 未老化=原档）+ "↑已升"标记（生效档≠原档渲染）
+        self.assertIn("const eff = t.effective_priority || t.priority || 'P1';", js)
+        self.assertIn("(byPriority[eff] || byPriority.P1).push(t);", js)
+        self.assertIn('class="todo-aged"', js)
         self.assertIn("['P0', 'P1', 'P2', 'P3', 'P4', 'P5']", js)   # 六档
         # 回归锚（v11 齿轮失效根因）：分组字典必须六键齐全 + 循环防御兜底
         self.assertIn(

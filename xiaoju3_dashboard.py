@@ -627,6 +627,9 @@ def api_todo_priority(todo_id):
     todo = state_manager.set_todo_priority(todo_id, body.get("priority"))
     if not todo:
         return jsonify({"code": 404, "data": {"ok": False}}), 404
+    # 时间老化（2026-10-07 拍板④）：手动改档清 effective——手动意图覆盖
+    # 自动老化，显示立即回归新设档位
+    state_manager.clear_effective_priority(todo_id)
     return jsonify({"code": 200, "data": {"ok": True, "todo": todo}})
 
 

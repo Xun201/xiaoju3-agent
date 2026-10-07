@@ -435,10 +435,13 @@
             // 防再犯（2026-10-05）：priority 不在六档白名单时原逻辑静默回退
             // P1 组，脏数据伪装成正常条目（#242/#243 content↔priority 颠倒
             // 即此相——文字 P3/标签 P1）。缺省空值走 || 'P1' 不算非法，不警告
-            if (t.priority && !byPriority[t.priority]) {
-                console.warn(`[todos] 非法 priority: "${t.priority}"（id=${t.id}），已回退至 P1 组`);
+            // 时间老化（2026-10-07）：分组键用生效档 effective_priority
+            // （服务端 COALESCE，未老化=原档）；"↑已升"标记在条目行渲染
+            const eff = t.effective_priority || t.priority || 'P1';
+            if (t.priority && !byPriority[eff]) {
+                console.warn(`[todos] 非法 priority: "${eff}"（id=${t.id}），已回退至 P1 组`);
             }
-            (byPriority[t.priority || 'P1'] || byPriority.P1).push(t);
+            (byPriority[eff] || byPriority.P1).push(t);
         });
         let html = '';
         for (const pr of ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']) {
@@ -485,9 +488,14 @@
                         `</div>`;
                 }
             }
+            // 时间老化（2026-10-07 拍板②）："↑已升"轻量标记——生效档≠原档
+            // 时渲染，悬浮 title 显示 原档 → 现档
+            const agedBadge = (t.effective_priority && t.effective_priority !== t.priority)
+                ? `<span class="todo-aged" title="时间老化：${t.priority} → ${t.effective_priority}">↑已升</span> `
+                : '';
             return `<li class="todo-item${doneCls}" data-id="${t.id}">` +
                     `<input type="checkbox" class="todo-check"${checked} title="勾选=完成，取消=恢复">` +
-                    `<span class="todo-text">${escapeHtml(t.content)}</span>` +
+                    `${agedBadge}<span class="todo-text">${escapeHtml(t.content)}</span>` +
                     `${prControl}${delBtn}</li>` + noteHtml;
             }).join('');
         }
