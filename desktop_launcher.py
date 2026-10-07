@@ -169,6 +169,14 @@ def _is_main_running(port=DASHBOARD_APP_PORT, timeout=1.0):
     return _is_port_listening(port, timeout=timeout)
 
 
+def _another_instance_serving(port=DASHBOARD_APP_PORT):
+    """跨版本双开探测（#263 L1，2026-10-07）：5003 已被监听 = 已有实例在
+    跑——**不分正式/测试通道**（真机双开实锤：桌面快捷方式历史上指向测试
+    版旧车，旧车无互斥体代码，同版本互斥体门对其失明）。端口探测是跨版本
+    通吃的兜底。测试经 mock 关闭。"""
+    return _is_port_listening(port, timeout=timeout)
+
+
 def wait_for_dashboard_ready(timeout_s=15.0, interval_s=0.5,
                              check_fn=None, sleep_fn=None):
     """轮询等待 :5003 就绪（端口修复设计 docs/DESKTOP_PORT_FIX.md §1，P1）。
@@ -557,6 +565,17 @@ def main(argv=None):
         _print(MISSING_WEBVIEW_HINT, err=True)
         return 1
 
+    # ⓪ 单实例门（#263 L1）：①互斥体（同版本，模块导入期已持锁——见
+    #   模块顶部）②5003 端口（跨版本：桌面快捷方式历史指向测试版旧车，
+    #   旧车无互斥体代码，同版本门对其失明——2026-10-07 双版本双开实锤）。
+    #   任一命中 = 已有实例在跑 → 唤起已有窗口（标题同款跨版本可达）+
+    #   return 0（先于 ensure：退出路径不重复拉后端）。测试经 mock 关闭。
+    if _SI_ALREADY or _another_instance_serving():
+        activated = _activate_existing_window()
+        _print("ℹ️ 小橘3号已在运行"
+               + ("，已唤起已有窗口" if activated else "，窗口启动中"))
+        return 0
+
     # ① 后台服务：:5003 已监听则复用现有进程，否则后台拉起统一启动器
     launcher_proc = ensure_backend_services()
     # 🔁 监督线程（2026-10-02）：窗口存活期间后台服务意外退出自动重启
@@ -577,17 +596,6 @@ def main(argv=None):
     need_wait = (launcher_proc is not None) or main_ok
     if main_hint:
         _print(MAIN_NOT_RUNNING_HINT)
-
-    # ⓪ 单实例门（#263）：互斥体已在**模块导入期**创建（见模块顶部）——
-    #   _SI_ALREADY=True = 已有实例在跑 → 唤起其窗口后本进程退出（不开第二
-    #   窗、不重复拉起后端——5003 已被 ensure_backend_services 复用）。
-    #   找不到窗=已有实例仍在启动期，其窗口稍后自现——静默退出即 #263
-    #   期望的"跳过"语义。
-    if _SI_ALREADY:
-        activated = _activate_existing_window()
-        _print("ℹ️ 小橘3号已在运行"
-               + ("，已唤起已有窗口" if activated else "，窗口启动中"))
-        return 0
 
     # ③ 占位窗先行（先出窗后导航，端口修复 P2）：create_window 先显示
     #   "正在启动主程序…"，GUI 就绪后由 webview.start 回调在后台线程
