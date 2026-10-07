@@ -11,6 +11,7 @@
 - 先侦察、先设计稿、后动代码
 - 不留尾巴，要修就一次性修完
 - 每步跑全仓测试，只增不减
+- 动态引用插件必须同步补 spec hiddenimports：字符串动态引用的模块（如 intent_router 的 "plugins.xxx:handler"）对 PyInstaller 静态分析不可见——本地跑正常、冻结包才暴露，且 ModuleNotFoundError 被上层静默吞掉落回 brain；每加一个动态引用插件，必须同步补 xiaoju3.spec 的 hiddenimports（先例：plugins.accounting / plugins.ebook_export / plugins.todo_text）
 ## 缺陷纪律（看到 bug 就修）
 - 发现 bug 立即修，不留着
 - 算 bug：功能不符预期 / 数据错 / 崩溃 / 静默失败 / 文案数字对不上
