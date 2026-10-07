@@ -108,16 +108,14 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,                  # onedir：二进制/数据由 COLLECT 落盘
     name='xiaoju3',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
     upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,                          # -w 无控制台（桌面窗口即主入口）
     version='version_info.txt',             # 步 B1：bat 预生成（版本抓自 xiaoju3.py）
     disable_windowed_traceback=False,
@@ -126,4 +124,18 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='assets/xiaoju3.ico',              # 步 B1：make_build_assets.py 生成（源 pet/normal_half.png）
+)
+
+# onedir 收集（2026-10-07 冷启动根治拍板）：产物 dist\xiaoju3\（exe + _internal\），
+# 三进程共享同一份磁盘文件、零解压——替代 onefile 的每次启动三进程×186MB 解压
+# （_MEI 临时目录实测残留 46 个/8.3GB，且冷启动 83s 大头）。回滚：revert 本段
+# 恢复 onefile 形态（paths.py 双根对两种形态均兼容，PyInstaller 6 onedir 亦设 _MEIPASS）。
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='xiaoju3',
 )

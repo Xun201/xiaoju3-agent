@@ -27,16 +27,21 @@ if errorlevel 1 (
     echo [WARN] driver 补丁失败——继续构建（可能表现为抓取时闪黑框）。
 )
 
-echo [3/5] PyInstaller 构建 exe（onefile，无控制台，含版本资源与图标）...
+echo [3/5] PyInstaller 构建 onedir 目录（无控制台，含版本资源与图标）...
 python -m PyInstaller xiaoju3.spec --noconfirm
 if errorlevel 1 (
     echo [FAIL] exe 构建失败，请检查上方日志。
     endlocal
     exit /b 1
 )
+if not exist dist\xiaoju3\xiaoju3.exe (
+    echo [FAIL] onedir 产物缺失（dist\xiaoju3\xiaoju3.exe），请检查上方日志。
+    endlocal
+    exit /b 1
+)
 
 echo [4/5] exe 产物报告...
-for %%I in (dist\xiaoju3.exe) do (
+for %%I in (dist\xiaoju3\xiaoju3.exe) do (
     echo 产物路径: %%~fI
     echo 产物大小: %%~zI 字节
 )

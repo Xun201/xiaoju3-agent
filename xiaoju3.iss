@@ -28,7 +28,7 @@ DisableProgramGroupPage=yes
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [Files]
-Source: "dist\xiaoju3.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\xiaoju3\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: ".env.example"; DestDir: "{app}"; Flags: ignoreversion
 Source: "QUICKSTART.md"; DestDir: "{app}"; Flags: ignoreversion
 
