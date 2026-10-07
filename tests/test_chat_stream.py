@@ -137,6 +137,103 @@ class ChatStreamSseTests(unittest.TestCase):
         self.assertIn("双因子授权", frames[-1][1]["reply"])
         ms.assert_not_called()
 
+    def test_intercept_on_stream_location_command(self):
+        """A' 修复锚（2026-10-07）：stream 发 /set_location（无参=用法
+        回显，零副作用）→ 命中位置拦截，done 单帧 ⚙️ 系统，不进模型——
+        修前该消息落大脑。"""
+        with mock.patch.object(
+                dashboard.brain, "smart_ask_stream",
+                side_effect=self._mock_stream(reply="LLM 回复")) as ms, \
+             _quiet():
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "/set_location"})
+        frames = _parse_sse(resp.get_data(as_text=True))
+        self.assertEqual([e for e, _ in frames], ["done"])
+        done = frames[-1][1]
+        self.assertIn("用法", done["reply"])
+        self.assertEqual(done["source"], "⚙️ 系统")
+        ms.assert_not_called()
+
+    def test_intercept_on_stream_child_lock_command(self):
+        """A' 修复锚：stream 发 /deny（无待裁决请求=ℹ️ 回显）→ 命中
+        儿童锁拦截（is_console=True 成人设备口径与 api_chat 同款），
+        done 单帧，不进模型。"""
+        with mock.patch.object(
+                dashboard.brain, "smart_ask_stream",
+                side_effect=self._mock_stream(reply="LLM 回复")) as ms, \
+             _quiet():
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "/deny"})
+        frames = _parse_sse(resp.get_data(as_text=True))
+        self.assertEqual([e for e, _ in frames], ["done"])
+        done = frames[-1][1]
+        self.assertIn("儿童操作请求", done["reply"])
+        self.assertEqual(done["source"], "⚙️ 系统")
+        ms.assert_not_called()
+
+    def test_intercept_on_stream_creator_command(self):
+        """A' 修复锚：stream 发 /creator → 命中署名拦截，done 单帧，
+        不进模型（修前落大脑）。"""
+        with mock.patch.object(
+                dashboard.brain, "smart_ask_stream",
+                side_effect=self._mock_stream(reply="LLM 回复")) as ms, \
+             _quiet():
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "/creator"})
+        frames = _parse_sse(resp.get_data(as_text=True))
+        self.assertEqual([e for e, _ in frames], ["done"])
+        done = frames[-1][1]
+        self.assertIn("小橘3号", done["reply"])
+        self.assertEqual(done["source"], "⚙️ 系统")
+        ms.assert_not_called()
+
+    def test_intercept_on_stream_todo_command(self):
+        """A' 修复锚（本次 bug 主案）：stream 发 /todos → 待办族拦截
+        （api_chat 806 同款），done 单帧 ⚙️ 指令 + <think> 指令处理卡，
+        不进模型——修前此消息落大脑，本地模型幻觉无参 extract_todos
+        （用户实收"❌ 缺少参数：需要提供 url"）。"""
+        import shutil
+        import tempfile
+        from agent_state.state_manager import StateManager
+        from permission import PermissionManager
+        tmp = tempfile.mkdtemp(prefix="xj3_stream_todo_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        sm = StateManager(base_dir=tmp)
+        sm.save_todos(["锚点测试待办"], source_url="u1")
+        pm = PermissionManager()
+        pm.current_level = "Lv.2"
+        with mock.patch.object(
+                dashboard.brain, "smart_ask_stream",
+                side_effect=self._mock_stream(reply="LLM 回复")) as ms, \
+                mock.patch.object(dashboard.main, "state_manager", sm), \
+                mock.patch.object(dashboard, "state_manager", sm), \
+                mock.patch.object(dashboard.main, "permission_manager", pm), \
+                _quiet():
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "/todos"})
+        frames = _parse_sse(resp.get_data(as_text=True))
+        self.assertEqual([e for e, _ in frames], ["done"])
+        done = frames[-1][1]
+        self.assertIn("<think>[指令处理]", done["reply"])   # 尾巴 3 指令卡
+        self.assertIn("锚点测试待办", done["reply"])        # 清单来自注入的库
+        self.assertEqual(done["source"], "⚙️ 指令")
+        ms.assert_not_called()
+
+    def test_stream_todo_link_still_reaches_brain(self):
+        """A' 回归锚：DeepSeek 分享链接消息仍进 brain（todo_link_mode
+        强制云端链路不受新增前置拦截影响）。"""
+        with mock.patch.object(
+                dashboard.brain, "smart_ask_stream",
+                side_effect=self._mock_stream()) as ms, _quiet():
+            resp = self.client.post(
+                "/api/chat/stream",
+                json={"message":
+                      "https://chat.deepseek.com/share/reg_anchor"})
+        frames = _parse_sse(resp.get_data(as_text=True))
+        self.assertIn("think", [e for e, _ in frames])   # 走流式管线
+        self.assertEqual([e for e, _ in frames].count("done"), 1)
+        ms.assert_called_once()
+
     def test_stream_normal_message_still_streams(self):
         """回归锚：普通消息仍逐块流式（think/answer 帧在位），拦截
         不误吞正常对话。"""
