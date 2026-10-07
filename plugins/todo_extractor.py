@@ -29,6 +29,7 @@ from xiaoju3 import CLOUD_KEY, CLOUD_URL
 CHUNK_SIZE = 4000           # 分片口径与 batch_logger.summarize_long_text 一致
 MAX_TODOS_PER_RUN = 30      # 单次提炼上限（防失控）
 CONTENT_MAX_CHARS = 200     # 单条待办截断（防异常超长）
+EMPTY_PAGE_MIN_CHARS = 50   # #262：低于此长度视为失效/空内容页（跳提炼零 token）
 RECENT_WINDOW_SECONDS = 24 * 3600
 
 # 24h 内已提取 URL（内存表；重启丢失 = 窗口重置，可接受）
@@ -180,29 +181,40 @@ async def extract_todos_from_url(url, api_key=None, cloud_url=None, notify=None)
         if not raw_text or not raw_text.strip():
             raise LinkFetchError("抓取到的文本为空，请检查链接是否正确。")
 
-        chunks = [raw_text[i:i + CHUNK_SIZE]
-                  for i in range(0, len(raw_text), CHUNK_SIZE)]
-        items, seen = [], set()
-        for i, chunk in enumerate(chunks):
-            print(f"🧠 待办提炼分片 {i + 1}/{len(chunks)}...")
-            reply = ask_cloud(build_extraction_prompt(chunk), api_key, cloud_url)
-            if not reply:
-                print(f"⚠️ 第 {i + 1}/{len(chunks)} 片提炼失败，跳过。")
-                continue
-            for entry in parse_todo_json(reply):
-                key = "".join(entry["content"].split())
-                if key in seen:
+        if len(raw_text.strip()) < EMPTY_PAGE_MIN_CHARS:
+            # #262（2026-10-07）：失效链接提示页仍带几十字 corpse 文本，零长度
+            # 守卫接不住——疑似失效/空内容页直接落 empty_page 态：跳过云端
+            # 提炼（零 token、防 corpse 幻觉条目），ok=True + 标记，通知层
+            # （main._notify_todo_done）据此换文案，不再静默"0 条完成"。
+            result["empty_page"] = True
+            result["ok"] = True
+            _set_job(state="done",
+                     finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                     inserted=0, skipped=0, empty_page=True)
+        else:
+            chunks = [raw_text[i:i + CHUNK_SIZE]
+                      for i in range(0, len(raw_text), CHUNK_SIZE)]
+            items, seen = [], set()
+            for i, chunk in enumerate(chunks):
+                print(f"🧠 待办提炼分片 {i + 1}/{len(chunks)}...")
+                reply = ask_cloud(build_extraction_prompt(chunk), api_key, cloud_url)
+                if not reply:
+                    print(f"⚠️ 第 {i + 1}/{len(chunks)} 片提炼失败，跳过。")
                     continue
-                seen.add(key)
-                items.append(entry)
-        items = items[:MAX_TODOS_PER_RUN]
-        result["items"] = items
+                for entry in parse_todo_json(reply):
+                    key = "".join(entry["content"].split())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(entry)
+            items = items[:MAX_TODOS_PER_RUN]
+            result["items"] = items
 
-        inserted, skipped = state_manager.save_todos(items, source_url=url)
-        result.update(ok=True, inserted=inserted, skipped=skipped)
-        _set_job(state="done",
-                 finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
-                 inserted=inserted, skipped=skipped)
+            inserted, skipped = state_manager.save_todos(items, source_url=url)
+            result.update(ok=True, inserted=inserted, skipped=skipped)
+            _set_job(state="done",
+                     finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                     inserted=inserted, skipped=skipped)
     except Exception as e:  # noqa: BLE001 —— 统一落 failed 态，通知器如实转告
         result["error"] = str(e)
         unmark_url(url)
