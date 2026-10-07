@@ -61,8 +61,3 @@ _dev/ENVIRONMENT.md
 build/
 dist/
 version_info.txt
-# AIC2026 佐证材料（2026-10-07 拍板：仅本地留档，不进公开仓；精确路径不误伤其他 docs 材料）
-docs/AIC2026_佐证材料.md
-docs/AIC2026_截图采集清单.md
-# 佐证截图七张（#Z1-Z7，2026-10-07：随佐证材料本地化，不进公开仓）
-docs/img/z*.png
