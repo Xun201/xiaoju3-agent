@@ -4333,8 +4333,69 @@ class HomeContextInjectionTests(unittest.TestCase):
         with open(src_path, encoding="utf-8") as f:
             src = f.read()
         self.assertIn("elif home_cloud:", src)
-        self.assertIn('if todo_link_mode or home_cloud or tier == "low":', src)
+        # 条件行随 #278 扩展：home_cloud 与 danger_cloud 并列在 stream 条件行
+        self.assertIn('if todo_link_mode or home_cloud or danger_cloud or tier == "low":', src)
         self.assertEqual(src.count("home_cloud = any("), 2)
+
+
+class DangerCloudForceCloudTests(unittest.TestCase):
+    """危险操作强制云端（#278，2026-10-08）：本地小模型对删除/系统级破坏
+    场景会零工具调用编造"操作已完成"（真机实锤），命中 _DANGER_CLOUD_KEYWORDS
+    即踢云端——与方向③家电词强制云端同构。"""
+
+    def _smart_ask_mocks(self, local_reply="好的。"):
+        return (
+            mock.patch.object(brain, "probe_local", return_value=True),
+            mock.patch.object(brain, "ask_local", return_value=local_reply),
+            mock.patch.object(brain, "ask_cloud",
+                              return_value="这个操作我无法执行。"),
+            mock.patch.object(brain, "save_memory"),
+            mock.patch.object(brain, "_remember_user_facts"),
+            mock.patch.object(brain, "_extract_location_from_user_message"),
+        )
+
+    def test_danger_keywords_table(self):
+        # 词表锚：代表词在列 + "重启"拍板不收（常用合法语义）+ 裸单字不收
+        for k in ("删除", "格式化", "系统文件", "注册表", "C盘"):
+            self.assertIn(k, brain._DANGER_CLOUD_KEYWORDS)
+        self.assertNotIn("重启", brain._DANGER_CLOUD_KEYWORDS)
+        self.assertNotIn("删", brain._DANGER_CLOUD_KEYWORDS)
+
+    def test_danger_message_forces_cloud(self):
+        # 行为锚（真机实锤场景复刻）："帮我删除系统文件"→ 本地绝不接手
+        p, ml, mc, sm, rf, el = self._smart_ask_mocks()
+        with p, ml as m_local, mc as m_cloud, sm, rf, el:
+            reply, source = brain.smart_ask("帮我删除系统文件", [])
+        m_local.assert_not_called()
+        m_cloud.assert_called_once()
+        self.assertIn("☁️", source)
+
+    def test_restart_word_not_forced(self):
+        # 行为锚："重启"拍板不收——普通重启语义本地照走（防误伤）
+        p, ml, mc, sm, rf, el = self._smart_ask_mocks("好的，路由器重启中。")
+        with p, ml as m_local, mc as m_cloud, sm, rf, el:
+            brain.smart_ask("帮我重启一下路由器", [])
+        m_local.assert_called_once()
+        m_cloud.assert_not_called()
+
+    def test_normal_message_stays_local(self):
+        # 不误伤回归：无危险词普通创作请求本地照走
+        p, ml, mc, sm, rf, el = self._smart_ask_mocks("好的，秋天来了~")
+        with p, ml as m_local, mc as m_cloud, sm, rf, el:
+            brain.smart_ask("帮我写一首关于秋天的诗", [])
+        m_local.assert_called_once()
+        m_cloud.assert_not_called()
+
+    def test_danger_cloud_mode_wired_both_chains(self):
+        # 静态锚：smart_ask elif 分支 + stream 条件行都挂 danger_cloud
+        # （防单侧漏接导致流式/同步行为分叉，同 home_cloud 锚口径）
+        src_path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "brain.py")
+        with open(src_path, encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn("elif danger_cloud:", src)
+        self.assertIn('if todo_link_mode or home_cloud or danger_cloud or tier == "low":', src)
+        self.assertEqual(src.count("danger_cloud = any("), 2)
 
 
 if __name__ == "__main__":

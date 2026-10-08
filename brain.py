@@ -890,6 +890,14 @@ def _inject_location(query):
 # 家电上下文注入触发词（#249 B 案；与 prompts【家电控制铁律】同清单口径）
 _HOME_CONTEXT_KEYWORDS = ("灯", "开关", "空调", "插座", "窗帘", "传感器",
                           "加湿器", "家电")
+# 危险操作强制云端触发词（#278，2026-10-08）：本地小模型对敏感场景会零工具
+# 调用编造"操作已完成"（真机实锤），命中即踢云端（云端有完整工具循环+权限
+# 门禁+【不伪造成功】铁律）——与家电词强制云端（方向③）同构。
+# 口径：双字起步裸单字不收防误伤；"重启"拍板不收（常用合法语义，如重启路由器）。
+_DANGER_CLOUD_KEYWORDS = ("删除", "删掉", "删了", "清空", "清掉", "格式化",
+                          "卸载", "抹掉", "关机", "注销", "杀进程", "终止进程",
+                          "系统文件", "注册表", "驱动", "硬盘", "磁盘", "C盘",
+                          "分区")
 # 【当前设备列表】system 条目截断上限（防超大家庭列表撑爆上下文）
 _HOME_CONTEXT_MAX_CHARS = 1500
 
@@ -1761,6 +1769,8 @@ def smart_ask(message, history=None, session_key="default"):
     # 🏠 家电强制云端判定（方向③，2026-10-05）：触发词与【家电控制铁律】
     # 同清单，与待办链接强制云端同构
     home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
+    # ⚠️ 危险操作强制云端判定（#278，2026-10-08）：与方向③同构
+    danger_cloud = any(k in (message or "") for k in _DANGER_CLOUD_KEYWORDS)
     messages = _build_messages(message, history)
     # 🗜️ 前情提要压缩接线（§10 #2）：历史 >20 条 → 旧消息浓缩为约 50 字
     # 前情提要 + 最近 10 条明细（结果持久化缓存；失败回退既有硬截断口径）
@@ -1807,6 +1817,12 @@ def smart_ask(message, history=None, session_key="default"):
         # 云端全场景正确——与待办链接强制云端同构
         local_online = False
         print("🏠 家电控制模式：强制云端大脑（本地小模型工具遵循不可靠）。")
+    elif danger_cloud:
+        # ⚠️ 危险操作强制云端（#278，2026-10-08）：本地小模型对删除/系统级
+        # 破坏场景会零工具调用编造"操作已完成"（真机实锤），云端才有权限
+        # 门禁+【不伪造成功】铁律——与方向③同构
+        local_online = False
+        print("⚠️ 危险操作模式：强制云端大脑（本地小模型编造结果防御）。")
     elif tier == "low":
         # low：跳过本地探测（省 1 秒等待），直接依赖云端
         local_online = False
@@ -2101,6 +2117,8 @@ def smart_ask_stream(message, history=None, session_key="default",
                               "https://chat.deepseek.com/share/"))
     # 🏠 家电强制云端判定（方向③）：与 smart_ask 同款
     home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
+    # ⚠️ 危险操作强制云端判定（#278）：与 smart_ask 同款
+    danger_cloud = any(k in (message or "") for k in _DANGER_CLOUD_KEYWORDS)
     messages = _build_messages(message, history)
     messages = _compress_history(messages, session_key)
     messages = _inject_memory_context(messages)
@@ -2129,7 +2147,7 @@ def smart_ask_stream(message, history=None, session_key="default",
         messages.append({"role": "system", "content": TOOL_FUSE_SYSTEM_NOTE})
 
     tier = _resolve_tier()
-    if todo_link_mode or home_cloud or tier == "low":
+    if todo_link_mode or home_cloud or danger_cloud or tier == "low":
         local_online = False
     else:
         local_online = probe_local()
