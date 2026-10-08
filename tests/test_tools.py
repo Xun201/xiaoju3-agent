@@ -245,6 +245,31 @@ class UserMandatedGateTests(ToolsTestBase):
         with open(os.path.join(self.ws, "a.txt"), "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), "数据")
 
+    def test_write_file_overwrite_creates_timestamped_bak(self):
+        # R2 覆盖保护（2026-10-08 挂机批，安全侦察报告项 2）：覆盖已有文件
+        # 前自动落 .bak-时间戳副本，原内容可恢复；返回消息不变（静默备份）。
+        pm = self._pm("Lv.3")
+        p = os.path.join(self.ws, "a.txt")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("old-content")
+        r = tools.execute_tool(
+            "write_file", {"filename": "a.txt", "content": "new"}, pm)
+        self.assertTrue(r.startswith("✅"), r)
+        baks = [n for n in os.listdir(self.ws) if n.startswith("a.txt.bak-")]
+        self.assertEqual(len(baks), 1, baks)
+        with open(os.path.join(self.ws, baks[0]), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "old-content")
+        with open(p, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "new")
+
+    def test_write_file_first_write_no_bak(self):
+        # R2 对照：首写（文件不存在）不产生 .bak（备份仅覆盖场景触发）。
+        pm = self._pm("Lv.3")
+        tools.execute_tool(
+            "write_file", {"filename": "fresh.txt", "content": "x"}, pm)
+        self.assertEqual(
+            [n for n in os.listdir(self.ws) if ".bak-" in n], [])
+
     def test_case2_lv3_write_within_open_window_still_succeeds(self):
         # ② 兼容路径（原"/sudo 窗口通道"用例）：窗口 API 保留，用户仍可
         #    主动 /sudo 开窗，窗口内写入照常成功；窗口不再是被强制的门禁，
@@ -682,6 +707,37 @@ class SystemManageTests(ToolsTestBase):
             {"totp": "000000"})
         self.assertEqual(r, "✅ 组件 flask 安装完成！")
 
+    def test_install_whitelist_gate(self):
+        # R3 安装白名单（2026-10-08 挂机批，安全侦察报告项 3）：白名单内
+        # 放行；白名单外拒绝+引导手动安装；extras/版本形态走防注入校验
+        # （先于白名单）；uninstall 不受白名单限制（注入面由
+        # _is_valid_component 拦）。
+        pm = self._pm("Lv.4")
+        with mock.patch.object(tools, "subprocess") as msub:
+            msub.run.return_value = mock.MagicMock(
+                returncode=0, stdout="", stderr="")
+            r = tools.execute_tool(
+                "system_manage",
+                {"action": "install", "component": "requests"}, pm)
+            self.assertTrue(r.startswith("✅"), r)
+            r = tools.execute_tool(
+                "system_manage",
+                {"action": "install", "component": "requests==2.31.0"}, pm)
+            self.assertTrue(r.startswith("❌ 安全拒绝"), r)
+            self.assertIn("非法", r)   # extras/版本形态：防注入校验先行
+            r = tools.execute_tool(
+                "system_manage",
+                {"action": "install", "component": "totally-evil-pkg"}, pm)
+            self.assertTrue(r.startswith("❌ 安全拒绝"), r)
+            self.assertIn("白名单", r)
+            self.assertIn("手动 pip install", r)
+            self.assertEqual(msub.run.call_count, 1)   # 仅白名单内一次真调
+            r = tools.execute_tool(
+                "system_manage",
+                {"action": "uninstall", "component": "whatever-pkg"}, pm)
+            self.assertNotIn("白名单", r)   # uninstall 不受白名单限制
+            self.assertEqual(msub.run.call_count, 2)
+
     def test_lv4_unconfirmed_credentials_succeeds(self):
         # 回归锁：confirmed=False 也不再阻断（凭据不消费）
         pm = self._pm("Lv.4")
@@ -726,13 +782,15 @@ class SystemManageTests(ToolsTestBase):
                           "playwright"])
 
     def test_pip_failure_returns_chinese_error(self):
+        # pip 执行失败（如包不存在/网络异常）→ 中文错误透传 stderr 尾段。
+        # （R3 白名单后组件须用白名单内名字才能真正走到 pip 执行层）
         pm = self._pm4_with_bio(bio_ok=True)
         proc = mock.Mock(returncode=1, stderr="No matching distribution", stdout="")
         with mock.patch.dict(os.environ, TOTP_ENV), \
                 mock.patch.object(tools.subprocess, "run", return_value=proc):
             r = tools.execute_tool(
                 "system_manage",
-                {"action": "install", "component": "no-such-pkg"}, pm,
+                {"action": "install", "component": "flask"}, pm,
                 self._lv4_credentials())
         self.assertTrue(r.startswith("❌"), r)
         self.assertIn("No matching distribution", r)
