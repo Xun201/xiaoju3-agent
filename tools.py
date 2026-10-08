@@ -47,6 +47,7 @@ VISION_KEY 配置检查指引。
 import json
 import os
 import re
+import shutil
 import threading
 import sys
 import subprocess
@@ -264,6 +265,27 @@ def _is_valid_component(component):
     return bool(_COMPONENT_PATTERN.fullmatch(name))
 
 
+# R3 安装白名单（2026-10-08 挂机批，安全侦察报告项 3）：system_manage 的
+# pip install 面向模型暴露，任意包=安装钩子任意代码执行——收敛为常用库
+# 白名单；白名单外 install 拒绝并提示主人手动安装；uninstall 不受限
+# （卸载存量环境包属运维操作，注入面已被 _is_valid_component 拦截）。
+# 匹配按主名归一（剥 extras/版本比较符，大小写不敏感）。
+_SYSTEM_MANAGE_INSTALL_WHITELIST = frozenset((
+    "requests", "httpx", "aiohttp", "beautifulsoup4", "bs4", "lxml",
+    "openpyxl", "python-docx", "pypdf", "pypdf2", "pillow", "pandas",
+    "numpy", "matplotlib", "psutil", "pyyaml", "yaml", "qrcode",
+    "chardet", "python-dateutil", "jieba", "pypinyin", "flask",
+    "flask-cors", "websockets", "websocket-client", "cryptography",
+    "rich", "tqdm",
+))
+
+
+def _install_whitelisted(component):
+    """组件名查安装白名单（大小写不敏感）。extras/版本形态（[ ] = < > 等）
+    到不了这里——先被 _is_valid_component 防注入校验拒绝，故无需归一。"""
+    return str(component or "").strip().lower() in _SYSTEM_MANAGE_INSTALL_WHITELIST
+
+
 def _system_manage(action, component):
     """pip 装卸系统组件（subprocess 封装；测试经 mock 替换 subprocess.run）。
 
@@ -367,6 +389,13 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
             if not _is_in_workspace(filepath):
                 return _DENY_OUTSIDE
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            if os.path.exists(filepath):
+                # R2 覆盖保护（2026-10-08 挂机批，安全侦察报告项 2）：覆盖
+                # 已有文件前自动落带时间戳的 .bak 副本——模型一句话覆盖
+                # 用户工作文件的损失可恢复（无交互场景静默备份，不加确认门）
+                bak = filepath + ".bak-" + time.strftime("%Y%m%d-%H%M%S")
+                shutil.copy2(filepath, bak)
+                print(f"💾 [write_file] 已备份原文件: {bak}")
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(args["content"])
             return f"✅ 文件 {args['filename']} 写入成功！"
@@ -487,6 +516,12 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
             if not _is_valid_component(component):
                 return ("❌ 安全拒绝：组件名非法（仅允许字母、数字、点、下划线、"
                         "连字符，且不得以 - 开头），疑似注入已拦截！")
+            if action == "install" and not _install_whitelisted(component):
+                # R3 安装白名单（2026-10-08 挂机批）：任意 PyPI 包=安装钩子
+                # 任意代码执行，白名单外拒绝并引导主人手动安装
+                return (f"❌ 安全拒绝：组件 {component} 不在安装白名单"
+                        "（防任意包安装执行代码）。请主人手动 pip install，"
+                        "或确认常用后再申请扩容白名单。")
             if not permission_manager.has_permission("system_manage"):
                 return _DENY_LV4_SYSTEM
             return _system_manage(action, component)
