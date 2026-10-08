@@ -299,12 +299,16 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
         if tool_name in _LV2_TOOLS and \
                 not _level_at_least(permission_manager, 2, "read_file"):
             return _DENY_LV2
-        # ---- Lv.3 门槛：write_file / adb_tap / adb_swipe / ui_tap_element ----
+        # ---- Lv.3 门槛：write_file（唯一 Lv.3 工具）----
         # 免逐次动态密码（用户指令 2026-09-30）：等级数值 >= 3 即直接放行，
         # 无任何动态密码校验，不调用 lv3_operation_ok（/sudo 窗口与 totp
         # 凭据 API 保留，用户仍可主动开窗，但工具门禁不再依赖它）。
         # 采用等级数值判定同时免疫旧病灶：权限表缺键时 has_permission
         # fail-closed 会把 Lv.3/Lv.4 一并拦下（见 _level_at_least docstring）。
+        # 【2026-10-08 修注释】本段旧注释曾误列 adb_tap/adb_swipe/
+        # ui_tap_element 为 Lv.3——三者已于 2026-10-02 升 Lv.4（走下方
+        # _LV4_TOOLS 门禁，回归锁 test_lv3_adb_and_ui_now_lv4_rejected），
+        # 误导性注释比无注释更危险，以 manifest 为唯一事实源。
         if tool_name in _LV3_TOOLS and \
                 not _level_at_least(permission_manager, 3, "write_file"):
             return _DENY_LV3
