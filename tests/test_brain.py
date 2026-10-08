@@ -4355,10 +4355,9 @@ class DangerCloudForceCloudTests(unittest.TestCase):
         )
 
     def test_danger_keywords_table(self):
-        # 词表锚：代表词在列 + "重启"拍板不收（常用合法语义）+ 裸单字不收
-        for k in ("删除", "格式化", "系统文件", "注册表", "C盘"):
+        # 词表锚：代表词在列（含 2026-10-08 收编的"重启"）+ 裸单字不收
+        for k in ("删除", "格式化", "系统文件", "注册表", "C盘", "重启"):
             self.assertIn(k, brain._DANGER_CLOUD_KEYWORDS)
-        self.assertNotIn("重启", brain._DANGER_CLOUD_KEYWORDS)
         self.assertNotIn("删", brain._DANGER_CLOUD_KEYWORDS)
 
     def test_danger_message_forces_cloud(self):
@@ -4370,13 +4369,14 @@ class DangerCloudForceCloudTests(unittest.TestCase):
         m_cloud.assert_called_once()
         self.assertIn("☁️", source)
 
-    def test_restart_word_not_forced(self):
-        # 行为锚："重启"拍板不收——普通重启语义本地照走（防误伤）
-        p, ml, mc, sm, rf, el = self._smart_ask_mocks("好的，路由器重启中。")
+    def test_restart_word_forces_cloud(self):
+        # 行为锚："重启"收编后触发强制云端（真机实锤本地对重启语义同样编造结果）
+        p, ml, mc, sm, rf, el = self._smart_ask_mocks()
         with p, ml as m_local, mc as m_cloud, sm, rf, el:
-            brain.smart_ask("帮我重启一下路由器", [])
-        m_local.assert_called_once()
-        m_cloud.assert_not_called()
+            reply, source = brain.smart_ask("帮我重启一下路由器", [])
+        m_local.assert_not_called()
+        m_cloud.assert_called_once()
+        self.assertIn("☁️", source)
 
     def test_normal_message_stays_local(self):
         # 不误伤回归：无危险词普通创作请求本地照走
