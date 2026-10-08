@@ -13,6 +13,9 @@
 - 每步跑全仓测试，只增不减
 - 解决 bug 与问题须在通用层面可行：方案要对所有用户/环境生效，禁止依赖本机特调（如手动加杀软白名单、改本机注册表绕过、特定目录名硬编码等）。本机特调只能作为临时缓解且须标注，正解必须产品级。先例 1：火绒白名单方案被否，改走 onedir 通用改造。先例 2：运维脚本（ps1/bat）一律纯 ASCII 或确保 UTF-8 带 BOM——Windows PowerShell 5.1 对无 BOM 文件按 ANSI/GBK 读，含中文注释即语法解析失败、变量赋值被吞（2026-10-07 autostart_watch.ps1 开机自启真机报错实锤）。
 - 动态引用插件必须同步补 spec hiddenimports：字符串动态引用的模块（如 intent_router 的 "plugins.xxx:handler"）对 PyInstaller 静态分析不可见——本地跑正常、冻结包才暴露，且 ModuleNotFoundError 被上层静默吞掉落回 brain；每加一个动态引用插件，必须同步补 xiaoju3.spec 的 hiddenimports（先例：plugins.accounting / plugins.ebook_export / plugins.todo_text）
+## 决策纪律（重大决策三步对抗论证）
+- 重大技术决策前先做三步对抗论证：①全力反驳（列遗漏信息/不可逆成本/最坏风险）②切换支持视角（列核心理由）③中立对比（哪边占优/最大未知/反转条件，拒绝五五开）。
+- 适用：方案选择、架构变更、引入新依赖、删改现有功能；不适用：日常 bug 修复、加测试、文档改动等轻量操作。
 ## 缺陷纪律（看到 bug 就修）
 - 发现 bug 立即修，不留着
 - 算 bug：功能不符预期 / 数据错 / 崩溃 / 静默失败 / 文案数字对不上
