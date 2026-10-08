@@ -90,7 +90,13 @@ os.environ.setdefault(
 _SI_MUTEX = "Local\\Xiaoju3_Desktop_SingleInstance"
 _SI_HANDLE = None
 _SI_ALREADY = False
-if os.name == "nt":
+if os.name == "nt" and not any(
+        a.startswith("--xj3-role=") for a in sys.argv[1:]):
+    # 方案 A 角色守卫（v23 冒烟实锤）：仅桌面角色建锁。exe 单一入口=
+    # 本模块，launcher/dashboard 角色启动同样加载它——此前无差别持锁
+    # 把后到的桌面窗 _SI_ALREADY 污染成 True → 登录链桌面窗被门误杀
+    # （"窗口启动中"+return 0 永无窗）；后端持锁还使门 or 短路，掩盖
+    # 5003 探测分支（连带 NameError 藏至 v21 车才炸）。
     import ctypes
     _SI_HANDLE = ctypes.windll.kernel32.CreateMutexW(None, False, _SI_MUTEX)
     _SI_ALREADY = bool(
