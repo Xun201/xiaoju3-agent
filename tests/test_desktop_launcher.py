@@ -871,6 +871,21 @@ class SingleInstanceGateTests(unittest.TestCase):
         activated.assert_called_once()
         fake_webview.create_window.assert_not_called()
 
+    def test_another_instance_serving_real_call_path(self):
+        """真跑锚（2026-10-08 v21 车启动 NameError 崩溃实锤后补）：不 mock
+        本函数——mock 底层 _is_port_listening 断言 (port, timeout) 透传。
+        回归背景：4cc77d5 签名漏 timeout=1.0 → 函数体 NameError——此前
+        全部测试 mock 本函数 + 真机门 or 短路只走互斥体分支，5003 探测
+        运行时路径零覆盖（双盲区），首跑即崩。"""
+        with mock.patch.object(launcher, "_is_port_listening",
+                               return_value=True) as mport:
+            self.assertTrue(launcher._another_instance_serving())
+            mport.assert_called_once_with(launcher.DASHBOARD_APP_PORT,
+                                          timeout=1.0)
+        with mock.patch.object(launcher, "_is_port_listening",
+                               return_value=False):
+            self.assertFalse(launcher._another_instance_serving())
+
 
 if __name__ == "__main__":
     unittest.main()
