@@ -4355,10 +4355,18 @@ class DangerCloudForceCloudTests(unittest.TestCase):
         )
 
     def test_danger_keywords_table(self):
-        # 词表锚：代表词在列（含 2026-10-08 收编的"重启"）+ 裸单字不收
-        for k in ("删除", "格式化", "系统文件", "注册表", "C盘", "重启"):
+        # 词表锚：代表词在列（含 2026-10-08 收编的"重启"+R4 扩容批：
+        # 中文同义 移除/清除/销毁/覆写 + 英文命令 cmd/rm -rf/delete 等）
+        for k in ("删除", "格式化", "系统文件", "注册表", "C盘", "重启",
+                  "移除", "清除", "销毁", "覆写",
+                  "cmd", "powershell", "bash", "rm -rf",
+                  "delete", "format", "uninstall"):
             self.assertIn(k, brain._DANGER_CLOUD_KEYWORDS)
-        self.assertNotIn("删", brain._DANGER_CLOUD_KEYWORDS)
+        self.assertNotIn("删", brain._DANGER_CLOUD_KEYWORDS)   # 裸单字不收
+        # R4 误伤评估不收的泛用词（"执行待办/运行环境/手机终端/写脚本"
+        # 皆核心场景词，踢云端徒增开销）——锁评估结论防顺手加回
+        for k in ("跑", "执行", "运行", "命令", "脚本", "替换", "终端"):
+            self.assertNotIn(k, brain._DANGER_CLOUD_KEYWORDS)
 
     def test_danger_message_forces_cloud(self):
         # 行为锚（真机实锤场景复刻）："帮我删除系统文件"→ 本地绝不接手
