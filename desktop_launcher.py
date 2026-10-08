@@ -169,7 +169,7 @@ def _is_main_running(port=DASHBOARD_APP_PORT, timeout=1.0):
     return _is_port_listening(port, timeout=timeout)
 
 
-def _another_instance_serving(port=DASHBOARD_APP_PORT):
+def _another_instance_serving(port=DASHBOARD_APP_PORT, timeout=1.0):
     """跨版本双开探测（#263 L1，2026-10-07）：5003 已被监听 = 已有实例在
     跑——**不分正式/测试通道**（真机双开实锤：桌面快捷方式历史上指向测试
     版旧车，旧车无互斥体代码，同版本互斥体门对其失明）。端口探测是跨版本
