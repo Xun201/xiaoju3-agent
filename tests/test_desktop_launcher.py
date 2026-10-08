@@ -113,13 +113,16 @@ class EnsureBackendServicesTests(unittest.TestCase):
         mp.assert_not_called()
         self.assertIn("复用现有进程", out.getvalue())
 
-    def test_ports_down_spawns_launcher_via_popen(self):
-        """端口未监听 → Popen 命令行含 xiaoju3_launcher.py，stdio 全 DEVNULL。"""
+    def test_ports_down_no_warming_spawns_launcher(self):
+        """fallback 锚（方案 A，2026-10-08）：端口未监听且探测不到后端在起
+        （真没人拉，双击兜底）→ Popen spawn-self，stdio 全 DEVNULL。"""
         fake_proc = mock.MagicMock()
         fake_proc.pid = 4321
         out = io.StringIO()
         with mock.patch.object(launcher, "_is_port_listening",
                                return_value=False), \
+                mock.patch.object(launcher, "_backend_warming_up",
+                                  return_value=False), \
                 self._patch_script_exists(True), \
                 mock.patch.object(launcher.subprocess, "Popen",
                                   return_value=fake_proc) as mp, \
@@ -139,6 +142,51 @@ class EnsureBackendServicesTests(unittest.TestCase):
             self.assertTrue(kwargs["start_new_session"])     # 独立进程组
         self.assertIn("xiaoju3_launcher.py", out.getvalue())
         self.assertIn("4321", out.getvalue())
+
+    def test_backend_warming_up_waits_no_spawn(self):
+        """等待复用锚（方案 A，2026-10-08）：端口未监听但探测到后端在起
+        （自启任务直启的 launcher 初始化中）→ 返回 None 等待、绝不 Popen
+        （开机链路零 spawn-self，火绒对 exe 自我复制敏感实锤）。"""
+        out = io.StringIO()
+        with mock.patch.object(launcher, "_is_port_listening",
+                               return_value=False), \
+                mock.patch.object(launcher, "_backend_warming_up",
+                                  return_value=True), \
+                mock.patch.object(launcher.subprocess, "Popen") as mp, \
+                contextlib.redirect_stdout(out):
+            proc = launcher.ensure_backend_services()
+        self.assertIsNone(proc)
+        mp.assert_not_called()
+        self.assertIn("等待复用", out.getvalue())
+
+    def test_backend_warming_up_detection(self):
+        """探测函数锚：5003 在线短路 True；无端口靠进程枚举（其他
+        xiaoju3.exe 在 → True，无 → False）；psutil 缺席 → False 兜底。"""
+        fake_psutil = types.ModuleType("psutil")
+
+        def _iter(rows):
+            fake_psutil.process_iter = mock.MagicMock(return_value=iter(
+                [types.SimpleNamespace(info=r) for r in rows]))
+            return mock.patch.dict(sys.modules, {"psutil": fake_psutil})
+
+        with mock.patch.object(launcher, "_is_port_listening",
+                               return_value=True):
+            self.assertTrue(launcher._backend_warming_up())   # 端口短路
+        me = os.getpid()
+        with mock.patch.object(launcher, "_is_port_listening",
+                               return_value=False), \
+                _iter([{"pid": me, "name": "xiaoju3.exe"},
+                       {"pid": me + 1, "name": "xiaoju3.exe"}]):
+            self.assertTrue(launcher._backend_warming_up())   # 他人进程在起
+        with mock.patch.object(launcher, "_is_port_listening",
+                               return_value=False), \
+                _iter([{"pid": me, "name": "xiaoju3.exe"},
+                       {"pid": me + 2, "name": "chrome.exe"}]):
+            self.assertFalse(launcher._backend_warming_up())  # 仅自己=没人拉
+        with mock.patch.object(launcher, "_is_port_listening",
+                               return_value=False), \
+                mock.patch.dict(sys.modules, {"psutil": None}):
+            self.assertFalse(launcher._backend_warming_up())  # psutil 缺席兜底
 
     def test_windowless_python_prefers_pythonw(self):
         """后台子树解释器（2026-10-02 用户口径：pythonw 无窗口形态）：
@@ -163,6 +211,8 @@ class EnsureBackendServicesTests(unittest.TestCase):
         out = io.StringIO()
         with mock.patch.object(launcher, "_is_port_listening",
                                return_value=False), \
+                mock.patch.object(launcher, "_backend_warming_up",
+                                  return_value=False), \
                 self._patch_script_exists(False), \
                 mock.patch.object(launcher.subprocess, "Popen") as mp, \
                 contextlib.redirect_stdout(out):
@@ -176,6 +226,8 @@ class EnsureBackendServicesTests(unittest.TestCase):
         err = io.StringIO()
         with mock.patch.object(launcher, "_is_port_listening",
                                return_value=False), \
+                mock.patch.object(launcher, "_backend_warming_up",
+                                  return_value=False), \
                 self._patch_script_exists(True), \
                 mock.patch.object(launcher.subprocess, "Popen",
                                   side_effect=OSError("boom")), \
@@ -303,6 +355,7 @@ class MainFlowTests(unittest.TestCase):
         out = io.StringIO()
         with _fake_webview(fake_webview),                 mock.patch.object(launcher, "_SI_ALREADY", False),                 mock.patch.object(launcher, "_SI_HANDLE", None),                 mock.patch.object(launcher, "_acquire_single_instance_lock",
                                   return_value=(None, False)),                 mock.patch.object(launcher, "_another_instance_serving",
+                                  return_value=False),                 mock.patch.object(launcher, "_backend_warming_up",
                                   return_value=False),                 mock.patch.object(launcher, "ensure_backend_services",
                                   return_value=spawn_proc) as mspawn,                 mock.patch.object(launcher, "_is_main_running",
                                   return_value=main_running) as mp,                 mock.patch.object(launcher, "wait_for_dashboard_ready",
