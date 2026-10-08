@@ -589,13 +589,17 @@ def main(argv=None):
     # ⓪ 单实例门（#263 L1）：①互斥体（同版本，模块导入期已持锁——见
     #   模块顶部）②5003 端口（跨版本：桌面快捷方式历史指向测试版旧车，
     #   旧车无互斥体代码，同版本门对其失明——2026-10-07 双版本双开实锤）。
-    #   任一命中 = 已有实例在跑 → 唤起已有窗口（标题同款跨版本可达）+
-    #   return 0（先于 ensure：退出路径不重复拉后端）。测试经 mock 关闭。
+    #   任一命中 → 唤起已有窗口 + return 0（先于 ensure：退出路径不重复拉
+    #   后端）。方案 A 精化（v22 冒烟实锤）：5003 被占但唤不到窗口 = 只有
+    #   后端角色在跑（Run 键/自启任务先直启 launcher 的登录链标准态）→
+    #   本进程是第一个桌面窗，正常出窗复用后端，不退出（否则登录后永无窗）。
     if _SI_ALREADY or _another_instance_serving():
         activated = _activate_existing_window()
-        _print("ℹ️ 小橘3号已在运行"
-               + ("，已唤起已有窗口" if activated else "，窗口启动中"))
-        return 0
+        if activated or _SI_ALREADY:
+            _print("ℹ️ 小橘3号已在运行"
+                   + ("，已唤起已有窗口" if activated else "，窗口启动中"))
+            return 0
+        _print("ℹ️ 后端已在运行，复用后端启动控制台窗口")
 
     # ① 后台服务：:5003 已监听则复用现有进程，否则后台拉起统一启动器
     launcher_proc = ensure_backend_services()
