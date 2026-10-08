@@ -886,6 +886,31 @@ class SingleInstanceGateTests(unittest.TestCase):
                                return_value=False):
             self.assertFalse(launcher._another_instance_serving())
 
+    def test_gate_backend_only_opens_window_reusing_backend(self):
+        """方案 A 精化锚（v22 冒烟实锤后补）：5003 被占（后端角色已在跑）
+        但唤不到已有窗口 = 登录链第一个桌面窗 → 正常出窗复用后端，绝不
+        退出（旧语义直接 return 0 会导致登录后永无窗）。互斥体旗标假。"""
+        fake_webview = mock.MagicMock()
+        out = io.StringIO()
+        with _fake_webview(fake_webview), \
+                mock.patch.object(launcher, "_SI_ALREADY", False), \
+                mock.patch.object(launcher, "_another_instance_serving",
+                                  return_value=True), \
+                mock.patch.object(launcher, "_activate_existing_window",
+                                  return_value=False), \
+                mock.patch.object(launcher, "ensure_backend_services",
+                                  return_value=None), \
+                mock.patch.object(launcher, "_is_main_running",
+                                  return_value=True), \
+                mock.patch.object(launcher, "wait_for_dashboard_ready",
+                                  return_value=True), \
+                mock.patch.object(launcher, "stop_backend_launcher"), \
+                contextlib.redirect_stdout(out):
+            rc = launcher.main([])
+        self.assertEqual(rc, 0)
+        self.assertIn("复用后端启动控制台窗口", out.getvalue())
+        fake_webview.create_window.assert_called_once()   # 出窗（未退出）
+
 
 if __name__ == "__main__":
     unittest.main()
