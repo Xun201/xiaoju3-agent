@@ -911,6 +911,19 @@ class SingleInstanceGateTests(unittest.TestCase):
         self.assertIn("复用后端启动控制台窗口", out.getvalue())
         fake_webview.create_window.assert_called_once()   # 出窗（未退出）
 
+    def test_mutex_guard_skips_backend_roles(self):
+        """互斥体角色守卫锚（v23 冒烟实锤后补）：导入期建锁仅限桌面角色
+        （argv 无 --xj3-role 旗标）——launcher/dashboard 角色加载同模块，
+        此前无差别持锁污染桌面窗 _SI_ALREADY → 登录链永无窗。静态锚锁
+        守卫存在于导入期段且先于 CreateMutexW。"""
+        src_path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "desktop_launcher.py")
+        with open(src_path, encoding="utf-8") as f:
+            src = f.read()
+        guard = 'a.startswith("--xj3-role=")'
+        self.assertIn(guard, src)
+        self.assertLess(src.index(guard), src.index("CreateMutexW"))
+
 
 if __name__ == "__main__":
     unittest.main()
