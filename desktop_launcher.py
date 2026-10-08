@@ -177,7 +177,7 @@ def _another_instance_serving(port=DASHBOARD_APP_PORT):
     return _is_port_listening(port, timeout=timeout)
 
 
-def wait_for_dashboard_ready(timeout_s=15.0, interval_s=0.5,
+def wait_for_dashboard_ready(timeout_s=60.0, interval_s=0.5,
                              check_fn=None, sleep_fn=None):
     """轮询等待 :5003 就绪（端口修复设计 docs/DESKTOP_PORT_FIX.md §1，P1）。
 
@@ -284,11 +284,32 @@ def start_backend_launcher():
     return proc
 
 
+def _backend_warming_up():
+    """探测后端是否已在拉起途中（方案 A 自启改造，2026-10-08）：5003 已
+    监听（就绪）或存在其他 xiaoju3.exe 进程（自启任务直启的 launcher 角色
+    初始化中）→ True；全无 → False（真没人拉，走 spawn-self 双击兜底）。"""
+    if _is_port_listening(DASHBOARD_APP_PORT):
+        return True
+    try:
+        import psutil
+        me = os.getpid()
+        return any((p.info.get("name") or "").lower() == "xiaoju3.exe"
+                   and p.info.get("pid") != me
+                   for p in psutil.process_iter(["pid", "name"]))
+    except Exception:
+        return False
+
+
 def ensure_backend_services():
-    """后台服务决策：:5003 已监听 → 复用现有进程（跳过拉起）；
-    否则后台拉起 xiaoju3_launcher.py。返回 Popen 句柄或 None。"""
+    """后台服务决策（方案 A 改造，2026-10-08）：:5003 已监听 → 复用；
+    未监听但探测到后端在拉起途中（自启任务直启的 launcher 初始化中）→
+    返回 None 等待复用（开机链路零 spawn-self，火绒对 exe 自我复制敏感
+    ——2026-10-08 拦截实锤）；全无 → spawn-self（双击场景兜底）。"""
     if _is_port_listening(DASHBOARD_APP_PORT):
         _print(LAUNCHER_REUSE_HINT)
+        return None
+    if _backend_warming_up():
+        _print("ℹ️ 后端已在拉起途中（自启任务直启），等待复用不重复拉起")
         return None
     return start_backend_launcher()
 
@@ -590,10 +611,13 @@ def main(argv=None):
             daemon=True).start()
 
     # ② 启动探测：主程序未在线且没有启动器在拉起途中 → 提示"聊天功能受限"
-    #   （无人会拉起主程序时等待无意义，导航线程跳过等待直接进错误页路径）
+    #   （无人会拉起主程序时等待无意义，导航线程跳过等待直接进错误页路径）；
+    #   方案 A 新增等待复用态：后端在起（任务直启）但本窗未持有句柄 →
+    #   need_wait=True 占位页等就绪（60s），main_hint 不亮（有人在拉）
     main_ok = _is_main_running()
-    main_hint = not main_ok and launcher_proc is None
-    need_wait = (launcher_proc is not None) or main_ok
+    backend_pending = (launcher_proc is None and _backend_warming_up())
+    main_hint = not main_ok and launcher_proc is None and not backend_pending
+    need_wait = (launcher_proc is not None) or main_ok or backend_pending
     if main_hint:
         _print(MAIN_NOT_RUNNING_HINT)
 
