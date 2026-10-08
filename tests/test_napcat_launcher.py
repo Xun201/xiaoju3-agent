@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""NapCat 静默拉起单元测试（2026-10-02，全部离线：popen/检测/身份全注入）。
+"""NapCat 静默拉起单元测试（2026-10-02；2026-10-08 方案 E 去提权化重构）。
 
 覆盖：
-- ensure_napcat 四分支：管理员拉起（cmd + CREATE_NO_WINDOW + DEVNULL）、
-  非管理员 PowerShell runAs 隐藏路径、已运行跳过、launcher.bat 缺失跳过；
+- ensure_napcat 分支：无窗口直拉 launcher-user.bat（NapCat 官方免提权
+  变体，cmd + CREATE_NO_WINDOW + DEVNULL，零 PowerShell 零 UAC——
+  火绒「隐藏执行 PowerShell」拦截实锤后的根治形态）、已运行跳过、
+  脚本缺失跳过；
+- 泛用动词锚：Popen 命令行绝不出现 powershell（防提权路径回潮）；
 - POSIX（香橙派）静默跳过（部署侧自管 NapCat）；
 - main() 非 dry-run 时调用 ensure_napcat（--dry-run 零副作用既有契约不破坏）。
 
@@ -24,7 +27,7 @@ class EnsureNapcatTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="xiaoju3_napcat_")
-        self.bat = os.path.join(self.tmp, "launcher.bat")
+        self.bat = os.path.join(self.tmp, "launcher-user.bat")
         with open(self.bat, "w", encoding="utf-8") as f:
             f.write("@echo off\r\n")
         self.calls = []
@@ -32,26 +35,27 @@ class EnsureNapcatTests(unittest.TestCase):
         self.out = []
         self.out_fn = self.out.append
 
-    def _run(self, running=False, admin=True, os_name="nt",
-             napcat_dir=None):
+    def _run(self, running=False, os_name="nt", napcat_dir=None):
         return xl.ensure_napcat(
             napcat_dir=napcat_dir or self.tmp,
             popen=self.popen,
             out=self.out_fn,
             running_fn=lambda: running,
-            is_admin_fn=lambda: admin,
             os_name=os_name,
         )
 
-    def test_admin_launches_hidden_cmd(self):
-        """管理员 + 未运行 → cmd /c 拉 launcher.bat（CREATE_NO_WINDOW +
-        双 DEVNULL），日志为用户口径文案，返回 True。"""
-        ok = self._run(running=False, admin=True)
+    def test_launches_user_bat_no_elevation(self):
+        """未运行 → cmd /c 拉 launcher-user.bat（NapCat 官方免提权变体；
+        CREATE_NO_WINDOW + 双 DEVNULL），零 PowerShell 零 UAC——方案 E
+        去提权化（2026-10-08）：QQ 目录用户可写，注入写权限普通用户已
+        具备，旧 powershell runAs 分支被火绒「隐藏执行 PowerShell」拦截。"""
+        ok = self._run(running=False)
         self.assertTrue(ok)
         self.assertEqual(len(self.calls), 1)
         args, kwargs = self.calls[0]
         self.assertEqual(args[0][:2], ["cmd", "/c"])
-        self.assertIn("launcher.bat", args[0][2])
+        self.assertIn("launcher-user.bat", args[0][2])
+        self.assertNotIn("powershell", " ".join(args[0]).lower())
         if os.name == "nt":
             self.assertEqual(kwargs["creationflags"],
                              subprocess.CREATE_NO_WINDOW)
@@ -59,30 +63,34 @@ class EnsureNapcatTests(unittest.TestCase):
         self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
         self.assertIn("✅ NapCat 已后台启动（无窗口）", self.out)
 
-    def test_non_admin_uses_hidden_runas(self):
-        """非管理员 → PowerShell Start-Process -Verb runAs -WindowStyle
-        Hidden（launcher.bat 自带管理员自检，直接跑会弹可见黑框）。"""
-        ok = self._run(running=False, admin=False)
-        self.assertTrue(ok)
-        args, kwargs = self.calls[0]
-        self.assertEqual(args[0][0], "powershell")
-        self.assertIn("-Verb runAs", args[0][3])
-        self.assertIn("-WindowStyle Hidden", args[0][3])
-        self.assertIn("UAC", " ".join(self.out))
-
     def test_running_skips(self):
         """已在运行 → 跳过（用户口径文案），不 Popen，返回 False。"""
-        ok = self._run(running=True, admin=True)
+        ok = self._run(running=True)
         self.assertFalse(ok)
         self.assertEqual(self.calls, [])
         self.assertIn("ℹ️ NapCat 已在运行，跳过", self.out)
 
     def test_missing_bat_skips(self):
-        """launcher.bat 缺失 → 跳过并提示路径，不 Popen。"""
+        """launcher-user.bat 缺失 → 跳过并提示路径，不 Popen。"""
         ok = self._run(napcat_dir=os.path.join(self.tmp, "nope"))
         self.assertFalse(ok)
         self.assertEqual(self.calls, [])
         self.assertTrue(any("未找到" in line for line in self.out))
+
+    def test_prefers_user_bat_over_admin_bat(self):
+        """优先级锚（方案 E 核心选择，2026-10-08）：目录里同时存在管理员版
+        launcher.bat 与免提权版 launcher-user.bat → 必拉 user 版（零提权
+        零 UAC 零 PowerShell——火绒「隐藏执行 PowerShell」拦截实锤后的
+        根治形态），绝不回退管理员版。"""
+        with open(os.path.join(self.tmp, "launcher.bat"), "w",
+                  encoding="utf-8") as f:
+            f.write("@echo off\r\n")
+        ok = self._run(running=False)
+        self.assertTrue(ok)
+        args, _ = self.calls[0]
+        self.assertIn("launcher-user.bat", args[0][2])
+        self.assertNotIn("launcher.bat", args[0][2].replace(
+            "launcher-user.bat", ""))   # 除 user 版外不含管理员版名
 
     def test_posix_skips_silently(self):
         """POSIX（香橙派）：NapCat 由部署侧管理——静默跳过，零输出零 Popen。"""

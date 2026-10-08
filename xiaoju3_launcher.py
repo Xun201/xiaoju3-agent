@@ -97,34 +97,25 @@ def _napcat_running():
         return False
 
 
-def _is_windows_admin():
-    """当前进程是否以 Windows 管理员身份运行（非 Windows 返回 False）。"""
-    if os.name != "nt":
-        return False
-    try:
-        import ctypes
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
-
-
 def ensure_napcat(napcat_dir=None, popen=None, out=None, running_fn=None,
-                  is_admin_fn=None, os_name=None):
+                  os_name=None):
     """拉起 NapCat（Windows-only，幂等可重复调用）。返回是否执行了拉起。
 
-    - 已在运行 / launcher.bat 缺失 / 非 Windows（香橙派部署侧自管）：跳过；
-    - 管理员身份：cmd /c 直接拉 launcher.bat（CREATE_NO_WINDOW 全程无黑框）；
-    - 非管理员：launcher.bat 自带管理员自检（net session + UAC 自重启），
-      这里经 PowerShell Start-Process -Verb runAs -WindowStyle Hidden 以
-      隐藏窗口发起——用户点一次 UAC【是】，之后无窗口常驻；
+    - 已在运行 / launcher-user.bat 缺失 / 非 Windows（香橙派部署侧自管）：
+      跳过；
+    - 统一经 cmd /c 拉 **launcher-user.bat**（NapCat 官方免提权变体，无
+      net session 自检段）+ CREATE_NO_WINDOW 全程无黑框——2026-10-08
+      方案 E 去提权化：QQ 装在用户可写目录（D:\\Ruanjian\\QQ 写探针实测），
+      注入/patch 写权限普通用户已具备，提权（旧 powershell -Verb runAs
+      -WindowStyle Hidden）零收益且被火绒「隐藏执行 PowerShell」规则拦截
+      （10-08 晚实锤，QQ 自愈链曾被掐断）；
     - Popen 句柄刻意不返回/不纳入 launcher 生命周期：NapCat 常驻后台，
       launcher 退出后继续运行。
-    全部依赖可注入（popen/out/running_fn/is_admin_fn/os_name），离线可测。
+    全部依赖可注入（popen/out/running_fn/os_name），离线可测。
     """
     popen = popen or subprocess.Popen
     out = out or print
     running_fn = running_fn or _napcat_running
-    is_admin_fn = is_admin_fn or _is_windows_admin
     if os_name is None:
         os_name = os.name
     if os_name != "nt":
@@ -134,27 +125,17 @@ def ensure_napcat(napcat_dir=None, popen=None, out=None, running_fn=None,
             from xiaoju3 import NAPCAT_DIR as napcat_dir
         except Exception:
             napcat_dir = "D:\\NapCat"
-    bat = os.path.join(napcat_dir, "launcher.bat")
+    bat = os.path.join(napcat_dir, "launcher-user.bat")
     if running_fn():
         out(NAPCAT_RUNNING_HINT)
         return False
     if not os.path.isfile(bat):
         out(f"ℹ️ 未找到 {bat}，跳过 NapCat 拉起")
         return False
-    if is_admin_fn():
-        popen(["cmd", "/c", f'cd /d "{napcat_dir}" && launcher.bat'],
-              creationflags=subprocess.CREATE_NO_WINDOW,
-              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        out(NAPCAT_STARTED_HINT)
-        return True
-    # 非管理员：经 PowerShell 隐藏窗口发起 runAs（launcher.bat 自带管理员
-    # 自检，直接跑会弹可见的 wt.exe 黑框——隐藏 runAs 全程无黑框）
-    ps_cmd = (f"Start-Process cmd -ArgumentList '/c','cd /d {napcat_dir} "
-              f"&& launcher.bat' -Verb runAs -WindowStyle Hidden")
-    popen(["powershell", "-NoProfile", "-Command", ps_cmd],
+    popen(["cmd", "/c", f'cd /d "{napcat_dir}" && launcher-user.bat'],
           creationflags=subprocess.CREATE_NO_WINDOW,
           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    out("✅ NapCat 已后台启动（无窗口）——首次会弹一次 UAC 授权，点【是】即可")
+    out(NAPCAT_STARTED_HINT)
     return True
 
 
