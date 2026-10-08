@@ -70,3 +70,74 @@
 
 - 重启终验四项：黑框零（已过一次）/ 自启 wscript 链（脚本已修待真机重启复验）/ 双开拦截（跨版本门待真机复验）/ 白闪缓解（env 参数待体感）
 - #262 待标 done；#275/#276 冒烟混入的生活待办待用户处置
+
+
+---
+
+## 六、10-08 午后~深夜批次（第二批，挂机补记）
+
+### `c225f8f` fix(repo): AIC2026 材料排除规则撤出公开 .gitignore
+
+- 6860e35 曾把两份 AIC2026 私有材料**文件名+拍板注释**推进公开 .gitignore（违纪实锤）
+- 修复=公开 .gitignore 删整段；排除效果迁 `.git/info/exclude`（纯本地永不进仓），佐证材料通配 md/docx/pdf + 佐证截图 z* 段同迁
+- 新规矩：**私有材料一律只走 info/exclude，文件名不进公开 .gitignore**
+- 历史残留拍板=L1 即止不重写历史
+
+### `be97b4f` feat(brain): #278 危险操作强制云端（一期）
+
+- `_DANGER_CLOUD_KEYWORDS` 初版 19 词；smart_ask / smart_ask_stream 双侧强制云端
+- 真机三连验收 PASS：删系统文件→云端按权限口径拒绝零编造；写诗/重启路由器→本地照走
+- 一期不做结果断言校验层（留 #270 赛后）
+
+### `7fffc91` feat(brain): #278 词表收编「重启」
+
+- 真机发现本地对「重启路由器」同样零工具编造「操作已完成」→收编（20 词）
+- restart 锚从「不触发」反转为「触发」
+
+### `c275e09` / `956dd02` / `03a3070` / `afff438` fix(boot): 方案 A 自启改造批（四笔）
+
+- `c275e09` 桌面窗探测等待+快速 fallback：新增 `_backend_warming_up`（5003 在线 OR 其他 xiaoju3 进程在=后端拉起途中）；ensure 三态化（就绪复用/途中等待/全无才 spawn 兜底）；wait 15s→60s
+- `956dd02` **NameError 祖传 bug 修复**：`_another_instance_serving` 签名漏 timeout（4cc77d5 起所有车带病）；测试全量 mock + 门 or 短路双盲区实锤（5003 探测分支部署至今真机零跑通）；补真跑锚
+- `03a3070` 门 5003 分支精化：后端在跑且唤不到窗=登录链标准态→出窗复用不退出（v22 冒烟永无窗实锤）
+- `afff438` **导入期互斥体角色守卫**：exe 单一入口后端角色也持锁，污染桌面窗 `_SI_ALREADY`（v23 冒烟永无窗第二根因）
+- 连带处置：火绒拦 wscript→powershell -Hidden 链 → **自启载体改 HKCU Run 键双通道**（Xiaoju3 桌面窗+Xiaoju3Backend 后端直启）；计划任务方案=ZCode shell 权限墙否决；v21-v24 四车迭代；双击 spawn 兜底实测火绒未拦；wscript/vbs 归档 `_dev/retired_autostart_20261008/`
+
+### `4b308cc` sec(adb): R1 安全边界显式化
+
+- adb_tap/adb_swipe f-string shell 拼接补【安全边界】注释 + int() 纵深强转
+- 侦察实锤：模型→shell 直达注入链=零（int() 隐式封死，本笔文档化+加固）
+
+### `e99d173` sec(brain): R4 危险词表扩容 20→31
+
+- 收中文同义（移除/清除/销毁/覆写）+英文命令（cmd/powershell/bash/rm -rf/delete/format/uninstall）
+- 泛用动词 7 词不收（跑/执行/运行/命令/脚本/替换/终端——误伤评估先行）；词表双向锚防回退
+
+### `836d9f6` docs(tools): Lv.3 门槛段注释修正
+
+- 旧注释误列 adb 族为 Lv.3（2026-10-02 已升 Lv.4）；manifest=唯一事实源，文档债清
+
+### `5088946` refactor(napcat): 方案 E 自愈链去提权化
+
+- 起因=火绒拦 xiaoju3.exe「隐藏执行 PowerShell」（ensure_napcat 非管理员分支 powershell runAs）
+- 侦察重大发现=NapCat 官方免提权变体 `launcher-user.bat` 在案 + QQ 装用户可写目录（D:\Ruanjian\QQ 写探针过）=提权非硬需求
+- ensure_napcat 统一 cmd /c launcher-user.bat，删 powershell 分支与 `_is_windows_admin`
+- E1 试点 user 版注入成功（NapCatWinBootMain+QQ×4+6099）；E3 复活+全程 powershell=0+火绒零拦截；强杀后 10 秒秒崩=QQ 残留单实例锁时序（延迟复跑成功，非代码缺陷）
+- **QQ 登录态恢复**（用户扫码 qrcode.png + 群发「在吗」验回）——方案 E 四段全过；v25 车（1160dc85）部署在线
+
+### `1adc72c` sec(tools): 挂机安全加固批 R2+R3（**本地未推**）
+
+- R2 write_file 覆盖保护：覆盖已有文件前自动落 `.bak-时间戳` 副本（shutil.copy2，无交互场景静默备份）
+- R3 system_manage 安装白名单 29 库：白名单外 install 拒绝+引导手动安装（任意 PyPI 包=安装钩子任意代码执行）；uninstall 不受限；extras/版本形态走防注入校验先于白名单
+- R2 两锚+R3 锚（call_count 精确断言）；全仓 1915+4
+
+## 七、测试与推送（第二批）
+
+- 测试基线演进：1902+4 → 1912+4（方案 A 批+5）→ **1915+4**（R2/R3+3），只增不减
+- 推平链：c225f8f → be97b4f → 7fffc91 → c275e09 → 956dd02 → 03a3070 → afff438 → 4b308cc → e99d173 → 836d9f6 → 5088946（**origin/main = 5088946，共 11 笔**）；`1adc72c` 本地未推（挂机批，明早人工过目后推）
+- 非提交事项：软著申报（实名过/登记表填毕/材料已上传，流水号 2026R11J453611=**签章页材料流水号**非受理号，**已上传未提交**待明早 8:00 系统维护结束提交）；DeepSeek 顾问记忆本建立（`_dev/DEEPSEEK_ADVISOR_MEMORY.md`，info/exclude 排除）
+
+## 八、遗留（第二批后更新）
+
+- QQ 通道已恢复（扫码+「在吗」验回）；E3 多轮自愈验证（明晚：杀 NapCat→重启→复活 ×N + 强杀-秒重启时序观察）
+- 重启终验：Run 键自启链 3 进程自动拉齐 / 黑框零 / 「重启」词走云端
+- 软著提交（明早 8:00，P0，提交后记新受理号）
