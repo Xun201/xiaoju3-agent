@@ -91,6 +91,7 @@ a = Analysis(
         'plugins.todo_extractor',
         'plugins.todo_aging',    # heartbeat 函数内 lazy import（modulegraph 可扫，显式列保险）
         'plugins.todo_text',     # #261：intent_router 字符串动态引用（importlib 对静态分析不可见，必须显式列）
+        'plugins.todo_query',    # todo_query 意图（查待办直达）：intent_router 字符串动态引用，同上铁律
     ] + pw_hiddenimports,
     hookspath=[],
     hooksconfig={},

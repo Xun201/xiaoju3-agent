@@ -294,5 +294,47 @@ class DispatchTest(unittest.TestCase):
         self.assertIn("chapters", result)
 
 
+class RuleLayerTodoQueryTest(unittest.TestCase):
+    """todo_query 意图（10-08 晚断链修复）：查待办自然语言直达库，零模型。"""
+
+    def test_route_recognizes_query_phrasings(self):
+        from intent_router import route
+        for msg in ("帮我看看今天有什么待办", "看看待办", "查一下待办",
+                    "今天有什么待办", "待办清单", "有哪些待办"):
+            intent = route(msg)
+            self.assertIsNotNone(intent, msg)
+            self.assertEqual(intent.name, "todo_query", msg)
+            self.assertEqual(intent.handler,
+                             "plugins.todo_query:list_reply")
+
+    def test_route_negative_not_hijack(self):
+        from intent_router import route
+        # 添加语义走 todo_text_add（或链接提取链）；斜杠走指令分发
+        for msg in ("帮我记个待办：明天交作业", "添加待办", "/todos",
+                    "帮我记待办"):
+            intent = route(msg)
+            if intent is not None:
+                self.assertNotEqual(intent.name, "todo_query", msg)
+
+    def test_dispatch_todo_query_formats_list(self):
+        # dispatch → plugins.todo_query:list_reply → 格式化清单（mock 库）
+        import plugins.todo_query as tq
+        rows = [
+            {"id": 283, "content": "决策辅助能力", "priority": "P3",
+             "effective_priority": "P3"},
+            {"id": 282, "content": "DSH Agent Loop 架构借鉴", "priority": "P3",
+             "effective_priority": "P3"},
+        ]
+        intent = IntentResult(name="todo_query", args={}, confidence=1.0,
+                              handler="plugins.todo_query:list_reply")
+        with mock.patch.object(tq.state_manager, "get_todos",
+                               return_value=rows) as mget:
+            result = dispatch(intent)
+            self.assertIn("📋 当前待办（前 2 条）", result)
+            self.assertIn("#283", result)
+            self.assertIn("[P3]", result)
+            mget.assert_called_once_with(status="pending", limit=16)
+
+
 if __name__ == "__main__":
     unittest.main()
