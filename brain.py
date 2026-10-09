@@ -270,7 +270,8 @@ def _is_placeholder_thinking(thinking_text):
 def _wrap_think(thinking, body):
     """统一 <think> 包装点：smart_ask 全部文本回复一律经此拼装（消灭手写拼接）。
 
-    产出 f"<think>{thinking}</think>{body}"，六重保证（2026-10-01 用户口径
+    body 入口先过 _strip_bare_json 旁路消毒（幻觉工具 JSON 直出防护，
+    2026-10-09）；六重保证（2026-10-01 用户口径
     两轮强化：绝不允许空 <think>、残缺/游离标签或"（操作已执行）"顶替真实
     正文直出网页）：
     1. 两侧彻底清洗：thinking/body 的 <think>/</think> 标签字面量与上游注入
@@ -1072,6 +1073,28 @@ def _strip_bare_cot(raw_reply):
     text = _PLAN_RE.sub("", text)
     text = _BARE_ACTION_RE.sub("", text)
     return text.strip()
+
+
+def _strip_bare_json(body):
+    """整条回复为「无 tool 键的可解析 JSON」时剥除并追加引导（旁路消毒）。
+
+    本地小模型会幻觉工具调用且格式不合规（10-08 晚实锤：输出
+    {"action":"get_todo_list"}——无 "tool" 键，_extract_tool_json 不认→
+    纯文本旁路把原始 JSON 直出给用户）。只处理「整条 body 就是一个 JSON
+    对象」的形态——片段级扫描会误伤含 JSON 字样的正常回复（如搜索结果），
+    故不做。与 _strip_bare_cot 同族，纯函数，可直接单测。
+    """
+    text = (body or "").strip()
+    if not text.startswith("{"):
+        return body
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text)
+    except Exception:
+        return body
+    if not isinstance(obj, dict) or "tool" in obj:
+        return body
+    return ("💡 这个操作我还在学习中，暂时帮不上——试试 /help 查看现有"
+            "指令清单，或直接告诉我你想达成什么。")
 
 
 def _force_chat_think(body):

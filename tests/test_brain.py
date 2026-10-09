@@ -4406,5 +4406,28 @@ class DangerCloudForceCloudTests(unittest.TestCase):
         self.assertEqual(src.count("danger_cloud = any("), 2)
 
 
+class BareJsonSanitizeTests(unittest.TestCase):
+    """_strip_bare_json 旁路消毒（10-08 晚断链修复辅修）：整条回复为
+    「无 tool 键的可解析 JSON」→ 剥除+引导语；其余形态一律原样。"""
+
+    def test_bare_json_without_tool_key_replaced(self):
+        # 断链场景复刻：{"action":"get_todo_list"}（无 tool 键）→ 引导语
+        r = brain._strip_bare_json('{"action": "get_todo_list", "args": {}}')
+        self.assertTrue(r.startswith("💡"), r)
+        self.assertIn("/help", r)
+        self.assertNotIn("get_todo_list", r)
+
+    def test_tool_key_json_untouched(self):
+        # 含 "tool" 键的合法工具载荷不经消毒（工具环先行消化）
+        payload = '{"tool": "web_search", "args": {"query": "x"}}'
+        self.assertEqual(brain._strip_bare_json(payload), payload)
+
+    def test_plain_text_and_non_dict_untouched(self):
+        # 纯文本/非 dict JSON（数组/标量）/片段级 JSON 一律原样
+        for body in ("今天天气不错", "[1, 2, 3]", '"just a string"',
+                     '结果如下：{"a": 1} 供参考'):
+            self.assertEqual(brain._strip_bare_json(body), body)
+
+
 if __name__ == "__main__":
     unittest.main()
