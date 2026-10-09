@@ -1764,6 +1764,17 @@ def smart_ask(message, history=None, session_key="default"):
     # SQLite 异常静默跳过，绝不影响本轮对话
     _remember_user_facts(message)
 
+    # 🧡 mood 状态机（#271① M1）：交互事件→PAD 情绪参数更新——悄悄记账
+    # 不改说话；开关关闭/模块缺席/任何异常一律静默旁路（mood 模块整体
+    # 可删，主链路零依赖）
+    try:
+        import mood
+        _mood_note = mood.observe_message(message)
+        if _mood_note:
+            print(f"🧡 [mood] {_mood_note}")
+    except Exception as _me:
+        print(f"⚠️ mood 更新失败（已静默跳过）: {_me}")
+
     # 📍 位置回答兜底提取（2026-10-02 隐私口径）：小模型可能识别不出完整
     # 句式的位置回答、漏带 [LOCATION:] 标记——用户消息里明显含"城市+区县"
     # 组合时直接提取写入本地位置记忆（词表+后缀轻量匹配，异常静默）
@@ -2127,6 +2138,15 @@ def smart_ask_stream(message, history=None, session_key="default",
 
     # 与同步版同序的前置副作用（记忆提取/位置提取/静默期拦截）
     _remember_user_facts(message)
+
+    # 🧡 mood 状态机（#271① M1，流式入口同款）：静默旁路同上
+    try:
+        import mood
+        _mood_note = mood.observe_message(message)
+        if _mood_note:
+            print(f"🧡 [mood] {_mood_note}")
+    except Exception as _me:
+        print(f"⚠️ mood 更新失败（已静默跳过）: {_me}")
     _extract_location_from_user_message(message)
     try:
         _chat_city, _chat_district, _chat_source = _resolve_user_location()
