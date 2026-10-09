@@ -402,6 +402,20 @@ def _supervise_backend(state, stop_event, respawn_fn, out=None,
             restarts.append(now)
             out("🔁 后台服务意外退出，自动重启（restart_service 受理/异常恢复）...")
             state["proc"] = respawn_fn()
+        elif proc is None and not _is_main_running():
+            # 复用态监督（方案 A 监督真空修复，2026-10-09）：复用分支无
+            # 句柄可 poll——改为监视 5003 存活：消失（后端死且无人在拉）
+            # → respawn（ensure 重新探测：真死 spawn / 途中复用回写），
+            # 同窗限防循环。E3 轮 1 实锤：复用态 launcher/dashboard 被
+            # 杀后 130 秒无人重生（QQ 通道死）。
+            now = time.time()
+            restarts = [t for t in restarts if now - t < window]
+            if len(restarts) >= max_restarts:
+                out("⚠️ 复用态后端连续消失（60 秒内 3 次），已停止自动重启。")
+                return
+            restarts.append(now)
+            out("🔁 复用态后端消失，自动重启（监督真空修复）...")
+            state["proc"] = respawn_fn()
         stop_event.wait(poll_interval)
 
 
@@ -609,12 +623,16 @@ def main(argv=None):
 
     # ① 后台服务：:5003 已监听则复用现有进程，否则后台拉起统一启动器
     launcher_proc = ensure_backend_services()
+    # 方案 A 监督真空修复（2026-10-09 E3 轮 1 实锤）：复用态（等待后端
+    # 起途/后端由他人直启）也纳入监督——此前 launcher_proc=None 时监督
+    # 线程不启动，后端死后无人重生（QQ 通道死 130s+）
+    backend_pending = (launcher_proc is None and _backend_warming_up())
     # 🔁 监督线程（2026-10-02）：窗口存活期间后台服务意外退出自动重启
-    # （restart_service 复活链 Windows 形态）；正常关窗时 finally 最先
+    # （restart_service 受理/异常恢复）；正常关窗时 finally 最先
     # 置位 stop_event，监督线程随即退出，不与手动清理竞争
     backend_state = {"proc": launcher_proc}
     stop_event = threading.Event()
-    if launcher_proc is not None:
+    if launcher_proc is not None or backend_pending:
         threading.Thread(
             target=_supervise_backend,
             args=(backend_state, stop_event, ensure_backend_services, _print),
@@ -622,10 +640,9 @@ def main(argv=None):
 
     # ② 启动探测：主程序未在线且没有启动器在拉起途中 → 提示"聊天功能受限"
     #   （无人会拉起主程序时等待无意义，导航线程跳过等待直接进错误页路径）；
-    #   方案 A 新增等待复用态：后端在起（任务直启）但本窗未持有句柄 →
-    #   need_wait=True 占位页等就绪（60s），main_hint 不亮（有人在拉）
+    #   方案 A 等待复用态：backend_pending 已在 ① 前算好（监督启动条件
+    #   与等待判定共用同一事实）
     main_ok = _is_main_running()
-    backend_pending = (launcher_proc is None and _backend_warming_up())
     main_hint = not main_ok and launcher_proc is None and not backend_pending
     need_wait = (launcher_proc is not None) or main_ok or backend_pending
     if main_hint:
