@@ -124,6 +124,11 @@ def _extract_ebook_args(message, match):
     return {"title": m.group(1).strip()} if m else {}
 
 
+def _extract_noargs(message, match):
+    """无参意图统一提取器（查询类：直查全量，无需抽参）。"""
+    return {}
+
+
 def _extract_todo_text(message, match):
     """纯文字记待办参数（#261）：整条消息原文作为待办素材——编号/换行/
     顿号等格式解析与 P0-P5 判级交给云端提炼链（build_extraction_prompt
@@ -204,7 +209,7 @@ INTENT_PATTERNS = [
         # 排除词：文件/家居/手机类请求应走模型工具协议（11 项白名单），
         # 不做搜索直达，避免"查一下工作区文件"之类误路由
         "negative_patterns": [
-            r"工作区|文件|设备|灯|空调|开关|插座|截图|屏幕|点击|点一下",
+            r"工作区|文件|设备|灯|空调|开关|插座|截图|屏幕|点击|点一下|待办",
         ],
     },
     {
@@ -222,6 +227,28 @@ INTENT_PATTERNS = [
             r"chat\.deepseek\.com/share/",
             r"^\s*/",
             r"怎么做|怎么用|怎么操作",
+        ],
+    },
+    {
+        "name": "todo_query",
+        "desc": "查待办列表（今天有什么待办/看看待办）——直查库零模型参与",
+        "patterns": [
+            r"(看看|查一下|查查|查看|翻一下|翻翻|列出|显示|汇报).{0,8}待办",
+            r"待办.{0,8}(有什么|有哪些|有啥|列表|清单)",
+            r"(有哪些|有啥|有什么).{0,4}待办",
+            r"(今天|今日|明天|明日|本周|这周).{0,8}(有啥|有什么|哪些)"
+            r".{0,6}(待办|任务)",
+            r"(待办|任务)清单",
+            r"帮我看看.{0,8}待办",
+        ],
+        "extractor": _extract_noargs,
+        "handler_name": "plugins.todo_query:list_reply",
+        # 排除词：添加/记录语义走 todo_text_add（记待办）；链接走提取链；
+        # 斜杠指令族走指令分发；问用法（#270）落正常对话
+        "negative_patterns": [
+            r"chat\.deepseek\.com/share/",
+            r"^\s*/",
+            r"添加|新增|记.{0,4}待办|记录.{0,4}待办|导出|怎么做|怎么用",
         ],
     },
 ]
