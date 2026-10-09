@@ -132,7 +132,15 @@ def ensure_napcat(napcat_dir=None, popen=None, out=None, running_fn=None,
     if not os.path.isfile(bat):
         out(f"ℹ️ 未找到 {bat}，跳过 NapCat 拉起")
         return False
-    popen(["cmd", "/c", f'cd /d "{napcat_dir}" && launcher-user.bat'],
+    # cwd 参数形态（2026-10-09 E3 轮 1 引号 bug 修复）：旧写法
+    # 'cd /d "<dir>" && bat' 经 list2cmdline+cmd 引号解析损坏，报
+    # 「文件名目录名语法不正确」→ bat 从未执行（对照实验 5 连定案，
+    # cwd 形态活体 30s 拉满）——勿回退 cd&& 字符串拼接
+    # ⚠️ cwd 参数形态（2026-10-09 E3 轮 1 引号 bug 修复）：勿回退
+    # 'cd /d "<dir>" && bat' 字符串拼接——list2cmdline+cmd 引号解析会损坏
+    # （报「文件名目录名语法不正确」，bat 从未执行，对照实验 5 连定案）
+    popen(["cmd", "/c", "launcher-user.bat"],
+          cwd=napcat_dir,
           creationflags=subprocess.CREATE_NO_WINDOW,
           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     out(NAPCAT_STARTED_HINT)

@@ -56,6 +56,10 @@ class EnsureNapcatTests(unittest.TestCase):
         self.assertEqual(args[0][:2], ["cmd", "/c"])
         self.assertIn("launcher-user.bat", args[0][2])
         self.assertNotIn("powershell", " ".join(args[0]).lower())
+        # cwd 参数形态锚（E3 轮 1 引号 bug 修复）：经 cwd 传目录，命令行
+        # 绝不含 cd&& 拼接（list2cmdline+cmd 引号解析会坏，勿回退）
+        self.assertEqual(kwargs.get("cwd"), self.tmp)
+        self.assertNotIn("cd /d", args[0][2])
         if os.name == "nt":
             self.assertEqual(kwargs["creationflags"],
                              subprocess.CREATE_NO_WINDOW)

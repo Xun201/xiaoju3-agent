@@ -35,6 +35,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -916,6 +917,57 @@ class SingleInstanceGateTests(unittest.TestCase):
         （argv 无 --xj3-role 旗标）——launcher/dashboard 角色加载同模块，
         此前无差别持锁污染桌面窗 _SI_ALREADY → 登录链永无窗。静态锚锁
         守卫存在于导入期段且先于 CreateMutexW。"""
+        src_path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "desktop_launcher.py")
+        with open(src_path, encoding="utf-8") as f:
+            src = f.read()
+        guard = 'a.startswith("--xj3-role=")'
+        self.assertIn(guard, src)
+        self.assertLess(src.index(guard), src.index("CreateMutexW"))
+
+    def test_supervise_reuse_mode_respawns_on_port_loss(self):
+        """复用态监督锚（E3 轮 1 监督真空实锤后补）：_supervise_backend 在
+        proc=None（复用态无句柄）且 5003 消失 → respawn_fn 被调且 state
+        回写；5003 在线时不误触发（对照）。"""
+        state = {"proc": None}
+        stop_event = threading.Event()
+        respawns = []
+
+        def respawn():
+            respawns.append(1)
+            stop_event.set()   # 首次 respawn 后即停，控测试时长
+            return None
+
+        with mock.patch.object(launcher, "_is_main_running",
+                               return_value=False):
+            threading.Thread(
+                target=launcher._supervise_backend,
+                args=(state, stop_event, respawn),
+                kwargs={"poll_interval": 0.05},
+                daemon=True).start()
+            deadline = time.time() + 3
+            while not respawns and time.time() < deadline:
+                time.sleep(0.05)
+            stop_event.set()
+        self.assertEqual(len(respawns), 1)
+        self.assertIsNone(state["proc"])
+
+    def test_supervise_reuse_mode_no_false_trigger(self):
+        # 复用态对照：5003 在线（_is_main_running=True）→ 不 respawn
+        state = {"proc": None}
+        stop_event = threading.Event()
+        respawns = []
+        with mock.patch.object(launcher, "_is_main_running",
+                               return_value=True):
+            threading.Thread(
+                target=launcher._supervise_backend,
+                args=(state, stop_event,
+                      lambda: (respawns.append(1), None)[1]),
+                kwargs={"poll_interval": 0.05},
+                daemon=True).start()
+            time.sleep(0.4)
+            stop_event.set()
+        self.assertEqual(respawns, [])
         src_path = os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "desktop_launcher.py")
         with open(src_path, encoding="utf-8") as f:
