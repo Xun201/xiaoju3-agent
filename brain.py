@@ -2131,6 +2131,8 @@ def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
                "stream": True, "keep_alive": -1,
                "options": {"temperature": LLM_TEMPERATURE}}
     chunks = []
+    _t0 = time.perf_counter()
+    _eval_count = None
     with requests.post(LOCAL_URL, json=payload, stream=True,
                        timeout=LOCAL_GENERATE_TIMEOUT) as resp:
         resp.raise_for_status()
@@ -2147,7 +2149,13 @@ def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
                 if on_event is not None:
                     on_event({"type": event_type, "delta": delta})
             if obj.get("done"):
+                _eval_count = obj.get("eval_count")
                 break
+    if turn_trace is not None:
+        turn_trace.record_step("local", model or LOCAL_MODEL,
+                               int((time.perf_counter() - _t0) * 1000),
+                               eval_count=_eval_count)
+    return "".join(chunks)
     return "".join(chunks)
 
 
@@ -2160,6 +2168,7 @@ def _ask_cloud_stream(messages, on_event, event_type="answer"):
     payload = {"model": CLOUD_MODEL, "messages": messages, "stream": True,
                "temperature": LLM_TEMPERATURE}
     chunks = []
+    _t0 = time.perf_counter()
     try:
         with requests.post(CLOUD_URL, headers=headers, json=payload,
                            stream=True, timeout=CLOUD_TIMEOUT) as resp:
@@ -2186,6 +2195,9 @@ def _ask_cloud_stream(messages, on_event, event_type="answer"):
         if not chunks:
             return f"⚠️ 云端连接异常: {e}"
         print(f"⚠️ 云端流式中途断开（已收 {len(chunks)} 块），按已收内容返回")
+    if turn_trace is not None:
+        turn_trace.record_step("cloud", CLOUD_MODEL,
+                               int((time.perf_counter() - _t0) * 1000))
     return "".join(chunks)
 
 

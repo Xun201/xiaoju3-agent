@@ -34,6 +34,8 @@ a = Analysis(
         ('console.js', '.'),
         ('desktop-pet.js', '.'),
         ('.env.example', '.'),             # 首启配置模板（数据根引导用）
+        ('mood_rules.json', '.'),          # #271① M1 规则表（缺它 frozen 静默回退最小词表——20261010 真机实锤）
+        ('mood_tone.json', '.'),           # #271① M2 语气映射表（缺它 M2 静默失效）
     ] + pw_datas,
     hiddenimports=[
         # ── pywebview Windows 后端链（6.x 默认 WinForms + WebView2 via pythonnet）──
