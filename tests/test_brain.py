@@ -2981,8 +2981,8 @@ class LongTermMemoryWiringTests(unittest.TestCase):
         self.sm.save_memory.assert_called_once_with("preference", "我喜欢蓝色")
 
     def test_dislike_keyword_saves_memory(self):
-        self._chat("我讨厌下雨天")
-        self.sm.save_memory.assert_called_once_with("preference", "我讨厌下雨天")
+        self._chat("我讨厌吃香菜")
+        self.sm.save_memory.assert_called_once_with("preference", "我讨厌吃香菜")
 
     def test_remember_keyword_saves_event(self):
         self._chat("请记住周三要开会")
@@ -2995,11 +2995,11 @@ class LongTermMemoryWiringTests(unittest.TestCase):
 
     def test_keyword_extracts_matching_sentence_only(self):
         # 多句消息：提取命中规则的那一句，不是整条消息
-        self._chat("今天天气不错。我讨厌下雨。")
-        self.sm.save_memory.assert_called_once_with("preference", "我讨厌下雨")
+        self._chat("今天心情不错。我讨厌吃香菜。")
+        self.sm.save_memory.assert_called_once_with("preference", "我讨厌吃香菜")
 
     def test_no_keyword_no_save(self):
-        self._chat("今天天气怎么样")
+        self._chat("今天穿什么好")
         self.sm.save_memory.assert_not_called()
 
     # ---------- 回答前注入 ----------
@@ -3593,7 +3593,7 @@ class LocationHardBlockTests(unittest.TestCase):
                                {"agent_state.state_manager": self.real_sm})
 
     def _run_web_search_flow(self, query, user_city="", user_district="",
-                             user_message="今天天气怎么样",
+                             user_message=None,
                              unknown_location=True):
         """跑一条 web_search 工具流，返回 (reply, source, stdout, mexec)。"""
         raw = ('[思考] 查询需要联网。\n'
@@ -3615,7 +3615,7 @@ class LocationHardBlockTests(unittest.TestCase):
             mr.get.return_value = mock.Mock()
             mr.post.side_effect = [_local_resp(raw), _local_resp("汇总完成")]
             mcloud.return_value = "汇总完成"
-            reply, source = brain.smart_ask(user_message, [])
+            reply, source = brain.smart_ask(user_message or query, [])
         return reply, source, buf.getvalue(), mexec
 
     def test_location_unknown_blocks_search(self):
@@ -3626,7 +3626,7 @@ class LocationHardBlockTests(unittest.TestCase):
         self.assertIn("我还不知道你在哪个城市和区", reply)
         self.assertIn("长沙天心区", reply)   # 固定文案含示例
         self.assertEqual(source, "📍 询问位置")
-        self.assertIn("🛑 [搜索] 位置未知，拦截搜索请求", out)
+        self.assertIn("🛑 [位置] 位置未知 + 地点敏感问题 → 强制询问", out)
 
     def test_non_location_query_passes(self):
         """任务口径用例②：位置未知 + query="如何写Python"（非地点敏感）
@@ -3703,7 +3703,7 @@ class LocationHardBlockTests(unittest.TestCase):
         self.assertIn("我还不知道你在哪个城市和区", reply)
         self.assertEqual(source, "📍 询问位置")
         self.assertTrue(reply.startswith("<think>"), reply)   # 卡片口径不破坏
-        self.assertIn("🛑 [位置] 静默期内 + 位置未知 + 地点敏感问题 → 强制询问",
+        self.assertIn("🛑 [位置] 位置未知 + 地点敏感问题 → 强制询问",
                       buf.getvalue())
         self.assertTrue(brain._waiting_location_active())
 
@@ -3755,8 +3755,10 @@ class LocationHardBlockTests(unittest.TestCase):
         self.assertIn("🛑 [位置] 静默期内，截断历史防止位置泄漏", buf.getvalue())
 
     def test_grace_expired_chat_normal_path(self):
-        """任务口径用例④：静默期已过（6 分钟后）+ 位置未知 → 正常走模型
-        （不拦截、不截断）。"""
+        """任务口径用例④（M1+ 语义适配）：清除宽限期已过 + 位置未知 +
+        非地点敏感消息 → 正常走模型（不拦截、不截断）。语义更新：
+        2026-10-10 起位置未知 + 地点敏感词必拦截（无论 grace）——"过期
+        不误伤"回归价值改由非敏感消息承载。"""
         brain._location_cleared_at = time.time() - 301
         self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
         with self._sm_ctx(), \
@@ -3764,11 +3766,11 @@ class LocationHardBlockTests(unittest.TestCase):
                 mock.patch.object(brain, "USER_DISTRICT", ""), \
                 mock.patch.object(brain, "probe_local", return_value=True), \
                 mock.patch.object(brain, "ask_local",
-                                  return_value="今天天气不错哦") as mlocal, \
+                                  return_value="今天穿短袖就行啦") as mlocal, \
                 contextlib.redirect_stdout(io.StringIO()) as buf:
-            reply, source = brain.smart_ask("今天天气", [])
+            reply, source = brain.smart_ask("今天穿什么衣服", [])
         mlocal.assert_called_once()
-        self.assertIn("今天天气不错哦", reply)
+        self.assertIn("今天穿短袖就行啦", reply)
         self.assertNotIn("强制询问", buf.getvalue())
         self.assertNotIn("截断历史", buf.getvalue())
 
@@ -3781,7 +3783,7 @@ class LocationHardBlockTests(unittest.TestCase):
         mexec.assert_not_called()
         self.assertIn("我还不知道你在哪个城市和区", reply)
         self.assertEqual(source, "📍 询问位置")
-        self.assertIn("🛑 [搜索] 位置未知，拦截搜索请求", out)
+        self.assertIn("🛑 [位置] 位置未知 + 地点敏感问题 → 强制询问", out)
 
     def test_grace_period_after_clear_forces_ask(self):
         """任务口径用例②：历史里有位置 + 刚执行过 /clear_location → 静默
@@ -3793,7 +3795,7 @@ class LocationHardBlockTests(unittest.TestCase):
             "长沙市天心区的天气", user_message="今天天气怎么样")
         mexec.assert_not_called()
         self.assertIn("我还不知道你在哪个城市和区", reply)
-        self.assertIn("🛑 [位置] 静默期内 + 位置未知 + 地点敏感问题 → 强制询问",
+        self.assertIn("🛑 [位置] 位置未知 + 地点敏感问题 → 强制询问",
                       out)
 
     def test_location_record_works_despite_grace(self):

@@ -386,10 +386,13 @@ class ChatHistoryPersistenceTests(HistoryApiTestsBase):
 
         self.assertEqual(resp.status_code, 200)
         stored = _read_json_file(self.history_file)
-        self.assertEqual(stored[0], {"role": "user", "content": "你好"})
+        self.assertEqual(stored[0]["role"], "user")
+        self.assertEqual(stored[0]["content"], "你好")
+        self.assertIn("ts", stored[0])   # M1+：ts 字段（IM 式时间分隔）
         self.assertEqual(stored[1]["role"], "assistant")
         self.assertEqual(stored[1]["content"], "你好呀，主人~")
         self.assertEqual(stored[1]["source"], "🏠 本地")
+        self.assertIn("ts", stored[1])   # M1+：assistant 条目同样带 ts
 
     def test_chat_history_truncated_to_50(self):
         """50 条滚动截断：旧消息 + 新问答超过 50 条时保留最近 50 条。"""
@@ -1229,6 +1232,8 @@ class CQFaceRenderTests(unittest.TestCase):
         self.assertIn("const reply = thinkParts.body", self.content)  # 刷新重生成先剥离 think
         self.assertIn("appendBotMessage(m.content, m.source || '', lastUser",
                       self.content)                                 # 历史回放同入口
+        self.assertIn("appendUserMessage(m.content, m.ts)",
+                      self.content)                                 # M1+：历史带 ts（时间分隔）
 
     def test_face_mapping_covers_full_classic_range(self):
         """经典表情 id 0-103 全量收录 + 既有扩展 id（109/124/129/144/146），
@@ -1333,8 +1338,9 @@ class ThinkCardFrontendTests(unittest.TestCase):
     def test_history_replay_no_typing(self):
         """历史回放共用 appendBotMessage 入口，但不打字（animateThink=false）。"""
         self.assertIn(
-            "appendBotMessage(m.content, m.source || '', lastUser, { animateThink: false })",
-            self.console_js)
+            "appendBotMessage(m.content, m.source || '', lastUser,\n"
+            "                                         { animateThink: false, ts: m.ts })",
+            self.console_js)   # M1+：ts 透传（时间分隔），animateThink=false 保留
 
     # ---------- console.js：打字机与折叠 ----------
 
