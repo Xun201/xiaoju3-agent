@@ -86,3 +86,19 @@ ENVIRONMENT/顾问本/记忆区 roadmap+northstar/实验室镜像七处落地）
 - **对比测试（4 消息：天气/夸/骂/待办）暴露双缺口** → **9fbb929**：①mood_rules.json/mood_tone.json 未进 spec datas——frozen 静默回退最小词表，用户「聪明/笨」全落 small_talk（relationship 词表代码内置故同句正常命中 scolded，同句两模块判定分裂即铁证）→spec datas 补两数据文件；②stream 链 record_step 未挂——控制台走 stream 端点 turns 全 steps=0/brain_source=None→_ask_local_stream/_ask_cloud_stream 补挂（eval_count 顺带落）；
 - **复测 PASS**：「你真厉害」→ mood praised P 0.2→0.48（dp+0.28 连击×1.00）/A 0.55、turn steps=1 eval_count=30；词表语义分离确认（「厉害」=mood 被夸命中、「非道谢」不计 relationship affinity——两词表语义本不同，调优项非 bug）；
 - **判读记录**：待办查询走意图直达不经 LLM（无 mood/trace 记录=设计语义待议）；测试基线 1969+4；本地领先 origin 4 笔（…→9fbb929）待推。
+
+## 七、10-10 晚真机验收收官（四条清单 PASS + 生产账本增量证据）
+
+- **验收结论**：四条清单全过——①天气 A+B 全链（位置已知→☁️ 云端真
+  搜索+诚实应答「不瞎编糊弄」；/clear→反问城市→回答→user_location.
+  json 确定性落盘→再问全链）②思考卡无残留（正常消息干净收尾）③
+  时间戳连发首条戳符合（history_console ts 落库）④M2 未开（拍板
+  缺省关）——**#271① 全链+#282 生产活体验收完成**。
+- **生产账本增量证据（M1 机制五连实证）**：①M1 回归曲线（15:07 夸
+  奖 P 0.48 峰值 → 9 次对话 α=0.10 回归 → 0.309）；②闲置回归 β 首例
+  （15:58:33 rate=0.15 含 1.8h 加成）；③rel 日帽防极化首例（14:55 骂
+  -1.0 用满帽 → 18:14 再骂 delta=0「日帽已满」）；④两本账语义分离
+  （「你真厉害」mood praised 进/rel thanks 不进；「小橘你真笨」双账
+  同命中交叉验证）；⑤天气强路由云端真搜+确定性位置落盘。
+- **状态**：origin/main = 7bd9d37 待推 0；生产车 = 419091ce 活体；
+  测试基线 1969+4；本地待推 0。
