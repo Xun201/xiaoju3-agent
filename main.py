@@ -1108,6 +1108,7 @@ def _sticker_collect_reply(raw_message, message, user_id):
             urls = [m.group(1).strip()]
     if not urls:
         return "🖼️ 引用的消息里没找到图片"
+    from emoji_manager import collect_sticker
     result = collect_sticker(urls, collector=str(user_id or "owner"))
     if not result.get("ok"):
         return "🖼️ 图片下载失败（QQ 图链有时效），请重新发图再收藏"
