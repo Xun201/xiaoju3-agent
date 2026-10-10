@@ -79,3 +79,10 @@ ENVIRONMENT/顾问本/记忆区 roadmap+northstar/实验室镜像七处落地）
 - 基线演进：1923+4 → 1937+4（mood）→ **1946+4**（trace）；
 - 推平：… → 19b99a9 → 0f76c88 → **20e9306（现 HEAD，待推 0）**；
 - 本地领先：0 笔。
+
+## 六、真机部署与对比测试补账（10-10 午后）
+
+- **生产部署两轮**：首轮（56969e6 车）冒烟暴露 **frozen 路径 bug**（三模块 _db_path 的 __file__ fallback 在 onedir 下误落 dev 仓——生产三 db 曾误建 F:\Orangepi_number3gent_state）当场修 **c6dc178**（fallback 优先 xiaoju3.AGENT_STATE_DIR +3 锚）→重部署复测三 db 正确落位生产 agent_state；
+- **对比测试（4 消息：天气/夸/骂/待办）暴露双缺口** → **9fbb929**：①mood_rules.json/mood_tone.json 未进 spec datas——frozen 静默回退最小词表，用户「聪明/笨」全落 small_talk（relationship 词表代码内置故同句正常命中 scolded，同句两模块判定分裂即铁证）→spec datas 补两数据文件；②stream 链 record_step 未挂——控制台走 stream 端点 turns 全 steps=0/brain_source=None→_ask_local_stream/_ask_cloud_stream 补挂（eval_count 顺带落）；
+- **复测 PASS**：「你真厉害」→ mood praised P 0.2→0.48（dp+0.28 连击×1.00）/A 0.55、turn steps=1 eval_count=30；词表语义分离确认（「厉害」=mood 被夸命中、「非道谢」不计 relationship affinity——两词表语义本不同，调优项非 bug）；
+- **判读记录**：待办查询走意图直达不经 LLM（无 mood/trace 记录=设计语义待议）；测试基线 1969+4；本地领先 origin 4 笔（…→9fbb929）待推。
