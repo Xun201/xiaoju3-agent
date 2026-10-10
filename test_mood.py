@@ -182,3 +182,99 @@ def test_brain_hook_anchor():
     hook_seg = src[src.index("mood.observe_message") - 200:
                    src.index("mood.observe_message") + 200]
     assert "except" in hook_seg
+
+
+# ==================== M2 语气注入（拍板稿三决策已存档） ====================
+
+# 15 开关缺省关：tone_suffix 恒空串（拍板①：首个可感知变化等手动开）
+def test_tone_default_off():
+    assert mood.tone_suffix({"p": 0.9, "a": 0.9, "d": 0.5}) == ""
+
+
+# 16 中性基线档：p_mid_a_mid 空串（防"每句话都在演"）
+def test_tone_neutral_empty(monkeypatch):
+    monkeypatch.setenv("XIAOJU3_MOOD_TONE", "1")
+    assert mood.tone_suffix({"p": 0.2, "a": 0.4, "d": 0.3}) == ""
+    assert mood.tone_suffix({"p": 0.0, "a": 0.0, "d": 0.0}) == ""
+
+
+# 17 正向档：p_high_a_high 查表正确 + 措辞口径
+def test_tone_positive_tier(monkeypatch):
+    monkeypatch.setenv("XIAOJU3_MOOD_TONE", "1")
+    s = mood.tone_suffix({"p": 0.9, "a": 0.9, "d": 0.3})
+    assert "活泼" in s and "情绪参数" in s
+    assert "以性格设定为准" in s        # 裁决句每档传导
+    assert "安全与权限" in s            # 安全句永远严肃
+
+
+# 18 负向极档：保护措辞在位（绝不冷淡失礼），零攻击性词
+def test_tone_negative_tier(monkeypatch):
+    monkeypatch.setenv("XIAOJU3_MOOD_TONE", "1")
+    s = mood.tone_suffix({"p": -0.9, "a": -0.9, "d": -0.3})
+    assert "忧郁狐狐" in s and "绝不冷淡失礼" in s
+    for bad in ("冷漠", "敷衍", "怼"):
+        assert bad not in s
+
+
+# 19 9 档表完整性：P×A 组合无缺失
+def test_tone_table_complete():
+    import json
+    table = json.load(open(mood._TONE_PATH, encoding="utf-8"))
+    keys = set(table["tones"].keys())
+    expect = {f"p_{p}_a_{a}" for p in ("high", "mid", "low")
+              for a in ("high", "mid", "low")}
+    assert keys == expect, f"9 档缺漏: {expect - keys}"
+
+
+# 20 体验词黑名单：注入面（tones 值+verdict）零"感到/开心/难过"（虚实
+# 红线；_comment 元说明不进注入面不扫）
+def test_tone_no_experience_words():
+    import json
+    table = json.load(open(mood._TONE_PATH, encoding="utf-8"))
+    injectable = " ".join(table["tones"].values()) + table.get("verdict", "")
+    for w in ("感到", "开心", "难过", "伤心"):
+        assert w not in injectable, f"红线词泄漏: {w}"
+
+
+# 21 db 读取失败 + 开关开：load 回退基线=中性档 → 空串（静默闭环）
+def test_tone_db_failure_neutral(monkeypatch, tmp_path):
+    bad = tmp_path / "file.txt"
+    bad.write_text("x")
+    monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", str(bad / "mood.db"))
+    monkeypatch.setenv("XIAOJU3_MOOD_TONE", "1")
+    assert mood.tone_suffix() == ""
+
+
+# 22 brain 源码锚：单点动态后缀（_build_messages 唯一组装点，拼 content）
+def test_tone_brain_anchor():
+    import inspect
+    import brain
+    src = inspect.getsource(brain)
+    assert "_mood_tone_suffix()" in src, "单点后缀调用缺失"
+    assert "SYSTEM_PROMPT.get(\"content\", \"\") + _tone" in src, \
+        "content 拼接缺失"
+    assert "def _mood_tone_suffix" in src
+
+
+# 23 后缀拼进 messages 后与空串路径逐字节一致（开关关）
+def test_build_messages_byte_identical_when_off(monkeypatch):
+    import brain
+    monkeypatch.delenv("XIAOJU3_MOOD_TONE", raising=False)
+    msgs = brain._build_messages("在吗", [])
+    assert msgs[0] == brain.SYSTEM_PROMPT  # 空串路径：逐字节现状
+
+
+# 24 开关开+真实情绪数据：_build_messages 的 system content 含后缀
+def test_build_messages_with_tone(monkeypatch):
+    import brain
+    monkeypatch.setenv("XIAOJU3_MOOD_TONE", "1")
+    # 制造正向情绪（写进 fixture 隔离库）：连续两次被夸 → P 升至 high 档
+    mood.observe_message("你好厉害呀", now=DAY)
+    mood.observe_message("你好厉害呀",
+                         now=datetime(2026, 10, 10, 9, 0, 5))
+    msgs = brain._build_messages("在吗", [])
+    assert isinstance(msgs[0], dict)
+    assert "当前情绪参数" in msgs[0]["content"]
+    assert "以性格设定为准" in msgs[0]["content"]
+    # prompts 共享常量不被污染
+    assert "当前情绪参数" not in brain.SYSTEM_PROMPT["content"]

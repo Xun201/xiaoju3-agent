@@ -39,6 +39,8 @@ LATE_NIGHT_DA = -0.05
 BASELINE = {"p": 0.2, "a": 0.4, "d": 0.3}   # 决策点①已拍板
 _RULES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "mood_rules.json")
+_TONE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "mood_tone.json")
 _FALLBACK_RULES = {  # 规则文件缺失/损坏时的内置最小集（保证可运行）
     "rules": [{"type": "praised", "label": "被夸/道谢",
                "patterns": ["厉害", "谢谢"], "dp": 0.30, "da": 0.15,
@@ -258,3 +260,43 @@ def mood_line(state=None):
     return (f"{tier(p, ('明显积极', '轻微积极', '偏消极'))}、"
             f"{tier(a, ('高唤醒', '中等唤醒', '低唤醒平静'))}、"
             f"{tier(d, ('主导', '平稳', '顺从'))}")
+
+
+def _tier(v):
+    """P/A 维度三档划分（阈值 0.50：基线 a=0.4 必须落在 mid=中性豁免
+    区——M2 拍板稿"中性档不注入"的隐含前提，0.34 会把基线判成 high）。"""
+    if v >= 0.50:
+        return "high"
+    if v >= -0.50:
+        return "mid"
+    return "low"
+
+
+def tone_enabled():
+    """M2 语气注入开关（XIAOJU3_MOOD_TONE）：缺省关（拍板①——首个
+    用户可感知变化，等 M1 真机验证后手动开）。"""
+    return str(os.environ.get("XIAOJU3_MOOD_TONE", "0")).strip().lower() \
+        in ("1", "true", "on")
+
+
+def tone_suffix(state=None):
+    """#271① M2：mood 坐标 → 语气后缀（拼在 SYSTEM_PROMPT 尾部）。
+
+    四条空串路径（任一命中即与现状逐字节一致）：开关关 / 读取异常 /
+    中性基线档（p_mid_a_mid）/ 表文件缺失损坏。全程 try/except，
+    绝不影响对话链。措辞红线：情绪参数口径，零体验词。
+    """
+    try:
+        if not tone_enabled():
+            return ""
+        s = state or load_mood()
+        key = f"p_{_tier(s['p'])}_a_{_tier(s['a'])}"
+        with open(_TONE_PATH, encoding="utf-8") as f:
+            table = json.load(f)
+        tone = table.get("tones", {}).get(key, "")
+        if not tone:
+            return ""
+        return (f"\n\n【当前情绪参数】：{mood_line(s)}。本轮回复语气："
+                f"{tone}。{table.get('verdict', '')}")
+    except Exception:
+        return ""
