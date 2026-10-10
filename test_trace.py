@@ -120,3 +120,11 @@ def test_brain_hook_anchor():
     assert "turn_trace.record_step(\"cloud\"" in src
     # 静默纪律：模块缺席时 turn_trace=None 旁路
     assert "except ImportError:\n    turn_trace = None" in src
+
+
+# 11 frozen 路径优先级：xiaoju3.AGENT_STATE_DIR 优先（同 mood 修复）
+def test_db_path_prefers_xiaoju3(monkeypatch, tmp_path):
+    import xiaoju3
+    monkeypatch.delenv("XIAOJU3_TRACE_DB_PATH", raising=False)
+    monkeypatch.setattr(xiaoju3, "AGENT_STATE_DIR", str(tmp_path))
+    assert turn_trace._db_path() == os.path.join(str(tmp_path), "trace.db")

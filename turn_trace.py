@@ -57,8 +57,12 @@ def _db_path():
     p = os.environ.get("XIAOJU3_TRACE_DB_PATH")
     if p:
         return p
-    base = os.environ.get("AGENT_STATE_DIR") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "agent_state")
+    try:
+        import xiaoju3
+        base = xiaoju3.AGENT_STATE_DIR  # frozen 归位（同 mood 修复）
+    except Exception:
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "agent_state")
     return os.path.join(base, "trace.db")
 
 
