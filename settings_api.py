@@ -50,7 +50,11 @@ def _load_tiers():
         if not isinstance(data, dict) or "tiers" not in data:
             raise ValueError("bad tiers structure")
         return data
-    except Exception:
+    except Exception as e:
+        # 显式化分档表加载失败（B1 生产首验抓到：items 空=读失败走空骨
+        # 架却静默——2026-10-10 真机调试图钉）；不影响主链
+        print(f"⚠️ [settings_tiers] 分档表加载失败（空骨架降级）: {e} | "
+              f"path={_tiers_path()!r}")
         return {"tiers": {}, "items": []}
 
 
