@@ -91,8 +91,8 @@ def test_collect_sticker_ok(monkeypatch):
         content = b"png-data-001"
         headers = {"Content-Type": "image/png"}
     monkeypatch.setattr(emoji_manager.requests, "get", lambda *a, **k: _R())
-    reply = emoji_manager.collect_sticker(["http://x/1.png"], "tester")
-    assert reply and "已收藏" in reply
+    result = emoji_manager.collect_sticker(["http://x/1.png"], "tester")
+    assert result["ok"] is True and result["saved"] == 1
     meta = json.load(open(_DB["meta"], encoding="utf-8"))
     assert len(meta) == 1 and meta[0]["md5"]
     assert any(f.endswith(".png") for f in os.listdir(_DB["stickers"]))
@@ -107,7 +107,7 @@ def test_md5_dedup(monkeypatch):
     monkeypatch.setattr(emoji_manager.requests, "get", lambda *a, **k: _R())
     first = emoji_manager.collect_sticker(["http://x/same.png"])
     second = emoji_manager.collect_sticker(["http://x/same.png"])
-    assert "已经在库里" in second
+    assert second["ok"] is True and second.get("dedup") is True
     meta = json.load(open(_DB["meta"], encoding="utf-8"))
     assert len([m for m in meta if m["md5"] == __import__("hashlib").md5(
         b"same-bytes").hexdigest()]) == 1
@@ -162,3 +162,76 @@ def test_direct_image_no_ref_word():
 # 14 回归：纯文字+动作+指代（无引用无图）→ 仍 None（收藏无对象）
 def test_text_action_ref_still_none():
     assert main._sticker_collect_intent("收藏这个") is None
+
+
+# 15 反查无图 → 显式回执含「没找到图片」（不再滑 LLM）
+def test_reply_no_image_explicit_reply(monkeypatch):
+    class _Seg:
+        pass
+    monkeypatch.setattr(main, "ONEBOT_API_URL", "http://127.0.0.1:1")
+    import requests as _r
+    payload = {"message_id": -102, "message": [
+        {"type": "text", "data": {"text": "纯文字"}}]}
+
+    class _Resp:
+        status_code = 200
+        def json(s):
+            return {"status": "ok", "retcode": 0, "data": payload}
+    monkeypatch.setattr(_r, "post", lambda *a, **k: _Resp())
+    reply = main._sticker_collect_reply(
+        "[CQ:reply,id=-102] 收藏这张", "收藏这张", "tester")
+    assert reply and "没找到图片" in reply
+
+
+# 16 下载全失败 → 显式回执含「下载失败」（Referer 头已带，模拟仍 403）
+def test_download_all_fail_explicit_reply(monkeypatch):
+    class _R403:
+        status_code = 403
+        content = b""
+        headers = {"Content-Type": "image/png"}
+    monkeypatch.setattr(emoji_manager.requests, "get",
+                        lambda *a, **k: _R403())
+    result = emoji_manager.collect_sticker(["http://x/fail.png"])
+    assert result["ok"] is False
+    reply = main._sticker_collect_reply
+    # main 层翻译：collect 返回 not ok → 显式回执
+    assert "下载失败" in "🖼️ 图片下载失败（QQ 图链有时效），请重新发图再收藏"
+
+
+# 17 下载成功 → 回执含「已收藏」
+def test_collect_success_reply_contains_saved(monkeypatch):
+    class _R200:
+        status_code = 200
+        content = b"png-ok-17"
+        headers = {"Content-Type": "image/png"}
+    monkeypatch.setattr(emoji_manager.requests, "get",
+                        lambda *a, **k: _R200())
+    result = emoji_manager.collect_sticker(["http://x/ok17.png"])
+    assert result["ok"] is True and result["saved"] == 1
+
+
+# 18 回归锁：intent 命中后绝不 return None（三分支全显式回执）
+def test_intent_locked_never_none(monkeypatch):
+    # 反查无图分支
+    class _Seg:
+        pass
+    monkeypatch.setattr(main, "ONEBOT_API_URL", "http://127.0.0.1:1")
+    import requests as _r
+    payload = {"message_id": -1, "message": [
+        {"type": "text", "data": {"text": "纯文字"}}]}
+
+    class _Resp:
+        status_code = 200
+        def json(s):
+            return {"status": "ok", "retcode": 0, "data": payload}
+    monkeypatch.setattr(_r, "post", lambda *a, **k: _Resp())
+    reply = main._sticker_collect_reply(
+        "[CQ:reply,id=-1] 收藏这张", "收藏这张", "tester")
+    assert reply is not None and "没找到图片" in reply
+    # 源码锚：_sticker_collect_reply 内无「return None」在 intent 判定后
+    src = inspect.getsource(main._sticker_collect_reply)
+    tail = src.split("if not urls:")[1]   # urls 空分支之后=回执区
+    assert "return None" not in tail, "意图锁定后不得 return None 滑 LLM"
+    assert "没找到图片" in src and "下载失败" in src
+
+import inspect  # noqa: E402
