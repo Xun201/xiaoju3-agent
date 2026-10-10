@@ -1892,6 +1892,11 @@ def _smart_ask_impl(message, history=None, session_key="default",
     home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
     # ⚠️ 危险操作强制云端判定（#278，2026-10-08）：与方向③同构
     danger_cloud = any(k in (message or "") for k in _DANGER_CLOUD_KEYWORDS)
+    # 🌤️ 天气意图强制云端（M1+ 天气方案 A 半，2026-10-10 用户拍板）：位置
+    # 已知时本地小模型对天气类仍会幻觉"操作已完成"（真机实锤：问天气→
+    # 幻觉 control_ha_device 开灯）——云端有【联网搜索规则】提示词约束，
+    # 正确调 web_search 并带位置拼 query
+    weather_intent = any(k in (message or "") for k in _WEATHER_KEYWORDS)
     messages = _build_messages(message, history, user_id)
     # 🗜️ 前情提要压缩接线（§10 #2）：历史 >20 条 → 旧消息浓缩为约 50 字
     # 前情提要 + 最近 10 条明细（结果持久化缓存；失败回退既有硬截断口径）
@@ -1944,6 +1949,12 @@ def _smart_ask_impl(message, history=None, session_key="default",
         # 门禁+【不伪造成功】铁律——与方向③同构
         local_online = False
         print("⚠️ 危险操作模式：强制云端大脑（本地小模型编造结果防御）。")
+    elif weather_intent:
+        # 🌤️ 天气意图强制云端（M1+ 天气方案 A 半）：位置未知已被前置拦截
+        # 问城市；位置已知时本地小模型对天气仍幻觉"操作已完成"（真机
+        # 实锤），云端有【联网搜索规则】正确调 web_search 带位置拼 query
+        local_online = False
+        print("🌤️ 天气意图模式：强制云端大脑（本地小模型幻觉防御）。")
     elif tier == "low":
         # low：跳过本地探测（省 1 秒等待），直接依赖云端
         local_online = False
@@ -2282,6 +2293,8 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
     home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
     # ⚠️ 危险操作强制云端判定（#278）：与 smart_ask 同款
     danger_cloud = any(k in (message or "") for k in _DANGER_CLOUD_KEYWORDS)
+    # 🌤️ 天气意图强制云端（M1+ 天气方案 A 半）：与 smart_ask 同款
+    weather_intent = any(k in (message or "") for k in _WEATHER_KEYWORDS)
     messages = _build_messages(message, history, user_id)
     messages = _compress_history(messages, session_key)
     messages = _inject_memory_context(messages)
@@ -2310,7 +2323,7 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
         messages.append({"role": "system", "content": TOOL_FUSE_SYSTEM_NOTE})
 
     tier = _resolve_tier()
-    if todo_link_mode or home_cloud or danger_cloud or tier == "low":
+    if todo_link_mode or home_cloud or danger_cloud or weather_intent or tier == "low":
         local_online = False
     else:
         local_online = probe_local()
