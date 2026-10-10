@@ -87,6 +87,12 @@ app = Flask(__name__)
 # 原 :5002 main.py 注册点随架构合并迁入）
 app.register_blueprint(health_bp)
 
+# ⚙️ #264 配置面板 settings API（B1：分档权限门/掩码密钥页/审计——
+# register_settings_routes 内部全静默降级，缺 settings_tiers.json 时
+# items 空且写入全拒，不碰主链）
+from settings_api import register_settings_routes as _register_settings  # noqa: E402
+_register_settings(app)
+
 # 资源根（保名重定义，方案 §1.2）：新版控制台前端文件与 assets 的静态托管基准——
 # frozen 下为 _MEIPASS（datas 只读），非 frozen 与项目根同值，行为不变
 PROJECT_ROOT = paths.RESOURCE_ROOT
