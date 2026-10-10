@@ -196,17 +196,33 @@ def _content_md5(data):
 
 
 def collect_sticker(urls, collector="owner", tag="sticker"):
-    """从候选 URL 列表收藏第一张下载成功的图 → stickers/ 库 + LRU 100。
+    """从候选 URL 列表收藏 → stickers/ 库 + LRU 100。
 
-    返回回执文本（成功/已在库/失败）；全程不抛异常（回复链路降级口径）。
+    返回 dict（一期补丁，2026-10-10：不再返回文本/静默 None——
+    意图锁定原则，调用方负责显式回执）：
+    - 全部/部分成功：{"ok": True, "saved": N, "total": M, "dedup": bool}
+    - 全部失败：{"ok": False, "reason": "download_failed",
+                 "detail": ["url → 错误", ...]}（逐 url 诊断，供回执）
+    全程不抛异常（回复链路降级口径）。
     """
     try:
         os.makedirs(STICKER_DIR, exist_ok=True)
         meta = _load_stickers_meta()
+        saved = 0
+        dedup = False
+        failures = []
+        result = {"ok": False, "reason": "download_failed",
+                  "detail": failures, "saved": 0, "total": len(urls)}
         for url in urls:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            res = requests.get(url, headers=headers, timeout=15)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                       'Referer': 'https://gchat.qpic.cn/'}
+            try:
+                res = requests.get(url, headers=headers, timeout=15)
+            except Exception as ex:
+                failures.append(f"{url[:60]} → {ex}")
+                continue
             if res.status_code != 200 or not res.content:
+                failures.append(f"{url[:60]} → HTTP {res.status_code}")
                 continue
             md5 = _content_md5(res.content)
             for it in meta:
@@ -214,7 +230,11 @@ def collect_sticker(urls, collector="owner", tag="sticker"):
                     it["last_used_ts"] = datetime.now().isoformat(
                         sep=" ", timespec="seconds")
                     _save_stickers_meta(meta)
-                    return "这张已经在库里啦😉"
+                    dedup = True
+                    break
+            if dedup:
+                result.update({"ok": True, "saved": 0, "dedup": True})
+                return result
             ext = _ext_from_content_type(
                 res.headers.get("Content-Type"))
             filename = f"{tag}_{md5}{ext}"
@@ -238,11 +258,15 @@ def collect_sticker(urls, collector="owner", tag="sticker"):
                 except Exception:
                     pass
             _save_stickers_meta(meta)
-            return f"✅ 已收藏！表情库现有 {len(meta)} 张"
-        return None   # 全部候选下载失败 → 调用方按"不收藏"静默处理
+            saved += 1
+        if saved:
+            result.update({"ok": True, "saved": saved})
+        elif not failures:
+            failures.append("全部候选 url 均为空")
+        return result
     except Exception as e:
         print(f"❌ 表情收藏出错: {e}")
-        return None
+        return {"ok": False, "reason": "exception", "detail": [str(e)]}
 
 
 def fetch_message_images(message_id):

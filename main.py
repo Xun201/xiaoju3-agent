@@ -1088,6 +1088,9 @@ def _sticker_collect_reply(raw_message, message, user_id):
     intent = _sticker_collect_intent(raw_message)
     if intent is None:
         return None
+    # 🔒 意图锁定原则（2026-10-10 补）：三条件命中=用户意图明确=意图锁定，
+    # 此后无论成败均显式回执，绝不 return None 滑 LLM（真机幻觉实证：
+    # 反查失败静默滑 LLM → 本地模型拿 CQ 残串编原始 JSON 回执）
     urls = []
     if intent["has_reply"] and intent["reply_id"]:
         from emoji_manager import fetch_message_images
@@ -1097,10 +1100,13 @@ def _sticker_collect_reply(raw_message, message, user_id):
         if m:
             urls = [m.group(1).strip()]
     if not urls:
-        print("🖼️ [表情收藏] 三条件命中但未取得图链（反查失败/无图），不收藏")
-        return None
-    from emoji_manager import collect_sticker
-    return collect_sticker(urls, collector=str(user_id or "owner"))
+        return "🖼️ 引用的消息里没找到图片"
+    result = collect_sticker(urls, collector=str(user_id or "owner"))
+    if not result.get("ok"):
+        return "🖼️ 图片下载失败（QQ 图链有时效），请重新发图再收藏"
+    if result.get("dedup"):
+        return "这张已经在库里啦😉"
+    return f"✅ 已收藏！表情库现有 {result.get('saved', 0)} 张"
 
 
 # =======================================================
