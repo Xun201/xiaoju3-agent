@@ -1055,7 +1055,8 @@ def _sticker_collect_intent(raw_message):
 
     - 条件①（对象）：[CQ:reply,id=M] 或 本条 [CQ:image；
     - 条件②（动作）：清洗文本命中动作词表；
-    - 条件③（指代）：命中指代词表（本条图场景省略指代）；
+    - 条件③（指代）：命中指代词表——**豁免：有引用或有本条图，对象即明
+      （「收藏」两字 + 引用 = 最简合法指令，2026-10-10 真机误杀实锤后修）**；
     不满足任一 → None（静默放过，修无条件拦截老 bug）。
     """
     import re as _re
@@ -1067,7 +1068,7 @@ def _sticker_collect_intent(raw_message):
     if not any(w in text for w in _STICKER_ACTION_WORDS):
         return None
     if not any(w in text for w in _STICKER_REF_WORDS) and not (
-            has_image and not has_reply):
+            has_image or has_reply):
         return None
     reply_id = None
     m = _re.search(r'\[CQ:reply,id=(-?\d+)', raw_message)

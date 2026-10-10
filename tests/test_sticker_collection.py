@@ -144,3 +144,21 @@ def test_old_unconditional_gone():
     import inspect
     src = inspect.getsource(main)
     assert "收到你的表情啦" not in src
+
+
+# 12 形态 A：引用+动作「收藏」（无指代词）→ 意图命中（条件③豁免修复实证）
+def test_reply_collect_no_ref_word():
+    it = main._sticker_collect_intent("[CQ:reply,id=-100] 收藏")
+    assert it and it["has_reply"] and it["reply_id"] == "-100"
+
+
+# 13 形态 B 回归：本条图+动作词（无指代）→ 意图命中（原语义保留）
+def test_direct_image_no_ref_word():
+    it = main._sticker_collect_intent(
+        "[CQ:image,file=x.png,url=http://x/x.png] 收藏")
+    assert it and it["has_image"]
+
+
+# 14 回归：纯文字+动作+指代（无引用无图）→ 仍 None（收藏无对象）
+def test_text_action_ref_still_none():
+    assert main._sticker_collect_intent("收藏这个") is None
