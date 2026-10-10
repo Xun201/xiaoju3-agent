@@ -107,6 +107,13 @@ from permission import permission_manager
 from prompts import SYSTEM_PROMPT
 from tools import execute_tool, TOOL_WHITELIST
 
+# Turn/Step 可观测性（#282 M1）：模块缺席（文件被删）时置 None 全旁路，
+# 静态 import 对 PyInstaller 可见，无需 hiddenimports
+try:
+    import turn_trace
+except ImportError:
+    turn_trace = None
+
 # 模块日志器：WRAPPED_TEXT 诊断日志走 DEBUG 级别（2026-10-02 用户口径降噪——
 # 默认终端不再输出；排查时 logging.getLogger("xiaoju3.brain").setLevel(
 # logging.DEBUG) 即可恢复逐条对账）
@@ -1577,8 +1584,14 @@ def ask_local(msgs, model=None):
     payload = {"model": model or LOCAL_MODEL, "messages": msgs,
                "stream": False, "keep_alive": -1,
                "options": {"temperature": LLM_TEMPERATURE}}
-    return requests.post(LOCAL_URL, json=payload,
-                         timeout=LOCAL_GENERATE_TIMEOUT).json()['message']['content']
+    _t0 = time.perf_counter()
+    resp = requests.post(LOCAL_URL, json=payload,
+                         timeout=LOCAL_GENERATE_TIMEOUT).json()
+    if turn_trace is not None:
+        turn_trace.record_step("local", model or LOCAL_MODEL,
+                               int((time.perf_counter() - _t0) * 1000),
+                               eval_count=resp.get("eval_count"))
+    return resp['message']['content']
 
 
 def ask_cloud(messages):
@@ -1593,10 +1606,14 @@ def ask_cloud(messages):
         # timeout 元组（#260）：标量值只约束单次 socket 读，防不住"每 29s
         # 来一个字节"的慢滴连接——connect 短 + read 硬上限，两者任一触发
         # 即抛异常转 ⚠️ 文案，调用方（含待办提取后台线程）不再无限挂死
+        _t0 = time.perf_counter()
         response = requests.post(CLOUD_URL, headers=headers, json=payload,
                                  timeout=(10, CLOUD_TIMEOUT))
         response.raise_for_status()
         resp_json = response.json()
+        if turn_trace is not None:
+            turn_trace.record_step("cloud", CLOUD_MODEL,
+                                   int((time.perf_counter() - _t0) * 1000))
 
         # 检查是否存在 choices，如果不存在，就把接口返回的原始错误信息发出来
         if "choices" in resp_json:
@@ -1751,6 +1768,14 @@ def _build_messages(message, history):
 
 
 def smart_ask(message, history=None, session_key="default"):
+    """双脑决策入口（#282 turn 级计时包装）：主体 _smart_ask_impl。"""
+    if turn_trace is not None:
+        with turn_trace.TurnTimer("sync"):
+            return _smart_ask_impl(message, history, session_key)
+    return _smart_ask_impl(message, history, session_key)
+
+
+def _smart_ask_impl(message, history=None, session_key="default"):
     """双脑决策入口：本地优先，异常热切换云端。返回 (回复, 来源标签) 二元组。
 
     message: 本条用户消息文本；history: 历史 role/content 消息列表（可含
@@ -1928,6 +1953,8 @@ def smart_ask(message, history=None, session_key="default"):
             tool_call = json.loads(json_str)
             tool_name = tool_call.get("tool")
             tool_args = tool_call.get("args", {})
+            if turn_trace is not None:
+                turn_trace.record_tool(tool_name)
 
             if tool_name in TOOL_WHITELIST:
                 # 🧠 思维链捕获：本轮有工具调用，最终 reply 统一在最前面包装
@@ -2113,6 +2140,17 @@ def _ask_cloud_stream(messages, on_event, event_type="answer"):
 
 def smart_ask_stream(message, history=None, session_key="default",
                      on_event=None):
+    """smart_ask 的流式平行版（#282 turn 级计时包装）：主体见
+    _smart_ask_stream_impl。"""
+    if turn_trace is not None:
+        with turn_trace.TurnTimer("stream"):
+            return _smart_ask_stream_impl(message, history, session_key,
+                                          on_event)
+    return _smart_ask_stream_impl(message, history, session_key, on_event)
+
+
+def _smart_ask_stream_impl(message, history=None, session_key="default",
+                           on_event=None):
     """smart_ask 的流式平行版（C1，#244）：复刻双脑路由/工具环/封口
     全状态机，模型增量经 on_event 逐块回调；返回与 smart_ask 同形的
     (reply, source)，落盘与熔断口径一致（落盘仍由调用方执行）。
@@ -2243,6 +2281,8 @@ def smart_ask_stream(message, history=None, session_key="default",
             tool_call = json.loads(json_str)
             tool_name = tool_call.get("tool")
             tool_args = tool_call.get("args", {})
+            if turn_trace is not None:
+                turn_trace.record_tool(tool_name)
             if tool_name in TOOL_WHITELIST:
                 thinking = _capture_thinking(raw_reply) or \
                     _tool_thinking_placeholder(tool_name)
