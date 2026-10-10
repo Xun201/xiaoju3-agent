@@ -274,10 +274,13 @@ def fetch_message_images(message_id):
 
     失败/无图返回 []（调用方按"不收藏不抢答"静默处理）。5s 超时。"""
     try:
-        from xiaoju3 import ONEBOT_API_URL
+        from xiaoju3 import ONEBOT_API_URL, ONEBOT_TOKEN
+        # Authorization 必带（NapCat token 校验——缺失即 403 静默失败，
+        # 2026-10-10 真机实锤：独立脚本带 Bearer 成功、函数内没带失败）
+        headers = {"Authorization": f"Bearer {ONEBOT_TOKEN}"}
         res = requests.post(f"{ONEBOT_API_URL}/get_msg",
                             json={"message_id": int(message_id)},
-                            timeout=5)
+                            timeout=5, headers=headers)
         if res.status_code != 200:
             return []
         message = res.json().get("data", {}).get("message") or []

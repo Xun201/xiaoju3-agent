@@ -235,3 +235,14 @@ def test_intent_locked_never_none(monkeypatch):
     assert "没找到图片" in src and "下载失败" in src
 
 import inspect  # noqa: E402
+
+
+# 20 意图锁定扩展：动作+指代双命中但无对象 → 轻回执（不滑 LLM）
+def test_action_ref_no_object_gentle_reply():
+    from main import _STICKER_ACTION_WORDS, _STICKER_REF_WORDS
+    text = "收藏这个"
+    hit = (any(w in text for w in _STICKER_ACTION_WORDS)
+           and any(w in text for w in _STICKER_REF_WORDS))
+    assert hit
+    expected = "要收藏表情的话，引用图片或直接发图给我哦～"
+    assert "引用" in expected and "发图" in expected

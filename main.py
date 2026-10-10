@@ -991,10 +991,17 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     # （handle_todo_command 从原文取链接，免疫清洗）：受理即回、零 token、
     # 不进模型。置于群聊防刷屏门之后：群里不 @ 不触发，与对话门一致。
     # 🎯 表情收藏三条件门（#299 c+d）：命中即收藏回执（不进模型）；
-    # 不满足=静默放过继续对话（修无条件拦截抢答老 bug）
+    # 动作+指代双命中但无对象 → 轻回执引导（不滑 LLM 幻觉，2026-10-10
+    # 真机：「收藏这个」纯文字 → 本地模型幻觉「已收藏」）；其余静默放过
     sticker_reply = _sticker_collect_reply(raw_message, message, user_id)
     if sticker_reply is not None:
         return sticker_reply
+    text_nc = _strip_cq(raw_message)
+    if ("[CQ:image" in raw_message or "[CQ:reply" in raw_message):
+        pass   # 有对象：三条件门已处理（含失败回执）
+    elif any(w in text_nc for w in _STICKER_ACTION_WORDS) and any(
+            w in text_nc for w in _STICKER_REF_WORDS):
+        return "要收藏表情的话，引用图片或直接发图给我哦～"
 
     if raw_message and "chat.deepseek.com/share/" in raw_message:
         link_match = re.search(r'https://chat\.deepseek\.com/share/\S+', raw_message)
