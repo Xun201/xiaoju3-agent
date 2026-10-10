@@ -108,3 +108,14 @@ ENVIRONMENT/顾问本/记忆区 roadmap+northstar/实验室镜像七处落地）
   修饰「尾巴摇成小风扇」，中-弱证据如实标注）；档位勘误=P=0.194 落
   mid（合成档 p_mid_a_high）；衍生打磨项 #300（「XX 表示 YY」陈述式
   →画面式，方案 A 待设计稿）。
+
+- **#264 B1 后端 settings API 部署生产+真机验收 PASS（两轮部署）**：首轮
+  生产 items 全空——**settings_tiers.json 未进 spec datas**（与 mood_rules/
+  mood_tone 同族教训第三例，except 显式化日志抓到 Errno 2 铁证）→ spec
+  datas 补齐重部署；复测 GET settings 13 项按等级渲染（L3 隐藏 danger）+
+  keys 5 掩码；B1 生产验收 PASS（两接口 200/零密钥泄漏/分档语义活体）。
+  生产车 = 39dc5cbd（含 B1）。
+- **三问题修复生产生效**：思考卡残留（q.get timeout 180+前端守护）/
+  天气意图误路由（聊天硬拦截去 grace 条件——位置未知+地点敏感即问城市，
+  真机：问天气→📍 询问位置非幻觉）/**IM 式时间戳分隔**（ts 落
+  history_console+前端分隔条——连发首条戳符合真机观察）。
