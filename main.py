@@ -953,18 +953,6 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     if soul_reply is not None:
         return soul_reply
 
-    # 1. 收集图片表情包（拦截非 @ 的图片消息，仅存链接不下载——文档 §5 口径）
-    if "[CQ:image" in raw_message and "[CQ:at" not in raw_message:
-        img_match = re.search(r'\[CQ:image,file=(.*?)\]', raw_message)
-        if img_match:
-            img_url = img_match.group(1).strip()
-            if img_url:
-                print(f"🖼️ 收到图片，正在保存链接: {img_url}")
-                if save_emoji_link(img_url):
-                    return "收到你的表情啦！已经存进小仓库了😊"
-                else:
-                    return "这个表情我没存下来，下次再试试！"
-
     # 2. 群聊防刷屏（只有@或触发词才理人）
     if source == 'qq' and group_id:
         if self_qq:
@@ -1002,6 +990,12 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     # 清洗前检测原文，命中直接转 /todo_from_link 指令形态走既有提取链
     # （handle_todo_command 从原文取链接，免疫清洗）：受理即回、零 token、
     # 不进模型。置于群聊防刷屏门之后：群里不 @ 不触发，与对话门一致。
+    # 🎯 表情收藏三条件门（#299 c+d）：命中即收藏回执（不进模型）；
+    # 不满足=静默放过继续对话（修无条件拦截抢答老 bug）
+    sticker_reply = _sticker_collect_reply(raw_message, message, user_id)
+    if sticker_reply is not None:
+        return sticker_reply
+
     if raw_message and "chat.deepseek.com/share/" in raw_message:
         link_match = re.search(r'https://chat\.deepseek\.com/share/\S+', raw_message)
         if link_match:
@@ -1045,6 +1039,69 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         state_manager.save_conversation("qq", messages_qq)
 
     return reply
+# ================ 表情收藏三条件门（#299 c+d，2026-10-10） ================
+# 触发：引用([CQ:reply) 或 本条图([CQ:image) + 动作词 + 指代词（本条图
+# 场景省略指代）。不满足=静默放过（不抢答不存——修"无条件拦截"老 bug）。
+# 词表先按定稿 8+6，实际用后调（改此二元组即可）。
+# "收"单字误伤实锤（测试抓到：「收下啦」子串命中）——定稿词表"实际用
+# 后调"第一调：移除；后续误伤照此模式增删
+_STICKER_ACTION_WORDS = ("收藏", "存", "留下", "要了", "拿走",
+                         "记下", "保存")
+_STICKER_REF_WORDS = ("这张", "这个", "它", "图", "表情", "图片")
+
+
+def _sticker_collect_intent(raw_message):
+    """三条件判定 → {'has_reply', 'reply_id', 'has_image'} 或 None。
+
+    - 条件①（对象）：[CQ:reply,id=M] 或 本条 [CQ:image；
+    - 条件②（动作）：清洗文本命中动作词表；
+    - 条件③（指代）：命中指代词表（本条图场景省略指代）；
+    不满足任一 → None（静默放过，修无条件拦截老 bug）。
+    """
+    import re as _re
+    has_reply = "[CQ:reply" in raw_message
+    has_image = "[CQ:image" in raw_message
+    if not (has_reply or has_image):
+        return None
+    text = _strip_cq(raw_message)
+    if not any(w in text for w in _STICKER_ACTION_WORDS):
+        return None
+    if not any(w in text for w in _STICKER_REF_WORDS) and not (
+            has_image and not has_reply):
+        return None
+    reply_id = None
+    m = _re.search(r'\[CQ:reply,id=(-?\d+)', raw_message)
+    if m:
+        reply_id = m.group(1)
+    return {"has_reply": has_reply, "reply_id": reply_id,
+            "has_image": has_image}
+
+
+def _sticker_collect_reply(raw_message, message, user_id):
+    """三条件命中 → 执行收藏并返回回执；不命中/失败返回 None（静默）。
+
+    - 形态 A 反查：get_msg 取被回复消息的图链；
+    - 形态 B 直发图：取本条图链；
+    - 全部失败：不收藏、不抢答，日志记一条（不阻断对话）。
+    """
+    intent = _sticker_collect_intent(raw_message)
+    if intent is None:
+        return None
+    urls = []
+    if intent["has_reply"] and intent["reply_id"]:
+        from emoji_manager import fetch_message_images
+        urls = fetch_message_images(intent["reply_id"])
+    elif intent["has_image"]:
+        m = re.search(r'\[CQ:image,file=(.*?)\]', raw_message)
+        if m:
+            urls = [m.group(1).strip()]
+    if not urls:
+        print("🖼️ [表情收藏] 三条件命中但未取得图链（反查失败/无图），不收藏")
+        return None
+    from emoji_manager import collect_sticker
+    return collect_sticker(urls, collector=str(user_id or "owner"))
+
+
 # =======================================================
 
 # ================= QQ大门（业务体；HTTP 视图宿主于 :5003） =================

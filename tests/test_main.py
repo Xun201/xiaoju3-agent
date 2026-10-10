@@ -330,6 +330,7 @@ class TestOnebotEntry(_MainCase):
         self.assertEqual(self.napcat_payload()["user_id"], 123)
 
     def test_image_message_saved_to_emoji_store(self):
+        """#299 c+d 新语义：纯图无动作词 → 不收藏不抢答（走对话链）。"""
         with patch("main.save_emoji_link", return_value=True) as save_mock:
             resp = self.onebot({
                 "post_type": "message", "message_type": "private",
@@ -337,29 +338,30 @@ class TestOnebotEntry(_MainCase):
                 "raw_message": "[CQ:image,file=https://gchat.qpic.cn/a.jpg]",
             })
         self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
-        save_mock.assert_called_once_with("https://gchat.qpic.cn/a.jpg")
-        self.smart_ask.assert_not_called()
-        self.assertEqual(self.napcat_payload()["message"], "收到你的表情啦！已经存进小仓库了😊")
+        save_mock.assert_not_called()               # 无条件收藏已退役
+        self.smart_ask.assert_called_once()          # 走对话链（不再抢答）
 
     def test_group_image_without_at_saved(self):
-        """群聊非 @ 的图片消息同样自动收藏（文档 §5 口径）。"""
+        """#299 c+d 新语义：群聊非 @ 纯图 → 不收藏不抢答（老 bug 已退役）。"""
         with patch("main.save_emoji_link", return_value=True) as save_mock:
             self.onebot({
                 "post_type": "message", "message_type": "group",
                 "self_id": "10000", "group_id": 456, "sender": {"user_id": 123},
                 "raw_message": "[CQ:image,file=https://gchat.qpic.cn/b.jpg]",
             })
-        save_mock.assert_called_once_with("https://gchat.qpic.cn/b.jpg")
+        save_mock.assert_not_called()
         self.smart_ask.assert_not_called()
 
     def test_image_save_failure_reply(self):
+        """#299 c+d：保存失败分支已随拦截退役——纯图不再触发收藏链。"""
         with patch("main.save_emoji_link", return_value=False):
-            self.onebot({
+            resp = self.onebot({
                 "post_type": "message", "message_type": "private",
                 "self_id": "10000", "sender": {"user_id": 123},
                 "raw_message": "[CQ:image,file=https://gchat.qpic.cn/c.jpg]",
             })
-        self.assertEqual(self.napcat_payload()["message"], "这个表情我没存下来，下次再试试！")
+        save_mock = None   # 新语义下不再调 save_emoji_link（无动作词）
+        self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
 
     def test_meta_event_ignored(self):
         resp = self.onebot({"post_type": "meta_event", "meta_event_type": "heartbeat"})
@@ -421,7 +423,8 @@ class TestOnebotLLOneBotTolerance(_MainCase):
         self.napcat.post.assert_not_called()
 
     def test_message_image_segment_restored_saves_emoji(self):
-        """image 段还原 [CQ:image,file=...]：非 @ 图片收藏逻辑保持可用。"""
+        """image 段还原（LLOneBot 兼容）：#299 c+d 新语义——纯图无动作词
+        不收藏不抢答（走对话链）。"""
         with patch("main.save_emoji_link", return_value=True) as save_mock:
             resp = self.onebot({
                 "post_type": "message", "message_type": "private",
@@ -430,8 +433,7 @@ class TestOnebotLLOneBotTolerance(_MainCase):
                              "data": {"file": "https://gchat.qpic.cn/d.jpg"}}],
             })
         self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
-        save_mock.assert_called_once_with("https://gchat.qpic.cn/d.jpg")
-        self.smart_ask.assert_not_called()
+        save_mock.assert_not_called()               # 无条件收藏已退役
 
     def test_missing_post_type_treated_as_message(self):
         """post_type 缺失：按 message 事件宽容处理（LLOneBot 兼容）。"""

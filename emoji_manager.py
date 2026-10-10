@@ -16,11 +16,13 @@
   一条经 download_emoji 下载到本地，成功后 translate 链路自然可用；下载失败
   优雅返回 None，不阻断回复链。
 """
+from datetime import datetime
 import hashlib
 import json
 import os
 import random
 import re
+import shutil
 
 import requests
 
@@ -155,3 +157,112 @@ def save_emoji_link(url):
     except Exception as e:
         print(f"❌ 保存表情链接失败: {e}")
         return False
+
+
+# ==================== #299 表情收藏（c+d 组合，2026-10-10） ====================
+# 显式收藏：引用/直发图 + 动作+指代词三条件（判定在 main._sticker_collect_
+# intent）；存本地文件不存链接（修 #299 链接残串坏账）；LRU 100 淘汰最久
+# 未用。主动观察收藏（情绪驱动）= #271③-T1，另稿。
+STICKER_DIR = os.path.join(PROJECT_ROOT, "xiaoju3_data", "stickers")
+STICKERS_META_FILE = os.path.join(AGENT_STATE_DIR, "stickers_meta.json")
+STICKERS_MAX = 100
+
+
+def _load_stickers_meta():
+    """读 stickers 元数据（损坏/缺失返回 []，静默降级口径同族）。"""
+    try:
+        with open(STICKERS_META_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_stickers_meta(meta):
+    """写元数据（时间戳 .bak 先落 + 原子 tmp+replace，配置写入纪律同款）。"""
+    os.makedirs(os.path.dirname(STICKERS_META_FILE), exist_ok=True)
+    backup = STICKERS_META_FILE + ".bak-" + datetime.now().strftime(
+        "%Y%m%d%H%M%S")
+    if os.path.exists(STICKERS_META_FILE):
+        shutil.copy2(STICKERS_META_FILE, backup)
+    tmp = STICKERS_META_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, STICKERS_META_FILE)
+
+
+def _content_md5(data):
+    return hashlib.md5(data).hexdigest()
+
+
+def collect_sticker(urls, collector="owner", tag="sticker"):
+    """从候选 URL 列表收藏第一张下载成功的图 → stickers/ 库 + LRU 100。
+
+    返回回执文本（成功/已在库/失败）；全程不抛异常（回复链路降级口径）。
+    """
+    try:
+        os.makedirs(STICKER_DIR, exist_ok=True)
+        meta = _load_stickers_meta()
+        for url in urls:
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            res = requests.get(url, headers=headers, timeout=15)
+            if res.status_code != 200 or not res.content:
+                continue
+            md5 = _content_md5(res.content)
+            for it in meta:
+                if it.get("md5") == md5:
+                    it["last_used_ts"] = datetime.now().isoformat(
+                        sep=" ", timespec="seconds")
+                    _save_stickers_meta(meta)
+                    return "这张已经在库里啦😉"
+            ext = _ext_from_content_type(
+                res.headers.get("Content-Type"))
+            filename = f"{tag}_{md5}{ext}"
+            filepath = os.path.join(STICKER_DIR, filename)
+            with open(filepath, 'wb') as f:
+                f.write(res.content)
+            now = datetime.now().isoformat(sep=" ", timespec="seconds")
+            meta.append({"file": filename, "md5": md5, "url_md5": hashlib.md5(
+                str(url).encode("utf-8")).hexdigest()[:12],
+                "collector": collector, "tags": [tag],
+                "collected_at": now, "last_used_ts": now})
+            # LRU 100：超限删 last_used_ts 最小者（元数据行 + 文件本体）
+            if len(meta) > STICKERS_MAX:
+                meta.sort(key=lambda m: m.get("last_used_ts", ""))
+                victim = meta[0]
+                meta = meta[1:]
+                try:
+                    vp = os.path.join(STICKER_DIR, victim.get("file", ""))
+                    if os.path.exists(vp):
+                        os.remove(vp)
+                except Exception:
+                    pass
+            _save_stickers_meta(meta)
+            return f"✅ 已收藏！表情库现有 {len(meta)} 张"
+        return None   # 全部候选下载失败 → 调用方按"不收藏"静默处理
+    except Exception as e:
+        print(f"❌ 表情收藏出错: {e}")
+        return None
+
+
+def fetch_message_images(message_id):
+    """OneBot get_msg 反查被引用消息 → 图片 url 列表（第一图优先）。
+
+    失败/无图返回 []（调用方按"不收藏不抢答"静默处理）。5s 超时。"""
+    try:
+        from xiaoju3 import ONEBOT_API_URL
+        res = requests.post(f"{ONEBOT_API_URL}/get_msg",
+                            json={"message_id": int(message_id)},
+                            timeout=5)
+        if res.status_code != 200:
+            return []
+        message = res.json().get("data", {}).get("message") or []
+        urls = []
+        for seg in message:
+            if isinstance(seg, dict) and seg.get("type") == "image":
+                u = (seg.get("data") or {}).get("url")
+                if u:
+                    urls.append(u)
+        return urls
+    except Exception:
+        return []
