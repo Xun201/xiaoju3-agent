@@ -1304,7 +1304,7 @@ class TestWaitingLocationWindow(_MainCase):
         self.addCleanup(sm_module.clear_user_location)
         self.brain._mark_waiting_location()
 
-        def fake_smart_ask(msg, hist, session_key="default"):
+        def fake_smart_ask(msg, hist, session_key="default", user_id=None):
             self.brain._extract_location_from_user_message(msg)
             return ("好的，已记录你的位置！", "🏠 本地")
 
@@ -1362,7 +1362,7 @@ class TestChildLockFlow(_MainCase):
     def _child_ask(self):
         """儿童发危险家电请求：smart_ask mock 内模拟模型发起工具调用，
         并把工具结果作为模型回复返回（贴近真实链路）。"""
-        def fake_smart_ask(msg, hist, session_key="default"):
+        def fake_smart_ask(msg, hist, session_key="default", user_id=None):
             result = brain.execute_tool(
                 "control_ha_device",
                 {"entity_id": "lock.front_door", "action": "unlock"},
@@ -1436,7 +1436,7 @@ class TestChildLockFlow(_MainCase):
         """成人（is_adult 缺省 True）发起危险操作 → 不拦截、直接执行。"""
         self.pm.current_level = "Lv.4"
 
-        def fake_smart_ask(msg, hist, session_key="default"):
+        def fake_smart_ask(msg, hist, session_key="default", user_id=None):
             brain.execute_tool(
                 "control_ha_device",
                 {"entity_id": "lock.front_door", "action": "unlock"},

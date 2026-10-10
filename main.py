@@ -260,7 +260,8 @@ def _smart_ask_with_child_lock(message, history, session_key, user_id):
       模式，执行完恢复）。
     """
     if not CHILD_LOCK_ENABLED or permission_manager.is_adult(user_id):
-        res = smart_ask(message, history, session_key=session_key)
+        res = smart_ask(message, history, session_key=session_key,
+                        user_id=user_id)  # M1+：关系层按 QQ 号归因
         return res[0] if isinstance(res, tuple) else res
 
     original_execute = brain.execute_tool
@@ -291,7 +292,8 @@ def _smart_ask_with_child_lock(message, history, session_key, user_id):
 
     brain.execute_tool = _child_lock_execute
     try:
-        res = smart_ask(message, history, session_key=session_key)
+        res = smart_ask(message, history, session_key=session_key,
+                        user_id=user_id)  # M1+：关系层按 QQ 号归因
     finally:
         brain.execute_tool = original_execute
     return res[0] if isinstance(res, tuple) else res

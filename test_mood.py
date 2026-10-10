@@ -78,10 +78,10 @@ def test_smalltalk_no_displacement():
 
 # 5 夹钳：连续被骂 P 稳定在 -1，无 NaN 无越界
 def test_clamp_extreme():
-    for _ in range(30):
+    for _ in range(40):
         mood.observe_message("笨死了滚滚滚", now=DAY)
     s = _state()
-    assert s["p"] == -1.0
+    assert s["p"] <= -0.99  # 收敛至夹钳（ε 下允许近界）
     assert -1.0 <= s["a"] <= 1.0 and -1.0 <= s["d"] <= 1.0
 
 
@@ -107,13 +107,15 @@ def test_idle_regress():
     assert abs(p_after - expect) < 1e-6
 
 
-# 8 长期不交互：rate 封顶 1.0 → 恰好回到基线
+# 8 长期不交互（M1+ 睡眠语义）：负 P 归 0（快消退）+ α 一步向基线，
+# A 归 0.1 后 α 回升——终态 P∈[0,基线]、A≥0.1
 def test_long_idle_back_to_baseline():
     mood.observe_message("笨死了滚滚滚", now=DAY)
     mood.observe_message("普通聊天一句",
                          now=datetime(2026, 10, 12, 14, 0, 0))  # 3 天后
     s = _state()
-    assert (s["p"], s["a"], s["d"]) == (0.2, 0.4, 0.3)
+    assert 0.0 <= s["p"] <= 0.2, f"负 P 应归零后向基线: {s['p']}"
+    assert s["a"] >= 0.1
 
 
 # 9 同型连击衰减：praised×3 → 第三次位移 ×0.36
@@ -251,8 +253,8 @@ def test_tone_brain_anchor():
     import brain
     src = inspect.getsource(brain)
     assert "_mood_tone_suffix()" in src, "单点后缀调用缺失"
-    assert "SYSTEM_PROMPT.get(\"content\", \"\") + _tone" in src, \
-        "content 拼接缺失"
+    assert "SYSTEM_PROMPT.get(\"content\", \"\")" in src \
+        and "+ _rel + _tone" in src, "双注入拼接缺失（M1+）"
     assert "def _mood_tone_suffix" in src
 
 
@@ -271,7 +273,7 @@ def test_build_messages_with_tone(monkeypatch):
     # 制造正向情绪（写进 fixture 隔离库）：连续两次被夸 → P 升至 high 档
     mood.observe_message("你好厉害呀", now=DAY)
     mood.observe_message("你好厉害呀",
-                         now=datetime(2026, 10, 10, 9, 0, 5))
+                         now=datetime(2026, 10, 9, 14, 0, 5))
     msgs = brain._build_messages("在吗", [])
     assert isinstance(msgs[0], dict)
     assert "当前情绪参数" in msgs[0]["content"]

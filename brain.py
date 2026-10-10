@@ -114,6 +114,12 @@ try:
 except ImportError:
     turn_trace = None
 
+# 关系层（#271① M1+ C 方案）：同上旁路纪律
+try:
+    import relationship
+except ImportError:
+    relationship = None
+
 # 模块日志器：WRAPPED_TEXT 诊断日志走 DEBUG 级别（2026-10-02 用户口径降噪——
 # 默认终端不再输出；排查时 logging.getLogger("xiaoju3.brain").setLevel(
 # logging.DEBUG) 即可恢复逐条对账）
@@ -1734,7 +1740,21 @@ def _mood_tone_suffix():
         return ""
 
 
-def _build_messages(message, history):
+def _relationship_suffix(user_id):
+    """#271① M1+：关系参数→关系段后缀（主位，拼在 mood 段之前）。
+
+    relationship.tone_prefix 内部自带开关/无称呼/异常空串路径；本
+    helper 兜模块缺席。一期只做称呼注入（拍板 R3）。
+    """
+    if relationship is None:
+        return ""
+    try:
+        return relationship.tone_prefix(user_id or "owner")
+    except Exception:
+        return ""
+
+
+def _build_messages(message, history, user_id=None):
     """组装模型消息：system 提示词置顶 + 历史 + 本条用户消息。
 
     - history 中的 system 消息一律剔除，保证全列表只有置顶这一条系统提示词；
@@ -1746,11 +1766,14 @@ def _build_messages(message, history):
       首条（_collapse_repeated_user_history），防止模型被连发输入带偏复读；
     - 返回新列表，不修改调用方传入的 history。
     """
+    _rel = _relationship_suffix(user_id)
     _tone = _mood_tone_suffix()
-    if _tone:
-        # 后缀拼进 content（新 dict，不污染 prompts 共享常量）
+    if _rel or _tone:
+        # 双注入（M1+）：关系段主位在前 + 情绪段次位在后（新 dict，
+        # 不污染 prompts 共享常量）；任一空串则该段缺席
         messages = [{"role": SYSTEM_PROMPT.get("role", "system"),
-                     "content": SYSTEM_PROMPT.get("content", "") + _tone}]
+                     "content": SYSTEM_PROMPT.get("content", "")
+                     + _rel + _tone}]
     else:
         messages = [SYSTEM_PROMPT]  # 空串路径：逐字节现状
     history_msgs = _collapse_repeated_user_history(history)
@@ -1786,15 +1809,16 @@ def _build_messages(message, history):
     return messages
 
 
-def smart_ask(message, history=None, session_key="default"):
+def smart_ask(message, history=None, session_key="default", user_id=None):
     """双脑决策入口（#282 turn 级计时包装）：主体 _smart_ask_impl。"""
     if turn_trace is not None:
         with turn_trace.TurnTimer("sync"):
-            return _smart_ask_impl(message, history, session_key)
-    return _smart_ask_impl(message, history, session_key)
+            return _smart_ask_impl(message, history, session_key, user_id)
+    return _smart_ask_impl(message, history, session_key, user_id)
 
 
-def _smart_ask_impl(message, history=None, session_key="default"):
+def _smart_ask_impl(message, history=None, session_key="default",
+                    user_id=None):
     """双脑决策入口：本地优先，异常热切换云端。返回 (回复, 来源标签) 二元组。
 
     message: 本条用户消息文本；history: 历史 role/content 消息列表（可含
@@ -1818,6 +1842,14 @@ def _smart_ask_impl(message, history=None, session_key="default"):
             print(f"🧡 [mood] {_mood_note}")
     except Exception as _me:
         print(f"⚠️ mood 更新失败（已静默跳过）: {_me}")
+
+    # 💞 关系层（#271① M1+ C 方案）：per-user 关系参数更新（同款静默
+    # 旁路）；偷听零记录=QQ 非 @ 消息不进本函数，架构天然保证
+    if relationship is not None:
+        try:
+            relationship.observe_rel(user_id or "owner", message)
+        except Exception as _re:
+            print(f"⚠️ 关系更新失败（已静默跳过）: {_re}")
 
     # 📍 位置回答兜底提取（2026-10-02 隐私口径）：小模型可能识别不出完整
     # 句式的位置回答、漏带 [LOCATION:] 标记——用户消息里明显含"城市+区县"
@@ -1856,7 +1888,7 @@ def _smart_ask_impl(message, history=None, session_key="default"):
     home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
     # ⚠️ 危险操作强制云端判定（#278，2026-10-08）：与方向③同构
     danger_cloud = any(k in (message or "") for k in _DANGER_CLOUD_KEYWORDS)
-    messages = _build_messages(message, history)
+    messages = _build_messages(message, history, user_id)
     # 🗜️ 前情提要压缩接线（§10 #2）：历史 >20 条 → 旧消息浓缩为约 50 字
     # 前情提要 + 最近 10 条明细（结果持久化缓存；失败回退既有硬截断口径）
     messages = _compress_history(messages, session_key)
@@ -2158,18 +2190,19 @@ def _ask_cloud_stream(messages, on_event, event_type="answer"):
 
 
 def smart_ask_stream(message, history=None, session_key="default",
-                     on_event=None):
+                     on_event=None, user_id=None):
     """smart_ask 的流式平行版（#282 turn 级计时包装）：主体见
     _smart_ask_stream_impl。"""
     if turn_trace is not None:
         with turn_trace.TurnTimer("stream"):
             return _smart_ask_stream_impl(message, history, session_key,
-                                          on_event)
-    return _smart_ask_stream_impl(message, history, session_key, on_event)
+                                          on_event, user_id)
+    return _smart_ask_stream_impl(message, history, session_key,
+                                  on_event, user_id)
 
 
 def _smart_ask_stream_impl(message, history=None, session_key="default",
-                           on_event=None):
+                           on_event=None, user_id=None):
     """smart_ask 的流式平行版（C1，#244）：复刻双脑路由/工具环/封口
     全状态机，模型增量经 on_event 逐块回调；返回与 smart_ask 同形的
     (reply, source)，落盘与熔断口径一致（落盘仍由调用方执行）。
@@ -2204,6 +2237,13 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
             print(f"🧡 [mood] {_mood_note}")
     except Exception as _me:
         print(f"⚠️ mood 更新失败（已静默跳过）: {_me}")
+
+    # 💞 关系层（#271① M1+，流式入口同款）：静默旁路同上
+    if relationship is not None:
+        try:
+            relationship.observe_rel(user_id or "owner", message)
+        except Exception as _re:
+            print(f"⚠️ 关系更新失败（已静默跳过）: {_re}")
     _extract_location_from_user_message(message)
     try:
         _chat_city, _chat_district, _chat_source = _resolve_user_location()
@@ -2226,7 +2266,7 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
     home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
     # ⚠️ 危险操作强制云端判定（#278）：与 smart_ask 同款
     danger_cloud = any(k in (message or "") for k in _DANGER_CLOUD_KEYWORDS)
-    messages = _build_messages(message, history)
+    messages = _build_messages(message, history, user_id)
     messages = _compress_history(messages, session_key)
     messages = _inject_memory_context(messages)
     messages = _inject_location_context(messages)
