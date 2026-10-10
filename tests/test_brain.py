@@ -3398,8 +3398,11 @@ class LocationInjectTests(unittest.TestCase):
             mr.post.side_effect = [_local_resp(raw), _local_resp("今天长沙晴")]
             mcloud.return_value = "不会走到这"
             reply, source = brain.smart_ask("今天天气怎么样", [])
-        called_args = mexec.call_args[0][1]
-        self.assertEqual(called_args["query"], "长沙 今日天气预报 气温 降水")
+        # M1+ 天气强路由：位置已知+天气词 → 强制云端（本地路径退役；
+        # mcloud="不会走到这" 变为实际返回值=云端路径铁证）
+        mcloud.assert_called_once()
+        mexec.assert_not_called()
+        self.assertIn("不会走到这", reply)   # <think> 包装内
 
     def test_prompts_search_rule_contains_location_constraint(self):
         """提示词约束（2026-10-02 用户口径）：联网搜索规则含地点条款。"""
@@ -3642,10 +3645,11 @@ class LocationHardBlockTests(unittest.TestCase):
         → 正常改写为"长沙今天天气"并调用 web_search。"""
         reply, source, out, mexec = self._run_web_search_flow(
             "今天天气", user_city="长沙", unknown_location=False)
-        mexec.assert_called_once()
-        called_args = mexec.call_args[0][1]
-        self.assertEqual(called_args["query"], "长沙 今日天气预报 气温 降水")
-        self.assertIn("📍 [搜索] 位置来源: .env", out)
+        # M1+ 天气强路由：位置已知+天气词 → 强制云端（.env 位置由云端
+        # 提示词约束模型自拼 query）；本地改写路径退役
+        mexec.assert_not_called()
+        self.assertIn("汇总完成", reply)   # 云端路径铁证（helper mock 值，<think> 包装内）
+        self.assertIn("🌤️ 天气意图模式：强制云端大脑", out)
         self.assertNotIn("🛑", out)
 
     def test_user_message_location_extracted(self):
@@ -3805,12 +3809,12 @@ class LocationHardBlockTests(unittest.TestCase):
         self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
         reply, source, out, mexec = self._run_web_search_flow(
             "今天天气", unknown_location=False)
-        mexec.assert_called_once()
-        called_args = mexec.call_args[0][1]
-        self.assertEqual(called_args["query"],
-                         "长沙天心区 今日天气预报 气温 降水")
-        self.assertNotIn("🛑", out)
-        self.assertNotIn("强制询问", out)   # 静默期检查调试行常驻，断言看拦截语义
+        # M1+ 天气强路由：user_location.json 新写入位置 + 天气词 → 强制
+        # 云端（"静默期不误伤新记录"语义由云端提示词约束承接）
+        mexec.assert_not_called()
+        self.assertIn("汇总完成", reply)   # 云端路径铁证（<think> 包装内）
+        self.assertIn("🌤️ 天气意图模式：强制云端大脑", out)
+        self.assertNotIn("强制询问", out)
 
     def test_grace_expires_after_window(self):
         """静默期超时（5 分钟）自动失效：届时无位置仍走常规未知路径。"""
@@ -3913,9 +3917,10 @@ class LocationHardBlockTests(unittest.TestCase):
             mr.post.side_effect = [_local_resp(raw), _local_resp("汇总完成")]
             mcloud.return_value = "汇总完成"
             brain.smart_ask("帮我搜一下长沙市天心区的天气", [])
-        called_args = mexec.call_args[0][1]
-        self.assertEqual(called_args["query"],
-                         "长沙天心区 今日天气预报 气温 降水")
+        # M1+ 天气强路由：当轮提取+写入仍生效（起步逻辑）；工具执行改走
+        # 云端（本地 web_search 路径退役）
+        mcloud.assert_called_once()
+        mexec.assert_not_called()
         self.assertEqual(self.real_sm.get_user_location(),
                          {"city": "长沙", "district": "天心区"})
         self.assertIn("📍 [位置] 从用户消息提取: 长沙-天心区，已写入并生效",
@@ -4336,7 +4341,7 @@ class HomeContextInjectionTests(unittest.TestCase):
             src = f.read()
         self.assertIn("elif home_cloud:", src)
         # 条件行随 #278 扩展：home_cloud 与 danger_cloud 并列在 stream 条件行
-        self.assertIn('if todo_link_mode or home_cloud or danger_cloud or tier == "low":', src)
+        self.assertIn('if todo_link_mode or home_cloud or danger_cloud or weather_intent or tier == "low":', src)
         self.assertEqual(src.count("home_cloud = any("), 2)
 
 
@@ -4404,7 +4409,7 @@ class DangerCloudForceCloudTests(unittest.TestCase):
         with open(src_path, encoding="utf-8") as f:
             src = f.read()
         self.assertIn("elif danger_cloud:", src)
-        self.assertIn('if todo_link_mode or home_cloud or danger_cloud or tier == "low":', src)
+        self.assertIn('if todo_link_mode or home_cloud or danger_cloud or weather_intent or tier == "low":', src)
         self.assertEqual(src.count("danger_cloud = any("), 2)
 
 
