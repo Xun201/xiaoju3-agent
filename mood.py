@@ -36,6 +36,30 @@ LOG_KEEP = 500        # mood_log 保留条数
 LATE_NIGHT_HOURS = (0, 1, 2, 3, 4, 5)
 LATE_NIGHT_DA = -0.05
 
+# ---- M1+ 睡眠刷新（拍板：S1 负面归 0 / S2 缺省开 / S3 阈值 6h）----
+SLEEP_THRESHOLD_H = 6.0   # 无交互 ≥6h = 一次睡眠窗口
+P_NEG_RATE = 0.5          # 睡眠期负 P 消退速率/h（向 0 收敛）
+P_POS_DECAY_H = 0.05      # 睡眠期正 P 衰减/h（保留）
+SLEEP_A = 0.1             # 睡眠期唤醒度（物理性归低；醒后 α 回升）
+
+
+def sleep_enabled():
+    """睡眠刷新开关（XIAOJU3_MOOD_SLEEP）：缺省开（M1 闲置回归的
+    升级替换；关=完整回退 M1 行为）。"""
+    return str(os.environ.get("XIAOJU3_MOOD_SLEEP", "1")).strip().lower() \
+        not in ("0", "false", "off")
+
+
+def sleep_refresh(state, hours):
+    """睡眠补算（纯函数，拍板 S1）：负 P 快消退**向 0 收敛**（不越
+    零）、正 P 保留、A 压平、D 不变；超长睡眠自然封顶（24h=72h）。"""
+    if state["p"] < 0:
+        state["p"] *= max(0.0, 1 - P_NEG_RATE * hours)
+    elif state["p"] > 0:
+        state["p"] *= max(0.01, 1 - P_POS_DECAY_H * hours)
+    state["a"] = SLEEP_A
+    return state
+
 BASELINE = {"p": 0.2, "a": 0.4, "d": 0.3}   # 决策点①已拍板
 _RULES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "mood_rules.json")
@@ -179,10 +203,28 @@ def observe_message(message, now=None):
         p, a, d = state["p"], state["a"], state["d"]
         bp, ba, bd = state["baseline"]
 
-        # ① 基线回归（交互 α + 闲置 β/小时，线性 rate）
-        state, idle_hours, rate = _regress(state, now)
-        regress_note = f"回归rate={rate:.2f}" + (
-            f"（含闲置{idle_hours:.1f}h）" if idle_hours >= 1 else "")
+        # ① 基线回归：idle≥6h 走睡眠刷新（M1+ 拍板 S2/S3），否则 M1
+        # 闲置线性回归（_regress 本体不动=开关可完整回退）
+        idle_hours = 0.0
+        if state["updated_at"]:
+            try:
+                last = datetime.strptime(state["updated_at"],
+                                         "%Y-%m-%d %H:%M:%S")
+                idle_hours = max(0.0, (now - last).total_seconds() / 3600.0)
+            except Exception:
+                idle_hours = 0.0
+        slept = False
+        if idle_hours >= SLEEP_THRESHOLD_H and sleep_enabled():
+            state = sleep_refresh(state, idle_hours)
+            state["p"] += ALPHA * (bp - state["p"])
+            state["a"] += ALPHA * (ba - state["a"])
+            state["d"] += ALPHA * (bd - state["d"])
+            regress_note = f"睡眠刷新{idle_hours:.1f}h（负面归0/A压平）+α"
+            slept = True
+        else:
+            state, idle_hours, rate = _regress(state, now)
+            regress_note = f"回归rate={rate:.2f}" + (
+                f"（含闲置{idle_hours:.1f}h）" if idle_hours >= 1 else "")
 
         # ② 事件评价（规则表首条命中；无命中零位移）
         rule, label = match_event(message)
@@ -211,6 +253,9 @@ def observe_message(message, now=None):
             if event_type == "small_talk":
                 event_type = "late_night"
                 label = "深夜交互"
+        if slept and event_type in ("small_talk", "late_night"):
+            event_type = "sleep"
+            label = "睡眠唤醒"
 
         # ④ 位移叠加（基于回归后的坐标）+ 夹钳
         state["p"] = _clamp(state["p"] + dp)
