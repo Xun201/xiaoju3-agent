@@ -1721,6 +1721,19 @@ def _collapse_repeated_user_history(history):
         return list(history or [])
 
 
+def _mood_tone_suffix():
+    """#271① M2：mood 情绪参数→语气后缀（拍板稿 design_271_m2）。
+
+    mood.tone_suffix 内部自带开关/中性档/异常三重空串路径；本 helper
+    只兜模块缺席（mood.py 被删时静默空串）。
+    """
+    try:
+        import mood
+        return mood.tone_suffix()
+    except Exception:
+        return ""
+
+
 def _build_messages(message, history):
     """组装模型消息：system 提示词置顶 + 历史 + 本条用户消息。
 
@@ -1733,7 +1746,13 @@ def _build_messages(message, history):
       首条（_collapse_repeated_user_history），防止模型被连发输入带偏复读；
     - 返回新列表，不修改调用方传入的 history。
     """
-    messages = [SYSTEM_PROMPT]
+    _tone = _mood_tone_suffix()
+    if _tone:
+        # 后缀拼进 content（新 dict，不污染 prompts 共享常量）
+        messages = [{"role": SYSTEM_PROMPT.get("role", "system"),
+                     "content": SYSTEM_PROMPT.get("content", "") + _tone}]
+    else:
+        messages = [SYSTEM_PROMPT]  # 空串路径：逐字节现状
     history_msgs = _collapse_repeated_user_history(history)
     # 🛑 静默期防位置泄漏截断（2026-10-02 任务 2）：清除后 5 分钟内且位置
     # 未知 → 历史只保留最近 5 条，模型无法从久远对话推断位置（配合聊天
