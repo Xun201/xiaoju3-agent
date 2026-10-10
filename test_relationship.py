@@ -134,3 +134,12 @@ def test_brain_hook_anchor():
     assert "def _relationship_suffix" in src
     # 静默纪律：模块缺席旁路
     assert "except ImportError:\n    relationship = None" in src
+
+
+# 11 frozen 路径优先级：xiaoju3.AGENT_STATE_DIR 优先（同 mood 修复）
+def test_db_path_prefers_xiaoju3(monkeypatch, tmp_path):
+    import xiaoju3
+    monkeypatch.delenv("XIAOJU3_RELATIONSHIP_DB_PATH", raising=False)
+    monkeypatch.setattr(xiaoju3, "AGENT_STATE_DIR", str(tmp_path))
+    assert relationship._db_path() == os.path.join(str(tmp_path),
+                                                   "relationship.db")

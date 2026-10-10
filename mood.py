@@ -79,12 +79,19 @@ def enabled():
 
 
 def _db_path():
-    """mood.db 路径：XIAOJU3_MOOD_DB_PATH > AGENT_STATE_DIR > 本地目录。"""
+    """mood.db 路径：XIAOJU3_MOOD_DB_PATH > xiaoju3.AGENT_STATE_DIR
+    （frozen 归位到生产 agent_state；os.environ 无此键，模块常量才是
+    真身——__file__ fallback 在 onedir 下会误落项目根，历史教训）>
+    本地目录。"""
     p = os.environ.get("XIAOJU3_MOOD_DB_PATH")
     if p:
         return p
-    base = os.environ.get("AGENT_STATE_DIR") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "agent_state")
+    try:
+        import xiaoju3
+        base = xiaoju3.AGENT_STATE_DIR
+    except Exception:
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "agent_state")
     return os.path.join(base, "mood.db")
 
 

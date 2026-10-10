@@ -280,3 +280,12 @@ def test_build_messages_with_tone(monkeypatch):
     assert "以性格设定为准" in msgs[0]["content"]
     # prompts 共享常量不被污染
     assert "当前情绪参数" not in brain.SYSTEM_PROMPT["content"]
+
+
+# 25 frozen 路径优先级：xiaoju3.AGENT_STATE_DIR 优先于 __file__ fallback
+# （真机教训：onedir 下 __file__ 误落项目根，生产三 db 曾误建 dev 仓）
+def test_db_path_prefers_xiaoju3_anchor(monkeypatch, tmp_path):
+    import xiaoju3
+    monkeypatch.delenv("XIAOJU3_MOOD_DB_PATH", raising=False)
+    monkeypatch.setattr(xiaoju3, "AGENT_STATE_DIR", str(tmp_path))
+    assert mood._db_path() == os.path.join(str(tmp_path), "mood.db")
