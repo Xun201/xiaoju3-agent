@@ -242,8 +242,9 @@ class CotCollapseRhythmTests(unittest.TestCase):
         false，不打字不动画、完整填充保持折叠、正文气泡立即可见。"""
         js = self.console_js
         self.assertIn(
-            "appendBotMessage(m.content, m.source || '', lastUser, { animateThink: false })",
-            js)
+            "appendBotMessage(m.content, m.source || '', lastUser,\n"
+            "                                         { animateThink: false, ts: m.ts })",
+            js)   # M1+：历史回放携带 ts（IM 式时间分隔）
         body = _extract_span(js, "function startThinkTypewriter",
                              "window.toggleThinkCard")
         self.assertIn("body.textContent = text;", body)

@@ -306,8 +306,13 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
         # window.history 内置对象，appendChild/contains 全炸——C2 遗留，
         # "实时卡"从未渲染、回退回复不显示，全靠轮询兜底掩盖）
         self.assertIn(
-            "const history = document.getElementById('chat-history');\n        return fetch('/api/chat/stream'",
-            js)
+            "const history = document.getElementById('chat-history');\n"
+            "        // ⏱️ 问题 1 前端兜底", js)   # M1+ 守护注释夹在中间（问题 1）
+        self.assertIn("fetch('/api/chat/stream', {\n"
+                      "            method: 'POST',\n"
+                      "            headers: { 'Content-Type': 'application/json' },\n"
+                      "            body: JSON.stringify({ message: text }),\n"
+                      "            signal: ac.signal", js)   # AbortController 兜底（问题 1）
         self.assertIn(
             "const history = document.getElementById('chat-history');\n        fetch('/api/chat'",
             js)

@@ -394,6 +394,14 @@
             color: var(--color-text-secondary);
             user-select: none;
         }
+        /* IM 式时间分隔条（2026-10-10 问题 3）：居中灰色小字 */
+        .time-separator {
+            text-align: center;
+            color: var(--color-text-secondary, #999);
+            font-size: 11px;
+            padding: 6px 0 2px;
+            user-select: none;
+        }
         .think-card-header:hover { color: var(--color-primary); }
         .think-card-title { flex: 1; }
         .think-card-arrow {

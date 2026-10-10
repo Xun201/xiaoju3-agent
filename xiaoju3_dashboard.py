@@ -63,6 +63,7 @@ import re
 import sqlite3
 import threading
 import time
+from datetime import datetime
 
 import main  # QQ 接入层业务逻辑模块（架构合并：webhook 业务体宿主于此进程）
 import paths  # 双根路径锚（方案 §1）：资源根=静态托管基准，非 frozen 与项目根同值
@@ -480,10 +481,14 @@ def _append_console_history(user_msg, reply, source):
     """成功问答后追加用户消息与回复，滚动保留最近 MAX_MESSAGES=50 条。
 
     assistant 条目额外携带 source（大脑来源标签），供前端渲染"大脑来源"徽标。
+    2026-10-10：两条均携带 ts（ISO 时间）——前端 IM 式时间分隔（>5 分钟
+    插分隔条）依赖此字段；旧条目无 ts，前端跳过分隔渲染向后兼容。
     """
     history = _read_console_history()
-    history.append({"role": "user", "content": user_msg})
-    history.append({"role": "assistant", "content": reply, "source": source})
+    _ts = datetime.now().isoformat(sep=" ", timespec="seconds")
+    history.append({"role": "user", "content": user_msg, "ts": _ts})
+    history.append({"role": "assistant", "content": reply,
+                    "source": source, "ts": _ts})
     if len(history) > MAX_MESSAGES:
         history = history[-MAX_MESSAGES:]
     save_memory(history, HISTORY_FILE)
@@ -1008,8 +1013,20 @@ def api_chat_stream():
         import threading
         threading.Thread(target=runner, daemon=True).start()
 
+        # ⏱️ 硬超时守护（2026-10-10 思考卡残留修复）：runner 挂死（如工具
+        # 执行无超时）时 DONE 永不到来，generator 无限阻塞 → SSE 无收口
+        # 帧 → 前端思考卡永残留（真机现场）。180s 无帧即发 error 帧收口，
+        # 挂死线程为 daemon 随底层超时自灭。
+        _STREAM_HARD_TIMEOUT = 180
         while True:
-            item = q.get()
+            try:
+                item = q.get(timeout=_STREAM_HARD_TIMEOUT)
+            except queue.Empty:
+                print(f"⏱️ [流式] {_STREAM_HARD_TIMEOUT}s 无收口——硬超时，"
+                      "发 error 帧（runner 可能挂死于工具执行）")
+                yield _sse_frame("error", {"error": "响应超时（180s 无进展），"
+                                           "请重试或改用同步发送"})
+                return
             if item is DONE:
                 break
             yield item

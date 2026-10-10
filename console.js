@@ -974,8 +974,46 @@
         startThinkTypewriter(msgEl, thinkText, true);
     }
 
-    function appendUserMessage(text) {
+    // ==================== IM 式时间分隔（2026-10-10，问题 3） ====================
+    // 连续消息只在第一条前显示时间；间隔 >5 分钟插新分隔条；格式分级
+    // 今天 HH:MM / 昨天 HH:MM / MM-DD HH:MM / 跨年 YYYY-MM-DD HH:MM。
+    let _lastMsgTs = null;   // 上一条消息时间（ISO 字符串或 null）
+
+    function fmtTimeSep(ts) {
+        const d = new Date(ts);
+        if (isNaN(d)) return '';
+        const p2 = n => String(n).padStart(2, '0');
+        const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+        const now = new Date();
+        if (d.toDateString() === now.toDateString()) return hm;
+        const yest = new Date(now); yest.setDate(now.getDate() - 1);
+        if (d.toDateString() === yest.toDateString()) return '昨天 ' + hm;
+        const md = `${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+        if (d.getFullYear() === now.getFullYear()) return md + ' ' + hm;
+        return `${d.getFullYear()}-${md} ` + hm;
+    }
+
+    function maybeTimeSeparator(ts) {
+        if (!ts) { _lastMsgTs = new Date().toISOString(); return; }
+        const t = new Date(ts);
+        if (isNaN(t)) return;
+        if (_lastMsgTs !== null) {
+            const prev = new Date(_lastMsgTs);
+            if (!isNaN(prev) && (t - prev) < 5 * 60 * 1000) {
+                _lastMsgTs = ts; return;   // 连续消息：不插
+            }
+        }
         const history = document.getElementById('chat-history');
+        const sep = document.createElement('div');
+        sep.className = 'time-separator';
+        sep.textContent = fmtTimeSep(ts);
+        history.appendChild(sep);
+        _lastMsgTs = ts;
+    }
+
+    function appendUserMessage(text, ts) {
+        const history = document.getElementById('chat-history');
+        maybeTimeSeparator(ts || new Date().toISOString());
         const userMsg = document.createElement('div');
         userMsg.className = 'message user-message';
         userMsg.textContent = text;   // textContent 注入，无 XSS 风险
@@ -1035,6 +1073,7 @@
     function appendBotMessage(rawReply, source, prompt, opts) {
         const options = opts || {};
         const history = document.getElementById('chat-history');
+        maybeTimeSeparator(options.ts || new Date().toISOString());
         const botMsg = document.createElement('div');
         botMsg.className = 'message bot-message';
         botMsg.dataset.prompt = prompt || '';
@@ -1168,10 +1207,11 @@
                     if (!m || typeof m.content !== 'string') return;
                     if (m.role === 'user') {
                         lastUser = m.content;
-                        appendUserMessage(m.content);
+                        appendUserMessage(m.content, m.ts);
                     } else if (m.role === 'assistant') {
                         // 历史回放共用入口：思考卡片不打字，直接折叠展示
-                        appendBotMessage(m.content, m.source || '', lastUser, { animateThink: false });
+                        appendBotMessage(m.content, m.source || '', lastUser,
+                                         { animateThink: false, ts: m.ts });
                     }
                 });
             })
@@ -1229,10 +1269,17 @@
         // 第一行 DOM 操作即 TypeError → 静默回退，"实时卡"从未渲染过。自取
         // 元素与作用域解耦（同 appendBotMessage:1016 惯例）
         const history = document.getElementById('chat-history');
+        // ⏱️ 问题 1 前端兜底（2026-10-10 思考卡残留修复）：后端 180s 硬
+        // 超时会发 error 帧，但若后端挂死连帧都发不出（极端），此处
+        // 190s AbortController 强制断流 → catch 清理过程件 → 外层转
+        // legacy 重答。比后端超时略长，作为最终防线。
+        const ac = new AbortController();
+        const streamGuard = setTimeout(() => ac.abort(), 190000);
         return fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text })
+            body: JSON.stringify({ message: text }),
+            signal: ac.signal
         }).then(res => {
             if (!res.ok || !res.body) throw new Error('stream unavailable');
             const reader = res.body.getReader();
@@ -1316,6 +1363,8 @@
                 } else if (etype === 'done') {
                     // 收尾：移除流式过程件，最终态走既有 appendBotMessage
                     // 管线（同形最终串：净化/表情/工具栏/落盘口径一致）
+                    clearTimeout(streamGuard);
+                    maybeTimeSeparator(new Date().toISOString());
                     if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);
                     if (toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
                     if (answerEl && answerEl.parentNode) answerEl.parentNode.removeChild(answerEl);
@@ -1350,6 +1399,7 @@
             // C3b：半途断流——闭包内清理过程件再 rethrow（外层 catch 才转
             // legacy 重答；宽 DOM 查询会误删历史消息，必须用闭包引用）
             return pump().catch(function (err) {
+                clearTimeout(streamGuard);
                 if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);
                 if (toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
                 if (answerEl && answerEl.parentNode) answerEl.parentNode.removeChild(answerEl);

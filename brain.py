@@ -1862,12 +1862,16 @@ def _smart_ask_impl(message, history=None, session_key="default",
     # 问题，静默期内 + 位置未知一律不进模型，代码层强制询问。位置兜底
     # 提取在上面已先行：主人本轮重新告知位置则 json 已写入、此拦截自然
     # 放行（重新告知立即生效语义不变）
+    # 🔧 M1+ 扩展（2026-10-10 用户拍板天气方案 A+B）：去掉 grace 条件——
+    # 原逻辑只拦"/clear_location 后 5 分钟"，**从未设置位置的用户永远
+    # 不拦截**（真机实锤：问天气 → 本地小模型幻觉"操作已完成"）。现
+    # 语义=位置未知 + 地点敏感即强制询问城市，回答经既有提取链记录后
+    # 自动放行；已设位置（.env/json）不受影响
     try:
         _chat_city, _chat_district, _chat_source = _resolve_user_location()
         if (not (_chat_city or _chat_district)
-                and _location_in_clear_grace()
                 and any(k in message for k in LOCATION_SENSITIVE_KEYWORDS)):
-            print("🛑 [位置] 静默期内 + 位置未知 + 地点敏感问题 → 强制询问，跳过模型")
+            print("🛑 [位置] 位置未知 + 地点敏感问题 → 强制询问，跳过模型")
             _mark_waiting_location()
             return _force_chat_think(LOCATION_ASK_REPLY), "📍 询问位置"
     except Exception as e:
