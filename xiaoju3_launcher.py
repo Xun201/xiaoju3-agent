@@ -97,25 +97,166 @@ def _napcat_running():
         return False
 
 
+# ==================== fire 日志 + QQ 三态探测（#305 F3/F2，2026-10-11） ====================
+# 背景：实机 20+ NapCatWinBootMain.exe 幽灵 + QQ(4) 僵尸树（设计稿
+# _dev/design_305_napcat_ghost.md）。三病根=DEVNULL 零可观测 / 裸 QQ
+# 探测盲区（进程名扫只认 napcat 子串，QQ.exe 不含）/ bat 末尾 pause 挂尸。
+# 本段落 F3（fire 输出落盘留证）+ F2（三态探测，只杀 NapCat 副本）；
+# F1（绕 bat 直呼 BootMain 根除 pause 挂尸）=批次 2，等批次 1 观察期。
+
+NAPCAT_FIRE_LOG_KEEP = 10            # fire 日志轮换保留数（与 LOG_KEEP 口径统一）
+NAPCAT_QQ_LOCK_GRACE_SECONDS = 10.0  # QQ 强杀后单实例锁残留宽限（E3 实锤：10s 内秒崩）
+
+
+def _napcat_fire_log_dir():
+    """fire 日志目录 = agent_state。优先 xiaoju3.AGENT_STATE_DIR（frozen 路径
+    陷阱铁律：一律 import xiaoju3 取数据目录，禁 __file__ fallback——onedir
+    下 __file__ 误落解包目录，生产三 db 曾误建 dev 仓 c6dc178 实锤）；
+    xiaoju3 缺席回退 paths.DATA_ROOT/agent_state（launcher 日志 LOG_DIR 同源）。"""
+    try:
+        from xiaoju3 import AGENT_STATE_DIR as state_dir
+        if state_dir:
+            return state_dir
+    except Exception:
+        pass
+    return os.path.join(paths.DATA_ROOT, "agent_state")
+
+
+def _napcat_fire_log_path(log_dir=None, now=None):
+    """带时间戳的 fire 日志路径：agent_state/napcat_fire_YYYYMMDD_HHMMSS.log
+    （命名对齐 timestamped_log_path 口径：每次 fire 独占一文件）。"""
+    ts = time.strftime("%Y%m%d_%H%M%S",
+                       time.localtime(now if now is not None else time.time()))
+    return os.path.join(log_dir or _napcat_fire_log_dir(),
+                        f"napcat_fire_{ts}.log")
+
+
+def prune_napcat_fire_logs(keep=NAPCAT_FIRE_LOG_KEEP, log_dir=None):
+    """napcat_fire_*.log 轮换：按 mtime 保留最近 keep 个（prune_dashboard_logs
+    同款口径；独立实现——fire 日志在 agent_state，不在 xiaoju3_data）。
+    返回 (保留数, 删除数)；目录缺失/删除失败静默（日志清理绝不影响拉起）。"""
+    log_dir = log_dir or _napcat_fire_log_dir()
+    try:
+        names = os.listdir(log_dir)
+    except OSError:
+        return 0, 0
+    files = [os.path.join(log_dir, n) for n in names
+             if n.startswith("napcat_fire_") and n.endswith(".log")]
+    files.sort(key=os.path.getmtime, reverse=True)
+    removed = files[keep:]
+    removed_total = 0
+    for path in removed:
+        try:
+            os.remove(path)
+            removed_total += 1
+        except OSError:
+            pass
+    return len(files) - len(removed), removed_total
+
+
+def _classify_qq_processes(napcat_dir=None, iter_fn=None):
+    """在跑 QQ.exe 按可执行路径二分（#305 F2 核心探针，2026-10-11 用户拍板：
+    按【路径】区分不按进程名——NapCat 目录下的 QQ.exe = NapCat Shell 副本
+    （裸 NapCat QQ，可杀可换）；NapCat 目录之外的 QQ.exe（D:\\Ruanjian\\QQ
+    等日常安装）= 用户日常 QQ，绝不动）。
+
+    返回 (plain, other_count)：plain=裸态 QQ 进程对象列表（供 KillQQ）；
+    other_count=目录外 QQ.exe 数（含 exe 读取失败者——宁少杀不误杀，且按
+    锁占用保守处理阻止 fire）。psutil 缺席/枚举异常 → ([], 0)：探测失效
+    按"无 QQ 在跑"走 legacy fire（探测不可用宁可放行也不瞎杀）。
+    iter_fn(attrs=["name", "exe"]) 可注入（测试零真实进程）。
+    """
+    if iter_fn is None:
+        try:
+            import psutil
+        except ImportError:
+            return [], 0
+        iter_fn = psutil.process_iter
+    base = os.path.normcase(os.path.normpath(napcat_dir or "")) + os.sep
+    plain, other = [], 0
+    try:
+        for proc in iter_fn(attrs=["name", "exe"]):
+            try:
+                info = proc.info or {}
+                if str(info.get("name") or "").lower() != "qq.exe":
+                    continue
+                exe = info.get("exe") or ""
+                if exe and os.path.normcase(
+                        os.path.normpath(exe)).startswith(base):
+                    plain.append(proc)
+                else:
+                    other += 1
+            except Exception:
+                other += 1   # 单进程属性读取失败：归 other 保守（宁少杀+阻止 fire）
+    except Exception:
+        return [], 0
+    return plain, other
+
+
+def _qq_plain_running(napcat_dir=None, iter_fn=None):
+    """裸 NapCat QQ 是否在跑（_classify_qq_processes 布尔门面，锚/快照用）。"""
+    plain, _ = _classify_qq_processes(napcat_dir, iter_fn)
+    return bool(plain)
+
+
+def _kill_qq_plain(plain, out=None, wait_timeout=3.0):
+    """终止裸 NapCat QQ 进程列表（#305 F2）：terminate → 等 wait_timeout →
+    存活者 kill 兜底。返回 (已终止数, 仍存活数)；单进程异常不阻断其余收尾。
+    只吃 _classify_qq_processes 判定的裸态列表——用户日常 QQ 永不进本函数。"""
+    out = out or (lambda msg: None)
+    killed, alive = 0, 0
+    for proc in plain:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=wait_timeout)
+            except Exception:
+                proc.kill()
+                try:
+                    proc.wait(timeout=wait_timeout)
+                except Exception:
+                    pass
+            killed += 1
+        except Exception:
+            alive += 1
+    if plain:
+        out(f"🛑 裸态 QQ 终止完成（killed={killed} alive={alive}）")
+    return killed, alive
+
+
 def ensure_napcat(napcat_dir=None, popen=None, out=None, running_fn=None,
-                  os_name=None):
+                  os_name=None, qq_iter_fn=None, sleep=None,
+                  fire_log_dir=None):
     """拉起 NapCat（Windows-only，幂等可重复调用）。返回是否执行了拉起。
 
     - 已在运行 / launcher-user.bat 缺失 / 非 Windows（香橙派部署侧自管）：
       跳过；
+    - 三态判定（#305 F2，2026-10-11 用户拍板：按【路径】区分不按进程名）：
+      ① NapCat 在跑（napcat 名进程/6099）→ 跳过；
+      ② 裸 NapCat QQ 在跑（QQ.exe 且 exe 位于 NapCat 目录副本下，即
+         D:\\NapCat\\QQ.exe Shell 形态）→ 只杀副本（用户日常 QQ 绝不动）
+         + 锁释放宽限（NAPCAT_QQ_LOCK_GRACE_SECONDS）→ 拉起；若 NapCat
+         目录之外还有 QQ.exe（用户日常）→ 副本终止后仍跳过拉起（锁被
+         日常 QQ 占用，硬拉=锁冲突僵尸树——昨晚幽灵同型）；
+      ③ 仅用户日常 QQ 在跑（NapCat 目录之外）→ 不干预，跳过拉起；
+      ④ 全无 → 拉起。
     - 统一经 cmd /c 拉 **launcher-user.bat**（NapCat 官方免提权变体，无
       net session 自检段）+ CREATE_NO_WINDOW 全程无黑框——2026-10-08
-      方案 E 去提权化：QQ 装在用户可写目录（D:\\Ruanjian\\QQ 写探针实测），
-      注入/patch 写权限普通用户已具备，提权（旧 powershell -Verb runAs
-      -WindowStyle Hidden）零收益且被火绒「隐藏执行 PowerShell」规则拦截
-      （10-08 晚实锤，QQ 自愈链曾被掐断）；
+      方案 E 去提权化：QQ 装在用户可写目录，注入/patch 写权限普通用户
+      已具备，提权零收益且被火绒「隐藏执行 PowerShell」规则拦截；
+    - fire 输出落 agent_state/napcat_fire_<ts>.log（#305 F3：首行探测
+      快照留证+保留最近 NAPCAT_FIRE_LOG_KEEP 份轮换；日志创建失败回退
+      DEVNULL 绝不影响拉起——DEVNULL 时代 NapCat 输出全丢、锁冲突挂死
+      零痕迹的教训）；
     - Popen 句柄刻意不返回/不纳入 launcher 生命周期：NapCat 常驻后台，
       launcher 退出后继续运行。
-    全部依赖可注入（popen/out/running_fn/os_name），离线可测。
+    全部依赖可注入（popen/out/running_fn/os_name/qq_iter_fn/sleep/
+    fire_log_dir），离线可测。
     """
     popen = popen or subprocess.Popen
     out = out or print
     running_fn = running_fn or _napcat_running
+    sleep = sleep or time.sleep
     if os_name is None:
         os_name = os.name
     if os_name != "nt":
@@ -132,18 +273,50 @@ def ensure_napcat(napcat_dir=None, popen=None, out=None, running_fn=None,
     if not os.path.isfile(bat):
         out(f"ℹ️ 未找到 {bat}，跳过 NapCat 拉起")
         return False
-    # cwd 参数形态（2026-10-09 E3 轮 1 引号 bug 修复）：旧写法
-    # 'cd /d "<dir>" && bat' 经 list2cmdline+cmd 引号解析损坏，报
-    # 「文件名目录名语法不正确」→ bat 从未执行（对照实验 5 连定案，
-    # cwd 形态活体 30s 拉满）——勿回退 cd&& 字符串拼接
-    # ⚠️ cwd 参数形态（2026-10-09 E3 轮 1 引号 bug 修复）：勿回退
+    # 三态判定（#305 F2）：QQ.exe 按可执行路径二分——NapCat 目录副本（裸态，
+    # 可杀可换）vs 用户日常（NapCat 目录之外，绝不动）
+    plain, other = _classify_qq_processes(napcat_dir, iter_fn=qq_iter_fn)
+    snapshot = (f"napcat_running=False plain_napcat_qq={len(plain)} "
+                f"other_qq={other}")
+    branch = "直接fire"
+    if plain:
+        branch = "杀副本后fire"
+        out(f"🛑 检测到 NapCat 副本 QQ（裸态）×{len(plain)}，终止后重新拉起"
+            "（用户日常 QQ 不受影响）")
+        _kill_qq_plain(plain, out=out)
+        if other:
+            out("⚠️ 用户日常 QQ 在跑（不干预）——单实例锁可能被占，"
+                "跳过本次 NapCat 拉起（硬拉=锁冲突僵尸树）")
+            return False
+        sleep(NAPCAT_QQ_LOCK_GRACE_SECONDS)   # 锁释放宽限（E3 实锤 10s 残留）
+    elif other:
+        out("ℹ️ 用户日常 QQ 在跑但 NapCat 未运行（不干预），跳过 NapCat 拉起")
+        return False
+    # cwd 参数形态（2026-10-09 E3 轮 1 引号 bug 修复）：勿回退
     # 'cd /d "<dir>" && bat' 字符串拼接——list2cmdline+cmd 引号解析会损坏
     # （报「文件名目录名语法不正确」，bat 从未执行，对照实验 5 连定案）
-    popen(["cmd", "/c", "launcher-user.bat"],
-          cwd=napcat_dir,
-          creationflags=subprocess.CREATE_NO_WINDOW,
-          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    fire_path = _napcat_fire_log_path(log_dir=fire_log_dir)
+    fh = None
+    stream = subprocess.DEVNULL
+    try:
+        os.makedirs(os.path.dirname(fire_path), exist_ok=True)
+        fh = open(fire_path, "a", buffering=1, encoding="utf-8",
+                  errors="replace")
+        fh.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 🔍 fire 探测快照: "
+                 f"{snapshot} 分支={branch} bat={bat}\n")
+        stream = fh   # fire 输出（含 NapCat 运行日志）落盘留证（#305 F3）
+    except OSError:
+        stream = subprocess.DEVNULL   # 日志失败绝不影响拉起（老形态兜底）
+    try:
+        popen(["cmd", "/c", "launcher-user.bat"],
+              cwd=napcat_dir,
+              creationflags=subprocess.CREATE_NO_WINDOW,
+              stdout=stream, stderr=subprocess.STDOUT)
+    finally:
+        if fh is not None:
+            fh.close()   # 子进程已继承句柄续写，Python 侧即收（防句柄泄漏）
     out(NAPCAT_STARTED_HINT)
+    prune_napcat_fire_logs(log_dir=fire_log_dir)
     return True
 
 
