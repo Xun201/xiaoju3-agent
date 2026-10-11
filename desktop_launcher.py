@@ -59,6 +59,7 @@
   spawn-self 三角色由 argv 标志分流，route_argv/ROLE_* 常量）】
 """
 import glob
+import json
 import os
 import signal
 import shutil
@@ -590,6 +591,134 @@ def _activate_existing_window():
     return True
 
 
+# ==================== 退出模式（#264 B2d④） ====================
+# mode 语义（用户拍板双方法）：'backend_only'=只退窗口（后端+NapCat 继续跑）/
+# 'full_exit'=完全退出（前端+后端+NapCat 全关）/ 'legacy'=前端未就绪时的旧
+# 语义直退（关窗清后端，NapCat 留）/ 'ask'=未决（弹窗询问）。
+# 记住选择持久化=agent_state/ui_pref.json——**绝不用 localStorage**（pywebview
+# 每窗独立 user_data_folder 且关窗 rmtree，跨启动即焚，设计稿第五节铁律）。
+
+UI_PREF_MODES = ("ask", "backend_only", "full_exit")
+UI_PREF_DEFAULT = {"exit": "ask"}
+
+
+def _ui_pref_path():
+    """ui_pref.json 路径：xiaoju3.AGENT_STATE_DIR 优先（frozen 路径陷阱
+    铁律，禁 __file__ fallback），缺席回退 paths.DATA_ROOT/agent_state。"""
+    try:
+        from xiaoju3 import AGENT_STATE_DIR as state_dir
+        if state_dir:
+            return os.path.join(state_dir, "ui_pref.json")
+    except Exception:
+        pass
+    return os.path.join(paths.DATA_ROOT, "agent_state", "ui_pref.json")
+
+
+def _load_ui_pref(path=None):
+    """读退出偏好：文件缺失/损坏/非法值 → 缺省 ask（最保守=每次询问）。"""
+    p = path or _ui_pref_path()
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        mode = (data or {}).get("exit")
+        if mode in UI_PREF_MODES:
+            return {"exit": mode}
+    except Exception:
+        pass
+    return dict(UI_PREF_DEFAULT)
+
+
+def _save_ui_pref(mode, path=None):
+    """写退出偏好（tmp+replace 原子写；目录惰性创建）。"""
+    p = path or _ui_pref_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"exit": mode}, f)
+    os.replace(tmp, p)
+
+
+def _kill_napcat_all(out=None, psutil_mod=None, wait_procs=None):
+    """全退 NapCat（#264 B2d④『完全退出』路径；主人主动断链语义，与
+    #305 F2『只杀副本』区分）：NapCat* 全列 + QQ.exe 全列 + cmd(命令行含
+    launcher-user.bat) 全列 terminate→超时 kill 兜底。psutil 缺席 → 静默
+    跳过（退出主流程不被阻塞）。返回命中数。"""
+    out = out or (lambda msg: None)
+    try:
+        import psutil
+    except ImportError:
+        out("ℹ️ psutil 缺席，跳过 NapCat/QQ 清理")
+        return 0
+    psutil_mod = psutil_mod or psutil
+    wait_fn = wait_procs or psutil_mod.wait_procs
+    targets = []
+    for proc in psutil_mod.process_iter(["name", "cmdline"]):
+        try:
+            info = proc.info or {}
+            name = str(info.get("name") or "").lower()
+            cmdline = " ".join(info.get("cmdline") or []).lower()
+            if (name.startswith("napcat") or name == "qq.exe"
+                    or (name == "cmd.exe" and "launcher-user.bat" in cmdline)):
+                targets.append(proc)
+        except Exception:
+            continue
+    for proc in targets:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    _, alive = wait_fn(targets, timeout=3)
+    for proc in alive:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    out(f"🛑 全退清理：NapCat/QQ 相关进程终止 {len(targets)} 个")
+    return len(targets)
+
+
+class QuitBridge:
+    """退出桥（#264 B2d④，js_api）：前端统一退出弹窗的 Python 侧。
+
+    - get_exit_pref/set_exit_pref：ui_pref.json 读写（记住选择持久化）；
+    - quit_app(mode, remember)：可选记住 → 置退出态 → destroy 主窗 →
+      closing 放行 → webview.start 返回 → main() finally 按 mode 清理
+      （full_exit 追加 NapCat 全杀；backend_only 跳过后端终止）。
+    window 经 window_getter 惰性取（桥先于 create_window 构造）。
+    """
+
+    def __init__(self, window_getter, quit_state, out=None, pref_path=None,
+                 napcat_killer=None):
+        self._window_getter = window_getter
+        self._state = quit_state
+        self._out = out or (lambda msg: None)
+        self._pref_path = pref_path
+        self._napcat_killer = napcat_killer
+
+    def get_exit_pref(self):
+        return _load_ui_pref(self._pref_path).get("exit", "ask")
+
+    def set_exit_pref(self, mode):
+        if mode not in UI_PREF_MODES:
+            return {"ok": False, "error": "invalid_mode"}
+        _save_ui_pref(mode, self._pref_path)
+        self._out(f"💾 退出偏好已保存：{mode}")
+        return {"ok": True, "exit": mode}
+
+    def quit_app(self, mode="backend_only", remember=False):
+        if mode not in ("backend_only", "full_exit"):
+            return {"ok": False, "error": "invalid_mode"}
+        if remember:
+            _save_ui_pref(mode, self._pref_path)
+        self._state["quitting"] = mode
+        self._out(f"🛑 退出受理：mode={mode} remember={bool(remember)}")
+        try:
+            self._window_getter().destroy()
+        except Exception as e:
+            self._out(f"⚠️ destroy 异常: {e}")
+        return {"ok": True, "mode": mode}
+
+
 def main(argv=None):
     """入口：缺 pywebview 中文提示退出；拉后台服务 → 占位窗 → 就绪导航 →
     关闭全清理（端口修复 P2：内置随机服务退役，窗口直挂 :5003）。
@@ -650,9 +779,14 @@ def main(argv=None):
 
     # ③ 占位窗先行（先出窗后导航，端口修复 P2）：create_window 先显示
     #   "正在启动主程序…"，GUI 就绪后由 webview.start 回调在后台线程
-    #   轮询 :5003，就绪即 load_url 切控制台
+    #   轮询 :5003，就绪即 load_url 切控制台。
+    #   js_api=退出桥（#264 B2d④）：前端统一退出弹窗经此受理（window 经
+    #   lambda 惰性取，桥先于窗口构造）。
+    quit_state = {"quitting": None}
+    bridge = QuitBridge(lambda: window, quit_state, out=_print)
     window = webview.create_window(WINDOW_TITLE, html=PLACEHOLDER_HTML,
-                                   width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
+                                   width=WINDOW_WIDTH, height=WINDOW_HEIGHT,
+                                   js_api=bridge)
 
     def _navigate_when_ready():
         """后台导航（webview.start 回调）：等 :5003 就绪 → load_url 控制台。
@@ -687,14 +821,57 @@ def main(argv=None):
     except Exception:
         pass   # 个别后端事件系统不可用时静默跳过（终端已有打印提示）
 
+    def _on_closing():
+        # #264 B2d④：X → 与桌宠菜单「退出」统一弹窗（双方法+记住选择）。
+        # closing.set() 返回 True=取消默认关闭（winforms on_closing 实锤）。
+        # ① 记住过（pref≠ask）→ 直接按记住的方法退出，不弹；
+        # ② 未记住 → 起线程 evaluate_js 唤前端弹窗（GUI 线程内不可同步
+        #    evaluate），本次默认关闭取消；
+        # ③ 前端未就绪（占位页阶段，console.js 未加载）→ 退回旧语义直退。
+        if quit_state.get("quitting"):
+            return False   # quit_app 已受理（destroy 再入），放行
+        pref = _load_ui_pref().get("exit", "ask")
+
+        def _decide():
+            try:
+                if pref in ("backend_only", "full_exit"):
+                    quit_state["quitting"] = pref
+                    window.destroy()
+                    return
+                window.evaluate_js(
+                    "window.__xiaoju3OpenQuitDialog && window.__xiaoju3OpenQuitDialog()")
+            except Exception:
+                # 前端未就绪：旧语义直退（关窗清后端，NapCat 留）
+                quit_state["quitting"] = "legacy"
+                try:
+                    window.destroy()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_decide, daemon=True).start()
+        return True   # 取消本次默认关闭（决定线程随后 destroy 或弹窗）
+
+    try:
+        window.events.closing += _on_closing
+    except Exception:
+        pass
+
     try:
         webview.start(_navigate_when_ready)   # GUI 启动后执行导航回调，阻塞至窗口关闭
     finally:
-        # 关闭清理：整树终止 xiaoju3_launcher.py（含心跳/main/dashboard
-        # 子进程）——关窗口即停全部后台进程，无孤儿驻留
-        # （旧"停内置服务线程"步骤随内置服务退役移除）
+        # 关闭清理（#264 B2d④ 按退出模式分派）：
+        # - full_exit：整树终止后端 + NapCat/QQ 全杀（主人主动断链）
+        # - backend_only：只退窗口——后端+NapCat 保持运行（跳过后端终止）
+        # - legacy/None：旧语义（关窗清后端，NapCat 留）
+        # 三种均先停监督线程（正常关窗不再触发自动重启）并释放单实例互斥体。
+        mode = quit_state.get("quitting")
         stop_event.set()   # 先停监督线程：正常关窗不再触发自动重启
-        stop_backend_launcher(backend_state["proc"])
+        if mode == "backend_only":
+            _print("ℹ️ 仅退窗口：后端与 NapCat 按你的选择保持运行")
+        else:
+            stop_backend_launcher(backend_state["proc"])
+            if mode == "full_exit":
+                _kill_napcat_all(_print)
         _release_single_instance_lock(_SI_HANDLE)   # 单实例互斥体随窗关闭释放
     return 0
 
