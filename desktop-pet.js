@@ -486,6 +486,7 @@
     }
 
     img.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;   // 右键/中键不进入拖拽（#264 B2d ①：右键留给菜单）
         e.preventDefault();
         img.setPointerCapture(e.pointerId);
         const rect = root.getBoundingClientRect();
@@ -666,5 +667,98 @@
     // 启动时请求一次，之后每 60 秒请求一次
     fetchBalance();
     setInterval(fetchBalance, 60000);
+
+    // ==================== 右键菜单（#264 B2d 第①批，#301 首个落地点） ====================
+    // img.contextmenu → 阻止默认（WebView2 缺省无菜单，#301 侦察结论）→ 自绘
+    // 暖橘菜单；配色取页面 CSS 变量（--color-card/--color-primary 等），双主题
+    // 自动跟随。六项=缩小/设置/切换主题/关于/—/退出，动作经 window.__xiaoju3Console
+    // 桥调 console.js（镜像 __xiaoju3Pet 反向桥模式；桥未就绪时 warn 兜底不抛错）。
+    // 菜单挂 body（脱离 .xiaoju-root 的 pointer-events:none 容器），z-index 盖过
+    // 桌宠(99999)与加速球。
+    const PET_MENU_STYLE_ID = 'xiaoju-pet-menu-style';
+    if (!document.getElementById(PET_MENU_STYLE_ID)) {
+        const menuStyle = document.createElement('style');
+        menuStyle.id = PET_MENU_STYLE_ID;
+        menuStyle.textContent = `
+            .xiaoju-pet-menu {
+                position: fixed;
+                z-index: 2147483000;
+                min-width: 132px;
+                background: var(--color-card, #fff);
+                color: var(--color-text, #222);
+                border: 1px solid var(--color-primary, #d96f2b);
+                border-radius: 8px;
+                box-shadow: 0 6px 24px rgba(0,0,0,.25);
+                padding: 4px;
+                font-size: 13px;
+            }
+            .xiaoju-pet-menu .pet-menu-item { padding: 7px 14px; border-radius: 6px; cursor: pointer; }
+            .xiaoju-pet-menu .pet-menu-item:hover { background: var(--color-primary, #d96f2b); color: #fff; }
+            .xiaoju-pet-menu .pet-menu-sep { height: 1px; background: var(--color-border, #e0e4ec); margin: 4px 6px; }
+        `;
+        document.head.appendChild(menuStyle);
+    }
+
+    let petMenuEl = null;
+    function closePetMenu() {
+        if (!petMenuEl) return;
+        petMenuEl.remove();
+        petMenuEl = null;
+        document.removeEventListener('pointerdown', closePetMenuOnOutside, true);
+        document.removeEventListener('keydown', closePetMenuOnKey, true);
+    }
+    function closePetMenuOnOutside(e) {
+        if (petMenuEl && !petMenuEl.contains(e.target)) closePetMenu();
+    }
+    function closePetMenuOnKey(e) {
+        if (e.key === 'Escape') closePetMenu();
+    }
+    function openPetMenu(x, y) {
+        closePetMenu();
+        const menu = document.createElement('div');
+        menu.className = 'xiaoju-pet-menu';
+        const entries = [
+            { label: '缩小', run: function (b) { b.setPetMinimized(true); } },
+            { label: '设置', run: function (b) { b.switchTab('settings'); } },
+            { label: '切换主题', run: function (b) { b.toggleTheme(); } },
+            { label: '关于', run: function (b) { b.openAbout(); } },
+            { sep: true },
+            { label: '退出', run: function (b) { b.quitApp(); } },
+        ];
+        entries.forEach(function (entry) {
+            if (entry.sep) {
+                const sep = document.createElement('div');
+                sep.className = 'pet-menu-sep';
+                menu.appendChild(sep);
+                return;
+            }
+            const item = document.createElement('div');
+            item.className = 'pet-menu-item';
+            item.textContent = entry.label;
+            item.addEventListener('click', function () {
+                const bridge = window.__xiaoju3Console;
+                closePetMenu();
+                if (bridge && typeof entry.run === 'function') entry.run(bridge);
+                else console.warn('[pet-menu] 桥未就绪：', entry.label);
+            });
+            menu.appendChild(item);
+        });
+        document.body.appendChild(menu);
+        // 视口钳制：贴右/下边打开时菜单收进窗内
+        const rect = menu.getBoundingClientRect();
+        menu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 4)) + 'px';
+        menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 4)) + 'px';
+        petMenuEl = menu;
+        // 本次 contextmenu 事件链结束后再挂外点/ESC 关闭（防开即关竞态）
+        setTimeout(function () {
+            document.addEventListener('pointerdown', closePetMenuOnOutside, true);
+            document.addEventListener('keydown', closePetMenuOnKey, true);
+        }, 0);
+    }
+    img.addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        openPetMenu(e.clientX, e.clientY);
+    });
+
     console.log('小橘3号桌宠已启动！');
 })();

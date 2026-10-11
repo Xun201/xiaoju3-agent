@@ -19,17 +19,19 @@
         try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; }
     }
 
+    // 主题切换抽成函数（#264 B2d ①）：头部按钮与桌宠右键菜单经桥共用同一实现
+    function toggleTheme() {
+        const next = getStoredTheme() === 'orange' ? '' : 'orange';
+        try {
+            if (next) localStorage.setItem(THEME_KEY, next);
+            else localStorage.removeItem(THEME_KEY);
+        } catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
+        applyTheme(next);
+        showToast(next === 'orange' ? '已切换到橘色主题 🦊' : '已切换到深蓝主题');
+    }
     const themeBtn = document.getElementById('theme-toggle');
     if (themeBtn) {
-        themeBtn.addEventListener('click', () => {
-            const next = getStoredTheme() === 'orange' ? '' : 'orange';
-            try {
-                if (next) localStorage.setItem(THEME_KEY, next);
-                else localStorage.removeItem(THEME_KEY);
-            } catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
-            applyTheme(next);
-            showToast(next === 'orange' ? '已切换到橘色主题 🦊' : '已切换到深蓝主题');
-        });
+        themeBtn.addEventListener('click', toggleTheme);
     }
 
     // 音效总开关（WebAudio 引擎在 desktop-pet.js 中，localStorage 记忆）
@@ -2320,5 +2322,63 @@
 
     // 单点插入（IIFE 尾部）：所有既有绑定完成后再尝试弹引导
     initFirstRun();
+
+    // ==================== 关于卡 + 退出 stub + 桥（#264 B2d 第①批） ====================
+    // 关于卡=极简拍板（名称+版本+一句话+Apache 2.0）；退出=stub 占位（双方法
+    // 确认弹窗+js_api 全退链随第③批界面偏好组落地，设计稿第五节）；桥=桌宠
+    // 右键菜单跨 IIFE 调用入口（镜像 __xiaoju3Pet 反向桥模式，方法缺失时
+    // desktop-pet.js 侧 console.warn 兜底）。
+    function openAbout() {
+        const exist = document.getElementById('about-overlay');
+        if (exist) { exist.hidden = false; return; }
+        const overlay = document.createElement('div');
+        overlay.id = 'about-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;'
+            + 'background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;';
+        const card = document.createElement('div');
+        card.style.cssText = 'background:var(--color-card,#fff);color:var(--color-text,#222);'
+            + 'border:1px solid var(--color-primary,#d96f2b);border-radius:10px;padding:22px 26px;'
+            + 'width:min(340px,92vw);box-shadow:0 8px 30px rgba(0,0,0,.35);text-align:center;font-size:14px;';
+        const logo = document.createElement('div');
+        logo.textContent = '🦊 小橘3号';
+        logo.style.cssText = 'font-size:20px;font-weight:700;margin-bottom:6px;';
+        const verText = ((document.getElementById('header-version') || {}).textContent || '').trim();
+        const ver = document.createElement('div');
+        ver.textContent = verText || 'v1.0.4';
+        ver.style.cssText = 'opacity:.75;margin-bottom:10px;';
+        const desc = document.createElement('div');
+        desc.textContent = '长期主线的本地优先智能体——桌宠+控制台+QQ 三通道。';
+        desc.style.cssText = 'margin-bottom:10px;';
+        const lic = document.createElement('div');
+        lic.textContent = '开源许可：Apache License 2.0';
+        lic.style.cssText = 'font-size:12px;opacity:.65;margin-bottom:14px;';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'header-btn';
+        closeBtn.textContent = '关闭';
+        closeBtn.addEventListener('click', function () { overlay.hidden = true; });
+        card.appendChild(logo);
+        card.appendChild(ver);
+        card.appendChild(desc);
+        card.appendChild(lic);
+        card.appendChild(closeBtn);
+        overlay.appendChild(card);
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) overlay.hidden = true;
+        });
+        document.body.appendChild(overlay);
+    }
+
+    function quitApp() {
+        // #264 B2d 第①批 stub：真弹窗（双方法 radio+记住选择）随第③批落地
+        showToast('退出确认弹窗将在下批上线（设计稿第五节）');
+    }
+
+    window.__xiaoju3Console = {
+        switchTab: switchChatTab,
+        setPetMinimized: setPetMinimized,
+        toggleTheme: toggleTheme,
+        openAbout: openAbout,
+        quitApp: quitApp,
+    };
 
 })();
