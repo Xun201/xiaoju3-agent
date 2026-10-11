@@ -53,5 +53,11 @@
 
 - **B2a 用户真机验收 PASS（午，五项全过）**：tab 出现/常规组/管理员组/改城市保存 toast「已保存 1 项，1 项已生效」/权限分档 danger 组隐藏——B2a done（#264 库 note 已记进度，PROJECT_CONTEXT 已刷）。
 - **B2d 拍板最终版**（design_264_b2d_ui_trio.md 已更新）：退出弹窗**双方法**（全部退出/仅退后端，两 radio 各自可记住）｜关于卡极简｜**窗口 X=同桌宠菜单退出统一弹窗**（行为变更：原 X 直接关窗→现先弹框，用户接受副作用）；记住选择走后端文件 agent_state/ui_pref.json（localStorage InPrivate 即焚铁律）；衍生待办 **#313 自动更新检查**（P3，关联 #279）。
-- **第①批 = 桌宠右键菜单（a7ee449，#301 首落地点）**：img.contextmenu 阻止默认+自绘暖橘菜单（CSS 变量随双主题/挂 body/视口钳制/外点+ESC 关闭+防开即关竞态）；六项=缩小/设置/切换主题/关于/—/退出；**__xiaoju3Console 桥五方法**（镜像 __xiaoju3Pet 反向桥）；toggleTheme 抽取单一实现源；openAbout 极简卡；quitApp stub（真弹窗+js_api 全退链=第③批）；pointerdown 左键门（右键不进拖拽）。+4 锚全仓 **2016+4→2020+4**；about-overlay 进 dashboard id 一致性白名单。
+- **第①批 = 桌宠右键菜单（a7ee449，#301 首落地点）**：img.contextmenu 阻止默认+自绘暖橘菜单（CSS 变量随双主题/挂 body/视口钳制/外点+ESC 关闭+防开即关竞态）；六项=缩小/设置/切换主题/关于/—/退出；**__xiaoju3Console 桥五方法**（镜像 __xiaoju3Pet 反向桥）；toggleTheme 抽取单一实现源；openAbout 极简卡；quitApp stub（真弹窗+js_api 全退链=第③批）；pointerdown 左键门（右键不进拖拽）。+4 锚全仓 **2016+4→2020+4**；about-overlay 进 dashboard id 一致性白名单。**✅ 用户真机验收 PASS（截图实证：菜单六项齐+双主题跟随变量+外点/ESC 关闭+右键不误触拖拽）=B2d① done**。
 - **幽灵第三次事件（11:36:52）**：同签名（cmd 33268/父 28424 死/无 launcher 日志——当日 launcher 日志仅 4 份全对应真实启动）；巡检脚本再立功留证；已清理归位 1/4/3。三次节奏 10:05→10:57→11:36（~52/~40 分钟），周期性外部 spawner 定性不变，身份未钉死。
+
+## 七、B2d② 验收 + 第③批双修复（1945a9a / 61f949b，生产车 23F070F2）
+
+- **B2d②（齿轮入口）用户真机验收 PASS**。
+- **第③批双修复（用户 B 方案拍板，61f949b）**：①**删 tab 栏「设置」文字按钮**（双入口收敛为 ⚙️齿轮+桌宠菜单；settings-pane 保留）+设置页顶部**「← 返回」**=switchChatTab('console')；CHAT_TABS settings 条目 btn 恒 null 空值安全，getElementById('tab-settings') 残留清理（dashboard id 一致性锚实锤兜底）②**桌宠右上角重叠根因修复**：下界钳制三处（出生位/拖拽/resize）裸读 `.chat-input-area` rect.top——settings/终端 tab 输入框 display:none rect 全零→下界归零→拖拽/重算把桌宠压到右上角遮 header（真机截图实证）；修=**getBottomLimit() helper**（rect.height>0 才作数，隐藏回退 window.innerHeight）三处 call site 全量替换，pet_desktop 尾巴 A 锚随语义更新。+2 锚全仓 **2022+4→2024+4**。
+- **幽灵第五次事件（12:05:18）**：同签名（cmd 27552/父 22176）；节奏 10:05→10:57→11:36→11:51→12:05（间隔 52/40/15/14 分钟**收窄**）；**WMI 监视脚本 _dev/watch_napcat_spawn.ps1 已备未启动**（被动监听父进程命令行，等用户启动）。
