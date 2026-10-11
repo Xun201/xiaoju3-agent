@@ -32,3 +32,9 @@
 | 锚 | +10：三态三分支（杀副本后 fire/日常阻止/并存跳过）+路径判定（NapCat 副本识别/日常不误判/非 QQ 名忽略）+快照首行+DEVNULL 兜底+轮换 N=10+目录缺省 agent_state |
 | 测试 | 全仓 2000+4→**2010+4**；share_link=#303 既有失败 stash 对照实锤与本批零交集（改动仅 xiaoju3_launcher.py+test_napcat_launcher.py） |
 | 批次 2 | F1 绕 bat 直呼 BootMain（设计稿已备：winreg+env 复刻+漂移自检回退），**等批次 1 观察 24h 后另行指令** |
+
+### 部署与真机验证（10:19-10:32）
+
+- **部署**：kill 三进程（单轮清杀防监督复活，轮询归零）→ build_exe.bat 全流程 → PYZ 双向锁验 4 标记全中（三态判定/napcat_fire_/宽限常量/_classify_qq_processes）→ VCRUNTIME 双锁再现（已知坑）→ **shutil 绕锁部署 412 文件（392 换装+20 同版跳过，零失败零孤儿）**→ schtasks 拉起 → **新 exe=027868FF**，3 进程+console 200。
+- **F2 健康态零误伤活体验证**：新 launcher 日志（102336）明写「ℹ️ NapCat 已在运行，跳过」——健康树在跑时零 fire，napcat_fire_*.log=0（设计预期：健康态不产 fire 日志）。
+- **计划外活体标本（10:05:34 幽灵事件）**：部署前 20 分钟实弹目击——cmd 23216 以 ensure_napcat 同款形态（`cmd /c launcher-user.bat` 无路径+cwd 形态）拉起第二棵完整树（BootMain 27468+QQ×4），**父进程 27300 已死、无对应 launcher 日志**（非 xiaoju3 launcher 所为——NapCat 自体重启链候选，napcat.mjs 含 29 处 restart 相关串待二期核）；两树并存实证 QQ 9.9.36 单实例锁**不拦截**第二棵树（僵尸树可长存=幽灵堆积的最终形态解释）；OneBot 3000/WebUI 6099 均被旧树 QQ 4424 持有，新树=纯重复。已 taskkill /T 整树清理（BootMain/QQ/xiaoju3 归位 1/4/3），3000 通道 200 复验。**乘法链候选③（BootMain/上级自拉）获实锤级新证据**——F2 管不住非 xiaoju3 来源的 fire，批次 2 前需先钉死 27300 真身（下一次事件抓父进程命令行）。
