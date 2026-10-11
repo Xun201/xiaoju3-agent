@@ -117,6 +117,27 @@ class KeysPageJsTests(unittest.TestCase):
         self.assertIn("switchChatTab('keys')", self.cjs)
 
 
+    def test_toolbar_layout_unified(self):
+        """#264 工具栏统一（B2c 前置批，用户拍板）：两 pane 删说明文字，
+        返回/刷新靠左成组（toolbar-left）、保存靠右（toolbar-right）；
+        密钥页无保存（行内改）。终端页工具条不受影响。"""
+        html = _read("index.html")
+        self.assertNotIn("仅显示当前等级可改项", html)
+        self.assertNotIn("掩码显示，只写不读", html)
+        self.assertIn('class="toolbar-left"', html)
+        self.assertIn('class="header-btn toolbar-right"', html)   # 💾 保存右置
+        self.assertIn(".toolbar-left { display: flex;", html)
+        # 顺序：返回 < 刷新 < 保存（设置页）；密钥页无保存
+        sp = html.index('id="settings-pane"')
+        seg = html[sp:html.index('id="keys-pane"')]
+        b = seg.index('id="settings-back"')
+        r = seg.index('id="settings-refresh"')
+        v = seg.index('id="settings-save"')
+        self.assertLess(b, r)
+        self.assertLess(r, v)
+        kseg = html[html.index('id="keys-pane"'):html.index('class="chat-input-area"')]
+        self.assertNotIn('settings-save', kseg)
+
     def test_keys_back_button(self):
         """#264 B2c 合并批：密钥 pane「← 返回」= 回对话窗口（与设置页同构）。
         另锁 header 探针绑定与刷新接线（事①配套）。"""
