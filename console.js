@@ -2029,7 +2029,12 @@
             if (!byTier[tier]) { byTier[tier] = []; groups.push(tier); }
             byTier[tier].push(it);
         });
+        // #264 B2c 收尾（用户拍板）：admin 组藏进开发者模式——
+        // dev_mode_on=false 时跳过渲染（藏/显是 UI 门；能不能改仍由后端
+        // level 管=双门，此处只影响可见性）
+        const devOn = DEV_STATE.mode_on === true;
         groups.forEach(function (tier) {
+            if (tier === 'admin' && !devOn) return;   // 藏：拨开发者模式 ON 才出现
             const title = document.createElement('div');
             title.className = 'settings-group-title';
             title.textContent = SETTINGS_TIER_LABELS[tier] || tier;
@@ -2266,6 +2271,8 @@
     let devTapCount = 0;
     let devTapTimer = null;
 
+    const DEV_STATE = { unlocked: false, mode_on: false };   // #264 B2c 收尾：内存镜像（真源=ui_pref.json）
+
     function applyDevBadges(on) {
         // 🛠️ 徽标统一挂/摘（「关于」条目标题+关于卡内版本号）
         const aboutLabel = document.querySelector('#settings-about .settings-about-label');
@@ -2288,6 +2295,7 @@
         if (!api || typeof api.set_dev_pref !== 'function') return;
         api.set_dev_pref(null, on).then(function (r) {
             if (!(r && r.ok)) return;
+            DEV_STATE.mode_on = on;
             applyDevBadges(on);
             applyDevSwitchRow();
             showToast((on ? '🛠️ 开发者模式已开启' : '开发者模式已关闭')
@@ -2326,6 +2334,8 @@
             // 首次解锁：unlocked+mode_on 同写 true + 徽标 + 开关行 + 审计
             api.set_dev_pref(true, true).then(function (r) {
                 if (!(r && r.ok)) { showToast('解锁失败'); return; }
+                DEV_STATE.unlocked = true;
+                DEV_STATE.mode_on = true;
                 applyDevBadges(true);
                 applyDevSwitchRow();
                 showToast('🛠️ 开发者模式已解锁并开启（开关在下方）');
@@ -2374,6 +2384,8 @@
         const list = document.getElementById('settings-list');
         if (!api || typeof api.get_dev_pref !== 'function' || !list) return;
         api.get_dev_pref().then(function (pref) {
+            DEV_STATE.unlocked = !!(pref && pref.unlocked);
+            DEV_STATE.mode_on = !!(pref && pref.mode_on);
             let row = document.getElementById('dev-switch-row');
             if (!(pref && pref.unlocked)) {
                 if (row) row.remove();   // 未解锁：开关行不显示
