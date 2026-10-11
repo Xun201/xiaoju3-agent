@@ -111,6 +111,19 @@ class QuitBridgeTests(unittest.TestCase):
         self.assertIn("window.events.closing += _on_closing", src)
         self.assertIn("js_api=bridge", src)
 
+    def test_closing_return_semantics_source_anchor(self):
+        """#264 B2d④ 修复锚（坑库 #18）：closing 返回值语义——pywebview
+        winforms 实锤 should_cancel=closing.set()（任一 handler 返回
+        False→取消关闭）。拦截路径必须 return False、放行路径必须
+        return True（曾写反致 X 直接关窗、弹窗永不出现）。"""
+        src = open(os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "desktop_launcher.py"),
+            encoding="utf-8").read()
+        self.assertIn("return False   # 取消本次默认关闭", src)
+        self.assertIn("return True   # quit_app/legacy 已受理", src)
+        self.assertIn("handler 返回 False=取消关闭", src)   # 语义注释在位
+        self.assertIn("except Exception:\n            return True", src)   # 异常放行不卡关窗
+
     def test_quit_app_backend_only_keeps_napcat(self):
         r = self.bridge.quit_app("backend_only")
         self.assertTrue(r["ok"])
