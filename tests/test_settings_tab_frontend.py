@@ -56,6 +56,17 @@ class SettingsTabHtmlTests(unittest.TestCase):
                            html.index('id="terminal-history"'))
 
 
+    def test_gear_entry_replaces_minimize(self):
+        """#264 B2d②：右上角 ⌄ → ⚙️ 齿轮=设置入口（title=设置）；旧
+        console-minimize 在前端双文件禁绝（缩球入口已迁桌宠右键菜单）。"""
+        html = _read("index.html")
+        self.assertIn(
+            '<button id="console-settings-entry" class="header-btn" title="设置">⚙️</button>',
+            html)
+        self.assertNotIn("console-minimize", html)
+        self.assertNotIn("console-minimize", _read("console.js"))
+
+
 class SettingsTabJsTests(unittest.TestCase):
     """console.js 行为契约锚（函数体级）。"""
 
@@ -97,6 +108,16 @@ class SettingsTabJsTests(unittest.TestCase):
         deny = _fn_body(self.js, "settingsDenyText")
         self.assertIn("权限不足", deny)
         self.assertIn("level_insufficient", deny)
+
+    def test_gear_click_binds_settings_and_pet_menu_regression(self):
+        """#264 B2d② 回归：齿轮 click → switchChatTab('settings')；
+        setPetMinimized 仍经 __xiaoju3Console 桥被桌宠菜单「缩小」调用
+        （入口迁移≠功能删除）。"""
+        js = _read("console.js")
+        self.assertIn("getElementById('console-settings-entry')", js)
+        self.assertIn("switchChatTab('settings')", js)
+        self.assertIn("setPetMinimized: setPetMinimized", js)
+        self.assertIn("b.setPetMinimized(true)", _read("desktop-pet.js"))
 
     def test_render_iterates_without_hardcoded_keys(self):
         """渲染=遍历 items（.forEach），零键名硬编码——18 键集增减/扩白名单

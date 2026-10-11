@@ -306,7 +306,7 @@ class PetOnlineRegressionTests(unittest.TestCase):
         self.assertIn('src="/assets/pet/normal_half.png"', html)
         self.assertIn("#xiaoju3-ball {", html)
         self.assertIn("body.xiaoju3-pet-minimized #xiaoju3-ball", html)
-        self.assertIn('id="console-minimize"', html)      # 缩球入口按钮
+        self.assertIn('id="console-settings-entry"', html)   # 齿轮设置入口（#264 B2d②；缩球入口=桌宠右键菜单「缩小」）
 
     def test_ball_logic_kept_in_console_js(self):
         """加速球交互逻辑（console.js）：可拖拽（位移平方>9 阈值、
@@ -320,7 +320,7 @@ class PetOnlineRegressionTests(unittest.TestCase):
         self.assertIn("setPointerCapture", section)
         self.assertIn("setPetMinimized(false);   // 未拖动＝点击恢复桌宠",
                       section)
-        self.assertIn("getElementById('console-minimize')", section)
+        self.assertIn("getElementById('console-settings-entry')", section)   # #264 B2d②：齿轮=设置 tab
 
     def test_console_never_hides_and_new_class_anchors(self):
         """口径①反向锚（PET_BALL_FIX_DESIGN §6）：控制台隐藏规则不得回流

@@ -2131,11 +2131,13 @@
         });
     }
 
-    const minimizeBtn = document.getElementById('console-minimize');
-    if (minimizeBtn) {
-        minimizeBtn.addEventListener('click', function () {
-            setPetMinimized(true);
-            showToast('桌宠已缩成加速球，点击小球恢复');
+    // #264 B2d ②：⌄ 原为「桌宠缩球」入口，现改齿轮=设置 tab（缩球功能
+    // 迁入桌宠右键菜单「缩小」项，经 __xiaoju3Console.setPetMinimized 调用）；
+    // 菜单批次的桥与 setPetMinimized 全保留，本处只换入口语义
+    const settingsEntryBtn = document.getElementById('console-settings-entry');
+    if (settingsEntryBtn) {
+        settingsEntryBtn.addEventListener('click', function () {
+            switchChatTab('settings');
         });
     }
     initConsoleBall();
