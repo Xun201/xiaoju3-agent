@@ -313,6 +313,12 @@
                     if (verEl && d.version) {
                         verEl.textContent = 'v' + d.version;
                     }
+                    // 设置页页脚版本（#264 B2c 修复）：连点暗入口载体，
+                    // 与 header 同源同值
+                    const settingsVerEl = document.getElementById('settings-version');
+                    if (settingsVerEl && d.version) {
+                        settingsVerEl.textContent = '小橘3号 v' + d.version;
+                    }
                     const cpuText = document.getElementById('cpu-text');
                     const cpuBar = document.getElementById('cpu-bar');
                     if (cpuText && cpuBar) {
@@ -2270,17 +2276,27 @@
         showToast(msg);
         const api = window.pywebview && window.pywebview.api;
         if (level >= 3) {
-            const verEl = document.getElementById('header-version');
+            // 会话徽标（#264 B2c 修复）：挂设置页页脚版本号（暗入口本体），
+            // 同步 header 版本；刷新即退
+            const verEl = document.getElementById('settings-version');
             if (verEl && verEl.textContent.indexOf('🛠️') === -1) {
-                verEl.textContent += ' 🛠️';   // 会话徽标（刷新即退）
+                verEl.textContent += ' 🛠️';
+            }
+            const headerVerEl = document.getElementById('header-version');
+            if (headerVerEl && headerVerEl.textContent.indexOf('🛠️') === -1) {
+                headerVerEl.textContent += ' 🛠️';
             }
             if (api && typeof api.dev_audit === 'function') {
                 api.dev_audit('tap7 level=' + level);
             }
         }
     }
-    const devTapEl = document.getElementById('header-version');
+    // 连点绑定（#264 B2c 修复）：设置页页脚版本号（入口本体；拍板位置=
+    // 设置页最底部），header 版本保留双入口
+    const devTapEl = document.getElementById('settings-version');
     if (devTapEl) devTapEl.addEventListener('click', handleDevTap);
+    const devTapHeaderEl = document.getElementById('header-version');
+    if (devTapHeaderEl) devTapHeaderEl.addEventListener('click', handleDevTap);
 
     // ==================== 8. 缩成加速球（2026-10-03 口径：⌄ 缩桌宠成球） ====================
     // 与桌宠（desktop-pet.js）的协作：本节只切换 body 的 xiaoju3-pet-minimized
