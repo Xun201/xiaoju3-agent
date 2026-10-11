@@ -459,24 +459,29 @@ class TerminalTabTests(unittest.TestCase):
 
     def test_readonly_semantics(self):
         """只读语义：终端页隐藏输入框、清空按钮禁用、消息不带任何操作
-        工具栏（无 msg-tools / buildSystemMsgTools / startThinkTypewriter）。"""
+        工具栏（无 msg-tools / buildSystemMsgTools / startThinkTypewriter）。
+        （#264 B2a 起切换逻辑为 CHAT_TABS 注册表——语义断言随字面量更新：
+        input/clear 由条目声明驱动，效果不变。）"""
         section = self._tab_section()
-        self.assertIn("chatInputAreaEl.hidden = isTerminal", section)
-        self.assertIn("clearBtnEl.disabled = isTerminal", section)
+        self.assertIn("chatInputAreaEl.hidden = !def.input", section)
+        self.assertIn("clearBtnEl.disabled = !def.clearTitle", section)
         self.assertNotIn("msg-tools", section)
         self.assertNotIn("buildSystemMsgTools", section)
         self.assertNotIn("startThinkTypewriter", section)
 
     def test_tab_switching_and_autorefresh(self):
         """切换接线：两个标签点击 ↔ switchChatTab('terminal'/'console')；
-        内容区互斥显隐；切入拉最新 + 停留期间定时自动刷新、切走清定时器。"""
+        内容区互斥显隐（#264 B2a 起=CHAT_TABS 注册表声明：terminal 条目
+        show/hide 列表）；切入拉最新 + 停留期间定时自动刷新、切走清定时器。"""
         section = self._tab_section()
         self.assertIn("function switchChatTab", section)
+        self.assertIn("const CHAT_TABS = {", section)
         self.assertIn("tabTerminalBtn.addEventListener('click'", section)
         self.assertIn("switchChatTab('terminal')", section)
         self.assertIn("switchChatTab('console')", section)
-        self.assertIn("chatHistoryPaneEl.hidden = isTerminal", section)
-        self.assertIn("terminalPaneEl.hidden = !isTerminal", section)
+        self.assertIn("show: function () { return [terminalPaneEl]; }", section)
+        self.assertIn("hide: function () { return [chatHistoryPaneEl, settingsPaneEl]; }",
+                      section)
         self.assertIn("setInterval(loadTerminalHistory, TERMINAL_REFRESH_MS)",
                       section)
         self.assertIn("clearInterval(terminalRefreshTimer)", section)
