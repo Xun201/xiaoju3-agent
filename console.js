@@ -1878,7 +1878,7 @@
     // 等级/TOTP 原因）；响应 applied=已写 .env 并补 os.environ（🟢 即改
     // 即生效），其余 written=需重启。类型渲染：str/int/bool/enum(:a,b,c)。
     let settingsFetchSeq = 0;
-    const SETTINGS_STATE = { level: null, original: {} };
+    const SETTINGS_STATE = { level: null, original: {}, tiers: {} };
     const SETTINGS_TIER_LABELS = {
         daily: '常规设置',
         admin: '管理员开关',
@@ -1898,6 +1898,7 @@
 
     function buildSettingsField(it) {
         SETTINGS_STATE.original[it.key] = it.value;
+        SETTINGS_STATE.tiers[it.key] = it.tier || 'other';   // #264 B2c b：TOTP 分流需要
         const row = document.createElement('label');
         row.className = 'first-run-field settings-field';
         const cap = document.createElement('span');
@@ -2027,6 +2028,9 @@
             const title = document.createElement('div');
             title.className = 'settings-group-title';
             title.textContent = SETTINGS_TIER_LABELS[tier] || tier;
+            if (tier === 'danger') {
+                title.style.color = 'var(--color-danger, #e0433f)';   // #264 B2c c：高危组红色标识
+            }
             settingsListEl.appendChild(title);
             byTier[tier].forEach(function (it) {
                 settingsListEl.appendChild(buildSettingsField(it));
@@ -2092,10 +2096,35 @@
         const updates = collectSettingsUpdates();
         const keys = Object.keys(updates);
         if (!keys.length) { showToast('没有修改项'); return; }
+        // #264 B2c b：改动含 danger 档 → 先 TOTP 验证（前端卡片）再提交
+        const dangerKeys = keys.filter(function (k) {
+            return SETTINGS_STATE.tiers[k] === 'danger';
+        });
+        if (dangerKeys.length) {
+            openTotpDialog(updates, dangerKeys);
+            return;
+        }
+        submitSettingsUpdates(updates, null);
+    }
+
+    // 危险项后果文案（按项区分，设计稿 §三 4：高危保存弹确认含后果）
+    const DANGER_CONSEQUENCES = {
+        LOCAL_MODEL: '改主模型会影响所有对话的模型调用',
+        CLOUD_MODEL: '改云模型会影响云端脑对话',
+        XIAOJU3_PERSONALITY: '改人格档会影响说话风格与自称',
+        HA_URL: '改 HA 地址会影响全屋智能联动',
+        ONEBOT_API_URL: '改 OneBot 地址会影响 QQ 通道收发',
+        VISION_API_URL: '改视觉地址会影响看图能力',
+        WORKSPACE: '改工作区路径会影响文件读写位置（重启生效）',
+    };
+
+    function submitSettingsUpdates(updates, totp) {
+        const payload = { updates: updates };
+        if (totp) payload.totp = totp;
         fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ updates: updates })
+            body: JSON.stringify(payload)
         })
             .then(function (res) {
                 return res.json().then(function (body) {
@@ -2105,6 +2134,13 @@
             .then(function (r) {
                 const body = r.body || {};
                 if (r.status === 403 || body.code === 403) {
+                    if (body.error === 'totp_invalid') {
+                        showToast('⚠️ TOTP 验证码错误，请重试');
+                        openTotpDialog(updates, Object.keys(updates).filter(function (k) {
+                            return SETTINGS_STATE.tiers[k] === 'danger';
+                        }), totp);   // 带上次的码便于改一位重试
+                        return;
+                    }
                     showToast('⚠️ ' + settingsDenyText(body));
                     return;
                 }
@@ -2125,6 +2161,126 @@
             })
             .catch(function (err) { showToast('保存失败: ' + err.message); });
     }
+
+    // ==================== 高危 TOTP 验证卡（#264 B2c b） ====================
+    // danger 项保存前置验证：6 位码+按项后果文案；403 totp_invalid →
+    // 带旧码重开卡便于改一位重试；成功走 submitSettingsUpdates 常规链。
+    let totpDialogEl = null;
+
+    function closeTotpDialog() {
+        if (totpDialogEl) {
+            totpDialogEl.remove();
+            totpDialogEl = null;
+        }
+    }
+
+    function openTotpDialog(updates, dangerKeys, prefill) {
+        closeTotpDialog();
+        const overlay = document.createElement('div');
+        overlay.id = 'totp-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;'
+            + 'background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;';
+        const card = document.createElement('div');
+        card.style.cssText = 'background:var(--color-card,#fff);color:var(--color-text,#222);'
+            + 'border:1px solid var(--color-danger,#e0433f);border-radius:10px;padding:20px 24px;'
+            + 'width:min(420px,92vw);box-shadow:0 8px 30px rgba(0,0,0,.35);font-size:14px;';
+        const title = document.createElement('div');
+        title.textContent = '🛠️ 高危操作验证';
+        title.style.cssText = 'font-size:16px;font-weight:700;color:var(--color-danger,#e0433f);margin-bottom:10px;';
+        card.appendChild(title);
+        dangerKeys.forEach(function (k) {
+            const line = document.createElement('div');
+            line.style.cssText = 'margin:4px 0;';
+            line.textContent = '⚠️ ' + k + '：' + (DANGER_CONSEQUENCES[k] || '即将修改该项配置');
+            card.appendChild(line);
+        });
+        const hint = document.createElement('div');
+        hint.textContent = '请输入 6 位动态码（TOTP）确认操作：';
+        hint.style.cssText = 'margin:12px 0 6px;';
+        card.appendChild(hint);
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.inputMode = 'numeric';
+        input.maxLength = 6;
+        input.value = prefill || '';
+        input.autocomplete = 'off';
+        input.style.cssText = 'width:100%;box-sizing:border-box;padding:8px;border:1px solid rgba(127,127,127,.4);'
+            + 'border-radius:6px;font-family:Consolas,monospace;font-size:18px;letter-spacing:.4em;text-align:center;';
+        card.appendChild(input);
+        const errTip = document.createElement('div');
+        errTip.className = 'first-run-error';
+        errTip.hidden = true;
+        card.appendChild(errTip);
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:10px;justify-content:flex-end;margin-top:12px;';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'header-btn';
+        cancelBtn.textContent = '取消';
+        cancelBtn.addEventListener('click', closeTotpDialog);
+        const okBtn = document.createElement('button');
+        okBtn.className = 'header-btn';
+        okBtn.textContent = '确认执行';
+        okBtn.addEventListener('click', function () {
+            const code = input.value.trim();
+            if (!/^\d{6}$/.test(code)) {
+                errTip.textContent = '请输入 6 位数字动态码';
+                errTip.hidden = false;
+                return;
+            }
+            closeTotpDialog();
+            submitSettingsUpdates(updates, code);
+        });
+        btnRow.appendChild(cancelBtn);
+        btnRow.appendChild(okBtn);
+        card.appendChild(btnRow);
+        overlay.appendChild(card);
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeTotpDialog();
+        });
+        document.body.appendChild(overlay);
+        totpDialogEl = overlay;
+        input.focus();
+    }
+
+    // ==================== 开发者模式暗入口（#264 B2c a，简化版） ====================
+    // 设置页版本号连点 7 次 → 按级分流告知（设计稿偏离标注：原「LV3 进基础档」
+    // 为空转——admin 组本就可见，语义改「权限状态告知」）；徽标=会话级
+    // （header-version 后缀 🛠️，刷新即退=设计稿「刷新即退出」天然满足）；
+    // LV3+ 每次触发写一条审计（js_api dev_audit → settings_log）。
+    let devTapCount = 0;
+    let devTapTimer = null;
+
+    function handleDevTap() {
+        devTapCount += 1;
+        clearTimeout(devTapTimer);
+        devTapTimer = setTimeout(function () { devTapCount = 0; }, 3000);
+        if (devTapCount < 7) return;
+        devTapCount = 0;
+        const level = SETTINGS_STATE.level;
+        let msg;
+        if (level === null || level === undefined) {
+            msg = '⚠️ 权限未知（请先打开设置页读取）';
+        } else if (level < 3) {
+            msg = '⚠️ 权限不足（Lv.' + level + '）';
+        } else if (level === 3) {
+            msg = '✅ 管理员权限已就绪（admin 项可改）';
+        } else {
+            msg = '🛠️ 开发者模式已就绪（改高危项需 TOTP）';
+        }
+        showToast(msg);
+        const api = window.pywebview && window.pywebview.api;
+        if (level >= 3) {
+            const verEl = document.getElementById('header-version');
+            if (verEl && verEl.textContent.indexOf('🛠️') === -1) {
+                verEl.textContent += ' 🛠️';   // 会话徽标（刷新即退）
+            }
+            if (api && typeof api.dev_audit === 'function') {
+                api.dev_audit('tap7 level=' + level);
+            }
+        }
+    }
+    const devTapEl = document.getElementById('header-version');
+    if (devTapEl) devTapEl.addEventListener('click', handleDevTap);
 
     // ==================== 8. 缩成加速球（2026-10-03 口径：⌄ 缩桌宠成球） ====================
     // 与桌宠（desktop-pet.js）的协作：本节只切换 body 的 xiaoju3-pet-minimized
@@ -2721,6 +2877,7 @@
             .then(function (body) {
                 if (body && body.code === 200) {
                     keysEntryBtn.hidden = false;
+                    SETTINGS_STATE.level = body.level;   // #264 B2c a：连点判级用（早于设置页）
                     renderKeysItems(body);   // 预取渲染（pane 打开即有内容）
                 } else {
                     keysEntryBtn.hidden = true;

@@ -94,19 +94,27 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("renderSettingsItems(body)", body)
 
     def test_save_settings_post_contract(self):
-        """saveSettings：POST /api/settings，body 携带 updates（增量改动项）。"""
+        """B2c b 重构后契约：saveSettings 只做收集+danger 分流（danger→
+        openTotpDialog），POST 提交移至 submitSettingsUpdates（body 携带
+        updates+可选 totp）。"""
         body = _fn_body(self.js, "saveSettings")
-        self.assertIn("method: 'POST'", body)
-        self.assertIn("'/api/settings'", body)
-        self.assertIn("updates", body)
+        self.assertIn("SETTINGS_STATE.tiers[k] === 'danger'", body)
+        self.assertIn("openTotpDialog(updates, dangerKeys)", body)
+        self.assertIn("submitSettingsUpdates(updates, null)", body)
+        sub = _fn_body(self.js, "submitSettingsUpdates")
+        self.assertIn("method: 'POST'", sub)
+        self.assertIn("'/api/settings'", sub)
+        self.assertIn("if (totp) payload.totp = totp;", sub)
 
     def test_save_403_shows_toast(self):
-        """403 响应 → showToast 提示；文案分流在 settingsDenyText（含
-        权限不足/所需等级/TOTP 原因）。"""
-        body = _fn_body(self.js, "saveSettings")
-        self.assertIn("403", body)
-        self.assertIn("showToast", body)
-        self.assertIn("settingsDenyText(body)", body)
+        """403 响应 → showToast；totp_invalid → 带旧码重开 TOTP 卡；
+        文案分流在 settingsDenyText（含权限不足/所需等级/TOTP 原因）。"""
+        sub = _fn_body(self.js, "submitSettingsUpdates")
+        self.assertIn("403", sub)
+        self.assertIn("showToast", sub)
+        self.assertIn("settingsDenyText(body)", sub)
+        self.assertIn("openTotpDialog(updates", sub)   # totp_invalid 带旧码重开
+        self.assertIn("totp_invalid", sub)
         deny = _fn_body(self.js, "settingsDenyText")
         self.assertIn("权限不足", deny)
         self.assertIn("level_insufficient", deny)
@@ -120,6 +128,34 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("switchChatTab('settings')", js)
         self.assertIn("setPetMinimized: setPetMinimized", js)
         self.assertIn("b.setPetMinimized(true)", _read("desktop-pet.js"))
+
+    def test_dev_mode_tap_and_totp_dialog(self):
+        """#264 B2c：a 连点 7 次暗入口（按级分流 toast+🛠️ 会话徽标+审计）
+        + b TOTP 卡（后果文案按项+6 位码+body.totp）+ c danger 组红标题。"""
+        cjs = _read("console.js")
+        # a 连点：计数 7 次触发+3s 重置+按级 toast+徽标+审计
+        self.assertIn("function handleDevTap()", cjs)
+        self.assertIn("if (devTapCount < 7) return;", cjs)
+        self.assertIn("setTimeout(function () { devTapCount = 0; }, 3000)", cjs)
+        self.assertIn("开发者模式已就绪（改高危项需 TOTP）", cjs)
+        self.assertIn("管理员权限已就绪", cjs)
+        self.assertIn("权限不足（Lv.' + level + '）", cjs)
+        self.assertIn("verEl.textContent += ' 🛠️'", cjs)
+        self.assertIn("api.dev_audit('tap7 level=' + level)", cjs)
+        # b TOTP 卡：结构+后果文案+6 位码校验+body.totp+totp_invalid 重开
+        self.assertIn("function openTotpDialog(updates, dangerKeys, prefill)", cjs)
+        self.assertIn("🛠️ 高危操作验证", cjs)
+        self.assertIn("DANGER_CONSEQUENCES", cjs)
+        self.assertIn("改主模型会影响所有对话的模型调用", cjs)
+        self.assertIn("if (!/^\\d{6}$/.test(code))", cjs)
+        self.assertIn("closeTotpDialog();", cjs)
+        self.assertIn("submitSettingsUpdates(updates, code);", cjs)
+        # c danger 组标题红色
+        self.assertIn("title.style.color = 'var(--color-danger, #e0433f)'", cjs)
+        # Python 侧审计接线
+        py = _read("desktop_launcher.py")
+        self.assertIn("def dev_audit(self, detail", py)
+        self.assertIn('_audit({"action": "dev_mode"', py)
 
     def test_settings_back_binding(self):
         """#264 B2d③ B 方案：设置页「← 返回」→ switchChatTab('console')；
