@@ -99,5 +99,18 @@ class PetPositionTests(unittest.TestCase):
         self.assertGreaterEqual(js.count("getBottomLimit()"), 4)   # 定义+三处调用
 
 
+    def test_reclamp_on_tab_switch(self):
+        """#264 B2d③ 回归修复锚：桌宠桥暴露 reclamp（切 tab 后按当前下界
+        重钳）；console.js switchChatTab 在 pane 切换后调用它——设置/终端
+        落过底的桌宠切回对话窗不再卡输入框/发送按钮区。"""
+        js = _read("desktop-pet.js")
+        self.assertIn("reclamp: reclampToCurrentLimits", js)
+        self.assertIn("function reclampToCurrentLimits()", js)
+        self.assertIn("getComputedStyle(root).display === 'none') return",
+                      js[js.index("function reclampToCurrentLimits"):])  # 缩球态守卫
+        cjs = _read("console.js")
+        self.assertIn("__xiaoju3Pet.reclamp()", cjs)
+
+
 if __name__ == "__main__":
     unittest.main()

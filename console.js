@@ -1810,6 +1810,12 @@
         def.show().forEach(function (el) { if (el) el.hidden = false; });
         def.hide().forEach(function (el) { if (el) el.hidden = true; });
         if (chatInputAreaEl) chatInputAreaEl.hidden = !def.input;
+        // #264 B2d③ 回归修复：输入框显隐改变桌宠下界基准（隐藏=窗口底/
+        // 可见=输入框上沿），pane 切完立即按新基准重钳——设置/终端落过底
+        // 的桌宠切回对话窗不再卡进输入框/发送按钮区
+        if (window.__xiaoju3Pet && typeof window.__xiaoju3Pet.reclamp === 'function') {
+            window.__xiaoju3Pet.reclamp();
+        }
         const clearBtnEl = document.getElementById('clear-history');
         if (clearBtnEl) {
             clearBtnEl.disabled = !def.clearTitle;
