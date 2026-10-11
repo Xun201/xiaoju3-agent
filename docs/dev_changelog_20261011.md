@@ -85,3 +85,17 @@
 - **监视净化**：watch_napcat_spawn.ps1 补 cmd 噪声门（commit 消息文本含 launcher-user 曾致假警报）；精确签名 fire 自 12:40 起=0。
 - 全仓锚 2038+4→**2051+4**。
 - **B2c 主体开工前置**：无硬前置（扩容已落地）；⚠️ 一个**语义对齐点**——admin/danger 项渲染+danger 改需 TOTP 已由 B2a/B1 覆盖，暗开关增量=连点 7 次入口+开发者会话态+审计强化，建议开工前先出增量清单避免重复轮子。
+
+
+## 十一、晚间批次：B2c 主体+持久化+收尾（3900c3a/b88b9cc/df40c3f，生产车 4098C2EF）
+
+| 项 | 内容 |
+|---|---|
+| **B2c 增量清单拍板** | 已覆盖（admin/danger 渲染+TOTP 门+审计 B2a/B1 有）vs 真增量（a 连点暗入口/b danger TOTP 前端流程/c 红标题）——b 为真缺口（此前 LV4 改 danger 项 403 无路可走）；d TOTP 会话期/e 进出审计砍 |
+| **B2c 主体** | a 连点 7 次+按级 toast+🛠️徽标+dev_audit；b saveSettings 检测 danger→TOTP 卡（DANGER_CONSEQUENCES 按项后果 7 条+6 位码+totp_invalid 带旧码重开）→body.totp 重提交；c danger 组红标题 |
+| **B2c 持久化（拍板 A 推翻会话级）** | ui_pref.json 泛化 KV（读改写合并防互覆盖）+get/set_dev_pref（dev_unlocked/dev_mode_on）+开关行组件（settings-list 内/关于上方）+四渲染路径恢复——解锁永久+开关永久，F5/重启复原，无重置路径 |
+| **B2c 收尾（拍板）** | admin 组藏进开发者模式（权限双门：藏显=前端 dev_mode_on，能改=后端 level）；设置页默认只剩 界面偏好+常规+开发者开关+关于（参照手机列表）；danger 常显（TOTP 门在） |
+| **UI 打磨战役** | 版本号入口迁移（header→关于卡内版本号连点）+「关于」条目化（手机列表样式）+工具栏统一（返回左置/保存右置/删说明）+滚动恢复+去沉底/贴底（chat-history 双类 flex:1 真凶+关于条目移进滚动容器） |
+| **🎯 help 幻觉修复（后补）** | 用户发裸 help→先滑 LLM 产「操作已完成」幻觉回执→侦察=三处拦截词表精确匹配无 help 无 lower（dashboard api_chat/_console_slash_intercept/QQ main 同源同漏，**与 #299 三期异因**——那期是 stream 链漏挂整段）→修=词表 lower()+补裸词 help 三处 |
+| **锚** | 2038+4→**2056+4**（B2c 主体+持久化+收尾+help 共 +18） |
+| 生产车迭代 | 96F6D9A6→…→C3DD91C4→1935AD33→96B0B847→(打磨四轮)→**4098C2EF 现行** |
