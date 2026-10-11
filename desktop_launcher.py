@@ -823,33 +823,39 @@ def main(argv=None):
 
     def _on_closing():
         # #264 B2d④：X → 与桌宠菜单「退出」统一弹窗（双方法+记住选择）。
-        # closing.set() 返回 True=取消默认关闭（winforms on_closing 实锤）。
+        # ⚠️ pywebview 事件返回值语义（winforms on_closing 源码实锤）：
+        #   should_cancel = closing.set() —— **handler 返回 False=取消关闭，
+        #   返回 True=放行**（Event.set 聚合：任一 handler False→取消）。
+        #   坑库 #18：凭直觉写反曾致 X 直接关窗、弹窗永不出现。
         # ① 记住过（pref≠ask）→ 直接按记住的方法退出，不弹；
         # ② 未记住 → 起线程 evaluate_js 唤前端弹窗（GUI 线程内不可同步
         #    evaluate），本次默认关闭取消；
         # ③ 前端未就绪（占位页阶段，console.js 未加载）→ 退回旧语义直退。
-        if quit_state.get("quitting"):
-            return False   # quit_app 已受理（destroy 再入），放行
-        pref = _load_ui_pref().get("exit", "ask")
+        try:
+            if quit_state.get("quitting"):
+                return True   # quit_app/legacy 已受理（destroy 再入），放行关闭
+            pref = _load_ui_pref().get("exit", "ask")
 
-        def _decide():
-            try:
-                if pref in ("backend_only", "full_exit"):
-                    quit_state["quitting"] = pref
-                    window.destroy()
-                    return
-                window.evaluate_js(
-                    "window.__xiaoju3OpenQuitDialog && window.__xiaoju3OpenQuitDialog()")
-            except Exception:
-                # 前端未就绪：旧语义直退（关窗清后端，NapCat 留）
-                quit_state["quitting"] = "legacy"
+            def _decide():
                 try:
-                    window.destroy()
+                    if pref in ("backend_only", "full_exit"):
+                        quit_state["quitting"] = pref
+                        window.destroy()
+                        return
+                    window.evaluate_js(
+                        "window.__xiaoju3OpenQuitDialog && window.__xiaoju3OpenQuitDialog()")
                 except Exception:
-                    pass
+                    # 前端未就绪：旧语义直退（关窗清后端，NapCat 留）
+                    quit_state["quitting"] = "legacy"
+                    try:
+                        window.destroy()
+                    except Exception:
+                        pass
 
-        threading.Thread(target=_decide, daemon=True).start()
-        return True   # 取消本次默认关闭（决定线程随后 destroy 或弹窗）
+            threading.Thread(target=_decide, daemon=True).start()
+            return False   # 取消本次默认关闭（决定线程随后弹窗或 destroy）
+        except Exception:
+            return True   # handler 任何异常：放行关闭（绝不卡死用户关窗）
 
     try:
         window.events.closing += _on_closing
