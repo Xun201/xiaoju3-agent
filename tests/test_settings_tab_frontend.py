@@ -253,5 +253,16 @@ class SettingsTabJsTests(unittest.TestCase):
             self.assertNotIn(key, body)
 
 
+def test_help_intercept_case_insensitive():
+    """B2c 后补：help 幻觉修复锚（用户发裸 help→先滑 LLM 产幻觉回执）——
+    三处拦截词表（dashboard api_chat/_console_slash_intercept/QQ main.py）
+    均须大小写不敏感+补裸词 help。"""
+    dash = open("xiaoju3_dashboard.py", encoding="utf-8").read()
+    main_src = open("main.py", encoding="utf-8").read()
+    assert 'user_msg.strip().lower() in ("/help", "help", "菜单", "帮助", "指令")' in dash
+    assert 'text.lower() in ("/help", "help", "菜单", "帮助", "指令")' in dash
+    assert 'command_text.lower() in ["/help", "help", "菜单", "帮助", "指令"]' in main_src
+
+
 if __name__ == "__main__":
     unittest.main()
