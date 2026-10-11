@@ -666,11 +666,12 @@
                 <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
                 <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
                 <button id="auto-tts-toggle" class="header-btn" title="自动朗读开关（AI 回复自动播报，与音效独立）">🔇</button>
-                <button id="theme-toggle" class="header-btn" title="切换橘色主题">🦊</button>
-                <button id="console-settings-entry" class="header-btn" title="设置">⚙️</button>
+                <!-- 主题切换入口（#264 B2b 微调）：头部 🦊 按钮已删（与桌宠菜单
+                     「切换主题」+设置页「界面偏好」双入口冗余），toggleTheme 保留 -->
                 <!-- 密钥管理入口（#264 B2b，方案 A）：LV3+ 可见（探针 403 时
                      hidden），掩码只写不读——设计稿第五节铁律 -->
                 <button id="keys-entry" class="header-btn" title="密钥管理" hidden>🔑</button>
+                <button id="console-settings-entry" class="header-btn" title="设置">⚙️</button>
             </span>
         </div>
         <!-- 聊天标签页：对话窗口 / 终端记录（切换逻辑在 console.js；终端

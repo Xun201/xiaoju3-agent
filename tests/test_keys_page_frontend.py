@@ -96,6 +96,19 @@ class KeysPageJsTests(unittest.TestCase):
         self.assertIn("confirm: true", body)
         self.assertIn("input.value = ''", body)   # 明文即清不缓存
 
+    def test_header_icon_order_and_theme_entry_removed(self):
+        """#264 B2b 微调：header-actions 排列=…🔑（密钥）→⚙️（设置）；
+        头部 🦊 主题按钮禁绝（双入口冗余，入口=桌宠菜单+设置页偏好组）。
+        回归：三主题入口中桌宠菜单/设置页仍在（toggleTheme 单一实现）。"""
+        html = _read("index.html")
+        keys_idx = html.index('id="keys-entry"')
+        gear_idx = html.index('id="console-settings-entry"')
+        self.assertLess(keys_idx, gear_idx)   # 🔑 在 ⚙️ 之前
+        self.assertNotIn('id="theme-toggle"', html)
+        js = _read("console.js")
+        self.assertIn("toggleTheme: toggleTheme", js)   # 桌宠菜单入口在
+        self.assertIn("applyTheme(themeSel.value)", js)   # 设置页入口在
+
     def test_lv_gate_hides_entry(self):
         """LV3+ 门双保险：探针 403/异常 → 🔑 hidden；注册表 keys 条目在位。"""
         self.assertIn("keys: {", self.cjs)

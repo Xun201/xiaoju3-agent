@@ -1068,7 +1068,9 @@ class FrontendStaticTests(unittest.TestCase):
         )
         for token in orange_tokens:
             self.assertIn(token, html)
-        self.assertIn("theme-toggle", html)  # 主题切换按钮挂载点
+        # 主题入口迁移（#264 B2b 微调）：头部 🦊 按钮已删（与桌宠菜单
+        # 「切换主题」+设置页「界面偏好」双入口冗余），挂载点禁绝
+        self.assertNotIn("theme-toggle", html)
 
     def test_index_mobile_responsive(self):
         """移动端适配（界面 §7）：viewport meta + ≤768px 断点单栏折叠
