@@ -61,3 +61,11 @@
 - **B2d②（齿轮入口）用户真机验收 PASS**。
 - **第③批双修复（用户 B 方案拍板，61f949b）**：①**删 tab 栏「设置」文字按钮**（双入口收敛为 ⚙️齿轮+桌宠菜单；settings-pane 保留）+设置页顶部**「← 返回」**=switchChatTab('console')；CHAT_TABS settings 条目 btn 恒 null 空值安全，getElementById('tab-settings') 残留清理（dashboard id 一致性锚实锤兜底）②**桌宠右上角重叠根因修复**：下界钳制三处（出生位/拖拽/resize）裸读 `.chat-input-area` rect.top——settings/终端 tab 输入框 display:none rect 全零→下界归零→拖拽/重算把桌宠压到右上角遮 header（真机截图实证）；修=**getBottomLimit() helper**（rect.height>0 才作数，隐藏回退 window.innerHeight）三处 call site 全量替换，pet_desktop 尾巴 A 锚随语义更新。+2 锚全仓 **2022+4→2024+4**。
 - **幽灵第五次事件（12:05:18）**：同签名（cmd 27552/父 22176）；节奏 10:05→10:57→11:36→11:51→12:05（间隔 52/40/15/14 分钟**收窄**）；**WMI 监视脚本 _dev/watch_napcat_spawn.ps1 已备未启动**（被动监听父进程命令行，等用户启动）。
+
+## 八、🎯 #305 真凶定案（WMI 监视立功）+ B2d③ 回归修复（b842272，生产车 B4B7D0F0）
+
+- **真凶=pytest 本体（WMI 12:17:21 铁证：cmd 的父=python.exe -m pytest）**：pytest rootdir 递归收集扫进 `_dev/`，E3 时代一次性实验脚本 **popen_*_test.py**（匹配 pytest 默认 `*_test.py` 模式 + **模块级裸 Popen launcher-user.bat** + 无 `__main__` 门）**被 import 即执行** → 每次全仓测试真 fire 一棵幽灵树。**六谜团统一解释**：父=pytest（import 在 pytest 进程）/父死（跑完即退）/无 launcher 日志（不经 ensure_napcat 主路径——是实验脚本自己 Popen）/间隔收窄（部署密集=全仓跑得勤）/昨晚 20+ 棵（10-09 脚本诞生以来每天全仓测试累积）/分块跑不炸（scoped 到 tests/ 不扫 _dev）。
+- **修复三件套（b842272）**：①**pytest.ini** `testpaths=tests` + norecursedirs 双保险（收集圈定）②五实验脚本补 `__main__` 执行门（断根）③**根目录散落的 mood/relationship/trace 三测试文件**（#271 唯一本体，tests/ 无副本）git mv 归位 tests/（tests/__init__.py 包模式 import 零改动）。+3 锚（残留禁绝+收集守卫×2）全仓 2024+4→**2027+4**；**修后全仓测试 FIRE DELTA=0 且 153s→59s**（顺带砍掉 90s 的 _dev 扫描）。failure_patterns #14（删引用不删绑定/IIFE 半身不遂）#15（收集器扫野文件）已录。
+- **B2d③ 回归修复同批部署**：设置入口点不开根因=删 const 后残留 `if(已删变量)` 绑定块 ReferenceError 打断 IIFE（「半身不遂」症状：terminal 活/齿轮+桥+返回全灭）——删残留块+锚。**生产车=B4B7D0F0**（console 200/齿轮+返回在线/BootMain 1·QQ 4·xiaoju3 3 全净/5 棵积压幽灵树已清）。
+- **#314 自主循环防漂移纪律**落库（P2，Anthropic 双实例实验启发，前置=#271③）+坑库 #13（无锚自激）/ #14 / #15 三条新坑。
+- **待用户复验**：⚙️齿轮+桌宠菜单「设置」恢复正常打开设置页；「← 返回」可用。**用户澄清已记**：桌宠菜单「设置」未来=桌宠专属设置（新页面待设计，非全局设置——另行立项）。
