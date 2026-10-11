@@ -38,3 +38,12 @@
 - **部署**：kill 三进程（单轮清杀防监督复活，轮询归零）→ build_exe.bat 全流程 → PYZ 双向锁验 4 标记全中（三态判定/napcat_fire_/宽限常量/_classify_qq_processes）→ VCRUNTIME 双锁再现（已知坑）→ **shutil 绕锁部署 412 文件（392 换装+20 同版跳过，零失败零孤儿）**→ schtasks 拉起 → **新 exe=027868FF**，3 进程+console 200。
 - **F2 健康态零误伤活体验证**：新 launcher 日志（102336）明写「ℹ️ NapCat 已在运行，跳过」——健康树在跑时零 fire，napcat_fire_*.log=0（设计预期：健康态不产 fire 日志）。
 - **计划外活体标本（10:05:34 幽灵事件）**：部署前 20 分钟实弹目击——cmd 23216 以 ensure_napcat 同款形态（`cmd /c launcher-user.bat` 无路径+cwd 形态）拉起第二棵完整树（BootMain 27468+QQ×4），**父进程 27300 已死、无对应 launcher 日志**（非 xiaoju3 launcher 所为——NapCat 自体重启链候选，napcat.mjs 含 29 处 restart 相关串待二期核）；两树并存实证 QQ 9.9.36 单实例锁**不拦截**第二棵树（僵尸树可长存=幽灵堆积的最终形态解释）；OneBot 3000/WebUI 6099 均被旧树 QQ 4424 持有，新树=纯重复。已 taskkill /T 整树清理（BootMain/QQ/xiaoju3 归位 1/4/3），3000 通道 200 复验。**乘法链候选③（BootMain/上级自拉）获实锤级新证据**——F2 管不住非 xiaoju3 来源的 fire，批次 2 前需先钉死 27300 真身（下一次事件抓父进程命令行）。
+
+## 五、#264 B2a 设置 tab（9447af8，生产车 62E73BBB）
+
+| 项 | 内容 |
+|---|---|
+| **改动** | ①index.html 第三 tab=设置（pane 与终端页同构，CSS 复用 first-run-field 族）②console.js switchChatTab 重构 **CHAT_TABS 注册表**（显隐/输入框/清空/进出副作用全条目声明，B2b/B2c 续条目即可；终端 15s 轮询语义逐条保留）③设置页=GET /api/settings 按 level 渲染（低档项后端已隐藏，**前端零键名硬编码**——扩白名单零前端改动）+str/int/bool/enum 分型+tier 分组+增量保存 POST {updates}（403 文案分流含儿童锁关需 Lv4+TOTP；applied/written 区分即生效 vs 需重启）+竞态守卫 |
+| **锚** | +6（test_settings_tab_frontend.py：HTML 结构/注册表非 if-else/GET 契约/POST 契约/403 toast/渲染遍历零硬编码）；test_web_ux 四条字面量随注册表语义适配（意图不变）。全仓 **2010+4→2016+4** |
+| **部署** | 11:02 换装（4 文件差异）→ schtasks 拉起 → console 200 + 线上 HTML 实含 tab-settings/settings-pane + /api/settings 200（747B=items 有货） |
+| **幽灵二次事件** | 部署健康检查再抓 ABNORMAL：第二棵树生于 **10:57:09**（cmd 16456/父 11504 已死/无 launcher 日志，ensure_napcat 同款形态）——与 10:05 事件同签名、间隔 ~52 分钟≈**小时级周期**（昨晚 20+ 棵≈20 小时堆积吻合）；新 launcher 11:02 启动正常 skip 零 fire（F2 无辜）；巡检脚本首战立功（genealogy 全链留证 napcat_ghost_report.txt）；已 taskkill /T 清理归位 1/4/3，3000/6099 始终归旧树。**下一步=被动等下次事件抓父进程 or 主动布 WMI 进程创建监视（拍板待定）** |
