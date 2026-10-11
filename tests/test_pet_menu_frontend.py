@@ -78,8 +78,10 @@ class ConsoleBridgeTests(unittest.TestCase):
         self.assertIn("about-overlay", about)
         self.assertIn("Apache License 2.0", about)
         self.assertIn("v1.0.4", about)          # header-version 缺失时的回退
+        # B2d④：quitApp 已由 stub 换真实现（调统一弹窗），stub 文案禁绝
         stub = self.js[self.js.index("function quitApp()"):]
-        self.assertIn("第③批", stub)
+        self.assertIn("__xiaoju3OpenQuitDialog();", stub)
+        self.assertNotIn("退出确认弹窗将在下批上线", stub)
         self.assertIn("showToast", stub)
 
 
@@ -110,6 +112,33 @@ class PetPositionTests(unittest.TestCase):
                       js[js.index("function reclampToCurrentLimits"):])  # 缩球态守卫
         cjs = _read("console.js")
         self.assertIn("__xiaoju3Pet.reclamp()", cjs)
+
+
+    def test_quit_dialog_real_and_ui_prefs_section(self):
+        """#264 B2d④：退出 stub→真弹窗（双方法 radio+记住选择+统一入口
+        __xiaoju3OpenQuitDialog）；设置页界面偏好组（主题+退出方式下拉，
+        静态组与 API 组并列且不依赖 API 成败）。"""
+        cjs = _read("console.js")
+        self.assertIn("function __xiaoju3OpenQuitDialog()", cjs)
+        self.assertIn("是否退出小橘3号？", cjs)
+        self.assertIn("'backend_only', '只退窗口（后端与 NapCat 继续运行）'", cjs)
+        self.assertIn("'full_exit', '完全退出（前端+后端+NapCat 全部关闭）'", cjs)
+        self.assertIn("记住我的选择，下次不再询问", cjs)
+        # stub 换真实现：quitApp 调统一弹窗（函数体含注释，窗口放宽到收尾）
+        stub_idx = cjs.index("function quitApp()")
+        stub_end = cjs.index("}", stub_idx)
+        self.assertIn("__xiaoju3OpenQuitDialog();", cjs[stub_idx:stub_end])
+        self.assertNotIn("退出确认弹窗将在下批上线", cjs)
+        # Python closing 拦截接线（X=菜单退出统一弹窗）
+        py = _read("desktop_launcher.py")
+        self.assertIn("window.__xiaoju3OpenQuitDialog", py)
+        # 界面偏好组：主题（applyTheme 复用）+退出方式（js_api 读写）
+        self.assertIn("界面偏好（本机）", cjs)
+        self.assertIn("ui-pref-theme", cjs)
+        self.assertIn("applyTheme(themeSel.value)", cjs)
+        self.assertIn("ui-pref-exit", cjs)
+        self.assertIn("set_exit_pref(exitSel.value)", cjs)
+        self.assertIn("appendUiPrefsSection()", cjs)
 
 
 if __name__ == "__main__":

@@ -316,7 +316,10 @@ class FirstRunOverlayStaticTests(unittest.TestCase):
         """跳过语义（方案 C）源码锁定：skip 走后端端点写标记文件，
         first-run 块整体零 localStorage——浏览器/WebView2 容器差异免疫；
         弹出判定只依赖后端 status（.env 与跳过标记两个文件）。"""
-        block = self.js[self.js.index("first-run-overlay"):]
+        # 切片右界=first-run 节结尾（#264 B2d④ 起文件后段合法使用 localStorage：
+        # 退出弹窗注释/主题选择器——first-run 块自身仍须零 localStorage）
+        block = self.js[self.js.index("first-run-overlay"):
+                        self.js.index("==================== 关于卡")]
         self.assertIn("/api/first_run/skip", block)
         self.assertIn("method: 'POST'", block)
         self.assertIn("closeFirstRunOverlay()", block)

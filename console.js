@@ -1917,12 +1917,82 @@
         return row;
     }
 
+    // 界面偏好（#264 B2d④ 静态本地组）：与 API items 并列渲染，不走分档
+    // 表——主题色=前端偏好（THEME_KEY），退出方式=js_api 读写 ui_pref.json。
+    // 浏览器形态（无 pywebview）下退出方式禁用置灰。
+    function appendUiPrefsSection() {
+        if (!settingsListEl) return;
+        const title = document.createElement('div');
+        title.className = 'settings-group-title';
+        title.textContent = '界面偏好（本机）';
+        settingsListEl.appendChild(title);
+        // 主题色
+        const themeField = document.createElement('label');
+        themeField.className = 'first-run-field settings-field';
+        const themeCap = document.createElement('span');
+        themeCap.textContent = '主题色';
+        themeField.appendChild(themeCap);
+        const themeSel = document.createElement('select');
+        themeSel.className = 'settings-input';
+        themeSel.id = 'ui-pref-theme';
+        [['', '深蓝（默认）'], ['orange', '暖橘 🦊']].forEach(function (pair) {
+            const o = document.createElement('option');
+            o.value = pair[0];
+            o.textContent = pair[1];
+            themeSel.appendChild(o);
+        });
+        themeSel.value = getStoredTheme() || '';
+        themeSel.addEventListener('change', function () {
+            applyTheme(themeSel.value);   // 复用既有主题设施（data-theme 切换）
+            try {
+                if (themeSel.value) localStorage.setItem(THEME_KEY, themeSel.value);
+                else localStorage.removeItem(THEME_KEY);
+            } catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
+            showToast('主题已切换');
+        });
+        themeField.appendChild(themeSel);
+        settingsListEl.appendChild(themeField);
+        // 退出方式
+        const exitField = document.createElement('label');
+        exitField.className = 'first-run-field settings-field';
+        const exitCap = document.createElement('span');
+        exitCap.textContent = '退出方式（勾过「记住」后生效；改回「每次询问」恢复弹窗）';
+        exitField.appendChild(exitCap);
+        const exitSel = document.createElement('select');
+        exitSel.className = 'settings-input';
+        exitSel.id = 'ui-pref-exit';
+        [['ask', '每次询问'], ['backend_only', '直接退窗口（后端与 NapCat 保留）'],
+         ['full_exit', '直接完全退出（含 NapCat）']].forEach(function (pair) {
+            const o = document.createElement('option');
+            o.value = pair[0];
+            o.textContent = pair[1];
+            exitSel.appendChild(o);
+        });
+        exitField.appendChild(exitSel);
+        settingsListEl.appendChild(exitField);
+        const api = window.pywebview && window.pywebview.api;
+        if (!api || typeof api.get_exit_pref !== 'function') {
+            exitSel.disabled = true;
+            exitSel.title = '浏览器形态不可用（桌面窗口内生效）';
+            return;
+        }
+        api.get_exit_pref().then(function (pref) {
+            exitSel.value = pref || 'ask';
+        }).catch(function () { exitSel.disabled = true; });
+        exitSel.addEventListener('change', function () {
+            window.pywebview.api.set_exit_pref(exitSel.value).then(function (r) {
+                showToast(r && r.ok ? '✅ 退出方式已保存' : '⚠️ 保存失败');
+            }).catch(function (err) { showToast('保存失败: ' + err.message); });
+        });
+    }
+
     function renderSettingsItems(data) {
         if (!settingsListEl) return;
         SETTINGS_STATE.level = data && data.level;
         const items = (data && Array.isArray(data.items)) ? data.items : [];
         SETTINGS_STATE.original = {};
         settingsListEl.innerHTML = '';
+        appendUiPrefsSection();   // #264 B2d④ 静态本地组（与 API 组并列，始终渲染）
         if (!items.length) {
             appendSettingsTip('暂无可见设置项（当前等级或分档表限制）');
             return;
@@ -1954,6 +2024,7 @@
                 if (seq !== settingsFetchSeq) return;
                 if (!body || body.code !== 200) {
                     settingsListEl.innerHTML = '';
+                    appendUiPrefsSection();   // 静态组不依赖 API 成败
                     appendSettingsTip('设置读取失败' +
                         (body && body.error ? ('：' + body.error) : ''));
                     return;
@@ -1963,6 +2034,7 @@
             .catch(function (err) {
                 if (seq !== settingsFetchSeq) return;
                 settingsListEl.innerHTML = '';
+                appendUiPrefsSection();   // 静态组不依赖 API 成败
                 appendSettingsTip('设置读取失败: ' + err.message);
             });
     }
@@ -2384,9 +2456,107 @@
     }
 
     function quitApp() {
-        // #264 B2d 第①批 stub：真弹窗（双方法 radio+记住选择）随第③批落地
-        showToast('退出确认弹窗将在下批上线（设计稿第五节）');
+        // #264 B2d④：真实现——与主窗 X 统一弹窗（双方法 radio+记住选择，
+        // Python closing 拦截经 evaluate_js 调同一弹窗； remembering 走
+        // js_api 存 ui_pref.json——localStorage 关窗即焚禁用）
+        __xiaoju3OpenQuitDialog();
     }
+
+    // ==================== 退出弹窗（#264 B2d④） ====================
+    // 双方法 radio（只退窗口/完全退出）+「记住我的选择」（经 js_api 存
+    // agent_state/ui_pref.json）；桌宠菜单 quitApp 与主窗 X（Python
+    // closing 拦截 evaluate_js）统一走 __xiaoju3OpenQuitDialog。已记住
+    // 时（pref≠ask）两端都不弹、直接按记住的方法退出。
+    let quitDialogEl = null;
+
+    function closeQuitDialog() {
+        if (quitDialogEl) {
+            quitDialogEl.remove();
+            quitDialogEl = null;
+        }
+    }
+
+    function showQuitDialog() {
+        if (quitDialogEl) { quitDialogEl.hidden = false; return; }
+        const overlay = document.createElement('div');
+        overlay.id = 'quit-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;'
+            + 'background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;';
+        const card = document.createElement('div');
+        card.style.cssText = 'background:var(--color-card,#fff);color:var(--color-text,#222);'
+            + 'border:1px solid var(--color-primary,#d96f2b);border-radius:10px;padding:20px 24px;'
+            + 'width:min(400px,92vw);box-shadow:0 8px 30px rgba(0,0,0,.35);font-size:14px;';
+        const title = document.createElement('div');
+        title.textContent = '是否退出小橘3号？';
+        title.style.cssText = 'font-size:16px;font-weight:700;margin-bottom:10px;';
+        card.appendChild(title);
+        let selected = 'backend_only';
+        [['backend_only', '只退窗口（后端与 NapCat 继续运行）'],
+         ['full_exit', '完全退出（前端+后端+NapCat 全部关闭）']].forEach(function (r, i) {
+            const lab = document.createElement('label');
+            lab.style.cssText = 'display:block;margin:8px 0;cursor:pointer;';
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = 'quit-mode';
+            input.value = r[0];
+            input.checked = i === 0;
+            input.addEventListener('change', function () { selected = r[0]; });
+            lab.appendChild(input);
+            lab.appendChild(document.createTextNode(' ' + r[1]));
+            card.appendChild(lab);
+        });
+        const rememberLab = document.createElement('label');
+        rememberLab.style.cssText = 'display:block;margin:10px 0;font-size:12px;opacity:.8;cursor:pointer;';
+        const remember = document.createElement('input');
+        remember.type = 'checkbox';
+        rememberLab.appendChild(remember);
+        rememberLab.appendChild(document.createTextNode(' 记住我的选择，下次不再询问'));
+        card.appendChild(rememberLab);
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:10px;justify-content:flex-end;margin-top:12px;';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'header-btn';
+        cancelBtn.textContent = '取消';
+        cancelBtn.addEventListener('click', closeQuitDialog);
+        const okBtn = document.createElement('button');
+        okBtn.className = 'header-btn';
+        okBtn.textContent = '确认退出';
+        okBtn.addEventListener('click', function () {
+            const api = window.pywebview && window.pywebview.api;
+            if (!api || typeof api.quit_app !== 'function') {
+                showToast('桌面窗口未就绪（浏览器形态请在窗口上退出）');
+                return;
+            }
+            api.quit_app(selected, remember.checked);
+            closeQuitDialog();
+            showToast(remember.checked ? '已记住退出方式，正在退出…' : '正在退出…');
+        });
+        btnRow.appendChild(cancelBtn);
+        btnRow.appendChild(okBtn);
+        card.appendChild(btnRow);
+        overlay.appendChild(card);
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeQuitDialog();
+        });
+        document.body.appendChild(overlay);
+        quitDialogEl = overlay;
+    }
+
+    function __xiaoju3OpenQuitDialog() {
+        const api = window.pywebview && window.pywebview.api;
+        if (api && typeof api.get_exit_pref === 'function') {
+            api.get_exit_pref().then(function (pref) {
+                if (pref === 'backend_only' || pref === 'full_exit') {
+                    api.quit_app(pref);   // 记住过：两端都不弹，按记住的方法直接走
+                    return;
+                }
+                showQuitDialog();
+            }).catch(function () { showQuitDialog(); });
+            return;
+        }
+        showToast('桌面窗口未就绪（浏览器形态请在窗口上退出）');
+    }
+    window.__xiaoju3OpenQuitDialog = __xiaoju3OpenQuitDialog;   // Python closing 拦截入口
 
     window.__xiaoju3Console = {
         switchTab: switchChatTab,
