@@ -846,7 +846,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return child_reply
 
     # === 🛡️ 指令菜单 ===
-    if command_text in ["/help", "菜单", "帮助", "指令"]:
+    if command_text.lower() in ["/help", "help", "菜单", "帮助", "指令"]:   # B2c 后补：裸 help/大小写不敏感（幻觉回执实证）
         from plugins.help_menu import get_help_menu
         return get_help_menu(permission_manager.current_level)
 

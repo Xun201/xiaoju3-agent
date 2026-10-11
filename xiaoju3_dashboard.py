@@ -841,7 +841,7 @@ def api_chat():
         #     落 smart_ask 走 LLM；QQ 通道 main.py:774 一直正常）。别名与
         #     main 同款；等级取全局（控制台视为成人设备口径，同 child 块）；
         #     菜单经 sanitize_for_web 与同级拦截块同口径 ===
-        if user_msg.strip() in ("/help", "菜单", "帮助", "指令"):
+        if user_msg.strip().lower() in ("/help", "help", "菜单", "帮助", "指令"):   # B2c 后补：裸 help/大小写不敏感（幻觉回执实证）
             from plugins.help_menu import get_help_menu
             menu = get_help_menu(main.permission_manager.current_level)
             return jsonify({
@@ -1169,7 +1169,7 @@ def _console_slash_intercept(user_msg):
 
     # ⚙️ /help | 菜单 | 帮助 | 指令：指令菜单（api_chat 有独立 /help 块
     # 在本函数之前——此处补一份，供流式端点等直调场景使用）
-    if text in ("/help", "菜单", "帮助", "指令"):
+    if text.lower() in ("/help", "help", "菜单", "帮助", "指令"):   # B2c 后补：裸 help/大小写不敏感
         from plugins.help_menu import get_help_menu
         return (get_help_menu(main.permission_manager.current_level),
                 "⚙️ 系统")
