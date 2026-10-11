@@ -61,7 +61,7 @@ class UiPrefTests(unittest.TestCase):
         self.assertEqual(dl._load_ui_pref(self.path), {"exit": "ask"})
 
     def test_save_load_roundtrip(self):
-        dl._save_ui_pref("full_exit", self.path)
+        dl._save_ui_pref({"exit": "full_exit"}, self.path)
         self.assertEqual(dl._load_ui_pref(self.path), {"exit": "full_exit"})
         with open(self.path, encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"exit": "full_exit"})

@@ -615,26 +615,30 @@ def _ui_pref_path():
 
 
 def _load_ui_pref(path=None):
-    """读退出偏好：文件缺失/损坏/非法值 → 缺省 ask（最保守=每次询问）。"""
+    """读 UI 偏好全量 KV（#264 B2c 泛化：exit 之外新增 dev_unlocked/
+    dev_mode_on）。exit 缺失/非法 → 缺省 ask（最保守=每次询问）；
+    其余键原样透传（未知键不丢——多特性共文件互不覆盖）。"""
     p = path or _ui_pref_path()
+    data = {}
     try:
         with open(p, encoding="utf-8") as f:
-            data = json.load(f)
-        mode = (data or {}).get("exit")
-        if mode in UI_PREF_MODES:
-            return {"exit": mode}
+            data = json.load(f) or {}
     except Exception:
-        pass
-    return dict(UI_PREF_DEFAULT)
+        data = {}
+    mode = data.get("exit")
+    out = dict(data)
+    out["exit"] = mode if mode in UI_PREF_MODES else UI_PREF_DEFAULT["exit"]
+    return out
 
 
-def _save_ui_pref(mode, path=None):
-    """写退出偏好（tmp+replace 原子写；目录惰性创建）。"""
+def _save_ui_pref(data, path=None):
+    """写 UI 偏好（tmp+replace 原子写；目录惰性创建）。#264 B2c 泛化：
+    接收全量 dict（调用方负责读改写合并，避免多特性互覆盖）。"""
     p = path or _ui_pref_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"exit": mode}, f)
+        json.dump(data, f)
     os.replace(tmp, p)
 
 
@@ -713,15 +717,39 @@ class QuitBridge:
     def set_exit_pref(self, mode):
         if mode not in UI_PREF_MODES:
             return {"ok": False, "error": "invalid_mode"}
-        _save_ui_pref(mode, self._pref_path)
+        cur = _load_ui_pref(self._pref_path)   # 读改写合并：不覆盖 dev 字段
+        cur["exit"] = mode
+        _save_ui_pref(cur, self._pref_path)
         self._out(f"💾 退出偏好已保存：{mode}")
         return {"ok": True, "exit": mode}
+
+    def get_dev_pref(self):
+        """开发者模式偏好（#264 B2c）：unlocked=暗入口已解锁（开关行显示）；
+        mode_on=开发者模式开（🛠️ 徽标+审计挂它）。"""
+        data = _load_ui_pref(self._pref_path)
+        return {"unlocked": bool(data.get("dev_unlocked")),
+                "mode_on": bool(data.get("dev_mode_on"))}
+
+    def set_dev_pref(self, unlocked=None, mode_on=None):
+        """写开发者模式偏好（读改写合并；两键独立可只写其一）。"""
+        cur = _load_ui_pref(self._pref_path)
+        if unlocked is not None:
+            cur["dev_unlocked"] = bool(unlocked)
+        if mode_on is not None:
+            cur["dev_mode_on"] = bool(mode_on)
+        _save_ui_pref(cur, self._pref_path)
+        self._out(f"💾 开发者模式偏好已保存：unlocked={cur.get('dev_unlocked')} "
+                  f"mode_on={cur.get('dev_mode_on')}")
+        return {"ok": True, "unlocked": bool(cur.get("dev_unlocked")),
+                "mode_on": bool(cur.get("dev_mode_on"))}
 
     def quit_app(self, mode="backend_only", remember=False):
         if mode not in ("backend_only", "full_exit"):
             return {"ok": False, "error": "invalid_mode"}
         if remember:
-            _save_ui_pref(mode, self._pref_path)
+            cur = _load_ui_pref(self._pref_path)
+            cur["exit"] = mode
+            _save_ui_pref(cur, self._pref_path)
         self._state["quitting"] = mode
         self._out(f"🛑 退出受理：mode={mode} remember={bool(remember)}")
         try:

@@ -2018,6 +2018,7 @@
         appendUiPrefsSection();   // #264 B2d④ 静态本地组（与 API 组并列，始终渲染）
         if (!items.length) {
             appendSettingsTip('暂无可见设置项（当前等级或分档表限制）');
+            applyDevSwitchRow();   // 开关行恢复（空列表路径）
             if (aboutRow) settingsListEl.appendChild(aboutRow);
             return;
         }
@@ -2040,7 +2041,8 @@
                 settingsListEl.appendChild(buildSettingsField(it));
             });
         });
-        if (aboutRow) settingsListEl.appendChild(aboutRow);   // 关于放回列表尾（滚动内容一部分）
+        if (aboutRow) settingsListEl.appendChild(aboutRow);   // 关于放回列表尾
+        applyDevSwitchRow();   // #264 B2c：开关行按 ui_pref 恢复（渲染尾）（滚动内容一部分）
     }
 
     function loadSettings() {
@@ -2055,6 +2057,7 @@
                     if (aboutRow) aboutRow.remove();
                     settingsListEl.innerHTML = '';
                     appendUiPrefsSection();   // 静态组不依赖 API 成败
+                    applyDevSwitchRow();   // 开关行恢复（失败路径）
                     if (aboutRow) settingsListEl.appendChild(aboutRow);
                     appendSettingsTip('设置读取失败' +
                         (body && body.error ? ('：' + body.error) : ''));
@@ -2068,6 +2071,7 @@
                 if (aboutRow) aboutRow.remove();
                 settingsListEl.innerHTML = '';
                 appendUiPrefsSection();   // 静态组不依赖 API 成败
+                applyDevSwitchRow();   // 开关行恢复（catch 路径）
                 if (aboutRow) settingsListEl.appendChild(aboutRow);
                 appendSettingsTip('设置读取失败: ' + err.message);
             });
@@ -2253,13 +2257,44 @@
         input.focus();
     }
 
-    // ==================== 开发者模式暗入口（#264 B2c a，简化版） ====================
-    // 设置页版本号连点 7 次 → 按级分流告知（设计稿偏离标注：原「LV3 进基础档」
-    // 为空转——admin 组本就可见，语义改「权限状态告知」）；徽标=会话级
-    // （「关于」条目+关于卡版本号后缀 🛠️，刷新即退=设计稿「刷新即退出」天然满足）；
+    // ==================== 开发者模式暗入口（#264 B2c，持久化拍板） ====================
+    // 状态=ui_pref.json 两字段（dev_unlocked/dev_mode_on，后端文件——
+    // localStorage 关窗即焚禁用）；解锁永久、开关永久，F5/重启读文件恢复，
+    // 无任何重置路径（用户拍板推翻设计稿原「会话级」口径）。连点=解锁仪式
+    // （已解锁则提示开关在下方）；开关行拨 ON/OFF 独立持久化+审计；
     // LV3+ 每次触发写一条审计（js_api dev_audit → settings_log）。
     let devTapCount = 0;
     let devTapTimer = null;
+
+    function applyDevBadges(on) {
+        // 🛠️ 徽标统一挂/摘（「关于」条目标题+关于卡内版本号）
+        const aboutLabel = document.querySelector('#settings-about .settings-about-label');
+        if (aboutLabel) {
+            const has = aboutLabel.textContent.indexOf('🛠️') !== -1;
+            if (on && !has) aboutLabel.textContent += ' 🛠️';
+            if (!on && has) aboutLabel.textContent = aboutLabel.textContent.replace(' 🛠️', '');
+        }
+        const cardVer = document.querySelector('#about-overlay .about-version');
+        if (cardVer) {
+            const has = cardVer.textContent.indexOf('🛠️') !== -1;
+            if (on && !has) cardVer.textContent += ' 🛠️';
+            if (!on && has) cardVer.textContent = cardVer.textContent.replace(' 🛠️', '');
+        }
+    }
+
+    function setDevMode(on, reason) {
+        // 开发者模式开/关（持久化拍板）：写 ui_pref.json + 徽标 + 审计
+        const api = window.pywebview && window.pywebview.api;
+        if (!api || typeof api.set_dev_pref !== 'function') return;
+        api.set_dev_pref(null, on).then(function (r) {
+            if (!(r && r.ok)) return;
+            applyDevBadges(on);
+            applyDevSwitchRow();
+            showToast((on ? '🛠️ 开发者模式已开启' : '开发者模式已关闭')
+                + (reason ? ('（' + reason + '）') : ''));
+            if (api.dev_audit) api.dev_audit('dev_mode ' + (on ? 'enter' : 'exit') + ' ' + (reason || ''));
+        }).catch(function () { showToast('保存失败'); });
+    }
 
     function handleDevTap() {
         devTapCount += 1;
@@ -2268,33 +2303,35 @@
         if (devTapCount < 7) return;
         devTapCount = 0;
         const level = SETTINGS_STATE.level;
-        let msg;
-        if (level === null || level === undefined) {
-            msg = '⚠️ 权限未知（请先打开设置页读取）';
-        } else if (level < 3) {
-            msg = '⚠️ 权限不足（Lv.' + level + '）';
-        } else if (level === 3) {
-            msg = '✅ 管理员权限已就绪（admin 项可改）';
-        } else {
-            msg = '🛠️ 开发者模式已就绪（改高危项需 TOTP）';
-        }
-        showToast(msg);
         const api = window.pywebview && window.pywebview.api;
-        if (level >= 3) {
-            // 会话徽标（#264 B2c 收尾）：挂「关于」条目标题（🛠️ 后缀）+
-            // 关于卡内版本号后缀（卡开着时）；刷新即退
-            const aboutLabel = document.querySelector('#settings-about .settings-about-label');
-            if (aboutLabel && aboutLabel.textContent.indexOf('🛠️') === -1) {
-                aboutLabel.textContent += ' 🛠️';
-            }
-            const cardVer = document.querySelector('#about-overlay .about-version');
-            if (cardVer && cardVer.textContent.indexOf('🛠️') === -1) {
-                cardVer.textContent += ' 🛠️';
-            }
-            if (api && typeof api.dev_audit === 'function') {
-                api.dev_audit('tap7 level=' + level);
-            }
+        if (level === null || level === undefined) {
+            showToast('⚠️ 权限未知（请先打开设置页读取）');
+            return;
         }
+        if (level < 3) {
+            showToast('⚠️ 权限不足（Lv.' + level + '）');
+            return;
+        }
+        if (!api || typeof api.get_dev_pref !== 'function') {
+            showToast('桌面窗口未就绪（浏览器形态不可用）');
+            return;
+        }
+        api.get_dev_pref().then(function (pref) {
+            if (pref && pref.unlocked) {
+                // 已解锁：不重复仪式，指路开关行
+                showToast('开发者模式开关已在下方（设置页底部）');
+                if (api.dev_audit) api.dev_audit('tap7 already-unlocked level=' + level);
+                return;
+            }
+            // 首次解锁：unlocked+mode_on 同写 true + 徽标 + 开关行 + 审计
+            api.set_dev_pref(true, true).then(function (r) {
+                if (!(r && r.ok)) { showToast('解锁失败'); return; }
+                applyDevBadges(true);
+                applyDevSwitchRow();
+                showToast('🛠️ 开发者模式已解锁并开启（开关在下方）');
+                if (api.dev_audit) api.dev_audit('dev_mode enter tap7 level=' + level);
+            }).catch(function () { showToast('解锁失败'); });
+        }).catch(function () { showToast('桌面窗口未就绪'); });
     }
     // 连点绑定（#264 B2c 收尾）：关于卡内版本号（藏得更深=暗入口语义）；
     // 事件委托挂 body——卡是动态节点，开卡后即可连点
@@ -2304,6 +2341,58 @@
             handleDevTap();
         }
     });
+    // ==================== 开发者模式开关行（#264 B2c 持久化） ====================
+    // 位置=设置页「关于」条目上方；dev_unlocked=true 才显示；拨 ON/OFF 独立
+    // 持久化（dev_mode_on）+徽标+审计；F5/重启按文件恢复（无重置路径）。
+    function buildDevSwitchRow() {
+        const row = document.createElement('div');
+        row.className = 'settings-about-row';
+        row.id = 'dev-switch-row';
+        const lab = document.createElement('span');
+        lab.className = 'settings-about-label';
+        lab.textContent = '开发者模式';
+        row.appendChild(lab);
+        const sw = document.createElement('label');
+        sw.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.id = 'dev-mode-switch';
+        input.addEventListener('change', function () {
+            setDevMode(input.checked, 'switch');
+        });
+        sw.appendChild(input);
+        const txt = document.createElement('span');
+        txt.style.cssText = 'font-size:12px;opacity:.7;';
+        txt.textContent = '高危项 TOTP 验证+审计';
+        sw.appendChild(txt);
+        row.appendChild(sw);
+        return row;
+    }
+
+    function applyDevSwitchRow() {
+        const api = window.pywebview && window.pywebview.api;
+        const list = document.getElementById('settings-list');
+        if (!api || typeof api.get_dev_pref !== 'function' || !list) return;
+        api.get_dev_pref().then(function (pref) {
+            let row = document.getElementById('dev-switch-row');
+            if (!(pref && pref.unlocked)) {
+                if (row) row.remove();   // 未解锁：开关行不显示
+                applyDevBadges(false);
+                return;
+            }
+            const on = !!(pref && pref.mode_on);
+            if (!row) {
+                row = buildDevSwitchRow();
+                const about = document.getElementById('settings-about');
+                if (about) list.insertBefore(row, about);   // 关于条目上方
+                else list.appendChild(row);
+            }
+            const input = row.querySelector('#dev-mode-switch');
+            if (input) input.checked = on;
+            applyDevBadges(on);   // F5/重启恢复徽标
+        }).catch(function () {});
+    }
+
     // 「关于」条目 click → openAbout（复用 B2d 桌宠菜单同卡）
     const aboutRow = document.getElementById('settings-about');
     if (aboutRow) aboutRow.addEventListener('click', function () { openAbout(); });

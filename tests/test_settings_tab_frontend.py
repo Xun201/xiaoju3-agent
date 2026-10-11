@@ -137,12 +137,19 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("function handleDevTap()", cjs)
         self.assertIn("if (devTapCount < 7) return;", cjs)
         self.assertIn("setTimeout(function () { devTapCount = 0; }, 3000)", cjs)
-        self.assertIn("开发者模式已就绪（改高危项需 TOTP）", cjs)
-        self.assertIn("管理员权限已就绪", cjs)
+        # B2c 持久化拍板：解锁仪式（未解锁→unlocked+on 同写）/已解锁指路/
+        # 徽标统一挂摘 applyDevBadges
+        self.assertIn("开发者模式开关已在下方（设置页底部）", cjs)
+        self.assertIn("开发者模式已解锁并开启（开关在下方）", cjs)
+        self.assertIn("api.set_dev_pref(true, true)", cjs)
         self.assertIn("权限不足（Lv.' + level + '）", cjs)
+        self.assertIn("function applyDevBadges(on)", cjs)
         self.assertIn("aboutLabel.textContent += ' 🛠️'", cjs)
         self.assertIn("cardVer.textContent += ' 🛠️'", cjs)
-        self.assertIn("api.dev_audit('tap7 level=' + level)", cjs)
+        self.assertIn("aboutLabel.textContent = aboutLabel.textContent.replace(' 🛠️', '')", cjs)
+        self.assertIn("api.dev_audit('dev_mode enter tap7 level=' + level)", cjs)
+        self.assertIn("api.dev_audit('tap7 already-unlocked level=' + level)", cjs)
+        self.assertIn("api.dev_audit('dev_mode ' + (on ? 'enter' : 'exit') + ' ' + (reason || ''))", cjs)   # 开关路径
         # b TOTP 卡：结构+后果文案+6 位码校验+body.totp+totp_invalid 重开
         self.assertIn("function openTotpDialog(updates, dangerKeys, prefill)", cjs)
         self.assertIn("🛠️ 高危操作验证", cjs)
@@ -189,6 +196,13 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("ver.className = 'about-version'", cjs)   # 卡内版本=连点载体
         self.assertIn("e.target.classList.contains('about-version')", cjs)   # 事件委托
         self.assertIn("cardVer.textContent += ' 🛠️'", cjs)   # 徽标挂卡内版本
+        # B2c 持久化：开关行（unlocked 才显示/ON-OFF 独立持久化/F5 恢复无重置）
+        self.assertIn("function buildDevSwitchRow()", cjs)
+        self.assertIn("function applyDevSwitchRow()", cjs)
+        self.assertIn("setDevMode(input.checked, 'switch')", cjs)
+        self.assertIn("dev_unlocked", cjs)
+        self.assertIn("dev_mode_on", cjs)
+        self.assertNotIn("localStorage.setItem('xiaoju3_dev", cjs)   # 状态不走 localStorage
 
     def test_about_row_inside_scroll_container(self):
         """#264 B2c 修正（用户实测贴底不动）：关于条目必须在滚动容器
