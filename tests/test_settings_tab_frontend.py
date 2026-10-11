@@ -172,6 +172,10 @@ class SettingsTabJsTests(unittest.TestCase):
         # B2c 修正（参照小米列表页）：普通一项——无独立块间距/分隔线，与
         # 上方表单项视觉连续
         self.assertIn('.settings-about-row { margin-top: 0;', html)
+        # B2c 沉底修正：settings-list 去 chat-history 双类（后者 flex:1 撑满
+        # 剩余空间把关于条目推底——真凶非 margin，是 flex 挤压）
+        self.assertIn('<div class="settings-list" id="settings-list">', html)
+        self.assertIn('<div class="settings-list" id="settings-list">', html)   # 无 chat-history 前缀（flex:1 撑开=沉底真凶）
         self.assertNotIn('border-top: 1px solid var(--color-border, #e0e4ec); cursor: pointer', html)
         cjs = _read("console.js")
         self.assertNotIn("header-version", cjs)
