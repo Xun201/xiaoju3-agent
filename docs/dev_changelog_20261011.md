@@ -75,3 +75,13 @@
 - **B2d④ 用户六步验收全 PASS**：①X 弹「是否退出小橘3号？」（双 radio+记住勾选）②只退窗口=前端关、后端+NapCat 留（秒开实证）③完全退出=前端+后端+NapCat+QQ 全关（实证）④记住选择=下次 X 不弹直接走（实证）⑤设置页改回「每次询问」→ X 恢复弹窗（实证）⑥closing 返回值语义修复生效（坑库 #18）。
 - **B2d 全系列 done**（①桌宠右键菜单六项+桥 / ②⌄→⚙️齿轮入口 / ③getBottomLimit+reclamp 桌宠定位双修复 / ④退出弹窗真实现+界面偏好组）——#264 库 note 已记，剩 B2b 密钥页 / B2c 开发者暗开关。
 - 本日生产车迭代链：027868FF→62E73BBB→(B2d①②)2EC6D2FA→DB945CD2→(B2d③)23F070F2→(回归修复)B4B7D0F0→7EA81CA2→(语义修复)**96F6D9A6**，全仓锚 2010+4→**2038+4**。
+
+## 十、✅ B2b 密钥页+工具栏统一+B2c 前置 验收 PASS（1d9aca0/a95acda/ac7b91d/987d7af/6395bf6，生产车 C3DD91C4）
+
+- **B2b 密钥管理页验收 PASS**（方案 A：🔑入口探针门 LV3+/掩码渲染零明文接触/覆盖二次确认/明文即清）——**8 密钥含新增 3**（NAPCAT_TOKEN/SERPER/TAVILY 补录 key 档）。
+- **工具栏统一验收 PASS**（用户拍板）：两 pane 删说明文字、返回/刷新靠左成组（toolbar-left）、💾保存右置（toolbar-right）、密钥页无保存；终端页工具条不受影响。
+- **B2c 前置扩容验收 PASS**：ENV_WRITE_ALLOWLIST **+9**（五行为开关+HEARTBEAT_INTERVAL+MAX_MESSAGES+WORKSPACE+NAPCAT_TOKEN——勘误：原侦察称"已在白名单"实锤不在）+ settings_tiers **18→32**（daily 3/admin 14/danger 7/key 8；apply 按消费点实测：五开关等 env 即时、心跳/上下文/路径类 restart）+ .env.example 补 9 键文档（白名单↔模板同步锚）+ B1 交集逻辑零改动（settings_api 零键名硬编码锚+交集健康锚 32/32）。
+- **语义修正存档**：XIAOJU3_ACCOUNT_BOOK 实为记账本路径非开关（侦察措辞偏差致拍板基础受染），admin 暂录+label 标注重启生效，可一句话改 danger。
+- **监视净化**：watch_napcat_spawn.ps1 补 cmd 噪声门（commit 消息文本含 launcher-user 曾致假警报）；精确签名 fire 自 12:40 起=0。
+- 全仓锚 2038+4→**2051+4**。
+- **B2c 主体开工前置**：无硬前置（扩容已落地）；⚠️ 一个**语义对齐点**——admin/danger 项渲染+danger 改需 TOTP 已由 B2a/B1 覆盖，暗开关增量=连点 7 次入口+开发者会话态+审计强化，建议开工前先出增量清单避免重复轮子。
