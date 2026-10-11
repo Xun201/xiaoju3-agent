@@ -698,6 +698,18 @@ class QuitBridge:
     def get_exit_pref(self):
         return _load_ui_pref(self._pref_path).get("exit", "ask")
 
+    def dev_audit(self, detail=""):
+        """开发者模式事件审计（#264 B2c a：连点触发写 settings_log）。
+        复用 settings_api._audit（同写 trace.db settings_log 表，跨进程
+        SQLite 短写）；失败静默（审计绝不阻塞前端交互）。"""
+        try:
+            from settings_api import _audit
+            _audit({"action": "dev_mode", "detail": str(detail)[:200]})
+            return {"ok": True}
+        except Exception as e:
+            self._out(f"⚠️ dev_audit 失败: {e}")
+            return {"ok": False}
+
     def set_exit_pref(self, mode):
         if mode not in UI_PREF_MODES:
             return {"ok": False, "error": "invalid_mode"}

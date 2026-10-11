@@ -138,6 +138,28 @@ class QuitBridgeTests(unittest.TestCase):
         self.assertIsNone(self.state["quitting"])
 
 
+class DevAuditTests(unittest.TestCase):
+    """#264 B2c a：连点审计（QuitBridge.dev_audit → settings_log）。"""
+
+    def test_dev_audit_writes_and_swallows_errors(self):
+        tmp = tempfile.mkdtemp(prefix="xiaoju3_devaudit_")
+        import settings_api
+        calls = []
+        bridge = dl.QuitBridge(lambda: None, {}, out=lambda m: None,
+                               pref_path=os.path.join(tmp, "ui_pref.json"),
+                               napcat_killer=lambda out=None: None)
+        with mock.patch.object(settings_api, "_audit",
+                               side_effect=lambda e: calls.append(e)):
+            r = bridge.dev_audit("tap7 level=4")
+        self.assertTrue(r["ok"])
+        self.assertEqual(calls[0]["action"], "dev_mode")
+        # 失败静默：_audit 抛错不外溢
+        with mock.patch.object(settings_api, "_audit",
+                               side_effect=RuntimeError("db gone")):
+            r = bridge.dev_audit("tap7")
+        self.assertFalse(r["ok"])
+
+
 class KillNapCatAllTests(unittest.TestCase):
     """_kill_napcat_all 分类锚：NapCat*/QQ.exe/cmd(launcher-user) 命中，
     无关进程不误杀（与 #305 F2「只杀副本」的语义区分点）。"""
