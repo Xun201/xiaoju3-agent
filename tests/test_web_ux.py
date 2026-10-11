@@ -301,19 +301,22 @@ class BallWidgetTests(unittest.TestCase):
         return html[start:html.index("}", start)]
 
     def test_minimize_button_in_header(self):
-        """index.html 聊天头部工具区新增最小化按钮 ⌄（header-btn 同款样式）。"""
+        """头部右侧入口（#264 B2d② 语义迁移）：⌄ 缩球钮 → ⚙️ 齿轮=设置
+        tab（缩球入口迁桌宠右键菜单「缩小」，setPetMinimized 经桥保留）。"""
         html = self.index_html
         start = html.index('<span class="header-actions">')
         actions = html[start:html.index("</span>", start)]
-        self.assertIn('id="console-minimize"', actions)
-        self.assertIn("⌄", actions)
+        self.assertIn('id="console-settings-entry"', actions)
+        self.assertIn("⚙️", actions)
+        self.assertIn('title="设置"', actions)
         self.assertIn("class=\"header-btn\"", actions)
-        # console.js 接线：点击最小化
+        # console.js 接线：点击齿轮切设置 tab
         js = self.console_js
-        self.assertIn("getElementById('console-minimize')", js)
+        self.assertIn("getElementById('console-settings-entry')", js)
+        self.assertIn("settingsEntryBtn.addEventListener('click'", js)
+        # 回归：缩球逻辑本体仍在（加速球节，setPetMinimized 供菜单桥调用）
         section = self._ball_section()
-        btn_idx = section.index("getElementById('console-minimize')")
-        self.assertLess(btn_idx, section.index("setPetMinimized(true)"))
+        self.assertIn("function setPetMinimized(minimized)", section)
 
     def test_ball_markup_with_mascot(self):
         """球体挂载点：index.html 静态节点 #xiaoju3-ball，小橘半身像
