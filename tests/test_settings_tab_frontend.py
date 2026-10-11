@@ -169,6 +169,8 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn('id="settings-about"', html)   # 关于条目
         self.assertIn('class="settings-about-arrow"', html)   # 右箭头
         self.assertIn('.settings-about-row:hover', html)   # hover 高亮
+        self.assertIn('.settings-about-row { margin-top: 28px;', html)   # 视觉隔离：上方留白（仿独立块）
+        self.assertIn('border-top: 1px solid', html)   # 上边框分隔
         cjs = _read("console.js")
         self.assertNotIn("header-version", cjs)
         self.assertNotIn("settings-version", cjs)
