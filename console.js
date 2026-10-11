@@ -1677,7 +1677,10 @@
     const TERMINAL_REFRESH_MS = 15000;
     const tabConsoleBtn = document.getElementById('tab-console');
     const tabTerminalBtn = document.getElementById('tab-terminal');
+    const tabSettingsBtn = document.getElementById('tab-settings');   // #264 B2a 设置页
     const terminalPaneEl = document.getElementById('terminal-pane');
+    const settingsPaneEl = document.getElementById('settings-pane');   // #264 B2a
+    const settingsListEl = document.getElementById('settings-list');   // #264 B2a
     const terminalHistoryEl = document.getElementById('terminal-history');
     const chatHistoryPaneEl = document.getElementById('chat-history');
     const chatInputAreaEl = document.querySelector('.chat-input-area');
@@ -1748,30 +1751,72 @@
             });
     }
 
-    // 标签切换：内容区/输入框互斥显隐 + 清空按钮只对对话窗口生效（终端记录只读）
+    // 标签切换（#264 B2a 重构为注册表）：新增 tab 只加 CHAT_TABS 条目，
+    // 不再膨胀 if/else——pane 显隐/输入框/清空按钮/进入退出副作用全部由
+    // 条目声明（B2b 密钥页、B2c 开发者暗开关直接续条目）。既有行为逐条
+    // 保留：终端切入拉最新+15s 轮询、切走即停；输入框与清空按钮仅对话窗口。
+    const CHAT_TABS = {
+        console: {
+            btn: function () { return tabConsoleBtn; },
+            show: function () { return [chatHistoryPaneEl]; },
+            hide: function () { return [terminalPaneEl, settingsPaneEl]; },
+            input: true,
+            clearTitle: '清空聊天记录',
+            enter: null,
+            leave: null,
+        },
+        terminal: {
+            btn: function () { return tabTerminalBtn; },
+            show: function () { return [terminalPaneEl]; },
+            hide: function () { return [chatHistoryPaneEl, settingsPaneEl]; },
+            input: false,
+            clearTitle: '',
+            enter: function () {
+                loadTerminalHistory();   // 每次切入拉最新
+                if (!terminalRefreshTimer) {
+                    terminalRefreshTimer = setInterval(loadTerminalHistory, TERMINAL_REFRESH_MS);
+                }
+            },
+            leave: function () {
+                if (terminalRefreshTimer) {
+                    clearInterval(terminalRefreshTimer);   // 切走即停，不留后台轮询
+                    terminalRefreshTimer = null;
+                }
+            },
+        },
+        settings: {
+            btn: function () { return tabSettingsBtn; },
+            show: function () { return [settingsPaneEl]; },
+            hide: function () { return [chatHistoryPaneEl, terminalPaneEl]; },
+            input: false,
+            clearTitle: '',
+            enter: function () { loadSettings(); },   // 切入即拉（后端按 level 过滤）
+            leave: null,
+        },
+    };
+    let activeChatTab = 'console';
+
     function switchChatTab(tab) {
-        const isTerminal = tab === 'terminal';
-        if (tabConsoleBtn) tabConsoleBtn.classList.toggle('active', !isTerminal);
-        if (tabTerminalBtn) tabTerminalBtn.classList.toggle('active', isTerminal);
-        if (chatHistoryPaneEl) chatHistoryPaneEl.hidden = isTerminal;
-        if (terminalPaneEl) terminalPaneEl.hidden = !isTerminal;
-        if (chatInputAreaEl) chatInputAreaEl.hidden = isTerminal;   // 只读：终端页无输入框
+        const def = CHAT_TABS[tab];
+        if (!def) return;
+        Object.keys(CHAT_TABS).forEach(function (name) {
+            const d = CHAT_TABS[name];
+            if (d.btn()) d.btn().classList.toggle('active', name === tab);
+        });
+        def.show().forEach(function (el) { if (el) el.hidden = false; });
+        def.hide().forEach(function (el) { if (el) el.hidden = true; });
+        if (chatInputAreaEl) chatInputAreaEl.hidden = !def.input;
         const clearBtnEl = document.getElementById('clear-history');
         if (clearBtnEl) {
-            clearBtnEl.disabled = isTerminal;
-            clearBtnEl.title = isTerminal
-                ? '终端记录为只读；切回对话窗口可清空控制台聊天记录'
-                : '清空聊天记录';
+            clearBtnEl.disabled = !def.clearTitle;
+            clearBtnEl.title = def.clearTitle || '该页无此操作';
         }
-        if (isTerminal) {
-            loadTerminalHistory();   // 每次切入拉最新
-            if (!terminalRefreshTimer) {
-                terminalRefreshTimer = setInterval(loadTerminalHistory, TERMINAL_REFRESH_MS);
-            }
-        } else if (terminalRefreshTimer) {
-            clearInterval(terminalRefreshTimer);   // 切走即停，不留后台轮询
-            terminalRefreshTimer = null;
+        if (activeChatTab !== tab) {
+            const prev = CHAT_TABS[activeChatTab];
+            if (prev && prev.leave) prev.leave();
+            activeChatTab = tab;
         }
+        if (def.enter) def.enter();
     }
 
     if (tabTerminalBtn) {
@@ -1780,9 +1825,199 @@
     if (tabConsoleBtn) {
         tabConsoleBtn.addEventListener('click', function () { switchChatTab('console'); });
     }
+    if (tabSettingsBtn) {
+        tabSettingsBtn.addEventListener('click', function () { switchChatTab('settings'); });
+    }
     const terminalRefreshBtn = document.getElementById('terminal-refresh');
     if (terminalRefreshBtn) {
         terminalRefreshBtn.addEventListener('click', loadTerminalHistory);
+    }
+    const settingsSaveBtn = document.getElementById('settings-save');
+    if (settingsSaveBtn) settingsSaveBtn.addEventListener('click', saveSettings);
+    const settingsRefreshBtn = document.getElementById('settings-refresh');
+    if (settingsRefreshBtn) settingsRefreshBtn.addEventListener('click', loadSettings);
+
+    // ==================== 7.6 设置页（#264 B2a，B1 API 契约） ====================
+    // 数据=GET /api/settings → {code,level,items:[{key,label,tier,type,value}]}：
+    // 低档项后端已按 level 隐藏——前端只渲染返回 items，零键名硬编码；
+    // 保存=POST {updates}（只提交改动项）；403 → toast 权限不足（含所需
+    // 等级/TOTP 原因）；响应 applied=已写 .env 并补 os.environ（🟢 即改
+    // 即生效），其余 written=需重启。类型渲染：str/int/bool/enum(:a,b,c)。
+    let settingsFetchSeq = 0;
+    const SETTINGS_STATE = { level: null, original: {} };
+    const SETTINGS_TIER_LABELS = {
+        daily: '常规设置',
+        admin: '管理员开关',
+        danger: '高危险（保存需 Lv.4+TOTP）',
+    };
+
+    function settingsChecked(value) {
+        return String(value) === '1' || String(value) === 'true';
+    }
+
+    function appendSettingsTip(text) {
+        const tip = document.createElement('div');
+        tip.className = 'settings-empty';
+        tip.textContent = text;
+        settingsListEl.appendChild(tip);
+    }
+
+    function buildSettingsField(it) {
+        SETTINGS_STATE.original[it.key] = it.value;
+        const row = document.createElement('label');
+        row.className = 'first-run-field settings-field';
+        const cap = document.createElement('span');
+        cap.textContent = (it.label || it.key) + '（' + it.key + '）';
+        row.appendChild(cap);
+        const type = String(it.type || '');
+        let input;
+        if (type === 'bool') {
+            input = document.createElement('input');
+            input.type = 'checkbox';
+            input.checked = settingsChecked(it.value);
+        } else if (type.indexOf('enum:') === 0) {
+            input = document.createElement('select');
+            const cur = String(it.value === null || it.value === undefined ? '' : it.value);
+            const options = String(type.slice(5)).split(',').filter(function (o) { return o; });
+            if (cur && options.indexOf(cur) === -1) options.push(cur);   // 表外现值原样保留，防保存误改
+            options.forEach(function (opt) {
+                const o = document.createElement('option');
+                o.value = opt;
+                o.textContent = opt;
+                input.appendChild(o);
+            });
+            input.value = cur || (options[0] || '');
+            if (!cur) SETTINGS_STATE.original[it.key] = input.value;   // 空现值记默认选中，防幻影 diff
+        } else {
+            input = document.createElement('input');
+            input.type = (type === 'int') ? 'number' : 'text';
+            input.value = it.value === null || it.value === undefined ? '' : String(it.value);
+        }
+        input.className = 'settings-input';
+        input.id = 'settings-field-' + it.key;
+        input.dataset.key = it.key;
+        input.dataset.type = type || 'str';
+        input.autocomplete = 'off';
+        row.appendChild(input);
+        return row;
+    }
+
+    function renderSettingsItems(data) {
+        if (!settingsListEl) return;
+        SETTINGS_STATE.level = data && data.level;
+        const items = (data && Array.isArray(data.items)) ? data.items : [];
+        SETTINGS_STATE.original = {};
+        settingsListEl.innerHTML = '';
+        if (!items.length) {
+            appendSettingsTip('暂无可见设置项（当前等级或分档表限制）');
+            return;
+        }
+        const groups = [];
+        const byTier = {};
+        items.forEach(function (it) {
+            const tier = it.tier || 'other';
+            if (!byTier[tier]) { byTier[tier] = []; groups.push(tier); }
+            byTier[tier].push(it);
+        });
+        groups.forEach(function (tier) {
+            const title = document.createElement('div');
+            title.className = 'settings-group-title';
+            title.textContent = SETTINGS_TIER_LABELS[tier] || tier;
+            settingsListEl.appendChild(title);
+            byTier[tier].forEach(function (it) {
+                settingsListEl.appendChild(buildSettingsField(it));
+            });
+        });
+    }
+
+    function loadSettings() {
+        if (!settingsListEl) return;
+        const seq = ++settingsFetchSeq;   // 竞态守卫（与终端页同口径）：慢响应丢弃
+        fetch('/api/settings')
+            .then(function (res) { return res.json(); })
+            .then(function (body) {
+                if (seq !== settingsFetchSeq) return;
+                if (!body || body.code !== 200) {
+                    settingsListEl.innerHTML = '';
+                    appendSettingsTip('设置读取失败' +
+                        (body && body.error ? ('：' + body.error) : ''));
+                    return;
+                }
+                renderSettingsItems(body);
+            })
+            .catch(function (err) {
+                if (seq !== settingsFetchSeq) return;
+                settingsListEl.innerHTML = '';
+                appendSettingsTip('设置读取失败: ' + err.message);
+            });
+    }
+
+    function collectSettingsUpdates() {
+        const updates = {};
+        if (!settingsListEl) return updates;
+        settingsListEl.querySelectorAll('.settings-input').forEach(function (input) {
+            const key = input.dataset.key;
+            if (!key) return;
+            const orig = SETTINGS_STATE.original[key];
+            if (input.dataset.type === 'bool') {
+                if (input.checked !== settingsChecked(orig)) {
+                    updates[key] = input.checked ? '1' : '0';
+                }
+            } else if (String(orig === null || orig === undefined ? '' : orig) !== input.value) {
+                updates[key] = input.value;
+            }
+        });
+        return updates;
+    }
+
+    function settingsDenyText(body) {
+        if (body && body.error === 'level_insufficient') {
+            return '权限不足（需要 Lv.' + (body.required || '?') + '）';
+        }
+        if (body && body.error === 'childlock_off_requires_lv4_totp') {
+            return '关闭儿童锁需要 Lv.4 + TOTP 验证';
+        }
+        if (body && body.error === 'totp_required') return '需要 TOTP 验证';
+        if (body && body.error === 'totp_invalid') return 'TOTP 验证码无效';
+        return '权限不足';
+    }
+
+    function saveSettings() {
+        const updates = collectSettingsUpdates();
+        const keys = Object.keys(updates);
+        if (!keys.length) { showToast('没有修改项'); return; }
+        fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ updates: updates })
+        })
+            .then(function (res) {
+                return res.json().then(function (body) {
+                    return { status: res.status, body: body };
+                });
+            })
+            .then(function (r) {
+                const body = r.body || {};
+                if (r.status === 403 || body.code === 403) {
+                    showToast('⚠️ ' + settingsDenyText(body));
+                    return;
+                }
+                if (r.status !== 200 && body.code !== 200) {
+                    showToast('保存失败' + (body.error ? ('：' + body.error) : ''));
+                    return;
+                }
+                const written = Array.isArray(body.written) ? body.written : [];
+                const applied = Array.isArray(body.applied) ? body.applied : [];
+                const restart = written.filter(function (k) {
+                    return applied.indexOf(k) === -1;
+                });
+                let msg = '✅ 已保存 ' + written.length + ' 项';
+                if (applied.length) msg += '，' + applied.length + ' 项已生效';
+                if (restart.length) msg += '，' + restart.length + ' 项重启后生效';
+                showToast(msg);
+                loadSettings();   // 保存后重拉：值与可见性以后端为真相
+            })
+            .catch(function (err) { showToast('保存失败: ' + err.message); });
     }
 
     // ==================== 8. 缩成加速球（2026-10-03 口径：⌄ 缩桌宠成球） ====================
