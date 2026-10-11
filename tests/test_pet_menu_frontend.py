@@ -65,10 +65,10 @@ class ConsoleBridgeTests(unittest.TestCase):
                        "toggleTheme: toggleTheme", "openAbout: openAbout",
                        "quitApp: quitApp"):
             self.assertIn(method, self.js)
-        self.assertIn("themeBtn.addEventListener('click', toggleTheme)", self.js)
-        body_start = self.js.index("themeBtn.addEventListener")
-        self.assertNotIn("getStoredTheme() === 'orange'",
-                         self.js[body_start:body_start + 200])   # handler 无内联逻辑
+        # B2b 微调：头部 🦊 绑定已删，toggleTheme 单一实现保留（菜单桥共用）
+        self.assertNotIn("themeBtn.addEventListener", self.js)
+        self.assertNotIn("getElementById('theme-toggle')", self.js)
+        self.assertIn("function toggleTheme()", self.js)
 
     def test_about_minimal_and_quit_stub(self):
         """关于卡=极简拍板（版本回退+一句话+Apache 2.0）；退出=第①批 stub

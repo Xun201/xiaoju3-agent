@@ -19,7 +19,9 @@
         try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; }
     }
 
-    // 主题切换抽成函数（#264 B2d ①）：头部按钮与桌宠右键菜单经桥共用同一实现
+    // 主题切换函数（头部 🦊 按钮已删——#264 B2b 微调拍板：与桌宠菜单
+    // 「切换主题」+设置页「界面偏好」双入口冗余）；toggleTheme 保留供
+    // 桌宠菜单桥与设置页主题选择器共用
     function toggleTheme() {
         const next = getStoredTheme() === 'orange' ? '' : 'orange';
         try {
@@ -28,10 +30,6 @@
         } catch (e) { /* localStorage 不可用时仅本次会话生效 */ }
         applyTheme(next);
         showToast(next === 'orange' ? '已切换到橘色主题 🦊' : '已切换到深蓝主题');
-    }
-    const themeBtn = document.getElementById('theme-toggle');
-    if (themeBtn) {
-        themeBtn.addEventListener('click', toggleTheme);
     }
 
     // 音效总开关（WebAudio 引擎在 desktop-pet.js 中，localStorage 记忆）
