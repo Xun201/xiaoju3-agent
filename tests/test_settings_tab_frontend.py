@@ -169,8 +169,10 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn('id="settings-about"', html)   # 关于条目
         self.assertIn('class="settings-about-arrow"', html)   # 右箭头
         self.assertIn('.settings-about-row:hover', html)   # hover 高亮
-        self.assertIn('.settings-about-row { margin-top: 28px;', html)   # 视觉隔离：上方留白（仿独立块）
-        self.assertIn('border-top: 1px solid', html)   # 上边框分隔
+        # B2c 修正（参照小米列表页）：普通一项——无独立块间距/分隔线，与
+        # 上方表单项视觉连续
+        self.assertIn('.settings-about-row { margin-top: 0;', html)
+        self.assertNotIn('border-top: 1px solid var(--color-border, #e0e4ec); cursor: pointer', html)
         cjs = _read("console.js")
         self.assertNotIn("header-version", cjs)
         self.assertNotIn("settings-version", cjs)
