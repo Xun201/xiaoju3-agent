@@ -531,6 +531,19 @@ def heartbeat_loop(interval=None, sense_fn=None, ask_fn=None, execute_fn=None,
                       f"梯队递补 {len(_aging['backfilled'])} 组")
         except Exception as e:
             print(f"⚠️ [老化] 执行异常（跳过）: {e}")
+        # 🧭 主动性引擎内账（#271③ Phase 0，2026-10-11）：开关缺省关
+        # （XIAOJU3_PROACTIVE_ENABLED=0 时首行早退不建库）；fire=只写
+        # proactive.db 审计不发消息（design §八 Phase 0 定义）。
+        try:
+            import proactive
+            _pr = proactive.proactive_tick()
+            if _pr is not None:
+                print(f"🧭 [主动性] 张力={_pr['tension']} "
+                      f"{'fire' if _pr['fired'] else 'suppress'}")
+        except ImportError:
+            pass   # 三文件可删纪律：proactive.py 整体删除时静默旁路
+        except Exception as e:
+            print(f"⚠️ [主动性] 执行异常（跳过）: {e}")
         heartbeat_once(sense_fn=sense_fn, ask_fn=ask_fn, execute_fn=execute_fn,
                        sense_states_fn=sense_states_fn)
         rounds += 1
