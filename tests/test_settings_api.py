@@ -242,3 +242,43 @@ def test_brain_mount_anchor():
     assert "_register_settings(app)" in src          # dashboard 挂载
     ssrc = inspect.getsource(settings_api)
     assert "/api/settings" in ssrc and "/api/keys" in ssrc  # 端点在 settings_api
+
+
+def test_allowlist_contains_nine_new_keys():
+    """#264 B2c 前置扩容锚：白名单 +9（五开关+心跳/上下文+WORKSPACE+NAPCAT_TOKEN）。"""
+    import xiaoju3
+    for k in ("XIAOJU3_MOOD_ENABLED", "XIAOJU3_MOOD_TONE", "XIAOJU3_MOOD_SLEEP",
+              "XIAOJU3_RELATIONSHIP_ENABLED", "XIAOJU3_TRACE_ENABLED",
+              "HEARTBEAT_INTERVAL", "MAX_MESSAGES", "WORKSPACE", "NAPCAT_TOKEN"):
+        assert k in xiaoju3.ENV_WRITE_ALLOWLIST
+
+
+def test_tiers_items_total_32_and_new_entries():
+    """扩容后 tiers=32 项；新键 tier/type/apply 抽查。"""
+    d = json.load(open("settings_tiers.json", encoding="utf-8"))
+    items = {it["key"]: it for it in d["items"]}
+    assert len(items) == 32
+    assert items["XIAOJU3_MOOD_ENABLED"]["tier"] == "admin"
+    assert items["XIAOJU3_MOOD_TONE"]["apply"] == "env"
+    assert items["HEARTBEAT_INTERVAL"]["apply"] == "restart"
+    assert items["MAX_MESSAGES"]["apply"] == "restart"
+    assert items["WORKSPACE"]["tier"] == "danger"
+    for k in ("NAPCAT_TOKEN", "SERPER_API_KEY", "TAVILY_API_KEY"):
+        assert items[k]["tier"] == "key"
+        assert items[k]["type"] == "secret"
+
+
+def test_settings_api_zero_keyname_changes():
+    """B1 交集逻辑未破：settings_api.py 零键名硬编码（键全在数据侧）。"""
+    src = open("settings_api.py", encoding="utf-8").read()
+    for k in ("XIAOJU3_MOOD_ENABLED", "HEARTBEAT_INTERVAL", "NAPCAT_TOKEN",
+              "WORKSPACE", "SERPER_API_KEY"):
+        assert k not in src
+
+
+def test_all_tier_items_in_allowlist():
+    """交集健康：tiers 全部 32 键都在白名单内（B1 交集=items 全可见）。"""
+    import xiaoju3
+    d = json.load(open("settings_tiers.json", encoding="utf-8"))
+    for it in d["items"]:
+        assert it["key"] in xiaoju3.ENV_WRITE_ALLOWLIST,             it["key"] + " 在 tiers 但不在白名单（B1 交集漏）"

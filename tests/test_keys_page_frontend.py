@@ -117,5 +117,17 @@ class KeysPageJsTests(unittest.TestCase):
         self.assertIn("switchChatTab('keys')", self.cjs)
 
 
+    def test_keys_back_button(self):
+        """#264 B2c 合并批：密钥 pane「← 返回」= 回对话窗口（与设置页同构）。
+        另锁 header 探针绑定与刷新接线（事①配套）。"""
+        html = _read("index.html")
+        self.assertIn('id="keys-back"', html)
+        cjs = _read("console.js")
+        self.assertIn("getElementById('keys-back')", cjs)
+        self.assertIn("keysBackBtn.addEventListener('click'", cjs)
+        self.assertIn("switchChatTab('console')", cjs)
+        self.assertIn("keysRefreshBtn.addEventListener('click', loadKeys)", cjs)
+
+
 if __name__ == "__main__":
     unittest.main()

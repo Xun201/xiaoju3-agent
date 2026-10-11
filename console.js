@@ -1861,10 +1861,12 @@
     // #264 B2d③ B 方案：设置页「← 返回」= 回对话窗口（tab 栏无设置按钮后的退出路径）
     const settingsBackBtn = document.getElementById('settings-back');
     if (settingsBackBtn) settingsBackBtn.addEventListener('click', function () { switchChatTab('console'); });
-    // #264 B2b 密钥管理绑定：入口按钮（探针放行后才可见）+刷新
+    // #264 B2b 密钥管理绑定：入口按钮（探针放行后才可见）+返回+刷新
     if (keysEntryBtn) {
         keysEntryBtn.addEventListener('click', function () { switchChatTab('keys'); });
     }
+    const keysBackBtn = document.getElementById('keys-back');
+    if (keysBackBtn) keysBackBtn.addEventListener('click', function () { switchChatTab('console'); });
     const keysRefreshBtn = document.getElementById('keys-refresh');
     if (keysRefreshBtn) keysRefreshBtn.addEventListener('click', loadKeys);
     probeKeysAccess();   // 页面加载即定 🔑 显隐（LV3+ 门）
