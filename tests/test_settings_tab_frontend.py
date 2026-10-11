@@ -160,6 +160,11 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("submitSettingsUpdates(updates, code);", cjs)
         # c danger 组标题红色
         self.assertIn("title.style.color = 'var(--color-danger, #e0433f)'", cjs)
+        # B2c 收尾（用户拍板）：admin 组藏进开发者模式（dev_mode_on=false
+        # 跳过渲染=藏显 UI 门；能不能改仍由后端 level 管=双门）
+        self.assertIn("const devOn = DEV_STATE.mode_on === true;", cjs)
+        self.assertIn("if (tier === 'admin' && !devOn) return;", cjs)
+        self.assertIn("const DEV_STATE = { unlocked: false, mode_on: false };", cjs)
         # Python 侧审计接线
         py = _read("desktop_launcher.py")
         self.assertIn("def dev_audit(self, detail", py)
