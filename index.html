@@ -720,12 +720,14 @@
                 </div>
                 <button id="settings-save" class="header-btn toolbar-right" type="button" title="保存修改项">💾 保存</button>
             </div>
-            <div class="settings-list" id="settings-list"></div>
-            <!-- 关于条目（#264 B2c 收尾，仿手机设置页样式）：左标题右箭头，
-                 整行可点弹关于卡；连点卡内版本号 7 次=开发者暗入口（B2c a） -->
-            <div class="settings-about-row" id="settings-about" title="关于小橘3号">
-                <span class="settings-about-label">关于</span>
-                <span class="settings-about-arrow">›</span>
+            <div class="settings-list" id="settings-list">
+                <!-- 关于条目（#264 B2c 修正：移进滚动容器内部——此前是
+                     settings-pane 直接子项，滚动发生在 settings-list 内，
+                     它在滚动区外=视觉贴底不动；进列表=普通最后子项跟着滚） -->
+                <div class="settings-about-row" id="settings-about" title="关于小橘3号">
+                    <span class="settings-about-label">关于</span>
+                    <span class="settings-about-arrow">›</span>
+                </div>
             </div>
         </div>
         <!-- 密钥管理面板（#264 B2b，方案 A）：GET /api/keys 渲染键名+掩码
