@@ -1919,7 +1919,8 @@ class ThinkCardFrontendTests(unittest.TestCase):
         html_ids = set(re.findall(r'id="([^"]+)"', self.index_html))
         js_ids = set(re.findall(r"getElementById\('([^']+)'\)", self.console_js))
         self.assertTrue(js_ids, msg="console.js 未发现 getElementById 调用")
-        dynamic_ids = {"xiaoju3-toast"}   # showToast 首次调用时 createElement 自建
+        dynamic_ids = {"xiaoju3-toast",
+                 "about-overlay"}   # showToast/关于卡（#264 B2d）首次调用时 createElement 自建
         missing = js_ids - dynamic_ids - html_ids
         self.assertEqual(missing, set(),
                          msg="console.js 引用了 index.html 不存在的 id: %s" % missing)
