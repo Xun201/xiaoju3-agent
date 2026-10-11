@@ -157,6 +157,21 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("def dev_audit(self, detail", py)
         self.assertIn('_audit({"action": "dev_mode"', py)
 
+    def test_settings_footer_version_entry(self):
+        """#264 B2c 修复（拍板位置=设置页最底部）：页脚版本号节点
+        （settings-version，小字灰字）=连点暗入口本体；填充与 header
+        同源（/api/status）；徽标双挂（页脚+header）。"""
+        html = _read("index.html")
+        self.assertIn('id="settings-version"', html)
+        self.assertIn('class="settings-version"', html)
+        self.assertIn('.settings-version { margin-top: auto;', html)   # 底部页脚
+        cjs = _read("console.js")
+        self.assertIn("getElementById('settings-version')", cjs)
+        self.assertIn("settingsVerEl.textContent = '小橘3号 v' + d.version", cjs)   # 同源填充
+        self.assertIn("devTapEl = document.getElementById('settings-version')", cjs)   # 连点绑定
+        self.assertIn("devTapHeaderEl = document.getElementById('header-version')", cjs)   # header 双入口
+        self.assertIn("verEl = document.getElementById('settings-version')", cjs)   # 徽标双挂
+
     def test_settings_back_binding(self):
         """#264 B2d③ B 方案：设置页「← 返回」→ switchChatTab('console')；
         齿轮入口路径不变（switchChatTab('settings')）。"""
