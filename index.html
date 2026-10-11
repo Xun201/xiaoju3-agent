@@ -668,12 +668,12 @@
                 <button id="console-settings-entry" class="header-btn" title="设置">⚙️</button>
             </span>
         </div>
-        <!-- 聊天标签页：对话窗口 / 终端记录 / 设置（切换逻辑在 console.js；
-             终端记录只读；设置页=#264 B2a 按 level 渲染，密钥页 B2b 下一批） -->
+        <!-- 聊天标签页：对话窗口 / 终端记录（切换逻辑在 console.js；终端
+             记录只读）。设置页=#264 B2d③ 起无 tab 按钮——入口=右上角⚙️
+             齿轮/桌宠右键菜单「设置」，返回=设置页顶部「← 返回」 -->
         <div class="chat-tabs">
             <button id="tab-console" class="chat-tab active" type="button">对话窗口</button>
             <button id="tab-terminal" class="chat-tab" type="button">终端记录</button>
-            <button id="tab-settings" class="chat-tab" type="button">设置</button>
         </div>
         <div class="chat-history" id="chat-history">
             <div class="message bot-message">你好！我是小橘3号，很高兴为你服务喵~</div>
@@ -692,6 +692,7 @@
         <div class="settings-pane" id="settings-pane" hidden>
             <div class="terminal-toolbar">
                 <span>设置 · 仅显示当前等级可改项</span>
+                <button id="settings-back" class="header-btn" type="button" title="返回对话窗口（#264 B2d③ B 方案）">← 返回</button>
                 <button id="settings-refresh" class="header-btn" type="button" title="重新读取">⟳ 刷新</button>
                 <button id="settings-save" class="header-btn" type="button" title="保存修改项">💾 保存</button>
             </div>

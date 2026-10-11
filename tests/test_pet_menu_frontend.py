@@ -83,5 +83,21 @@ class ConsoleBridgeTests(unittest.TestCase):
         self.assertIn("showToast", stub)
 
 
+class PetPositionTests(unittest.TestCase):
+    """#264 B2d③ 重叠修复锚：桌宠下界取值。"""
+
+    def test_bottom_limit_hidden_input_fallback(self):
+        """下界统一走 getBottomLimit：输入框可见取上沿、隐藏（设置/终端
+        tab，display:none rect 全零）回退窗口底——三处 call site（出生位/
+        拖拽/resize）全走 helper，裸读 rect.top 旧写法禁绝（真机实证：
+        旧代码在设置页把桌宠压到右上角遮 header）。"""
+        js = _read("desktop-pet.js")
+        self.assertIn("function getBottomLimit()", js)
+        self.assertIn("if (rect.height > 0) limitBottom = rect.top;", js)
+        self.assertNotIn(
+            "limitBottom = inputArea.getBoundingClientRect().top;", js)
+        self.assertGreaterEqual(js.count("getBottomLimit()"), 4)   # 定义+三处调用
+
+
 if __name__ == "__main__":
     unittest.main()

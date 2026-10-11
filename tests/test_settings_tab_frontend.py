@@ -41,11 +41,13 @@ class SettingsTabHtmlTests(unittest.TestCase):
     """index.html 结构锚。"""
 
     def test_tab_button_and_pane_present(self):
+        """#264 B2d③ B 方案：tab 栏**无**「设置」按钮（入口=⚙️齿轮/桌宠
+        菜单「设置」），settings-pane 保留（缺省 hidden）且含 ←返回/保存/
+        刷新按钮与挂载点；pane 位于记录区与输入区之间（与终端页同构平级）。"""
         html = _read("index.html")
-        self.assertIn(
-            '<button id="tab-settings" class="chat-tab" type="button">设置</button>',
-            html)
+        self.assertNotIn('id="tab-settings"', html)
         self.assertIn('<div class="settings-pane" id="settings-pane" hidden>', html)
+        self.assertIn('id="settings-back"', html)
         self.assertIn('id="settings-save"', html)
         self.assertIn('id="settings-refresh"', html)
         self.assertIn('id="settings-list"', html)
@@ -118,6 +120,15 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("switchChatTab('settings')", js)
         self.assertIn("setPetMinimized: setPetMinimized", js)
         self.assertIn("b.setPetMinimized(true)", _read("desktop-pet.js"))
+
+    def test_settings_back_binding(self):
+        """#264 B2d③ B 方案：设置页「← 返回」→ switchChatTab('console')；
+        齿轮入口路径不变（switchChatTab('settings')）。"""
+        js = _read("console.js")
+        self.assertIn("getElementById('settings-back')", js)
+        self.assertIn("settingsBackBtn.addEventListener('click'", js)
+        self.assertIn("switchChatTab('console')", js)
+        self.assertIn("switchChatTab('settings')", js)
 
     def test_render_iterates_without_hardcoded_keys(self):
         """渲染=遍历 items（.forEach），零键名硬编码——18 键集增减/扩白名单
