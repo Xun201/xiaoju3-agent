@@ -48,3 +48,10 @@
 | **部署** | 11:02 换装（4 文件差异）→ schtasks 拉起 → console 200 + 线上 HTML 实含 tab-settings/settings-pane + /api/settings 200（747B=items 有货） |
 | **✅ 用户真机验收 PASS（午）** | 五项全过：①设置 tab 出现 ②常规设置组渲染（城市/区县/TTS 声音）③管理员开关组渲染（儿童锁/生成超时/小模型/设备档位）④改「城市」保存 → toast「已保存 1 项，1 项已生效」（apply=env 即改即生效链活体）⑤权限分档生效（level<4 时 danger 组隐藏=后端过滤活体）——**B2a done**；B2b/B2c/B2d 待做（#264 库 note 已记进度） |
 | **幽灵二次事件** | 部署健康检查再抓 ABNORMAL：第二棵树生于 **10:57:09**（cmd 16456/父 11504 已死/无 launcher 日志，ensure_napcat 同款形态）——与 10:05 事件同签名、间隔 ~52 分钟≈**小时级周期**（昨晚 20+ 棵≈20 小时堆积吻合）；新 launcher 11:02 启动正常 skip 零 fire（F2 无辜）；巡检脚本首战立功（genealogy 全链留证 napcat_ghost_report.txt）；已 taskkill /T 清理归位 1/4/3，3000/6099 始终归旧树。**下一步=被动等下次事件抓父进程 or 主动布 WMI 进程创建监视（拍板待定）** |
+
+## 六、B2a 验收 PASS + B2d 拍板 + 第①批（72c2257 / a7ee449，生产车 2EC6D2FA）
+
+- **B2a 用户真机验收 PASS（午，五项全过）**：tab 出现/常规组/管理员组/改城市保存 toast「已保存 1 项，1 项已生效」/权限分档 danger 组隐藏——B2a done（#264 库 note 已记进度，PROJECT_CONTEXT 已刷）。
+- **B2d 拍板最终版**（design_264_b2d_ui_trio.md 已更新）：退出弹窗**双方法**（全部退出/仅退后端，两 radio 各自可记住）｜关于卡极简｜**窗口 X=同桌宠菜单退出统一弹窗**（行为变更：原 X 直接关窗→现先弹框，用户接受副作用）；记住选择走后端文件 agent_state/ui_pref.json（localStorage InPrivate 即焚铁律）；衍生待办 **#313 自动更新检查**（P3，关联 #279）。
+- **第①批 = 桌宠右键菜单（a7ee449，#301 首落地点）**：img.contextmenu 阻止默认+自绘暖橘菜单（CSS 变量随双主题/挂 body/视口钳制/外点+ESC 关闭+防开即关竞态）；六项=缩小/设置/切换主题/关于/—/退出；**__xiaoju3Console 桥五方法**（镜像 __xiaoju3Pet 反向桥）；toggleTheme 抽取单一实现源；openAbout 极简卡；quitApp stub（真弹窗+js_api 全退链=第③批）；pointerdown 左键门（右键不进拖拽）。+4 锚全仓 **2016+4→2020+4**；about-overlay 进 dashboard id 一致性白名单。
+- **幽灵第三次事件（11:36:52）**：同签名（cmd 33268/父 28424 死/无 launcher 日志——当日 launcher 日志仅 4 份全对应真实启动）；巡检脚本再立功留证；已清理归位 1/4/3。三次节奏 10:05→10:57→11:36（~52/~40 分钟），周期性外部 spawner 定性不变，身份未钉死。
