@@ -130,6 +130,16 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("switchChatTab('console')", js)
         self.assertIn("switchChatTab('settings')", js)
 
+    def test_no_dangling_tab_settings_refs(self):
+        """#264 B2d③ 回归修复锚：tabSettingsBtn 残留引用禁绝——const 已删
+        而旧 if(tabSettingsBtn) 绑定块曾残留，运行时 ReferenceError 打断
+        IIFE 求值、其后齿轮/桥/返回绑定全部失效（node --check 抓不到：语法
+        合法运行时才炸）。设置入口=⚙️齿轮（console-settings-entry）必须在线。"""
+        js = _read("console.js")
+        self.assertNotIn("tabSettingsBtn", js)
+        self.assertIn("getElementById('console-settings-entry')", js)
+        self.assertIn("settingsEntryBtn.addEventListener('click'", js)
+
     def test_render_iterates_without_hardcoded_keys(self):
         """渲染=遍历 items（.forEach），零键名硬编码——18 键集增减/扩白名单
         均无需改前端；分档表是唯一事实源（B1 设计取舍）。"""
