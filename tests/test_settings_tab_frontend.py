@@ -190,6 +190,20 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("e.target.classList.contains('about-version')", cjs)   # 事件委托
         self.assertIn("cardVer.textContent += ' 🛠️'", cjs)   # 徽标挂卡内版本
 
+    def test_about_row_inside_scroll_container(self):
+        """#264 B2c 修正（用户实测贴底不动）：关于条目必须在滚动容器
+        （settings-list）**内部**——此前是 settings-pane 直接子项，滚动发生
+        在列表内，它在滚动区外=视觉贴底（非 sticky/fixed，grep 零命中）。
+        锚=DOM 嵌套关系 + 重渲染保活（innerHTML 清空先摘后挂回）。"""
+        html = _read("index.html")
+        list_start = html.index('<div class="settings-list" id="settings-list">')
+        list_end = html.index('</div>' + chr(10) + '        </div>', list_start)
+        seg = html[list_start:list_end]
+        self.assertIn('id="settings-about"', seg)   # 关于在滚动容器内部
+        cjs = _read("console.js")
+        self.assertIn("aboutRow.remove()", cjs)    # 重渲染先摘
+        self.assertIn("settingsListEl.appendChild(aboutRow)", cjs)   # 渲染后放回列表尾
+
     def test_settings_back_binding(self):
         """#264 B2d③ B 方案：设置页「← 返回」→ switchChatTab('console')；
         齿轮入口路径不变（switchChatTab('settings')）。"""

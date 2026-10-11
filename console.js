@@ -2008,10 +2008,17 @@
         SETTINGS_STATE.level = data && data.level;
         const items = (data && Array.isArray(data.items)) ? data.items : [];
         SETTINGS_STATE.original = {};
+        // #264 B2c 修正：关于条目已移进滚动容器（settings-list 内部），
+        // innerHTML 清空前先摘出来，重渲染后放回列表尾
+        const aboutRow = document.getElementById('settings-about');
+        if (aboutRow && aboutRow.parentElement === settingsListEl) {
+            aboutRow.remove();
+        }
         settingsListEl.innerHTML = '';
         appendUiPrefsSection();   // #264 B2d④ 静态本地组（与 API 组并列，始终渲染）
         if (!items.length) {
             appendSettingsTip('暂无可见设置项（当前等级或分档表限制）');
+            if (aboutRow) settingsListEl.appendChild(aboutRow);
             return;
         }
         const groups = [];
@@ -2033,6 +2040,7 @@
                 settingsListEl.appendChild(buildSettingsField(it));
             });
         });
+        if (aboutRow) settingsListEl.appendChild(aboutRow);   // 关于放回列表尾（滚动内容一部分）
     }
 
     function loadSettings() {
@@ -2043,8 +2051,11 @@
             .then(function (body) {
                 if (seq !== settingsFetchSeq) return;
                 if (!body || body.code !== 200) {
+                    const aboutRow = document.getElementById('settings-about');
+                    if (aboutRow) aboutRow.remove();
                     settingsListEl.innerHTML = '';
                     appendUiPrefsSection();   // 静态组不依赖 API 成败
+                    if (aboutRow) settingsListEl.appendChild(aboutRow);
                     appendSettingsTip('设置读取失败' +
                         (body && body.error ? ('：' + body.error) : ''));
                     return;
@@ -2053,8 +2064,11 @@
             })
             .catch(function (err) {
                 if (seq !== settingsFetchSeq) return;
+                const aboutRow = document.getElementById('settings-about');
+                if (aboutRow) aboutRow.remove();
                 settingsListEl.innerHTML = '';
                 appendUiPrefsSection();   // 静态组不依赖 API 成败
+                if (aboutRow) settingsListEl.appendChild(aboutRow);
                 appendSettingsTip('设置读取失败: ' + err.message);
             });
     }
