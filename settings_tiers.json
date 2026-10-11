@@ -1,29 +1,248 @@
 {
   "_comment": "#264 配置面板权限分档表（design_264_settings_panel.md v2 + B1 API 定稿）。四档：daily=L1 所有用户/admin=L3/danger=L4+TOTP/key=L3 独立密钥页。键集=ENV_WRITE_ALLOWLIST ∩ 分档表交集（18 键）；对不上清单见 #301/#264 B1 回报（五行为开关/HEARTBEAT_INTERVAL/MAX_MESSAGES/NAPCAT_TOKEN/WORKSPACE/端口等不在白名单，宁缺勿错暂不录）。儿童锁特例：键档=admin（开无验证），但 API 层特例——写 false（关）需 L4+TOTP。",
   "tiers": {
-    "daily": {"level": 1, "totp": false},
-    "admin": {"level": 3, "totp": false},
-    "danger": {"level": 4, "totp": true},
-    "key": {"level": 3, "totp": false}
+    "daily": {
+      "level": 1,
+      "totp": false
+    },
+    "admin": {
+      "level": 3,
+      "totp": false
+    },
+    "danger": {
+      "level": 4,
+      "totp": true
+    },
+    "key": {
+      "level": 3,
+      "totp": false
+    }
   },
   "items": [
-    {"key": "USER_CITY", "label": "城市", "tier": "daily", "type": "str", "apply": "env"},
-    {"key": "USER_DISTRICT", "label": "区县", "tier": "daily", "type": "str", "apply": "env"},
-    {"key": "TTS_VOICE", "label": "TTS 声音", "tier": "daily", "type": "str", "apply": "env"},
-    {"key": "CHILD_LOCK_ENABLED", "label": "儿童锁", "tier": "admin", "type": "bool", "apply": "env", "extra": "childlock_off_totp"},
-    {"key": "LOCAL_GENERATE_TIMEOUT", "label": "生成超时（秒）", "tier": "admin", "type": "int", "apply": "env"},
-    {"key": "LOCAL_MODEL_SMALL", "label": "小模型", "tier": "admin", "type": "str", "apply": "env"},
-    {"key": "DEVICE_TIER", "label": "设备档位", "tier": "admin", "type": "enum:high,medium,low,auto", "apply": "env"},
-    {"key": "LOCAL_MODEL", "label": "主模型", "tier": "danger", "type": "str", "apply": "env"},
-    {"key": "CLOUD_MODEL", "label": "云模型", "tier": "danger", "type": "str", "apply": "env"},
-    {"key": "XIAOJU3_PERSONALITY", "label": "人格档位", "tier": "danger", "type": "enum:off,low,medium,high", "apply": "env"},
-    {"key": "HA_URL", "label": "HA 地址", "tier": "danger", "type": "str", "apply": "env"},
-    {"key": "ONEBOT_API_URL", "label": "OneBot API 地址", "tier": "danger", "type": "str", "apply": "env"},
-    {"key": "VISION_API_URL", "label": "视觉 API 地址", "tier": "danger", "type": "str", "apply": "env"},
-    {"key": "DEEPSEEK_API_KEY", "label": "DeepSeek API Key", "tier": "key", "type": "secret", "apply": "env"},
-    {"key": "HA_TOKEN", "label": "HA 长期令牌", "tier": "key", "type": "secret", "apply": "env"},
-    {"key": "ONEBOT_TOKEN", "label": "OneBot Token", "tier": "key", "type": "secret", "apply": "env"},
-    {"key": "WEB_API_KEY", "label": "Web API Key", "tier": "key", "type": "secret", "apply": "env"},
-    {"key": "VISION_KEY", "label": "视觉 API Key", "tier": "key", "type": "secret", "apply": "env"}
+    {
+      "key": "USER_CITY",
+      "label": "城市",
+      "tier": "daily",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "USER_DISTRICT",
+      "label": "区县",
+      "tier": "daily",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "TTS_VOICE",
+      "label": "TTS 声音",
+      "tier": "daily",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "CHILD_LOCK_ENABLED",
+      "label": "儿童锁",
+      "tier": "admin",
+      "type": "bool",
+      "apply": "env",
+      "extra": "childlock_off_totp"
+    },
+    {
+      "key": "LOCAL_GENERATE_TIMEOUT",
+      "label": "生成超时（秒）",
+      "tier": "admin",
+      "type": "int",
+      "apply": "env"
+    },
+    {
+      "key": "LOCAL_MODEL_SMALL",
+      "label": "小模型",
+      "tier": "admin",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "DEVICE_TIER",
+      "label": "设备档位",
+      "tier": "admin",
+      "type": "enum:high,medium,low,auto",
+      "apply": "env"
+    },
+    {
+      "key": "LOCAL_MODEL",
+      "label": "主模型",
+      "tier": "danger",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "CLOUD_MODEL",
+      "label": "云模型",
+      "tier": "danger",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "XIAOJU3_PERSONALITY",
+      "label": "人格档位",
+      "tier": "danger",
+      "type": "enum:off,low,medium,high",
+      "apply": "env"
+    },
+    {
+      "key": "HA_URL",
+      "label": "HA 地址",
+      "tier": "danger",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "ONEBOT_API_URL",
+      "label": "OneBot API 地址",
+      "tier": "danger",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "VISION_API_URL",
+      "label": "视觉 API 地址",
+      "tier": "danger",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "DEEPSEEK_API_KEY",
+      "label": "DeepSeek API Key",
+      "tier": "key",
+      "type": "secret",
+      "apply": "env"
+    },
+    {
+      "key": "HA_TOKEN",
+      "label": "HA 长期令牌",
+      "tier": "key",
+      "type": "secret",
+      "apply": "env"
+    },
+    {
+      "key": "ONEBOT_TOKEN",
+      "label": "OneBot Token",
+      "tier": "key",
+      "type": "secret",
+      "apply": "env"
+    },
+    {
+      "key": "WEB_API_KEY",
+      "label": "Web API Key",
+      "tier": "key",
+      "type": "secret",
+      "apply": "env"
+    },
+    {
+      "key": "VISION_KEY",
+      "label": "视觉 API Key",
+      "tier": "key",
+      "type": "secret",
+      "apply": "env"
+    },
+    {
+      "key": "XIAOJU3_MOOD_ENABLED",
+      "label": "心情状态机",
+      "tier": "admin",
+      "type": "bool",
+      "apply": "env"
+    },
+    {
+      "key": "XIAOJU3_MOOD_TONE",
+      "label": "语气注入",
+      "tier": "admin",
+      "type": "bool",
+      "apply": "env"
+    },
+    {
+      "key": "XIAOJU3_MOOD_SLEEP",
+      "label": "睡眠刷新",
+      "tier": "admin",
+      "type": "bool",
+      "apply": "env"
+    },
+    {
+      "key": "XIAOJU3_RELATIONSHIP_ENABLED",
+      "label": "关系层",
+      "tier": "admin",
+      "type": "bool",
+      "apply": "env"
+    },
+    {
+      "key": "XIAOJU3_TRACE_ENABLED",
+      "label": "Turn/Step 观测",
+      "tier": "admin",
+      "type": "bool",
+      "apply": "env"
+    },
+    {
+      "key": "HEARTBEAT_INTERVAL",
+      "label": "心跳周期（秒，重启生效）",
+      "tier": "admin",
+      "type": "int",
+      "apply": "restart"
+    },
+    {
+      "key": "MAX_MESSAGES",
+      "label": "上下文条数上限（重启生效）",
+      "tier": "admin",
+      "type": "int",
+      "apply": "restart"
+    },
+    {
+      "key": "NAPCAT_TOKEN",
+      "label": "NapCat Token",
+      "tier": "key",
+      "type": "secret",
+      "apply": "env"
+    },
+    {
+      "key": "SEARCH_ENGINE",
+      "label": "搜索引擎",
+      "tier": "admin",
+      "type": "str",
+      "apply": "env"
+    },
+    {
+      "key": "XIAOJU3_ACCOUNT_BOOK",
+      "label": "记账本路径（重启生效）",
+      "tier": "admin",
+      "type": "str",
+      "apply": "restart"
+    },
+    {
+      "key": "XIAOJU3_HUMIDITY_THRESHOLD",
+      "label": "加湿阈值（%）",
+      "tier": "admin",
+      "type": "int",
+      "apply": "env"
+    },
+    {
+      "key": "SERPER_API_KEY",
+      "label": "Serper API Key",
+      "tier": "key",
+      "type": "secret",
+      "apply": "env"
+    },
+    {
+      "key": "TAVILY_API_KEY",
+      "label": "Tavily API Key",
+      "tier": "key",
+      "type": "secret",
+      "apply": "env"
+    },
+    {
+      "key": "WORKSPACE",
+      "label": "工作区路径（重启生效）",
+      "tier": "danger",
+      "type": "str",
+      "apply": "restart"
+    }
   ]
 }
