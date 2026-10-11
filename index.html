@@ -255,6 +255,9 @@
             font-size: 13px;
             color: var(--color-text-secondary);
         }
+        /* #264 工具栏统一（B2c 前置批）：返回/刷新靠左成组，保存靠右 */
+        .toolbar-left { display: flex; align-items: center; gap: 10px; }
+        .toolbar-right { margin-left: auto; }
         .terminal-history { background-color: var(--color-bg-chat); }
         .terminal-empty {
             margin: auto;
@@ -697,10 +700,11 @@
              （改动项增量提交）。密钥管理独立 tab=B2b、开发者暗开关=B2c。 -->
         <div class="settings-pane" id="settings-pane" hidden>
             <div class="terminal-toolbar">
-                <span>设置 · 仅显示当前等级可改项</span>
-                <button id="settings-back" class="header-btn" type="button" title="返回对话窗口（#264 B2d③ B 方案）">← 返回</button>
-                <button id="settings-refresh" class="header-btn" type="button" title="重新读取">⟳ 刷新</button>
-                <button id="settings-save" class="header-btn" type="button" title="保存修改项">💾 保存</button>
+                <div class="toolbar-left">
+                    <button id="settings-back" class="header-btn" type="button" title="返回对话窗口（#264 B2d③ B 方案）">← 返回</button>
+                    <button id="settings-refresh" class="header-btn" type="button" title="重新读取">⟳ 刷新</button>
+                </div>
+                <button id="settings-save" class="header-btn toolbar-right" type="button" title="保存修改项">💾 保存</button>
             </div>
             <div class="chat-history settings-list" id="settings-list"></div>
         </div>
@@ -709,9 +713,10 @@
              LV3+ 门=页面加载探针（403→入口 hidden，后端 403 双保险）。 -->
         <div class="settings-pane" id="keys-pane" hidden>
             <div class="terminal-toolbar">
-                <span>密钥管理 · 掩码显示，只写不读</span>
-                <button id="keys-back" class="header-btn" type="button" title="返回对话窗口">← 返回</button>
-                <button id="keys-refresh" class="header-btn" type="button" title="重新读取">⟳ 刷新</button>
+                <div class="toolbar-left">
+                    <button id="keys-back" class="header-btn" type="button" title="返回对话窗口">← 返回</button>
+                    <button id="keys-refresh" class="header-btn" type="button" title="重新读取">⟳ 刷新</button>
+                </div>
             </div>
             <div class="chat-history settings-list" id="keys-list"></div>
         </div>
