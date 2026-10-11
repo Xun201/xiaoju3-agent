@@ -242,6 +242,8 @@
         .settings-group-title { font-weight: 600; font-size: 13px; opacity: .75; margin: 14px 0 4px; }
         .settings-empty { opacity: .65; padding: 18px 0; text-align: center; }
         .settings-field select.settings-input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid rgba(127,127,127,.4); border-radius: 6px; background: var(--color-panel, #fff); color: var(--color-text, #222); }
+        .keys-row { display: flex; align-items: center; gap: 8px; }
+        .keys-masked { font-family: Consolas, monospace; letter-spacing: .05em; }
         .terminal-toolbar {
             display: flex;
             align-items: center;
@@ -666,6 +668,9 @@
                 <button id="auto-tts-toggle" class="header-btn" title="自动朗读开关（AI 回复自动播报，与音效独立）">🔇</button>
                 <button id="theme-toggle" class="header-btn" title="切换橘色主题">🦊</button>
                 <button id="console-settings-entry" class="header-btn" title="设置">⚙️</button>
+                <!-- 密钥管理入口（#264 B2b，方案 A）：LV3+ 可见（探针 403 时
+                     hidden），掩码只写不读——设计稿第五节铁律 -->
+                <button id="keys-entry" class="header-btn" title="密钥管理" hidden>🔑</button>
             </span>
         </div>
         <!-- 聊天标签页：对话窗口 / 终端记录（切换逻辑在 console.js；终端
@@ -697,6 +702,16 @@
                 <button id="settings-save" class="header-btn" type="button" title="保存修改项">💾 保存</button>
             </div>
             <div class="chat-history settings-list" id="settings-list"></div>
+        </div>
+        <!-- 密钥管理面板（#264 B2b，方案 A）：GET /api/keys 渲染键名+掩码
+             （前端不碰明文）；覆盖=POST {key,value,confirm:true}（二次确认）。
+             LV3+ 门=页面加载探针（403→入口 hidden，后端 403 双保险）。 -->
+        <div class="settings-pane" id="keys-pane" hidden>
+            <div class="terminal-toolbar">
+                <span>密钥管理 · 掩码显示，只写不读</span>
+                <button id="keys-refresh" class="header-btn" type="button" title="重新读取">⟳ 刷新</button>
+            </div>
+            <div class="chat-history settings-list" id="keys-list"></div>
         </div>
         <div class="chat-input-area">
             <input type="text" id="chat-input" placeholder="输入消息，按回车发送..." onkeypress="if(event.key === 'Enter') sendMessage()">

@@ -1685,6 +1685,9 @@
     const terminalPaneEl = document.getElementById('terminal-pane');
     const settingsPaneEl = document.getElementById('settings-pane');   // #264 B2a 设置页
     const settingsListEl = document.getElementById('settings-list');   // #264 B2a
+    const keysEntryBtn = document.getElementById('keys-entry');        // #264 B2b 密钥管理（LV3+，探针定显隐）
+    const keysPaneEl = document.getElementById('keys-pane');           // #264 B2b
+    const keysListEl = document.getElementById('keys-list');           // #264 B2b
     const terminalHistoryEl = document.getElementById('terminal-history');
     const chatHistoryPaneEl = document.getElementById('chat-history');
     const chatInputAreaEl = document.querySelector('.chat-input-area');
@@ -1791,10 +1794,19 @@
         settings: {
             btn: function () { return null; },   // #264 B2d③：tab 栏无设置按钮（B 方案），空值安全
             show: function () { return [settingsPaneEl]; },
-            hide: function () { return [chatHistoryPaneEl, terminalPaneEl]; },
+            hide: function () { return [chatHistoryPaneEl, terminalPaneEl, keysPaneEl]; },
             input: false,
             clearTitle: '',
             enter: function () { loadSettings(); },   // 切入即拉（后端按 level 过滤）
+            leave: null,
+        },
+        keys: {
+            btn: function () { return keysEntryBtn; },   // #264 B2b：LV3+ 才显示（探针定显隐）
+            show: function () { return [keysPaneEl]; },
+            hide: function () { return [chatHistoryPaneEl, terminalPaneEl, settingsPaneEl]; },
+            input: false,
+            clearTitle: '',
+            enter: function () { loadKeys(); },   // 切入即拉掩码
             leave: null,
         },
     };
@@ -1851,6 +1863,13 @@
     // #264 B2d③ B 方案：设置页「← 返回」= 回对话窗口（tab 栏无设置按钮后的退出路径）
     const settingsBackBtn = document.getElementById('settings-back');
     if (settingsBackBtn) settingsBackBtn.addEventListener('click', function () { switchChatTab('console'); });
+    // #264 B2b 密钥管理绑定：入口按钮（探针放行后才可见）+刷新
+    if (keysEntryBtn) {
+        keysEntryBtn.addEventListener('click', function () { switchChatTab('keys'); });
+    }
+    const keysRefreshBtn = document.getElementById('keys-refresh');
+    if (keysRefreshBtn) keysRefreshBtn.addEventListener('click', loadKeys);
+    probeKeysAccess();   // 页面加载即定 🔑 显隐（LV3+ 门）
 
     // ==================== 7.6 设置页（#264 B2a，B1 API 契约） ====================
     // 数据=GET /api/settings → {code,level,items:[{key,label,tier,type,value}]}：
@@ -2557,6 +2576,158 @@
         showToast('桌面窗口未就绪（浏览器形态请在窗口上退出）');
     }
     window.__xiaoju3OpenQuitDialog = __xiaoju3OpenQuitDialog;   // Python closing 拦截入口
+
+    // ==================== 密钥管理（#264 B2b，方案 A） ====================
+    // 数据=GET /api/keys → {code,level,items:[{key,masked,set}]}：掩码由
+    // 后端拼好（前3+****+后4），**前端零明文接触**（渲染只用 masked/set，
+    // 铁律=设计稿第五节）；覆盖=POST {key,value,confirm:true}（二次确认
+    // window.confirm——设计稿拍板防误操作）；LV3+ 门=页面加载探针
+    // （403→🔑 hidden，后端 403 双保险）。
+    let keysFetchSeq = 0;
+
+    function appendKeysTip(text) {
+        const tip = document.createElement('div');
+        tip.className = 'settings-empty';
+        tip.textContent = text;
+        keysListEl.appendChild(tip);
+    }
+
+    function buildKeysRow(it) {
+        const row = document.createElement('div');
+        row.className = 'first-run-field settings-field keys-field';
+        const cap = document.createElement('span');
+        cap.textContent = it.key;
+        row.appendChild(cap);
+        const maskRow = document.createElement('div');
+        maskRow.className = 'keys-row';
+        const masked = document.createElement('span');
+        masked.className = 'keys-masked';
+        masked.textContent = it.set ? (it.masked || '****') : '未配置';
+        masked.style.cssText = it.set ? '' : 'opacity:.55;';
+        maskRow.appendChild(masked);
+        const editBtn = document.createElement('button');
+        editBtn.className = 'header-btn';
+        editBtn.textContent = '改';
+        editBtn.title = '覆盖 ' + it.key;
+        editBtn.addEventListener('click', function () { startKeyEdit(row, it); });
+        maskRow.appendChild(editBtn);
+        row.appendChild(maskRow);
+        return row;
+    }
+
+    function renderKeysItems(data) {
+        if (!keysListEl) return;
+        const items = (data && Array.isArray(data.items)) ? data.items : [];
+        keysListEl.innerHTML = '';
+        if (!items.length) {
+            appendKeysTip('暂无可见密钥项');
+            return;
+        }
+        items.forEach(function (it) { keysListEl.appendChild(buildKeysRow(it)); });
+    }
+
+    function startKeyEdit(row, it) {
+        const existing = row.querySelector('.keys-edit');
+        if (existing) { existing.querySelector('input').focus(); return; }
+        const edit = document.createElement('div');
+        edit.className = 'keys-edit';
+        edit.style.cssText = 'margin-top:6px;';
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.autocomplete = 'off';
+        input.placeholder = '粘贴新值（只写不读，保存后仅显示掩码）';
+        input.style.cssText = 'width:100%;box-sizing:border-box;padding:6px 8px;'
+            + 'border:1px solid rgba(127,127,127,.4);border-radius:6px;';
+        const btns = document.createElement('div');
+        btns.style.cssText = 'display:flex;gap:8px;margin-top:6px;justify-content:flex-end;';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'header-btn';
+        cancelBtn.textContent = '取消';
+        cancelBtn.addEventListener('click', function () { edit.remove(); });
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'header-btn';
+        saveBtn.textContent = '保存';
+        saveBtn.addEventListener('click', function () {
+            const value = input.value;
+            if (!value.trim()) { showToast('新值不能为空'); return; }
+            // 二次确认（设计稿第五节拍板：防误操作，旧值不可恢复）
+            if (!window.confirm('确认覆盖 ' + it.key + ' 吗？旧值不可恢复。')) return;
+            fetch('/api/keys', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: it.key, value: value, confirm: true })
+            })
+                .then(function (res) {
+                    return res.json().then(function (body) {
+                        return { status: res.status, body: body };
+                    });
+                })
+                .then(function (r) {
+                    const body = r.body || {};
+                    if (r.status === 403 || body.code === 403) {
+                        showToast('⚠️ 权限不足（需要 Lv.3）');
+                        return;
+                    }
+                    if (r.status === 400 || body.code === 400) {
+                        showToast('保存失败：' + (body.error || '参数错误'));
+                        return;
+                    }
+                    if (r.status !== 200 && body.code !== 200) {
+                        showToast('保存失败');
+                        return;
+                    }
+                    input.value = '';   // 明文即清，不缓存
+                    edit.remove();
+                    showToast('✅ 已保存 ' + it.key);
+                    loadKeys();          // 刷新掩码显示
+                })
+                .catch(function (err) { showToast('保存失败: ' + err.message); });
+        });
+        btns.appendChild(cancelBtn);
+        btns.appendChild(saveBtn);
+        edit.appendChild(input);
+        edit.appendChild(btns);
+        row.appendChild(edit);
+        input.focus();
+    }
+
+    function loadKeys() {
+        if (!keysListEl) return;
+        const seq = ++keysFetchSeq;   // 竞态守卫（与设置页同口径）
+        fetch('/api/keys')
+            .then(function (res) { return res.json(); })
+            .then(function (body) {
+                if (seq !== keysFetchSeq) return;
+                if (!body || body.code !== 200) {
+                    keysListEl.innerHTML = '';
+                    appendKeysTip('权限不足（需要 Lv.3）或读取失败');
+                    return;
+                }
+                renderKeysItems(body);
+            })
+            .catch(function (err) {
+                if (seq !== keysFetchSeq) return;
+                keysListEl.innerHTML = '';
+                appendKeysTip('密钥读取失败: ' + err.message);
+            });
+    }
+
+    // 入口探针（LV3+ 门，页面加载即定）：200 → 显 🔑 并预取渲染；
+    // 403 → 🔑 hidden（与后端 403 双保险）。
+    function probeKeysAccess() {
+        if (!keysEntryBtn) return;
+        fetch('/api/keys')
+            .then(function (res) { return res.json(); })
+            .then(function (body) {
+                if (body && body.code === 200) {
+                    keysEntryBtn.hidden = false;
+                    renderKeysItems(body);   // 预取渲染（pane 打开即有内容）
+                } else {
+                    keysEntryBtn.hidden = true;
+                }
+            })
+            .catch(function () { keysEntryBtn.hidden = true; });
+    }
 
     window.__xiaoju3Console = {
         switchTab: switchChatTab,
