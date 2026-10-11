@@ -1679,9 +1679,11 @@
     const TERMINAL_REFRESH_MS = 15000;
     const tabConsoleBtn = document.getElementById('tab-console');
     const tabTerminalBtn = document.getElementById('tab-terminal');
-    const tabSettingsBtn = document.getElementById('tab-settings');   // #264 B2a 设置页
+    // #264 B2d③ B 方案：tab 栏不再有「设置」按钮——入口=右上角⚙️齿轮/
+    // 桌宠菜单「设置」，返回=设置页顶部「← 返回」（注册表 settings 条目
+    // btn 恒 null，空值安全）
     const terminalPaneEl = document.getElementById('terminal-pane');
-    const settingsPaneEl = document.getElementById('settings-pane');   // #264 B2a
+    const settingsPaneEl = document.getElementById('settings-pane');   // #264 B2a 设置页
     const settingsListEl = document.getElementById('settings-list');   // #264 B2a
     const terminalHistoryEl = document.getElementById('terminal-history');
     const chatHistoryPaneEl = document.getElementById('chat-history');
@@ -1787,7 +1789,7 @@
             },
         },
         settings: {
-            btn: function () { return tabSettingsBtn; },
+            btn: function () { return null; },   // #264 B2d③：tab 栏无设置按钮（B 方案），空值安全
             show: function () { return [settingsPaneEl]; },
             hide: function () { return [chatHistoryPaneEl, terminalPaneEl]; },
             input: false,
@@ -1838,6 +1840,9 @@
     if (settingsSaveBtn) settingsSaveBtn.addEventListener('click', saveSettings);
     const settingsRefreshBtn = document.getElementById('settings-refresh');
     if (settingsRefreshBtn) settingsRefreshBtn.addEventListener('click', loadSettings);
+    // #264 B2d③ B 方案：设置页「← 返回」= 回对话窗口（tab 栏无设置按钮后的退出路径）
+    const settingsBackBtn = document.getElementById('settings-back');
+    if (settingsBackBtn) settingsBackBtn.addEventListener('click', function () { switchChatTab('console'); });
 
     // ==================== 7.6 设置页（#264 B2a，B1 API 契约） ====================
     // 数据=GET /api/settings → {code,level,items:[{key,label,tier,type,value}]}：

@@ -372,6 +372,20 @@
         root.classList.toggle('facing-right', facing === 'right');
     }
 
+    // 下界取值（#264 B2d③ 重叠修复）：底界=输入框上沿；但设置/终端 tab 下
+    // 输入框 display:none → rect 全零（top=0）→ 旧代码把下界归零，拖拽/
+    // 重算会把桌宠压到窗口顶（真机截图实证：桌宠钉在右上角遮 header）。
+    // 隐藏态回退窗口底边——无输入框的 tab 允许桌宠落到底。
+    function getBottomLimit() {
+        let limitBottom = window.innerHeight;
+        const inputArea = document.querySelector('.chat-input-area');
+        if (inputArea) {
+            const rect = inputArea.getBoundingClientRect();
+            if (rect.height > 0) limitBottom = rect.top;   // 可见才作数；隐藏（全零）回退窗口底
+        }
+        return limitBottom;
+    }
+
     // 翻转判定（修复拖到屏幕右侧吸附时翻错方向）：面向由桌宠中心 x 相对
     // 屏幕中线决定——左半边朝右、右半边朝左，始终朝向屏幕中心，与拖拽
     // 位移方向无关；吸附校正可能改变最终位置，松手后按最终位置再重算一次
@@ -412,12 +426,9 @@
         // 1) 水平：贴屏幕右边
         state.left = window.innerWidth - petWidth;
 
-        // 2) 垂直：底边停在输入框上方（不留空隙）
-        let limitBottom = window.innerHeight;
-        const inputArea = document.querySelector('.chat-input-area');
-        if (inputArea) {
-            limitBottom = inputArea.getBoundingClientRect().top;
-        }
+        // 2) 垂直：底边停在输入框上方（不留空隙）；输入框隐藏（设置/终端
+        //    tab）时 getBottomLimit 回退窗口底（#264 B2d③ 重叠修复）
+        const limitBottom = getBottomLimit();
         state.top = Math.max(0, limitBottom - petHeight);
 
         express();
@@ -520,12 +531,9 @@
             limitLeft = chatArea.getBoundingClientRect().left;
         }
 
-        // 下边界：紧贴输入框上沿
-        let limitBottom = window.innerHeight;
-        const inputArea = document.querySelector('.chat-input-area');
-        if (inputArea) {
-            limitBottom = inputArea.getBoundingClientRect().top;
-        }
+        // 下边界：输入框可见取其上沿；隐藏（设置/终端 tab）回退窗口底
+        //（#264 B2d③ 重叠修复——旧代码 hidden 态 rect.top=0 把桌宠压到顶）
+        const limitBottom = getBottomLimit();
 
         state.left = Math.max(limitLeft, Math.min(state.left, window.innerWidth - rect.width));
         state.top = Math.max(0, Math.min(state.top, limitBottom - rect.height));
@@ -604,9 +612,7 @@
 
         // 新窗可用域：底界取输入框上沿（尾巴 A 根因即旧代码此处漏算输入框，
         // 缩窗后桌宠被 window.innerHeight 收钳压进发送条）
-        let limitBottom = window.innerHeight;
-        const inputArea = document.querySelector('.chat-input-area');
-        if (inputArea) limitBottom = inputArea.getBoundingClientRect().top;
+        let limitBottom = getBottomLimit();   // #264 B2d③：隐藏态兜底见 helper
         let limitLeft = 0;
         const chatArea = document.querySelector('.chat-area');
         if (chatArea) limitLeft = chatArea.getBoundingClientRect().left;

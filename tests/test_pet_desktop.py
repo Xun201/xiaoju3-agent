@@ -81,10 +81,11 @@ class DesktopPetResizeGeometryTests(unittest.TestCase):
         return self.js[start:end]
 
     def test_resize_bottom_limit_uses_input_area(self):
-        # 尾巴 A：resize 收钳底界与拖拽/出生位同口径（输入框上沿），
-        # 不得再出现裸 window.innerHeight 直接收钳 top 的旧写法
+        # 尾巴 A：resize 收钳底界与拖拽/出生位同口径——统一走 getBottomLimit
+        #（#264 B2d③ 重叠修复：输入框可见取上沿，隐藏（设置/终端 tab）回退
+        # 窗口底，不得再裸读 rect.top 或裸用 window.innerHeight 收钳）
         body = self._resize_body()
-        self.assertIn("chat-input-area", body)
+        self.assertIn("getBottomLimit()", body)
         self.assertIn("limitBottom", body)
 
     def test_resize_anchor_follows_edges(self):
