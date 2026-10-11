@@ -307,18 +307,9 @@
             .then(res => {
                 if (res.code === 200) {
                     const d = res.data;
-                    // 版本徽标（步 A1）：/api/status 下发 version，有值才写
-                    // （旧后端无此键时保持空，不显示 undefined）
-                    const verEl = document.getElementById('header-version');
-                    if (verEl && d.version) {
-                        verEl.textContent = 'v' + d.version;
-                    }
-                    // 设置页页脚版本（#264 B2c 修复）：连点暗入口载体，
-                    // 与 header 同源同值
-                    const settingsVerEl = document.getElementById('settings-version');
-                    if (settingsVerEl && d.version) {
-                        settingsVerEl.textContent = '小橘3号 v' + d.version;
-                    }
+                    // 版本源（#264 B2c 收尾：header 版本号已删，版本只进
+                    // VERSION_STATE 供关于卡使用；/api/status 能力保留）
+                    if (d.version) window.__xiaoju3Version = String(d.version);
                     const cpuText = document.getElementById('cpu-text');
                     const cpuBar = document.getElementById('cpu-bar');
                     if (cpuText && cpuBar) {
@@ -2251,7 +2242,7 @@
     // ==================== 开发者模式暗入口（#264 B2c a，简化版） ====================
     // 设置页版本号连点 7 次 → 按级分流告知（设计稿偏离标注：原「LV3 进基础档」
     // 为空转——admin 组本就可见，语义改「权限状态告知」）；徽标=会话级
-    // （header-version 后缀 🛠️，刷新即退=设计稿「刷新即退出」天然满足）；
+    // （「关于」条目+关于卡版本号后缀 🛠️，刷新即退=设计稿「刷新即退出」天然满足）；
     // LV3+ 每次触发写一条审计（js_api dev_audit → settings_log）。
     let devTapCount = 0;
     let devTapTimer = null;
@@ -2276,27 +2267,32 @@
         showToast(msg);
         const api = window.pywebview && window.pywebview.api;
         if (level >= 3) {
-            // 会话徽标（#264 B2c 修复）：挂设置页页脚版本号（暗入口本体），
-            // 同步 header 版本；刷新即退
-            const verEl = document.getElementById('settings-version');
-            if (verEl && verEl.textContent.indexOf('🛠️') === -1) {
-                verEl.textContent += ' 🛠️';
+            // 会话徽标（#264 B2c 收尾）：挂「关于」条目标题（🛠️ 后缀）+
+            // 关于卡内版本号后缀（卡开着时）；刷新即退
+            const aboutLabel = document.querySelector('#settings-about .settings-about-label');
+            if (aboutLabel && aboutLabel.textContent.indexOf('🛠️') === -1) {
+                aboutLabel.textContent += ' 🛠️';
             }
-            const headerVerEl = document.getElementById('header-version');
-            if (headerVerEl && headerVerEl.textContent.indexOf('🛠️') === -1) {
-                headerVerEl.textContent += ' 🛠️';
+            const cardVer = document.querySelector('#about-overlay .about-version');
+            if (cardVer && cardVer.textContent.indexOf('🛠️') === -1) {
+                cardVer.textContent += ' 🛠️';
             }
             if (api && typeof api.dev_audit === 'function') {
                 api.dev_audit('tap7 level=' + level);
             }
         }
     }
-    // 连点绑定（#264 B2c 修复）：设置页页脚版本号（入口本体；拍板位置=
-    // 设置页最底部），header 版本保留双入口
-    const devTapEl = document.getElementById('settings-version');
-    if (devTapEl) devTapEl.addEventListener('click', handleDevTap);
-    const devTapHeaderEl = document.getElementById('header-version');
-    if (devTapHeaderEl) devTapHeaderEl.addEventListener('click', handleDevTap);
+    // 连点绑定（#264 B2c 收尾）：关于卡内版本号（藏得更深=暗入口语义）；
+    // 事件委托挂 body——卡是动态节点，开卡后即可连点
+    document.body.addEventListener('click', function (e) {
+        if (e.target && e.target.classList &&
+            e.target.classList.contains('about-version')) {
+            handleDevTap();
+        }
+    });
+    // 「关于」条目 click → openAbout（复用 B2d 桌宠菜单同卡）
+    const aboutRow = document.getElementById('settings-about');
+    if (aboutRow) aboutRow.addEventListener('click', function () { openAbout(); });
 
     // ==================== 8. 缩成加速球（2026-10-03 口径：⌄ 缩桌宠成球） ====================
     // 与桌宠（desktop-pet.js）的协作：本节只切换 body 的 xiaoju3-pet-minimized
@@ -2620,10 +2616,12 @@
         const logo = document.createElement('div');
         logo.textContent = '🦊 小橘3号';
         logo.style.cssText = 'font-size:20px;font-weight:700;margin-bottom:6px;';
-        const verText = ((document.getElementById('header-version') || {}).textContent || '').trim();
+        const verText = window.__xiaoju3Version || '';
         const ver = document.createElement('div');
-        ver.textContent = verText || 'v1.0.4';
-        ver.style.cssText = 'opacity:.75;margin-bottom:10px;';
+        ver.className = 'about-version';   // 连点 7 次=开发者暗入口（B2c 收尾）
+        ver.textContent = verText ? ('v' + verText) : 'v1.0.4';
+        ver.title = '连点 7 次查看权限状态';
+        ver.style.cssText = 'opacity:.75;margin-bottom:10px;cursor:default;user-select:none;';
         const desc = document.createElement('div');
         desc.textContent = '长期主线的本地优先智能体——桌宠+控制台+QQ 三通道。';
         desc.style.cssText = 'margin-bottom:10px;';

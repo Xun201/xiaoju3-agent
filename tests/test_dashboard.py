@@ -2316,17 +2316,17 @@ class TestVersionBadge(unittest.TestCase):
         self.assertEqual(data["version"], xiaoju3.XIAOJU3_VERSION)  # 单一事实源透传 + 版本钉（引常量，升版零改动）
 
     def test_header_version_element_in_console_html(self):
-        """/console 页（index.html）含 header-version 徽标元素与样式锚
-        （console.js 动态填充内容，此处锁定壳存在）。"""
+        """#264 B2c 收尾：header-version 徽标已删（与设置页「关于」条目
+        冗余，版本移居关于卡），前后端字面禁绝；/api/status version 透传
+        不受影响（上一断言）。"""
         with open(os.path.join(PROJECT_ROOT, "index.html"),
                   "r", encoding="utf-8") as f:
             html = f.read()
-        self.assertIn('id="header-version"', html)
-        self.assertIn("header-version", html)
+        self.assertNotIn('id="header-version"', html)
         with open(os.path.join(PROJECT_ROOT, "console.js"),
                   "r", encoding="utf-8") as f:
             js = f.read()
-        self.assertIn("header-version", js)
+        self.assertNotIn("header-version", js)
 
 
 class TodosApiTests(unittest.TestCase):

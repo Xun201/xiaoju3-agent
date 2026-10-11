@@ -121,7 +121,6 @@
             gap: 10px;
         }
         .header-title { flex: 1; }
-        .header-version { font-size: 12px; opacity: .55; margin-left: 8px; font-weight: normal; }
         .header-actions { display: flex; align-items: center; gap: 4px; }
         .header-btn {
             background: none;
@@ -239,8 +238,10 @@
            表单控件复用 first-run-field 族 */
         .settings-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
         .settings-list { padding: 12px 16px; }
-        /* 页脚版本号（#264 B2c 修复）：设置页底部小字灰字，连点 7 次=暗入口 */
-        .settings-version { margin-top: auto; padding: 14px 0 10px; text-align: center; font-size: 12px; opacity: .55; cursor: default; user-select: none; }
+        /* 关于条目（#264 B2c 收尾，仿手机设置页）：左标题右箭头，hover 高亮 */
+        .settings-about-row { margin-top: auto; padding: 12px 8px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--color-border, #e0e4ec); cursor: pointer; user-select: none; border-radius: 6px; font-size: 14px; }
+        .settings-about-row:hover { background: var(--color-progress-track, #eef2fb); }
+        .settings-about-arrow { opacity: .5; font-size: 18px; line-height: 1; }
         .settings-group-title { font-weight: 600; font-size: 13px; opacity: .75; margin: 14px 0 4px; }
         .settings-empty { opacity: .65; padding: 18px 0; text-align: center; }
         .settings-field select.settings-input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid rgba(127,127,127,.4); border-radius: 6px; background: var(--color-panel, #fff); color: var(--color-text, #222); }
@@ -666,7 +667,7 @@
         <div class="chat-header">
             <!-- 移动端抽屉开关（≤768px 显示） -->
             <button id="sidebar-toggle" class="header-btn" title="监控面板">☰</button>
-            <span class="header-title">小橘3号 · 控制台<span id="header-version" class="header-version"></span></span>
+            <span class="header-title">小橘3号 · 控制台</span>
             <span class="header-actions">
                 <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
                 <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
@@ -709,9 +710,12 @@
                 <button id="settings-save" class="header-btn toolbar-right" type="button" title="保存修改项">💾 保存</button>
             </div>
             <div class="chat-history settings-list" id="settings-list"></div>
-            <!-- 页脚版本号（#264 B2c 修复）：开发者暗入口=连点 7 次（B2c a），
-                 值由 console.js 经 /api/status 填充（与 header 同源） -->
-            <div class="settings-version" id="settings-version" title="连点 7 次查看权限状态">小橘3号</div>
+            <!-- 关于条目（#264 B2c 收尾，仿手机设置页样式）：左标题右箭头，
+                 整行可点弹关于卡；连点卡内版本号 7 次=开发者暗入口（B2c a） -->
+            <div class="settings-about-row" id="settings-about" title="关于小橘3号">
+                <span class="settings-about-label">关于</span>
+                <span class="settings-about-arrow">›</span>
+            </div>
         </div>
         <!-- 密钥管理面板（#264 B2b，方案 A）：GET /api/keys 渲染键名+掩码
              （前端不碰明文）；覆盖=POST {key,value,confirm:true}（二次确认）。

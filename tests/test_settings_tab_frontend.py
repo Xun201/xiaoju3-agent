@@ -140,7 +140,8 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("开发者模式已就绪（改高危项需 TOTP）", cjs)
         self.assertIn("管理员权限已就绪", cjs)
         self.assertIn("权限不足（Lv.' + level + '）", cjs)
-        self.assertIn("verEl.textContent += ' 🛠️'", cjs)
+        self.assertIn("aboutLabel.textContent += ' 🛠️'", cjs)
+        self.assertIn("cardVer.textContent += ' 🛠️'", cjs)
         self.assertIn("api.dev_audit('tap7 level=' + level)", cjs)
         # b TOTP 卡：结构+后果文案+6 位码校验+body.totp+totp_invalid 重开
         self.assertIn("function openTotpDialog(updates, dangerKeys, prefill)", cjs)
@@ -157,20 +158,25 @@ class SettingsTabJsTests(unittest.TestCase):
         self.assertIn("def dev_audit(self, detail", py)
         self.assertIn('_audit({"action": "dev_mode"', py)
 
-    def test_settings_footer_version_entry(self):
-        """#264 B2c 修复（拍板位置=设置页最底部）：页脚版本号节点
-        （settings-version，小字灰字）=连点暗入口本体；填充与 header
-        同源（/api/status）；徽标双挂（页脚+header）。"""
+    def test_settings_about_entry_and_version_relocation(self):
+        """#264 B2c 收尾（用户拍板）：①删右上角 header 版本号（前后端字面
+        禁绝，/api/status 能力保留→window.__xiaoju3Version）②设置页底部
+        改「关于」列表条目（左标题右箭头，click 弹 openAbout 卡）③连点
+        入口迁居关于卡内版本号（事件委托，藏得更深=暗入口语义）。"""
         html = _read("index.html")
-        self.assertIn('id="settings-version"', html)
-        self.assertIn('class="settings-version"', html)
-        self.assertIn('.settings-version { margin-top: auto;', html)   # 底部页脚
+        self.assertNotIn('id="header-version"', html)
+        self.assertNotIn('id="settings-version"', html)
+        self.assertIn('id="settings-about"', html)   # 关于条目
+        self.assertIn('class="settings-about-arrow"', html)   # 右箭头
+        self.assertIn('.settings-about-row:hover', html)   # hover 高亮
         cjs = _read("console.js")
-        self.assertIn("getElementById('settings-version')", cjs)
-        self.assertIn("settingsVerEl.textContent = '小橘3号 v' + d.version", cjs)   # 同源填充
-        self.assertIn("devTapEl = document.getElementById('settings-version')", cjs)   # 连点绑定
-        self.assertIn("devTapHeaderEl = document.getElementById('header-version')", cjs)   # header 双入口
-        self.assertIn("verEl = document.getElementById('settings-version')", cjs)   # 徽标双挂
+        self.assertNotIn("header-version", cjs)
+        self.assertNotIn("settings-version", cjs)
+        self.assertIn("window.__xiaoju3Version = String(d.version)", cjs)   # 版本源保留
+        self.assertIn("aboutRow.addEventListener('click', function () { openAbout(); })", cjs)
+        self.assertIn("ver.className = 'about-version'", cjs)   # 卡内版本=连点载体
+        self.assertIn("e.target.classList.contains('about-version')", cjs)   # 事件委托
+        self.assertIn("cardVer.textContent += ' 🛠️'", cjs)   # 徽标挂卡内版本
 
     def test_settings_back_binding(self):
         """#264 B2d③ B 方案：设置页「← 返回」→ switchChatTab('console')；
