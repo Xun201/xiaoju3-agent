@@ -1829,9 +1829,11 @@
     if (tabConsoleBtn) {
         tabConsoleBtn.addEventListener('click', function () { switchChatTab('console'); });
     }
-    if (tabSettingsBtn) {
-        tabSettingsBtn.addEventListener('click', function () { switchChatTab('settings'); });
-    }
+    // #264 B2d③ 回归修复：旧 tab-settings 按钮绑定块随 B 方案删除——
+    // const 已移除但此块曾残留，对已删变量的事实引用在运行时抛
+    // ReferenceError 打断 IIFE 求值，其后所有绑定（⚙️齿轮/桥/关于/返回）
+    // 全部失效（node --check 抓不到：语法合法、运行时才炸）。设置入口现只
+    // 经齿轮/桌宠菜单。
     const terminalRefreshBtn = document.getElementById('terminal-refresh');
     if (terminalRefreshBtn) {
         terminalRefreshBtn.addEventListener('click', loadTerminalHistory);
