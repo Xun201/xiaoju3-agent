@@ -24,7 +24,7 @@
 //   window.xiaoju3SetPetState('happy_full') 挂载即可。
 (function() {
     if (window.__xiaoju3Pet) return;
-    window.__xiaoju3Pet = { getPos: getPos };   // getPos 为 IIFE 内函数声明（提升可用），真身见 state 定义处
+    window.__xiaoju3Pet = { getPos: getPos, reclamp: reclampToCurrentLimits };   // 均为 IIFE 内函数声明（提升可用）；reclamp=#264 B2d③ 回归修复（切 tab 后按当前下界重钳）
 
     // ==================== 0. 双版本状态图常量表（情绪扩展接口） ====================
     // 键 = 状态名（后续情绪按此表挂载），值 = 素材路径；素材由即梦 AI 生成
@@ -384,6 +384,24 @@
             if (rect.height > 0) limitBottom = rect.top;   // 可见才作数；隐藏（全零）回退窗口底
         }
         return limitBottom;
+    }
+
+    // 切 tab 重钳（#264 B2d③ 回归修复）：设置/终端 tab 下界=窗口底（输入框
+    // 隐藏），桌宠可在彼处合法落点；切回对话窗后输入框回归，旧位置卡进
+    // 输入框/发送按钮区——switchChatTab 经 __xiaoju3Pet.reclamp 调本函数，
+    // 按当前下界/左界重钳一次（不搬出生位、不触音效换装、缩球态早退）。
+    function reclampToCurrentLimits() {
+        if (getComputedStyle(root).display === 'none') return;   // 缩球态不动（同 initPosition 守卫）
+        const rect = root.getBoundingClientRect();
+        let limitLeft = 0;
+        const chatArea = document.querySelector('.chat-area');
+        if (chatArea) limitLeft = chatArea.getBoundingClientRect().left;
+        const maxX = window.innerWidth - rect.width;
+        const maxY = getBottomLimit() - rect.height;
+        state.left = Math.max(limitLeft, Math.min(state.left, maxX));
+        state.top = Math.max(0, Math.min(state.top, maxY));
+        express();
+        updateFacingByPosition();
     }
 
     // 翻转判定（修复拖到屏幕右侧吸附时翻错方向）：面向由桌宠中心 x 相对
