@@ -175,7 +175,11 @@ class SettingsTabJsTests(unittest.TestCase):
         # B2c 沉底修正：settings-list 去 chat-history 双类（后者 flex:1 撑满
         # 剩余空间把关于条目推底——真凶非 margin，是 flex 挤压）
         self.assertIn('<div class="settings-list" id="settings-list">', html)
-        self.assertIn('<div class="settings-list" id="settings-list">', html)   # 无 chat-history 前缀（flex:1 撑开=沉底真凶）
+        self.assertIn('<div class="settings-list" id="settings-list">', html)   # 无 chat-history 前缀（双类一刀切曾连滚动一起删）
+        # 滚动恢复+自然排列双锚（B2c 修正）：容器 flex:1+overflow-y 占满可滚，
+        # 内部项 flex-column 自然排列（不 space-between=关于不沉底）
+        self.assertIn("overflow-y: auto;", html)
+        self.assertIn("gap: 14px;", html)
         self.assertNotIn('border-top: 1px solid var(--color-border, #e0e4ec); cursor: pointer', html)
         cjs = _read("console.js")
         self.assertNotIn("header-version", cjs)

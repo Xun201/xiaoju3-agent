@@ -237,7 +237,18 @@
         /* 设置面板（#264 B2a）：结构与终端页同构（工具条+滚动列表），
            表单控件复用 first-run-field 族 */
         .settings-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-        .settings-list { padding: 12px 16px; }
+        /* #264 B2c 修正：列表容器 flex:1 占满 pane + overflow-y 滚动
+           （chat-history 双类一刀切时误删滚动）；列表**内部项自然排列**
+           （flex-column 不 space-between），关于条目紧接上一项不沉底 */
+        .settings-list {
+            flex: 1;
+            padding: 12px 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            min-height: 0;
+        }
         /* 关于条目（#264 B2c 修正：看齐手机列表样式——普通一项，与上方表单项视觉连续，无独立块间距/分隔线） */
         .settings-about-row { margin-top: 0; padding: 10px 8px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; border-radius: 6px; font-size: 14px; }
         .settings-about-row:hover { background: var(--color-progress-track, #eef2fb); }
