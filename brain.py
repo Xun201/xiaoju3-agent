@@ -1623,7 +1623,15 @@ def ask_local(msgs, model=None):
         turn_trace.record_step("local", model or LOCAL_MODEL,
                                int((time.perf_counter() - _t0) * 1000),
                                eval_count=resp.get("eval_count"))
-    return resp['message']['content']
+    msg = resp.get('message') or {}
+    thinking = str(msg.get('thinking') or '')
+    content = msg.get('content') or ''
+    # D1（#326）：独立 thinking 字段优先（R1 类思考模型）——思考以
+    # <think> 包装并入返回走既有管线；Qwen 无此字段 → 纯 content
+    # 回退（正则路径兼容）。
+    if thinking:
+        return '<think>' + thinking + '</think>' + content
+    return content
 
 
 def ask_cloud(messages):
@@ -1649,7 +1657,15 @@ def ask_cloud(messages):
 
         # 检查是否存在 choices，如果不存在，就把接口返回的原始错误信息发出来
         if "choices" in resp_json:
-            return resp_json["choices"][0]["message"]["content"]
+            choice = (resp_json.get("choices") or [{}])[0]
+            msg = choice.get("message") or {}
+            reasoning = str(msg.get('reasoning_content') or '')
+            content = msg.get("content") or ''
+            # D1（#326）：DeepSeek R1 类 reasoning_content 独立字段
+            # 优先——同本地 <think> 包装收敛。
+            if reasoning:
+                return '<think>' + reasoning + '</think>' + content
+            return content
 
         # 如果 API 返回了错误（比如模型不对、余额不足），直接显示错误详情
         error_detail = resp_json.get("error", {})
@@ -2173,6 +2189,7 @@ def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
                "stream": True, "keep_alive": -1,
                "options": {"temperature": LLM_TEMPERATURE}}
     chunks = []
+    th_chunks = []
     _t0 = time.perf_counter()
     _eval_count = None
     with requests.post(LOCAL_URL, json=payload, stream=True,
@@ -2185,7 +2202,15 @@ def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
                 obj = json.loads(line)
             except (ValueError, TypeError):
                 continue
-            delta = (obj.get("message") or {}).get("content", "")
+            msg = obj.get("message") or {}
+            th = str(msg.get("thinking") or "")
+            delta = msg.get("content") or ""
+            # D1（#326）：独立 thinking 增量 → think 事件先行（R1
+            # 思考流），answer 正文按 event_type 照旧。
+            if th:
+                th_chunks.append(th)
+                if on_event is not None:
+                    on_event({"type": "think", "delta": th})
             if delta:
                 chunks.append(delta)
                 if on_event is not None:
@@ -2197,8 +2222,10 @@ def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
         turn_trace.record_step("local", model or LOCAL_MODEL,
                                int((time.perf_counter() - _t0) * 1000),
                                eval_count=_eval_count)
-    return "".join(chunks)
-    return "".join(chunks)
+    body = "".join(chunks)
+    if th_chunks:  # D1：思考统一 <think> 包装（下游原生透传）
+        return '<think>' + ''.join(th_chunks) + '</think>' + body
+    return body
 
 
 def _ask_cloud_stream(messages, on_event, event_type="answer"):
@@ -2210,6 +2237,7 @@ def _ask_cloud_stream(messages, on_event, event_type="answer"):
     payload = {"model": CLOUD_MODEL, "messages": messages, "stream": True,
                "temperature": LLM_TEMPERATURE}
     chunks = []
+    r_chunks = []
     _t0 = time.perf_counter()
     try:
         with requests.post(CLOUD_URL, headers=headers, json=payload,
@@ -2226,9 +2254,16 @@ def _ask_cloud_stream(messages, on_event, event_type="answer"):
                 except (ValueError, TypeError):
                     continue
                 try:
-                    delta = obj["choices"][0]["delta"].get("content") or ""
+                    ch_delta = obj["choices"][0]["delta"] or {}
                 except (KeyError, IndexError, AttributeError):
                     continue
+                th = str(ch_delta.get("reasoning_content") or "")
+                # D1（#326）：DeepSeek R1 类思考增量 → think 事件。
+                if th:
+                    r_chunks.append(th)
+                    if on_event is not None:
+                        on_event({"type": "think", "delta": th})
+                delta = ch_delta.get("content") or ""
                 if delta:
                     chunks.append(delta)
                     if on_event is not None:
@@ -2240,7 +2275,10 @@ def _ask_cloud_stream(messages, on_event, event_type="answer"):
     if turn_trace is not None:
         turn_trace.record_step("cloud", CLOUD_MODEL,
                                int((time.perf_counter() - _t0) * 1000))
-    return "".join(chunks)
+    body = "".join(chunks)
+    if r_chunks:  # D1：思考统一 <think> 包装
+        return '<think>' + ''.join(r_chunks) + '</think>' + body
+    return body
 
 
 def smart_ask_stream(message, history=None, session_key="default",

@@ -202,6 +202,12 @@ def _resp(payload):
     return resp
 
 
+def _cloud_resp_full(reasoning, content):
+    """DeepSeek 响应结构（含 R1 reasoning_content 独立字段）。"""
+    return _resp({"choices": [{"message": {
+        "reasoning_content": reasoning, "content": content}}]})
+
+
 def _local_resp(content):
     """Ollama /api/chat 响应结构。"""
     return _resp({"message": {"content": content}})
@@ -252,7 +258,95 @@ class AskLocalTests(unittest.TestCase):
                 brain.ask_local([{"role": "user", "content": "hi"}])
 
 
-class AskCloudTests(unittest.TestCase):
+
+class D1ThinkingFieldTests(unittest.TestCase):
+    """#326/D1 兼容层锚：独立思考字段优先（R1 类）/纯 content 回退
+    （Qwen 类）；流式 thinking 增量 → think 事件先行。"""
+
+    def test_local_resp_with_thinking_field(self):
+        """mock R1 形态：message.thinking 有值 → <think> 包装+正文。"""
+        with mock.patch.object(brain, "requests") as mr:
+            mr.post.return_value = _resp({"message": {
+                "thinking": "首先，我记得这是基础数学",
+                "content": "1加1等于2"}})
+            out = brain.ask_local([{"role": "user", "content": "1+1"}])
+        self.assertTrue(out.startswith("<think>首先，我记得这是基础数学</think>"))
+        self.assertIn("1加1等于2", out)
+
+    def test_local_resp_without_thinking_field_regression(self):
+        """Qwen 形态回归：无 thinking 字段 → 纯 content（不包 <think>）。"""
+        with mock.patch.object(brain, "requests") as mr:
+            mr.post.return_value = _local_resp("本地回答")
+            self.assertEqual(brain.ask_local([{"role": "user", "content": "hi"}]),
+                             "本地回答")
+
+    def test_cloud_resp_with_reasoning_content(self):
+        """DeepSeek R1 API 形态：reasoning_content → <think> 包装。"""
+        with mock.patch.object(brain, "requests") as mr:
+            mr.post.return_value = _cloud_resp_full(
+                reasoning="先分析再作答", content="答案是 2")
+            out = brain.ask_cloud([{"role": "user", "content": "1+1"}])
+        self.assertTrue(out.startswith("<think>先分析再作答</think>"))
+        self.assertIn("答案是 2", out)
+
+
+class D1StreamThinkingTests(unittest.TestCase):
+    """流式 D1 锚：独立 thinking 增量 → think 事件先行；Qwen 无字段
+    → 行为不变（回归）。"""
+
+    def _run_local_stream(self, ndjson_lines, event_type=None):
+        import io as _io
+
+        class _FakeResp:
+            def raise_for_status(self):
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def iter_lines(self, decode_unicode=True):
+                return iter(ndjson_lines)
+
+        captured = []
+        with mock.patch.object(brain, "requests") as mr:
+            mr.post.return_value = _FakeResp()
+            if event_type:
+                out = brain._ask_local_stream(
+                    [{"role": "user", "content": "1+1"}],
+                    lambda ev: captured.append(ev), event_type=event_type)
+            else:
+                out = brain._ask_local_stream(
+                    [{"role": "user", "content": "1+1"}],
+                    lambda ev: captured.append(ev))
+        return out, captured
+
+    def test_thinking_field_emits_think_events_first(self):
+        nd = [
+            '{"message": {"role": "assistant", "thinking": "首先"}, "done": false}',
+            '{"message": {"role": "assistant", "thinking": "，再计算"}, "done": false}',
+            '{"message": {"role": "assistant", "content": "等于 2"}, "done": false}',
+            '{"done": true}',
+        ]
+        out, captured = self._run_local_stream(nd, event_type="answer")
+        types = [e["type"] for e in captured]
+        self.assertEqual(types, ["think", "think", "answer"])
+        self.assertEqual(out, "<think>首先，再计算</think>等于 2")
+
+    def test_no_thinking_field_regression(self):
+        nd = [
+            '{"message": {"role": "assistant", "content": "等于 2"}, "done": false}',
+            '{"done": true}',
+        ]
+        out, captured = self._run_local_stream(nd, event_type="answer")
+        self.assertEqual([e["type"] for e in captured], ["answer"])
+        self.assertEqual(out, "等于 2")
+
+
+if __name__ == "__main__":
+    unittest.main()
     """ask_cloud：Bearer 鉴权、choices 解析、API 报错与连接异常文案。"""
 
     def test_request_structure_and_timeout(self):
