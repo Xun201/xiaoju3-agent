@@ -1198,6 +1198,117 @@ def _sticker_collect_reply(raw_message, message, user_id):
 
 # =======================================================
 
+# ================= QQ 闲聊拟人节奏（2026-10-12） =================
+# QQ 是社交场景，秒回不自然——纯文字闲聊经每用户防抖桶延迟回复；
+# 指令类（斜杠/链接/记住/工具意图 route 命中/CQ 媒体）豁免即时处理
+# （黑屋子等 25 秒开灯不可接受）。控制台/stream 不经此路径；
+# proactive 主动消息走独立心跳线程，互不影响。
+# 判据（任意一条=用户说完了，进入回复流程）：最后消息后 >10s 静默 /
+# 累计 ≥6 条 / 首条起 ≥120s / 单条 >100 字。凑齐 → 生成回复 →
+# 随机延迟 20-30s → ONEBOT API 异步发送（静默等待，不发"正在输入"）。
+
+_CHAT_RHYTHM = {
+    "silence": 10.0,     # 静默判据：最后消息后 10s 无新消息
+    "max_count": 6,      # 条数判据：累计 6 条强制回
+    "max_window": 120.0, # 时长判据：首条起 120s 兜底
+    "long_msg": 100,     # 长消息判据：单条 >100 字直通
+    "delay_min": 20.0,   # 回复延迟下限
+    "delay_max": 30.0,   # 回复延迟上限
+}
+_CHAT_BURSTS = {}
+_CHAT_BURSTS_LOCK = threading.Lock()
+
+
+def _chat_rhythm_enabled():
+    """拟人节奏开关（XIAOJU3_CHAT_RHYTHM_ENABLED，**缺省关**——生产默认
+    秒回旧契约，用户手动开=MOOD_TONE 同款模式；2026-10-12 收口拍板）。"""
+    return str(os.environ.get("XIAOJU3_CHAT_RHYTHM_ENABLED", "0")).strip().lower()         in ("1", "true", "on")
+
+
+def _is_chat_like(raw_message, text_nc):
+    """预分类：纯文字闲聊=True 进延迟队列；工具意图/媒体/指令=False 即时。
+
+    豁免清单：斜杠指令 / 分享链接（待办提取）/ 记住（记忆写入）/
+    含任意 CQ 码（媒体或引用——sticker 硬门与收藏门即时处理）/
+    intent_router 规则命中（家电/待办/设备等工具意图，零 token）。"""
+    if not text_nc:
+        return False                # 纯媒体：硬门/收藏门路径
+    if text_nc.startswith("/"):
+        return False
+    if "chat.deepseek.com/share/" in str(raw_message or ""):
+        return False
+    if "记住" in text_nc:
+        return False
+    try:
+        if route(text_nc) is not None:
+            return False            # 工具意图（家电/待办/设备/截图等）
+    except Exception:
+        pass
+    return True
+
+
+def _enqueue_chat_burst(user_id, group_id, text, now=None, timer_cls=None):
+    """闲聊入桶：新用户建桶（10s 防抖 Timer）；满足条数/时长/长消息判据
+    则 0.05s 后立即冲刷；静默判据由防抖 Timer 天然实现（新消息不断重置）。
+    timer_cls 可注入（测试同步捕获）。返回实际延迟秒数。"""
+    now = time.time() if now is None else now
+    timer_cls = timer_cls or threading.Timer
+    key = f"{group_id or 0}:{user_id}"
+    with _CHAT_BURSTS_LOCK:
+        b = _CHAT_BURSTS.setdefault(key, {"texts": [], "first": now})
+        b["texts"].append(text)
+        b["last"] = now
+        b["user_id"] = user_id
+        b["group_id"] = group_id
+        if b.get("timer"):
+            b["timer"].cancel()
+        count = len(b["texts"])
+        window = now - b["first"]
+        if (count >= _CHAT_RHYTHM["max_count"]
+                or window >= _CHAT_RHYTHM["max_window"]
+                or len(text) > _CHAT_RHYTHM["long_msg"]):
+            delay = 0.05            # 条数/时长/长消息：立即冲刷
+        else:
+            delay = _CHAT_RHYTHM["silence"]
+        t = timer_cls(delay, _flush_chat_burst, args=(key,))
+        t.daemon = True
+        b["timer"] = t
+    t.start()
+    return delay
+
+
+def _flush_chat_burst(key):
+    """冲刷 worker：合并桶内文字 → handle_message 生成回复 → 消毒 →
+    随机延迟 20-30s → ONEBOT API 发送。全链 try/except 静默
+    （闲聊延迟失败绝不拖垮接入层）。"""
+    with _CHAT_BURSTS_LOCK:
+        b = _CHAT_BURSTS.pop(key, None)
+    if not b or not b["texts"]:
+        return
+    combined = " ".join(b["texts"]).strip()
+    if not combined:
+        return
+    try:
+        reply = handle_message('qq', b["user_id"], b["group_id"], combined)
+        reply = _strip_llm_pollution(reply)
+        if not reply:
+            return
+        delay = random.uniform(_CHAT_RHYTHM["delay_min"],
+                               _CHAT_RHYTHM["delay_max"])
+        time.sleep(delay)
+        endpoint = ("send_group_msg" if b.get("group_id")
+                    else "send_private_msg")
+        payload = {"message": reply}
+        if b.get("group_id"):
+            payload["group_id"] = b["group_id"]
+        else:
+            payload["user_id"] = b["user_id"]
+        requests.post(f"{ONEBOT_API_URL}/{endpoint}", json=payload,
+                      timeout=10, headers=_onebot_headers())
+    except Exception as e:
+        print(f"⚠️ [拟人节奏] 闲聊回复失败（跳过）: {e}")
+
+
 # ================= QQ大门（业务体；HTTP 视图宿主于 :5003） =================
 def _rebuild_raw_message(data):
     """raw_message 缺失/为空时从 message 字段重建文本（LLOneBot 兼容）。
@@ -1272,6 +1383,12 @@ def onebot_event(data):
         self_id = data.get('self_id')
         self_qq = str(self_id) if self_id is not None else None
 
+        # 拟人节奏（2026-10-12）：纯文字闲聊入防抖桶延迟回复；工具意图/
+        # 媒体/指令即时处理。开关关或非闲聊 → 原同步路径。
+        _nc_text = _strip_cq(raw_message or "").strip()
+        if _chat_rhythm_enabled() and _is_chat_like(raw_message or "", _nc_text):
+            _enqueue_chat_burst(user_id, group_id, _nc_text)
+            return {"status": "ok", "retcode": 0}
         reply = handle_message('qq', user_id, group_id, raw_message or "", self_qq=self_qq)
         # 🧠 QQ 消息保持干净（#322 F1）：_strip_llm_pollution = <think> XML
         # + 方括号 [think]/[plan] 变体 + 幻觉 action JSON（全剥）
