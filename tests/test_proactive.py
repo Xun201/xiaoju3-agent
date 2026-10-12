@@ -45,8 +45,9 @@ class TensionTests(ProactiveBase):
     """锚 2/3：张力累积（clamp）+ 时间衰减数学。"""
 
     def test_event_accumulation_with_clamp(self):
-        # 累积触顶 clamp → 达阈值即 fire（张力清零）；clamp 上限永不越界
-        now = datetime.now()
+        # 累积触顶 clamp → 达阈值即 fire（张力清零）；钉正午避开
+        # quiet_hours（23-7 点 suppress 会让 fire 断言随运行时刻翻转）
+        now = datetime(2026, 10, 12, 12, 0, 0)
         with mock.patch.object(proactive, "_collect_events",
                                return_value=[("todo_due", 0.3)] * 5):   # 5×0.3=1.5 → clamp 1.0
             r = proactive.proactive_tick(now)
@@ -118,7 +119,7 @@ class FireTests(ProactiveBase):
     """锚 5/6：fire（张力≥阈值+无抑制→张力清零+last_fire_at）+ 冷却。"""
 
     def test_fire_resets_tension_and_sets_last_fire(self):
-        now = datetime.now()
+        now = datetime(2026, 10, 12, 12, 0, 0)   # 正午：避开 quiet_hours
         with mock.patch.object(proactive, "_collect_events",
                                return_value=[("todo_due", 0.9)]):
             r = proactive.proactive_tick(now)
@@ -132,7 +133,7 @@ class FireTests(ProactiveBase):
         self.assertEqual(row[0], "fire")
 
     def test_cooldown_after_fire_suppresses(self):
-        now = datetime.now()
+        now = datetime(2026, 10, 12, 12, 0, 0)   # 正午：避开 quiet_hours
         # 先 fire 一次建立 last_fire_at
         with mock.patch.object(proactive, "_collect_events",
                                return_value=[("todo_due", 0.9)]):
@@ -213,6 +214,34 @@ class RealEventSourceIntegrationTests(unittest.TestCase):
         con.close()
         self.assertIsNotNone(row)
         self.assertIn("todos:", row[1])
+
+
+class DataRootAnchorTests(unittest.TestCase):
+    """#319 前置侦察修正锚：user_idle 探针路径锚 DATA_ROOT（cwd 解耦）。
+    真文件流：tmp 建真 history_console.json（旧 mtime）→ 事件命中；
+    新 mtime → 不命中。不打 _collect_events mock。"""
+
+    def _probe_with_history(self, age_hours):
+        import time as _t
+        tmp = tempfile.mkdtemp(prefix="xiaoju3_dr_")
+        xd = os.path.join(tmp, "xiaoju3_data")
+        os.makedirs(xd)
+        h = os.path.join(xd, "history_console.json")
+        with open(h, "w", encoding="utf-8") as f:
+            f.write("[]")
+        old = _t.time() - age_hours * 3600
+        os.utime(h, (old, old))
+        with mock.patch("paths.DATA_ROOT", tmp):
+            return proactive._collect_events(datetime.now())
+
+    def test_old_history_fires_user_idle(self):
+        events = self._probe_with_history(age_hours=6)
+        self.assertIn(("user_idle", proactive.EVENT_DELTAS["user_idle"]),
+                      events)
+
+    def test_fresh_history_no_idle_event(self):
+        events = self._probe_with_history(age_hours=0.5)
+        self.assertNotIn("user_idle", [e[0] for e in events])
 
 
 if __name__ == "__main__":
