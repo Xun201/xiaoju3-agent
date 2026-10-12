@@ -144,6 +144,11 @@ def test_old_unconditional_gone():
     import inspect
     src = inspect.getsource(main)
     assert "收到你的表情啦" not in src
+    # 2026-10-12 Bug A 根因锚：幻觉教学在 prompts.py（系统提示词第 4 条
+    # 教模型谎报收藏）——三文件（main/emoji_manager/prompts）全禁绝
+    prompts_src = open(os.path.join(os.path.dirname(main.__file__),
+                       "prompts.py"), encoding="utf-8").read()
+    assert "收到你的表情啦" not in prompts_src
 
 
 # 12 形态 A：引用+动作「收藏」（无指代词）→ 意图命中（条件③豁免修复实证）
