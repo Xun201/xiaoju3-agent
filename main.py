@@ -163,6 +163,28 @@ def _strip_cq(text):
     return re.sub(r'\[CQ:[^\]]*\]', '', text).strip()
 
 
+# F2（#322）：CQ 码全类型 → 人类可读描述（进 brain 前）——裸 CQ 码是
+# 幻觉触发源（坑库 #20：模型看不懂 [CQ:image,...] 就编 show_image）。
+_CQ_TRANSLATE_RE = [
+    (re.compile(r'\[CQ:image[^\]]*\]'), '（用户发了一张图片）'),
+    (re.compile(r'\[CQ:face[^\]]*\]'), '（用户发了个表情）'),
+    (re.compile(r'\[CQ:record[^\]]*\]'), '（用户发了一段语音）'),
+    (re.compile(r'\[CQ:video[^\]]*\]'), '（用户发了一个视频）'),
+    (re.compile(r'\[CQ:file[^\]]*\]'), '（用户发了一个文件）'),
+    (re.compile(r'\[CQ:at[^\]]*\]'), '（用户@了你）'),
+]
+
+
+def _translate_cq_for_brain(raw_text):
+    """CQ 码全类型 → 人类可读描述（模型能懂，防幻觉）；未识别类型走
+    _strip_cq 兜底剥除。只用于进 brain 的文本（意图门仍用 raw_message
+    的 CQ 码形态，不影响既有门禁）。"""
+    text = str(raw_text or "")
+    for rex, desc in _CQ_TRANSLATE_RE:
+        text = rex.sub(desc, text)
+    return _strip_cq(text)
+
+
 
 # @机器人提及文本形态（2026-10-02 紧急修复）：LLOneBot 部分版本 raw_message
 # 的 @ 为纯文本"@小橘3号 指令"而非 CQ 码，指令精确/前缀匹配全部失效——
@@ -194,6 +216,25 @@ def _strip_think(text):
     QQ 消息保持干净，推理展示只属于新前端。
     """
     return re.sub(r'<think>.*?</think>', '', str(text or ""), flags=re.DOTALL).strip()
+
+
+# QQ 出口消毒（#322 F1，2026-10-12）：方括号变体 + 幻觉 action JSON。
+# 实锤：本地模型图片消息上下文下输出 [think]/[plan]（方括号变体，XML
+# 正则不匹配）+ {"action":"show_image"}（编造工具名+错键）混合体直发。
+_THINK_SQUARE_RE = re.compile(r'\[think\].*?\[/think\]', re.DOTALL | re.IGNORECASE)
+_PLAN_SQUARE_RE = re.compile(r'\[plan\].*?\[/plan\]', re.DOTALL | re.IGNORECASE)
+_ACTION_JSON_RE = re.compile(r'\{[^{}]*"action"\s*:[^{}]*\}', re.DOTALL)
+
+
+def _strip_llm_pollution(text):
+    """QQ 出口消毒（#322 F1）：XML <think> 之外，剥方括号 [think]/[plan]
+    变体与幻觉 action JSON（注册表只认 "tool" 键，"action" 键 JSON 是
+    幻觉签名——正常回复永不携带）。坑库 #20 通道不对齐族。"""
+    text = _strip_think(text)
+    text = _THINK_SQUARE_RE.sub('', text)
+    text = _PLAN_SQUARE_RE.sub('', text)
+    text = _ACTION_JSON_RE.sub('', text)
+    return text.strip()
 
 
 # ================= 权限指令族辅助（§7） =================
@@ -1035,6 +1076,9 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         _compress_and_save(messages_web, MEMORY_FILE_WEB)
         state_manager.save_conversation("web", messages_web)
     else:
+        # F2（#322）：CQ 码→人类可读描述再进 brain——裸 CQ 码是幻觉触发源
+        # （坑库 #20：模型看不懂就编 show_image）。history 存可读文本更优。
+        message = _translate_cq_for_brain(raw_message)
         is_new_session = len(messages_qq) <= 1
         messages_qq.append({"role": "user", "content": message})
         reply = _brain_reply('qq', message, messages_qq, user_key,
@@ -1194,8 +1238,9 @@ def onebot_event(data):
         self_qq = str(self_id) if self_id is not None else None
 
         reply = handle_message('qq', user_id, group_id, raw_message or "", self_qq=self_qq)
-        # 🧠 QQ 消息保持干净：剥除 <think> 思维链包装块（推理卡片只在网页前端展示）
-        reply = _strip_think(reply)
+        # 🧠 QQ 消息保持干净（#322 F1）：_strip_llm_pollution = <think> XML
+        # + 方括号 [think]/[plan] 变体 + 幻觉 action JSON（全剥）
+        reply = _strip_llm_pollution(reply)
         print(f"🐛 准备发送回复，内容为: {reply}")
 
         if reply:
