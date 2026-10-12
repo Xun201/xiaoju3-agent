@@ -151,5 +151,69 @@ class FireTests(ProactiveBase):
         self.assertIn("cooldown", row[0])
 
 
+class RealEventSourceIntegrationTests(unittest.TestCase):
+    """#271③ 哑火修复——真集成锚（不打 _collect_events 的 mock）。
+
+    背景（坑库 #21）：9 锚全 mock 注入，真链路断链（SQL 查不存在的
+    due_date 列）880 分钟零察觉。本组锚建**临时真 todos.db**，让
+    _collect_events 本体跑真 SQL——堵“单元全绿但集成哑火”盲区。
+    环境隔离=xiaoju3.AGENT_STATE_DIR 指向 tmp（mood 测试同款环境级
+    隔离，被测函数本体全真）。"""
+
+    def _make_env(self, todo_rows):
+        import sqlite3 as sq
+        tmp = tempfile.mkdtemp(prefix="xiaoju3_p0int_")
+        con = sq.connect(os.path.join(tmp, "todos.db"))
+        con.execute("CREATE TABLE todos (id INTEGER PRIMARY KEY, content TEXT, "
+                    "source_url TEXT DEFAULT '', status TEXT DEFAULT 'pending', "
+                    "priority TEXT DEFAULT 'P3', created_at DATETIME DEFAULT "
+                    "CURRENT_TIMESTAMP, done_at DATETIME, note TEXT DEFAULT '', "
+                    "effective_priority TEXT)")
+        for created in todo_rows:
+            con.execute("INSERT INTO todos (content, status, created_at) "
+                        "VALUES ('t', 'pending', ?)", (created,))
+        con.commit()
+        con.close()
+        return tmp
+
+    def test_real_stale_todo_fires_event(self):
+        """真库真 SQL：created_at 老化 >7 天的 pending → todo_stale 事件。"""
+        import xiaoju3
+        old = (datetime.now() - timedelta(days=9)).strftime("%Y-%m-%d %H:%M:%S")
+        tmp = self._make_env([old])
+        with mock.patch.object(xiaoju3, "AGENT_STATE_DIR", tmp):
+            events = proactive._collect_events(datetime.now())
+        self.assertIn(("todo_stale", proactive.EVENT_DELTAS["todo_stale"]),
+                      events)
+
+    def test_real_fresh_todo_no_stale_event(self):
+        """对照：全部新创建 pending → 无 todo_stale（阈值未到）。"""
+        import xiaoju3
+        fresh = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        tmp = self._make_env([fresh])
+        with mock.patch.object(xiaoju3, "AGENT_STATE_DIR", tmp):
+            events = proactive._collect_events(datetime.now())
+        self.assertNotIn("todo_stale", [e[0] for e in events])
+
+    def test_real_corrupt_todos_db_audited(self):
+        """哑火根因复现+审计锚：todos.db 损坏 → SQL 报错**不再静默**，
+        proactive_log 记 event_source_error（#316 自我适用）。"""
+        import xiaoju3
+        tmp = tempfile.mkdtemp(prefix="xiaoju3_p0err_")
+        with open(os.path.join(tmp, "todos.db"), "w", encoding="utf-8") as f:
+            f.write("this is not a sqlite database {{{")
+        db = os.path.join(tmp, "proactive.db")
+        with mock.patch.object(xiaoju3, "AGENT_STATE_DIR", tmp),                 mock.patch.dict(os.environ, {"XIAOJU3_PROACTIVE_DB_PATH": db}):
+            events = proactive._collect_events(datetime.now())
+        self.assertNotIn("todo_stale", [e[0] for e in events])
+        con = sqlite3.connect(db)
+        row = con.execute(
+            "SELECT decision, reason FROM proactive_log "
+            "WHERE decision='error' ORDER BY id DESC LIMIT 1").fetchone()
+        con.close()
+        self.assertIsNotNone(row)
+        self.assertIn("todos:", row[1])
+
+
 if __name__ == "__main__":
     unittest.main()

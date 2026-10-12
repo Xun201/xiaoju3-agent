@@ -36,11 +36,11 @@ LOG_KEEP = 2000         # 审计日志滚动保留（relationship_event_log 同�
 
 # 张力事件源（Phase 0 最小集，delta 按 design §三语义定）
 EVENT_DELTAS = {
-    "todo_due": 0.3,        # ① 待办到期
-    "todo_stale": 0.3,      # ② 久未做某事
+    "todo_stale": 0.3,      # ② 久未做某事（created_at 老化 >STALE_DAYS）
     "user_idle": 0.2,       # ⑥ 久未理
-    "task_done": 0.2,       # ⑪ 完成汇报
+    "task_done": 0.2,       # ⑪ 完成汇报（Phase 0 占位）
 }
+STALE_DAYS = 7   # 久未做阈值（天）——todos 表无 due_date 列，用 created_at 老化
 
 ENABLE_ENV = "XIAOJU3_PROACTIVE_ENABLED"
 DB_ENV = "XIAOJU3_PROACTIVE_DB_PATH"
@@ -206,13 +206,15 @@ def told_not_to_bother(now=None):
 
 
 def _collect_events(now):
-    """Phase 0 三事件源（最小实现，delta 见 EVENT_DELTAS）：
-    - todo_due：存在已过期 pending（updated_at < now）→ 记一次；
-    - todo_stale：存在 pending 超期 N 天未动（简化=与 todo_due 同查合并计）；
-    - user_idle：history_console 最近修改时间距今 > 4h 且在活跃时段；
+    """Phase 0 事件源（2026-10-12 修复哑火——原 SQL 查 todos 表不存在的
+    due_date 列，OperationalError 被裸 except 吞掉 880 分钟，坑库 #21）：
+    - todo_stale：pending 中存在 created_at 老化 >STALE_DAYS（真实列）；
+    - user_idle：history_console 最近修改时间距今 > 4h；
     - task_done：Phase 0 暂无独立信号源，占位不计。
-    全部只读；任何探测异常静默跳过（事件缺失≠故障）。"""
+    事件源探测失败**不再静默**：写 proactive_log 一条 event_source_error
+    （#316 静默可解释自我适用——审计自身失败再兜底忽略）。全部只读。"""
     events = []
+    errors = []
     try:
         todos_db = None
         try:
@@ -223,23 +225,28 @@ def _collect_events(now):
             todos_db = os.path.join("agent_state", "todos.db")
         if todos_db and os.path.isfile(todos_db):
             con = sqlite3.connect(f"file:{todos_db}?mode=ro", uri=True, timeout=2.0)
-            due = con.execute(
+            cutoff = (now - timedelta(days=STALE_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+            stale = con.execute(
                 "SELECT COUNT(*) FROM todos WHERE status = 'pending' "
-                "AND due_date IS NOT NULL AND due_date != '' "
-                "AND due_date < ?", (now.strftime("%Y-%m-%d"),)).fetchone()
-            if due and due[0]:
-                events.append(("todo_due", EVENT_DELTAS["todo_due"]))
+                "AND created_at < ?", (cutoff,)).fetchone()
             con.close()
-    except Exception:
-        pass
+            if stale and stale[0]:
+                events.append(("todo_stale", EVENT_DELTAS["todo_stale"]))
+    except Exception as e:
+        errors.append(f"todos:{type(e).__name__}:{e}")
     try:
         hist = os.path.join("xiaoju3_data", "history_console.json")
         if os.path.isfile(hist):
             age_h = (now.timestamp() - os.path.getmtime(hist)) / 3600.0
             if age_h >= 4.0:
                 events.append(("user_idle", EVENT_DELTAS["user_idle"]))
-    except Exception:
-        pass
+    except Exception as e:
+        errors.append(f"history:{type(e).__name__}:{e}")
+    for e in errors:   # #316 自我适用：事件源断链第一天可见（审计自身失败再兜底）
+        try:
+            _append_log("event_source", "error", e[:180], now)
+        except Exception:
+            pass
     return events
 
 
