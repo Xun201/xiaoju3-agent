@@ -177,16 +177,31 @@ _CQ_TRANSLATE_RE = [
 ]
 
 
+# 指代图词（#322 v2 扩门拍板 2026-10-12）：图剥离后这些词必语义断裂
+# （模型不知有图，实测 4/4 反问“请描述/上传图片”=要求重发不可能重发的图）
+_IMAGE_REF_WORDS = ("这图", "图片", "这张", "上面那张", "看图", "图里")
+
+_GATE_PURE_IMAGE_REPLY = ("图片收到啦～小橘现在还看不懂图片内容，"
+                          "你打字跟我说就好")
+_GATE_REF_REPLY = ("小橘收到了图片，但暂时看不懂图片内容——"
+                   "你可以直接打字告诉我～")
+
+
 def _image_gate_reply(raw_message, translated_text):
-    """图片消息硬门（#322 收尾拍板 2026-10-12）：QQ 通道无视觉能力，
+    """图片消息硬门（#322 v2 扩门拍板 2026-10-12）：QQ 通道无视觉能力，
     图片内容不可读——纯图=诚实自曝看不了（确定性回应，不走 LLM 自由
-    发挥，#278 同构）；图文=文字正常回应（图已从 brain 输入剥离，
-    禁评论图片=防纯编造）；无图=None。返回确定性回复文本或 None。"""
+    发挥，#278 同构）；图文+指代图词=确定性诚实回应（图剥离后“这图
+    里是啥”类问题必语义断裂，实测 4/4 反问重发）；图文+无关文字=正常
+    放行（文字本身是完整问题，与图无关）；无图=None。
+    返回确定性回复文本或 None。"""
     if "[CQ:image" not in str(raw_message or ""):
         return None
-    if str(translated_text or "").strip():
-        return None   # 图文混合：文字正常回应（brain 输入已剥图）
-    return "图片收到啦～小橘现在还看不懂图片内容，你打字跟我说就好"
+    text = str(translated_text or "").strip()
+    if not text:
+        return _GATE_PURE_IMAGE_REPLY
+    if any(w in text for w in _IMAGE_REF_WORDS):
+        return _GATE_REF_REPLY
+    return None   # 图文无关文字：正常放行 LLM
 
 
 def _translate_cq_for_brain(raw_text):
