@@ -453,5 +453,22 @@ class NodeSyntaxGateTests(unittest.TestCase):
                              "%s: %s" % (name, proc.stderr.decode("utf-8", "replace")))
 
 
+
+class ThinkDurationDisplayTests(unittest.TestCase):
+    """A1（#326 前置侦察）锚：思考耗时显示——首个 think 增量记时刻，
+    done 收尾算差写入卡片标题"已思考（用时 X 秒）"。"""
+
+    def test_think_start_ts_recorded_on_first_delta(self):
+        src = _read("console.js")
+        self.assertIn("let thinkStartTs = null;", src)
+        self.assertIn("thinkStartTs = Date.now();", src)   # 首增量记时刻
+        self.assertIn("st.textContent = '思考中…';", src)   # 流式期卡片态
+
+    def test_duration_display_in_final_card_title(self):
+        src = _read("console.js")
+        self.assertIn("已思考（用时 ' + secs + ' 秒）", src)
+        self.assertIn("botMsg.querySelector('.think-card-title')", src)
+
+
 if __name__ == "__main__":
     unittest.main()
