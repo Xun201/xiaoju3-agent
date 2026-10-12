@@ -235,7 +235,11 @@ def _collect_events(now):
     except Exception as e:
         errors.append(f"todos:{type(e).__name__}:{e}")
     try:
-        hist = os.path.join("xiaoju3_data", "history_console.json")
+        # 路径锚（#319 前置侦察修正）：history_console 在 DATA_ROOT/xiaoju3_data/
+        # （非 agent_state）——DATA_ROOT 锚与 cwd 解耦（c6dc178 同族，
+        # 防多终端/换目录哑火）
+        from paths import DATA_ROOT as _data_root
+        hist = os.path.join(_data_root, "xiaoju3_data", "history_console.json")
         if os.path.isfile(hist):
             age_h = (now.timestamp() - os.path.getmtime(hist)) / 3600.0
             if age_h >= 4.0:
