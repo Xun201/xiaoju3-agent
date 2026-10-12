@@ -4436,5 +4436,40 @@ class BareJsonSanitizeTests(unittest.TestCase):
             self.assertEqual(brain._strip_bare_json(body), body)
 
 
+
+class ThinkLabelNormalizeTests(unittest.TestCase):
+    """#322 Bug B 锚（中文冒号/英文冒号/混合三变体，一次覆盖全）：
+    行首冒号标签行归一化为原生 [思考]/[计划]——brain 包装链只认方括号，
+    1.5b 模型漂移形态不再漏进正文（控制台思考卡直出实锤）。"""
+
+    def test_chinese_colon_lines(self):
+        raw = "思考：需要分析图片\n计划：正常描述内容"
+        t = brain._normalize_think_labels(raw)
+        self.assertIn("[思考] 需要分析图片", t)
+        self.assertIn("[计划] 正常描述内容", t)
+
+    def test_english_colon_lines(self):
+        raw = "Think: analyze the image\nPlan: describe it"
+        t = brain._normalize_think_labels(raw)
+        self.assertIn("[思考] analyze the image", t)
+        self.assertIn("[计划] describe it", t)
+
+    def test_mixed_variants_and_body_untouched(self):
+        raw = "推理：先看图\n步骤：再回应\n这是正文，不改动任何文字"
+        t = brain._normalize_think_labels(raw)
+        self.assertIn("[思考] 先看图", t)
+        self.assertIn("[计划] 再回应", t)
+        self.assertIn("这是正文，不改动任何文字", t)
+
+    def test_seal_captures_colon_variant_as_card(self):
+        """集成：冒号变体经归一化后 _seal_bare_cot 正常包装思考卡，
+        冒号原文不残留。"""
+        raw = "思考：分析图片内容\n这是正文回复"
+        sealed = brain._seal_bare_cot(brain._normalize_think_labels(raw))
+        self.assertIn("<think>", sealed)
+        self.assertIn("[思考] 分析图片内容", sealed)
+        self.assertNotIn("思考：", sealed)
+
+
 if __name__ == "__main__":
     unittest.main()

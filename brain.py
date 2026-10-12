@@ -1122,8 +1122,33 @@ def _force_chat_think(body):
     return _wrap_think(CHAT_THINKING_PLACEHOLDER, body)
 
 
+# 思考标签归一化（#322 Bug B，2026-10-12）：1.5b 模型会把 [思考]/[计划]
+# 漂移成"思考：/计划："冒号行形态——brain 包装逻辑只认方括号原生标记，
+# 冒号变体漏进正文（控制台思考卡直出"思考: ..."实锤）。行首归一化回
+# 原生标记，三受益：工具 JSON 解析上下文一致 / 思考卡正常包装 / QQ 出
+# 口 _strip_think 链路兼容。
+_THINK_LABEL_RES = [
+    (re.compile(r'\s*思考[：:]\s*(.*)$', re.M | re.I), '思考'),
+    (re.compile(r'\s*推理[：:]\s*(.*)$', re.M | re.I), '思考'),
+    (re.compile(r'\s*计划[：:]\s*(.*)$', re.M | re.I), '计划'),
+    (re.compile(r'\s*步骤[：:]\s*(.*)$', re.M | re.I), '计划'),
+    (re.compile(r'\s*Think[：:]\s*(.*)$', re.M | re.I), '思考'),
+    (re.compile(r'\s*Plan[：:]\s*(.*)$', re.M | re.I), '计划'),
+]
+
+def _normalize_think_labels(text):
+    """行首冒号变体（思考：/推理：/计划：/步骤：/Think:/Plan:）→ 原生
+    [思考]/[计划] 标记。只动行首带标签的行，正文不受影响。"""
+    text = str(text or "")
+    for rex, label in _THINK_LABEL_RES:
+        text = rex.sub(lambda m, lb=label: '[' + lb + '] ' + m.group(1),
+                       text)
+    return text
+
+
 def _seal_bare_cot(raw_reply):
-    """全对话强制包装出口：smart_ask 自然语言回复一律带 <think> 卡片。
+    """全对话强制包装出口：smart_ask 自然语言回复一律带 <think> 卡片
+    （入口先过 _normalize_think_labels 冒号变体归一化——#322 Bug B）。
 
     用户口径（2026-10-01"强制所有自然语言对话展示思维链卡片"，显式废止旧
     "普通聊天零包装零干扰"）：系统指令（/clear、/coder_auth、/register 等）
@@ -1145,6 +1170,7 @@ def _seal_bare_cot(raw_reply):
       残缺形态剥净标签字面量后按占位思考重新包装，空 <think> 同样不允许）；
     - 封口/注入时各打印一条 [CoT] 终端日志，与工具路径日志口径一致。
     """
+    raw_reply = _normalize_think_labels(raw_reply)
     if not _BARE_COT_MARK_RE.search(raw_reply):
         # 普通闲聊：强制注入默认占位符（模型自吐 <think> 原生包装时防重入
         # ——成对且思考非空才原样透传，残缺/空卡片剥净标签后重新包装）
@@ -2013,6 +2039,7 @@ def _smart_ask_impl(message, history=None, session_key="default",
         #（裸 CoT 封口同样生效：模型若仍输出 [思考]/[计划]，包装成卡片不裸漏）
         return _seal_bare_cot(raw_reply), label
 
+    raw_reply = _normalize_think_labels(raw_reply)   # #322 Bug B：冒号变体归一
     json_str = _extract_tool_json(raw_reply)
     if json_str:
         try:
