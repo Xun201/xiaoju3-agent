@@ -247,23 +247,13 @@ def _strip_think(text):
     return re.sub(r'<think>.*?</think>', '', str(text or ""), flags=re.DOTALL).strip()
 
 
-# QQ 出口消毒（#322 F1，2026-10-12）：方括号变体 + 幻觉 action JSON。
-# 实锤：本地模型图片消息上下文下输出 [think]/[plan]（方括号变体，XML
-# 正则不匹配）+ {"action":"show_image"}（编造工具名+错键）混合体直发。
-_THINK_SQUARE_RE = re.compile(r'\[think\].*?\[/think\]', re.DOTALL | re.IGNORECASE)
-_PLAN_SQUARE_RE = re.compile(r'\[plan\].*?\[/plan\]', re.DOTALL | re.IGNORECASE)
-_ACTION_JSON_RE = re.compile(r'\{[^{}]*"action"\s*:[^{}]*\}', re.DOTALL)
-
-
+# QQ 出口消毒（#322 F1，2026-10-12）——#326 收编：全变体剥除逻辑迁至
+# chain_of_thought.strip_pollution（本函数保留入口名防调用方断裂）。
 def _strip_llm_pollution(text):
-    """QQ 出口消毒（#322 F1）：XML <think> 之外，剥方括号 [think]/[plan]
-    变体与幻觉 action JSON（注册表只认 "tool" 键，"action" 键 JSON 是
-    幻觉签名——正常回复永不携带）。坑库 #20 通道不对齐族。"""
-    text = _strip_think(text)
-    text = _THINK_SQUARE_RE.sub('', text)
-    text = _PLAN_SQUARE_RE.sub('', text)
-    text = _ACTION_JSON_RE.sub('', text)
-    return text.strip()
+    """QQ 出口消毒（#322 F1）：XML <think> + 方括号 [think]/[plan]
+    变体 + 幻觉 action JSON——全剥（坑库 #20 通道不对齐族）。"""
+    from chain_of_thought import strip_pollution as _cot_strip
+    return _cot_strip(text)
 
 
 # ================= 权限指令族辅助（§7） =================
