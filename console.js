@@ -1285,6 +1285,7 @@
             let thinkCard = null;     // 渐进思考卡（首个 think 块建卡）
             let thinkBodyEl = null;
             let thinkAcc = '';        // 累计思考原文（分段判定用）
+            let thinkStartTs = null;  // A1（#326 前置侦察）：首个 think 增量到达时刻→耗时显示
             let answerEl = null;      // 正文气泡（首个 answer 块建）
             let answerAcc = '';
             let toolEl = null;
@@ -1341,6 +1342,11 @@
 
             function handleEvent(etype, data) {
                 if (etype === 'think') {
+                    if (thinkStartTs === null) {
+                        thinkStartTs = Date.now();   // A1：耗时计时起点
+                        const st = thinkCard && thinkCard.querySelector('.think-card-title');
+                        if (st) st.textContent = '思考中…';
+                    }
                     thinkAcc += (data.delta || '');
                     renderThinkProgressive();
                 } else if (etype === 'tool') {
@@ -1366,6 +1372,12 @@
                     if (toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
                     if (answerEl && answerEl.parentNode) answerEl.parentNode.removeChild(answerEl);
                     const botMsg = appendBotMessage(data.reply, data.source, text);
+                    // A1（#326 前置侦察）：耗时显示——卡片标题追加"已思考（用时 X 秒）"
+                    if (thinkStartTs !== null) {
+                        const secs = ((Date.now() - thinkStartTs) / 1000).toFixed(1);
+                        const fc = botMsg.querySelector('.think-card-title');
+                        if (fc) fc.textContent = '已思考（用时 ' + secs + ' 秒）';
+                    }
                     if (window.xiaoju3Sound) window.xiaoju3Sound.ding();
                     if (autoTTSEnabled()) speakMessageEl(botMsg);
                 } else if (etype === 'error') {
