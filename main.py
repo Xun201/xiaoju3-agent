@@ -166,13 +166,27 @@ def _strip_cq(text):
 # F2（#322）：CQ 码全类型 → 人类可读描述（进 brain 前）——裸 CQ 码是
 # 幻觉触发源（坑库 #20：模型看不懂 [CQ:image,...] 就编 show_image）。
 _CQ_TRANSLATE_RE = [
-    (re.compile(r'\[CQ:image[^\]]*\]'), '（用户发了一张图片）'),
+    # 图片类型不翻译——直接剥离（#322 硬门拍板：QQ 无视觉能力，
+    # 模型知道有图也只会编造图片内容；纯图由 _image_gate_reply 确定性回应）
+    # (re.compile(r'\[CQ:image[^\]]*\]'), '（用户发了一张图片）'),
     (re.compile(r'\[CQ:face[^\]]*\]'), '（用户发了个表情）'),
     (re.compile(r'\[CQ:record[^\]]*\]'), '（用户发了一段语音）'),
     (re.compile(r'\[CQ:video[^\]]*\]'), '（用户发了一个视频）'),
     (re.compile(r'\[CQ:file[^\]]*\]'), '（用户发了一个文件）'),
     (re.compile(r'\[CQ:at[^\]]*\]'), '（用户@了你）'),
 ]
+
+
+def _image_gate_reply(raw_message, translated_text):
+    """图片消息硬门（#322 收尾拍板 2026-10-12）：QQ 通道无视觉能力，
+    图片内容不可读——纯图=诚实自曝看不了（确定性回应，不走 LLM 自由
+    发挥，#278 同构）；图文=文字正常回应（图已从 brain 输入剥离，
+    禁评论图片=防纯编造）；无图=None。返回确定性回复文本或 None。"""
+    if "[CQ:image" not in str(raw_message or ""):
+        return None
+    if str(translated_text or "").strip():
+        return None   # 图文混合：文字正常回应（brain 输入已剥图）
+    return "图片收到啦～小橘现在还看不懂图片内容，你打字跟我说就好"
 
 
 def _translate_cq_for_brain(raw_text):
@@ -1078,7 +1092,13 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     else:
         # F2（#322）：CQ 码→人类可读描述再进 brain——裸 CQ 码是幻觉触发源
         # （坑库 #20：模型看不懂就编 show_image）。history 存可读文本更优。
+        # 图片类型已从翻译表剥离（#322 硬门：无视觉能力，禁评论图片）。
         message = _translate_cq_for_brain(raw_message)
+        # 硬门（#322 收尾拍板）：纯图=确定性诚实回应（不走 LLM）；
+        # 图文=文字正常回应（图已剥离）
+        gate_reply = _image_gate_reply(raw_message, message)
+        if gate_reply:
+            return gate_reply
         is_new_session = len(messages_qq) <= 1
         messages_qq.append({"role": "user", "content": message})
         reply = _brain_reply('qq', message, messages_qq, user_key,
