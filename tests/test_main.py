@@ -330,7 +330,9 @@ class TestOnebotEntry(_MainCase):
         self.assertEqual(self.napcat_payload()["user_id"], 123)
 
     def test_image_message_saved_to_emoji_store(self):
-        """#299 c+d 新语义：纯图无动作词 → 不收藏不抢答（走对话链）。"""
+        """#322 硬门新语义（2026-10-12 拍板，覆盖 #299 旧“走对话链”）：纯图
+        无动作词 → 不收藏不抢答不进 LLM——QQ 无视觉能力，自由发挥=纯编造，
+        确定性诚实回应（#278 同构）。"""
         with patch("main.save_emoji_link", return_value=True) as save_mock:
             resp = self.onebot({
                 "post_type": "message", "message_type": "private",
@@ -339,7 +341,7 @@ class TestOnebotEntry(_MainCase):
             })
         self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
         save_mock.assert_not_called()               # 无条件收藏已退役
-        self.smart_ask.assert_called_once()          # 走对话链（不再抢答）
+        self.smart_ask.assert_not_called()          # 硬门拦截：不进 LLM
 
     def test_group_image_without_at_saved(self):
         """#299 c+d 新语义：群聊非 @ 纯图 → 不收藏不抢答（老 bug 已退役）。"""
