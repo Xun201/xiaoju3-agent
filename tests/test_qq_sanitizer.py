@@ -78,6 +78,29 @@ class ImageHardGateTests(unittest.TestCase):
         self.assertIsNone(
             main._image_gate_reply("[CQ:image,file=x.png]", t))
 
+    def test_image_text_with_ref_words_deterministic(self):
+        """#322 v2 扩门：图文混合+指代图词（这图/图片/这张/看图/图里）
+        → 确定性诚实回应（图剥离后指代必语义断裂——实测 4/4 反问重发
+        不可能的图）。"""
+        for text in ("这图里是啥", "图片上是什么", "看看这张",
+                     "上面那张啥意思", "帮我看图"):
+            r = main._image_gate_reply("[CQ:image,file=x]" + text, text)
+            self.assertIsNotNone(r, text)
+            self.assertIn("看不懂图片内容", r)
+            self.assertNotIn("已存进小仓库", r)
+
+    def test_image_text_unrelated_passes_through(self):
+        """#322 v2 对照：图文混合+无关文字（文字本身完整问题）→ 正常
+        放行 LLM（门返回 None）。"""
+        for text in ("今天天气怎么样", "帮我记个事"):
+            self.assertIsNone(
+                main._image_gate_reply("[CQ:image,file=x]" + text, text))
+
+    def test_plain_image_regression(self):
+        """纯图回归：原硬门文案不变。"""
+        r = main._image_gate_reply("[CQ:image,file=x]", "")
+        self.assertEqual(r, main._GATE_PURE_IMAGE_REPLY)
+
     def test_plain_text_unaffected_and_wiring(self):
         """纯文字 → 门返回 None 不受影响；接线锚：handle_message 内
         翻译→硬门→append 顺序正确。"""
