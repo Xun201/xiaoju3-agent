@@ -1127,23 +1127,8 @@ def _force_chat_think(body):
 # 冒号变体漏进正文（控制台思考卡直出"思考: ..."实锤）。行首归一化回
 # 原生标记，三受益：工具 JSON 解析上下文一致 / 思考卡正常包装 / QQ 出
 # 口 _strip_think 链路兼容。
-_THINK_LABEL_RES = [
-    (re.compile(r'\s*思考[：:]\s*(.*)$', re.M | re.I), '思考'),
-    (re.compile(r'\s*推理[：:]\s*(.*)$', re.M | re.I), '思考'),
-    (re.compile(r'\s*计划[：:]\s*(.*)$', re.M | re.I), '计划'),
-    (re.compile(r'\s*步骤[：:]\s*(.*)$', re.M | re.I), '计划'),
-    (re.compile(r'\s*Think[：:]\s*(.*)$', re.M | re.I), '思考'),
-    (re.compile(r'\s*Plan[：:]\s*(.*)$', re.M | re.I), '计划'),
-]
-
-def _normalize_think_labels(text):
-    """行首冒号变体（思考：/推理：/计划：/步骤：/Think:/Plan:）→ 原生
-    [思考]/[计划] 标记。只动行首带标签的行，正文不受影响。"""
-    text = str(text or "")
-    for rex, label in _THINK_LABEL_RES:
-        text = rex.sub(lambda m, lb=label: '[' + lb + '] ' + m.group(1),
-                       text)
-    return text
+# _normalize_think_labels 收编至 chain_of_thought.normalize（#326）
+from chain_of_thought import normalize as _normalize_think_labels
 
 
 def _seal_bare_cot(raw_reply):
@@ -1623,9 +1608,8 @@ def ask_local(msgs, model=None):
         turn_trace.record_step("local", model or LOCAL_MODEL,
                                int((time.perf_counter() - _t0) * 1000),
                                eval_count=resp.get("eval_count"))
-    msg = resp.get('message') or {}
-    thinking = str(msg.get('thinking') or '')
-    content = msg.get('content') or ''
+    from chain_of_thought import parse_thinking_field
+    thinking, content = parse_thinking_field(resp.get('message'))
     # D1（#326）：独立 thinking 字段优先（R1 类思考模型）——思考以
     # <think> 包装并入返回走既有管线；Qwen 无此字段 → 纯 content
     # 回退（正则路径兼容）。
@@ -2202,9 +2186,8 @@ def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
                 obj = json.loads(line)
             except (ValueError, TypeError):
                 continue
-            msg = obj.get("message") or {}
-            th = str(msg.get("thinking") or "")
-            delta = msg.get("content") or ""
+            from chain_of_thought import parse_thinking_field
+            th, delta = parse_thinking_field(obj.get("message"))
             # D1（#326）：独立 thinking 增量 → think 事件先行（R1
             # 思考流），answer 正文按 event_type 照旧。
             if th:
