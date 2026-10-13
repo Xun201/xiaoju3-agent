@@ -246,3 +246,106 @@ class DataRootAnchorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Phase1Batch1Tests(ProactiveBase):
+    """#271③ Phase 1 批 1（design_271c_phase1.md §9 锚 1-7）：
+    events 明细列 + 每日配额（proactive_meta 存 N）。"""
+
+    def test_events_column_idempotent(self):
+        # ALTER 幂等：重复 _connect 不炸不重复
+        for _ in range(3):
+            con = proactive._connect()
+            con.close()
+        cols = [r[1] for r in sqlite3.connect(self.db).execute(
+            "PRAGMA table_info(proactive_log)")]
+        self.assertEqual(cols.count("events"), 1)
+        meta_tables = [r[0] for r in sqlite3.connect(self.db).execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")]
+        self.assertIn("proactive_meta", meta_tables)
+
+    def test_fire_row_records_event_names(self):
+        now = datetime(2026, 10, 13, 12, 0, 0)
+        with mock.patch.object(proactive, "_collect_events",
+                               return_value=[("todo_stale", 0.9)]):
+            proactive.proactive_tick(now)
+        row = sqlite3.connect(self.db).execute(
+            "SELECT events FROM proactive_log WHERE decision='fire'"
+        ).fetchone()
+        self.assertEqual(row[0], "todo_stale")
+
+    def test_suppress_row_records_event_names(self):
+        # 多事件累积不达阈值 → suppress 行同样落明细（抑制时谁在累积同可对账）
+        now = datetime(2026, 10, 13, 12, 0, 0)
+        with mock.patch.object(proactive, "_collect_events",
+                               return_value=[("todo_stale", 0.3),
+                                             ("user_idle", 0.2)]):
+            r = proactive.proactive_tick(now)
+        self.assertFalse(r["fired"])
+        row = sqlite3.connect(self.db).execute(
+            "SELECT events FROM proactive_log WHERE decision='suppress'"
+        ).fetchone()
+        self.assertEqual(row[0], "todo_stale,user_idle")
+
+    def test_old_rows_null_events_compat(self):
+        # 旧行（4 列时代 events=NULL）读取兼容（先 _connect 建表）
+        con = proactive._connect()
+        con.close()
+        con = sqlite3.connect(self.db)
+        con.execute("INSERT INTO proactive_log (ts, action, decision,"
+                    " reason) VALUES ('2026-10-01 08:00:00',"
+                    " 'tension_release', 'fire', 'tension=0.90')")
+        con.commit()
+        row = con.execute(
+            "SELECT events, COALESCE(events, '') FROM proactive_log"
+        ).fetchone()
+        con.close()
+        self.assertIsNone(row[0])
+        self.assertEqual(row[1], "")
+
+    def test_daily_quota_blocks_fire(self):
+        # 当日 fire 达 N（meta=2）→ 第 3 次张力达标也 suppress 且
+        # reason 含 daily_quota（三次 tick 各隔 >30min 冷却窗，同日内）
+        t1 = datetime(2026, 10, 13, 9, 0, 0)
+        step = timedelta(seconds=proactive.COOLDOWN_SECONDS + 60)
+        proactive.set_daily_limit(2)
+        for i, t in enumerate((t1, t1 + step, t1 + 2 * step)):
+            with mock.patch.object(proactive, "_collect_events",
+                                   return_value=[("todo_stale", 0.9)]):
+                r = proactive.proactive_tick(t)
+            if i < 2:
+                self.assertTrue(r["fired"], f"第 {i+1} 次应在配额内 fire")
+        self.assertFalse(r["fired"])   # 第 3 次：daily_quota 拦截
+        row = sqlite3.connect(self.db).execute(
+            "SELECT reason FROM proactive_log WHERE decision='suppress'"
+            " ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertIn("daily_quota", row[0])
+
+    def test_quota_within_limit_fires_normal(self):
+        # 配额内：reason 无 daily_quota，fire 正常
+        now = datetime(2026, 10, 13, 12, 0, 0)
+        proactive.set_daily_limit(5)
+        with mock.patch.object(proactive, "_collect_events",
+                               return_value=[("todo_stale", 0.9)]):
+            r = proactive.proactive_tick(now)
+        self.assertTrue(r["fired"])
+        row = sqlite3.connect(self.db).execute(
+            "SELECT reason FROM proactive_log WHERE decision='fire'"
+        ).fetchone()
+        self.assertNotIn("daily_quota", row[0])
+
+    def test_daily_limit_default_and_meta_roundtrip(self):
+        con = sqlite3.connect(self.db)
+        self.assertEqual(proactive._daily_limit(con), 5)   # 缺省 5
+        con.close()
+        self.assertEqual(proactive.set_daily_limit(8), 8)
+        con = sqlite3.connect(self.db)
+        self.assertEqual(proactive._daily_limit(con), 8)   # meta 生效
+        con.close()
+
+    def test_set_daily_limit_clamp(self):
+        self.assertIsNone(proactive.set_daily_limit(0))
+        self.assertIsNone(proactive.set_daily_limit(51))
+        self.assertIsNone(proactive.set_daily_limit("abc"))
+        self.assertEqual(proactive.set_daily_limit(1), 1)     # 下边界
+        self.assertEqual(proactive.set_daily_limit(50), 50)   # 上边界
