@@ -2942,14 +2942,16 @@ class ProactiveFrontendAnchorTests(unittest.TestCase):
     """前端源码锚：主动性卡 DOM/双 API 调用/防误导说明/B 面板灰化。"""
 
     def test_console_js_has_proactive_section(self):
+        # #UI修复 批 1（2026-10-13）：设置页段迁入小工具面板（MAA 式）——
+        # 渲染函数改名 renderProactiveInto；防误导说明与双 API 不变
         path = os.path.join(PROJECT_ROOT, "console.js")
         src = io.open(path, encoding="utf-8").read()
-        self.assertIn("appendProactiveSection", src)
-        self.assertIn("proactive-audit", src)
-        self.assertIn("proactive-limit", src)
+        self.assertIn("renderProactiveInto", src)
+        self.assertIn("openToolsPanel", src)
         self.assertIn("/api/proactive/recent", src)
         self.assertIn("/api/proactive/config", src)
         # 防误导说明（#316 兄弟约束：可见且不误导）
-        self.assertIn("暂不给主人发真消息", src)
-        # 面板 B 占位灰化
-        self.assertIn("Phase 2 开放", src)
+        self.assertIn("暂不发真消息", src)
+        # 三分类卡片墙（MAA 式收纳）
+        self.assertIn("📊 小橘监控", src)
+        self.assertIn("🔌 管理", src)
