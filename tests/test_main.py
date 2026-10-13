@@ -1909,3 +1909,25 @@ class TestContentHandlerSendImage(unittest.TestCase):
             level_value_cb=lambda: 4, is_in_workspace_cb=lambda p: True,
             exists_cb=lambda p: True)
         self.assertEqual(out, "[CQ:image,file=file://F:/x.png]")
+
+
+class TestContentHandlerSoul(unittest.TestCase):
+    """soul 领域分派（纯转发样板，本体 handle_soul_command 在 main）。"""
+
+    def test_non_domain_returns_none(self):
+        import content_handler
+        self.assertIsNone(content_handler.handle_soul(
+            "/help", "/help", soul_cb=lambda t, r: None))
+
+    def test_forwards_to_callback(self):
+        import content_handler
+        seen = {}
+
+        def fake_soul(command_text, raw_message):
+            seen["args"] = (command_text, raw_message)
+            return "🧠 灵魂备份完成"
+
+        out = content_handler.handle_soul(
+            "/soul_export", "/soul_export", soul_cb=fake_soul)
+        self.assertEqual(out, "🧠 灵魂备份完成")
+        self.assertEqual(seen["args"], ("/soul_export", "/soul_export"))

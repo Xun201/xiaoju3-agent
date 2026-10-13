@@ -8,7 +8,9 @@ v2 领域拆分版（design_227b_boundary_v2.md；v1 单 handler 思路已证伪
 领域路线图（v2 §二，后续批逐个填入本文件）：
 - ✅ todo：/todo_from_link + /todos 全族（批 0 首批）
 - ✅ send_image：/send_image（Lv.4 门+存在性+workspace 校验+CQ 拼装）
-- ⬜ soul：/soul_export /soul_import
+- ✅ soul：/soul_export /soul_import（纯转发，本体在 main）
+- 领域三件齐——v2 §二「content_handler」域内全部迁毕；剩余领域
+  （config/memory/system）见设计稿领域表，后续批另起 handler 文件。
 
 接口纪律：每 handler ≤4 参数+领域回调由调用方注入；本模块零 import
 main（dashboard/多终端可直接复用）。
@@ -25,6 +27,15 @@ def handle_todo(raw_message, message, user_id, group_id, todo_cb,
     共用）；返回回复文本，非待办指令返回 None（调用方继续消息管线）。
     """
     return todo_cb(raw_message, message, user_id, group_id, steps=steps)
+
+
+def handle_soul(command_text, raw_message, soul_cb):
+    """灵魂备份领域入口（/soul_export Lv.3+ / /soul_import Lv.4）。
+
+    soul_cb=main.handle_soul_command（本体在 main，含设备自动迁移）；
+    返回回复文本，非本领域指令返回 None。
+    """
+    return soul_cb(command_text, raw_message)
 
 
 def send_image(command_text, raw_message, level_value_cb, is_in_workspace_cb,

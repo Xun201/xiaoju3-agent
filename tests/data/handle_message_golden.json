@@ -176,6 +176,22 @@
       "user_id": "admin",
       "group_id": null,
       "assert_type": "contains_权限"
+    },
+    {
+      "desc": "soul_export_qq",
+      "raw_message": "/soul_export",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_权限"
+    },
+    {
+      "desc": "soul_export_console",
+      "raw_message": "/soul_export",
+      "source": "web",
+      "user_id": "admin",
+      "group_id": null,
+      "assert_type": "contains_权限"
     }
   ]
 }

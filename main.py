@@ -1023,7 +1023,9 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return send_reply
 
     # === 💾 灵魂备份（/soul_export Lv.3+ / /soul_import Lv.4，设备自动迁移最小版） ===
-    soul_reply = handle_soul_command(command_text, raw_message)
+    # #227 批 0 续：soul 领域分派迁入 content_handler（纯转发，本体在 main）
+    soul_reply = content_handler.handle_soul(
+        command_text, raw_message, soul_cb=handle_soul_command)
     if soul_reply is not None:
         return soul_reply
 
