@@ -1983,3 +1983,38 @@ class TestSystemHandler(unittest.TestCase):
             self.assertIsInstance(out, str)   # 菜单文本（真 get_help_menu）
         self.assertIsNone(system_handler.handle_help(
             "/todo", level_str_cb=lambda: "Lv.1"))
+
+
+class TestProactiveUiFoldAndFooterTap:
+    """#UI修复（2026-10-13）：审计折叠交互+footer 版本号连点（源码锚）。"""
+
+    def _js(self):
+        return open("console.js", encoding="utf-8").read()
+
+    def _html(self):
+        return open("index.html", encoding="utf-8").read()
+
+    def test_audit_fold_structure(self):
+        js = self._js()
+        # 折叠三件：摘要行/箭头/默认 hidden
+        assert "proactive-summary" in js
+        assert "proactive-arrow" in js
+        assert "auditBox.hidden = true" in js
+        # 点击切换+展开时刷新
+        assert "loadProactiveAudit();" in js
+        # 摘要行恒显状态文本（折叠也能看到状态）
+        assert "stateText" in js
+
+    def test_footer_version_tap_binding(self):
+        js = self._js()
+        html = self._html()
+        assert 'id="footer-version"' in html
+        assert "footer-version" in js          # 填充+连点绑定
+        assert "markFooterVersionUnlocked" in js   # 解锁变橙反馈
+        assert "handleDevTap" in js            # 复用既有连点逻辑
+
+    def test_proactive_transition_log_source(self):
+        # 后端跃迁日志：签名判重（连续同状态不记）
+        src = open("proactive.py", encoding="utf-8").read()
+        assert "last_signature" in src
+        assert 'signature = ("suppress:" + ",".join(sup)) if sup else "suppress:calm"' in src

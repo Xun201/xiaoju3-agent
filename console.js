@@ -309,7 +309,14 @@
                     const d = res.data;
                     // 版本源（#264 B2c 收尾：header 版本号已删，版本只进
                     // VERSION_STATE 供关于卡使用；/api/status 能力保留）
-                    if (d.version) window.__xiaoju3Version = String(d.version);
+                    if (d.version) {
+                        window.__xiaoju3Version = String(d.version);
+                        // #UI修复 2026-10-13：页脚版本号（连点 7 次=开发者
+                        // 暗入口第二触发点）
+                        const fv = document.getElementById('footer-version');
+                        if (fv) fv.textContent =
+                            'V' + String(d.version);
+                    }
                     const cpuText = document.getElementById('cpu-text');
                     const cpuBar = document.getElementById('cpu-bar');
                     if (cpuText && cpuBar) {
@@ -1964,14 +1971,25 @@
     function loadProactiveAudit() {
         const box = document.getElementById('proactive-audit');
         if (!box) return;
+        const summaryText = document.getElementById('proactive-summary-text');
         fetch('/api/proactive/recent').then(function (r) { return r.json(); })
             .then(function (j) {
                 const d = (j && j.data) || {};
-                box.textContent = '';
                 if (!d.enabled) {
+                    if (summaryText) summaryText.textContent =
+                        '主动性引擎未启用';
                     box.textContent = '主动性引擎未启用';
                     return;
                 }
+                // 摘要行（折叠态也恒显）：最近一次状态+今日配额+张力
+                const lastItem = (d.recent || [])[0];
+                const lastFired = lastItem && lastItem.decision === 'fire';
+                const stateText = lastFired ? '刚出手' : '按住中';
+                if (summaryText) summaryText.textContent =
+                    stateText + ' · 今日出手 ' + (d.today_fire_count || 0) +
+                    '/' + (d.daily_limit || 5) + ' · 张力 ' +
+                    (d.tension || 0);
+                box.textContent = '';
                 const head = document.createElement('div');
                 head.className = 'settings-empty';
                 head.textContent = '今日出手 ' + (d.today_fire_count || 0) + '/' +
@@ -2000,7 +2018,10 @@
                     box.appendChild(line);
                 });
             })
-            .catch(function () { box.textContent = '审计读取失败'; });
+            .catch(function () {
+                if (summaryText) summaryText.textContent = '审计读取失败';
+                box.textContent = '审计读取失败';
+            });
     }
 
     function appendProactiveSection() {
@@ -2063,13 +2084,35 @@
         bSel.appendChild(bOpt);
         bField.appendChild(bSel);
         settingsListEl.appendChild(bField);
-        // 审计列表
+        // 审计列表（#UI修复 2026-10-13：默认折叠——摘要行恒显+箭头展开，
+        // 防 60s/条的审计刷屏；交互参考思考卡折叠先例）
         const auditTitle = document.createElement('div');
         auditTitle.className = 'settings-group-title';
         auditTitle.textContent = '你刚才想说什么';
         settingsListEl.appendChild(auditTitle);
+        const summaryRow = document.createElement('div');
+        summaryRow.id = 'proactive-summary';
+        summaryRow.style.cssText = 'display:flex;align-items:center;'
+            + 'justify-content:space-between;cursor:pointer;padding:6px 4px;'
+            + 'border-radius:6px;user-select:none;';
+        summaryRow.innerHTML = '<span id="proactive-summary-text">'
+            + '加载中…</span><span id="proactive-arrow" '
+            + 'style="transition:transform .2s;">▸</span>';
+        summaryRow.addEventListener('click', function () {
+            const box = document.getElementById('proactive-audit');
+            const arrow = document.getElementById('proactive-arrow');
+            const open = box && !box.hidden;
+            if (box) box.hidden = open;
+            if (arrow) {
+                arrow.textContent = open ? '▸' : '▾';
+                arrow.style.transform = open ? '' : 'rotate(0deg)';
+            }
+            if (!open) loadProactiveAudit();   // 展开时刷新
+        });
+        settingsListEl.appendChild(summaryRow);
         const auditBox = document.createElement('div');
         auditBox.id = 'proactive-audit';
+        auditBox.hidden = true;   // 默认折叠：只露摘要行
         settingsListEl.appendChild(auditBox);
         const refreshBtn = document.createElement('button');
         refreshBtn.className = 'settings-input';
@@ -2077,7 +2120,7 @@
         refreshBtn.textContent = '刷新审计';
         refreshBtn.addEventListener('click', loadProactiveAudit);
         settingsListEl.appendChild(refreshBtn);
-        loadProactiveAudit();
+        loadProactiveAudit();   // 摘要行恒需数据（折叠也显示状态）
     }
 
     function appendUiPrefsSection() {
@@ -2433,6 +2476,9 @@
             if (on && !has) cardVer.textContent += ' 🛠️';
             if (!on && has) cardVer.textContent = cardVer.textContent.replace(' 🛠️', '');
         }
+        // footer 版本号：解锁态恒橙（F5/重启恢复）
+        const fv = document.getElementById('footer-version');
+        if (fv) fv.style.color = on ? 'var(--color-primary, #d96f2b)' : '';
     }
 
     function setDevMode(on, reason) {
@@ -2484,16 +2530,27 @@
                 DEV_STATE.mode_on = true;
                 applyDevBadges(true);
                 applyDevSwitchRow();
+                markFooterVersionUnlocked();
                 showToast('🛠️ 开发者模式已解锁并开启（开关在下方）');
                 if (api.dev_audit) api.dev_audit('dev_mode enter tap7 level=' + level);
             }).catch(function () { showToast('解锁失败'); });
-        }).catch(function () { showToast('桌面窗口未就绪'); });
+            }).catch(function () { showToast('桌面窗口未就绪'); });
     }
+    // 解锁瞬间视觉反馈：footer 版本号变橙（#UI修复 2026-10-13）
+    function markFooterVersionUnlocked() {
+        const fv = document.getElementById('footer-version');
+        if (fv) fv.style.color = 'var(--color-primary, #d96f2b)';
+    }
+
     // 连点绑定（#264 B2c 收尾）：关于卡内版本号（藏得更深=暗入口语义）；
     // 事件委托挂 body——卡是动态节点，开卡后即可连点
     document.body.addEventListener('click', function (e) {
         if (e.target && e.target.classList &&
             e.target.classList.contains('about-version')) {
+            handleDevTap();
+        }
+        // #UI修复 2026-10-13：第二触发点=页面底部版本号（更显眼的自然位）
+        if (e.target && e.target.id === 'footer-version') {
             handleDevTap();
         }
     });
