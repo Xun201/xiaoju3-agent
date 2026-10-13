@@ -771,6 +771,7 @@ def api_proactive_recent():
             limit = max(1, min(5000, int(request.args.get("limit", "50"))))
         except (TypeError, ValueError):
             limit = 50
+        proactive._connect().close()   # 确保表存在（空库首查 200 而非 500）
         con = sqlite3.connect(proactive._db_path(), timeout=3.0)
         rows = con.execute(
             "SELECT ts, action, decision, reason, COALESCE(events, '')"

@@ -2032,3 +2032,34 @@ class TestProactiveUiFoldAndFooterTap:
         src = open("proactive.py", encoding="utf-8").read()
         assert "last_signature" in src
         assert 'signature = ("suppress:" + ",".join(sup)) if sup else "suppress:calm"' in src
+
+
+class TestTabBarRetired:
+    """#UI修复：顶部 tab 栏退役（对话常显，终端/设置经 🧰 面板）。"""
+
+    def _js(self):
+        return open("console.js", encoding="utf-8").read()
+
+    def _html(self):
+        return open("index.html", encoding="utf-8").read()
+
+    def test_tab_bar_absent(self):
+        html = self._html()
+        assert 'class="chat-tabs"' not in html
+        assert 'id="tab-console"' not in html
+        assert 'id="tab-terminal"' not in html
+
+    def test_terminal_entry_via_panel_with_back(self):
+        js = self._js()
+        html = self._html()
+        # 面板卡实装（非占位 toast）+终端页返回回路
+        assert "switchChatTab('terminal')" in js
+        assert "closeToolsPanel" in js
+        assert 'id="terminal-back"' in html
+        assert "switchChatTab('console')" in js
+
+    def test_settings_card_in_panel(self):
+        js = self._js()
+        # 设置入口统一经面板（管理分类）
+        assert "switchChatTab('settings')" in js
+        assert "权限分级配置" in js
