@@ -375,3 +375,37 @@ class ContractTests(SearchEnvTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WeatherFilterFallbackTests(unittest.TestCase):
+    """天气白名单滤空 → 轮下一引擎（2026-10-13 顺手修：原 return 短路
+    导致自动链 bing 滤空后 baidu 永不参与；手动链保持快速短文案口径）"""
+
+    def test_manual_chain_empty_filter_returns_fixed_msg(self):
+        # 手动链（SEARCH_ENGINE=bing）：滤空 → 既有固定短文案，不降级
+        no_hit = [{"title": "长沙市_百度百科", "snippet": "长江中游中心城市"}]
+        with mock.patch.dict(os.environ, {"SEARCH_ENGINE": "bing"}), \
+                mock.patch.object(search_tools, "requests") as mr:
+            mr.get.return_value = _html_resp(BING_HTML)
+            with mock.patch.object(search_tools, "_search_bing",
+                                   return_value=no_hit):
+                out = search_tools.web_search("长沙今天天气")
+        self.assertEqual(out, search_tools.NO_WEATHER_RESULT_MSG)
+
+    def test_auto_chain_empty_filter_falls_to_next_engine(self):
+        # 自动链：第一引擎滤空 → 轮下一引擎（修复点）；后者命中天气词则正常返回
+        no_hit = [{"title": "百科页", "snippet": "城市概况与历史沿革",
+                   "url": "u1"}]
+        hit = [{"title": "长沙天气", "snippet": "今天晴，25 度",
+                "url": "u2"}]
+        os.environ.pop("SEARCH_ENGINE", None)
+        os.environ.pop("SERPER_API_KEY", None)
+        os.environ.pop("TAVILY_API_KEY", None)
+        # _ENGINES 字典定义时绑定函数对象——patch 字典条目而非模块属性
+        with mock.patch.dict(search_tools._ENGINES, {
+                "bing": lambda q, m: no_hit,
+                "baidu": lambda q, m: hit}), \
+                mock.patch.object(search_tools, "_engine_chain",
+                                  return_value=["bing", "baidu"]):
+            out = search_tools.web_search("长沙今天天气")
+        self.assertIn("长沙天气", out)
