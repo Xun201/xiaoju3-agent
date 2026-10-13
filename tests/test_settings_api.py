@@ -11,6 +11,7 @@ import sqlite3
 import time
 
 import pytest
+from unittest import mock  # noqa: E402  (#328 锚)
 
 import settings_api
 
@@ -25,7 +26,10 @@ def _iso(tmp_path, monkeypatch):
         f.write("USER_CITY=长沙\n")
     monkeypatch.setenv("XIAOJU3_SETTINGS_ENV_PATH", envf)
     monkeypatch.setenv("XIAOJU3_SETTINGS_TIERS_PATH", tiers)
-    monkeypatch.setenv("AGENT_STATE_DIR", str(tmp_path))   # 审计/trace 隔离
+    # #328 同步：审计 base 改走 xiaoju3.AGENT_STATE_DIR（模块属性 patch，
+    # env 键不再被 _audit 读取）
+    import xiaoju3 as _xj
+    monkeypatch.setattr(_xj, "AGENT_STATE_DIR", str(tmp_path))
     _DB["tiers"] = tiers
     _DB["env"] = envf
     yield
@@ -282,3 +286,48 @@ def test_all_tier_items_in_allowlist():
     d = json.load(open("settings_tiers.json", encoding="utf-8"))
     for it in d["items"]:
         assert it["key"] in xiaoju3.ENV_WRITE_ALLOWLIST,             it["key"] + " 在 tiers 但不在白名单（B1 交集漏）"
+
+
+class TestSettingsAuditPath:
+    """#328：审计 base 走 xiaoju3.AGENT_STATE_DIR（frozen 路径铁律）。
+
+    背景：原实现读 os.environ['AGENT_STATE_DIR']——生产 .env 未设该行时
+    缺失，fallback __file__ 误落 _internal\agent_state 只读部署区（审计
+    恒失败，2026-10-13 新车日志实锤；c6dc178 同族修法）。"""
+
+    def test_audit_writes_to_agent_state_dir(self, tmp_path, monkeypatch):
+        import xiaoju3 as _xj
+        from settings_api import _audit
+        monkeypatch.setattr(_xj, "AGENT_STATE_DIR", str(tmp_path))
+        _audit({"action": "settings_update", "detail": "k=TEST_KEY"})
+        db = sqlite3.connect(str(tmp_path / "trace.db"))
+        try:
+            rows = db.execute(
+                "SELECT actor, action, detail FROM settings_log").fetchall()
+        finally:
+            db.close()
+        assert len(rows) == 1
+        assert rows[0][1] == "settings_update"
+        assert rows[0][2] == "k=TEST_KEY"
+        # 审计红线：不记值（detail 只含键名与档位口径）
+
+    def test_audit_importerror_falls_back_to_env(self, tmp_path, monkeypatch):
+        # xiaoju3 缺席（极端兜底）→ env 键仍被尊重（向后兼容）
+        from settings_api import _audit
+        import builtins
+        real_import = builtins.__import__
+
+        def _no_xiaoju(name, *a, **kw):
+            if name == "xiaoju3":
+                raise ImportError("simulated absent")
+            return real_import(name, *a, **kw)
+
+        monkeypatch.setenv("AGENT_STATE_DIR", str(tmp_path))
+        with mock.patch.object(builtins, "__import__", side_effect=_no_xiaoju):
+            _audit({"action": "keys_view", "detail": "level=1"})
+        db = sqlite3.connect(str(tmp_path / "trace.db"))
+        try:
+            n = db.execute("SELECT COUNT(*) FROM settings_log").fetchone()[0]
+        finally:
+            db.close()
+        assert n == 1
