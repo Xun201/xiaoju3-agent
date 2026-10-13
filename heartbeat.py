@@ -544,6 +544,21 @@ def heartbeat_loop(interval=None, sense_fn=None, ask_fn=None, execute_fn=None,
             pass   # 三文件可删纪律：proactive.py 整体删除时静默旁路
         except Exception as e:
             print(f"⚠️ [主动性] 执行异常（跳过）: {e}")
+        # 💤 记忆睡眠批处理（#297 批 2，2026-10-13）：开关缺省关
+        # （XIAOJU3_MEMORY_V2=0 时首行早退零副作用）；memory_meta.
+        # sleep_last_date 幂等闸在 run_daily_sleep 内部（同天重入返回
+        # None 不打印）；四步=隔夜衰减/重放/关联巩固/低权下沉。
+        try:
+            from plugins.memory_sleep import run_daily_sleep
+            _sleep = run_daily_sleep()
+            if _sleep is not None:
+                print(f"💤 [记忆睡眠] 重放 {_sleep['replayed']} 条 / "
+                      f"巩固 {_sleep['edges_consolidated']} 边 / "
+                      f"下沉 {_sleep['sinked']} 条")
+        except ImportError:
+            pass   # 插件可删纪律：memory_sleep.py 删除时静默旁路
+        except Exception as e:
+            print(f"⚠️ [记忆睡眠] 执行异常（跳过）: {e}")
         heartbeat_once(sense_fn=sense_fn, ask_fn=ask_fn, execute_fn=execute_fn,
                        sense_states_fn=sense_states_fn)
         rounds += 1

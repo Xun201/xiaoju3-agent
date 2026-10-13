@@ -430,3 +430,169 @@ class SeedCandidatesTests(MemoryV2TestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MemorySleepTests(MemoryV2TestBase):
+    """#297 批 2：睡眠批处理（exp04 七断言主项目版 + 情绪加权/豁免 +
+    夹钳 + 幂等闸 + log 清理）。开关缺省关=零副作用（拍板）。"""
+
+    def _run(self, **kw):
+        import os as _os
+        from plugins.memory_sleep import run_daily_sleep
+        with mock.patch.dict(_os.environ, {"XIAOJU3_MEMORY_V2": "1"}):
+            return run_daily_sleep(
+                db_path=self.sm.memory_db,
+                now=kw.pop("now", None) or __import__("datetime").datetime(
+                    2026, 10, 13, 3, 0, 0), **kw)
+
+    def _add_mem(self, content, weight=1.0, ac=0, impact=0.0,
+                 sink="active"):
+        with _quiet_stdout():
+            self.sm.save_memory("event", content)
+        conn = sqlite3.connect(self.sm.memory_db)
+        conn.execute(
+            "UPDATE memories SET weight=?, access_count=?,"
+            " emotional_impact=?, sink_status=? WHERE content=?",
+            (weight, ac, impact, sink, content))
+        conn.commit()
+        conn.close()
+        return self._rows(
+            "SELECT id FROM memories WHERE content=?", (content,))[0][0]
+
+    def test_sleep_disabled_by_default(self):
+        import os as _os
+        from plugins.memory_sleep import run_daily_sleep
+        _os.environ.pop("XIAOJU3_MEMORY_V2", None)
+        self.assertIsNone(run_daily_sleep(db_path=self.sm.memory_db))
+        # 库未被改动（零副作用）
+        self.assertEqual(self._rows("SELECT weight FROM memories"), [])
+
+    def test_sleep_night_decay_with_floor(self):
+        self._add_mem("记忆甲", weight=1.0)
+        self._add_mem("记忆乙", weight=0.0105)  # 逼近下限
+        self._run()
+        weights = {r[0]: r[1] for r in self._rows(
+            "SELECT content, weight FROM memories")}
+        self.assertAlmostEqual(weights["记忆甲"], 0.95)  # ×0.95
+        self.assertEqual(weights["记忆乙"], 0.01)        # 下限兜底不归零
+
+    def test_sleep_replay_and_consolidate(self):
+        a = self._add_mem("高频记忆甲", weight=1.0, ac=2)
+        self._add_mem("中频记忆乙", weight=1.0, ac=1)
+        self._add_mem("对照记忆丙", weight=1.0, ac=0)
+        conn = sqlite3.connect(self.sm.memory_db)
+        ids = [r[0] for r in conn.execute(
+            "SELECT id FROM memories ORDER BY id").fetchall()]
+        conn.execute("INSERT INTO memory_edge (from_id, to_id,"
+                     " coactivation_count) VALUES (?,?,2)", (ids[0], ids[1]))
+        # 对照边：零共激活（甲-丙）
+        conn.execute("INSERT INTO memory_edge (from_id, to_id)"
+                     " VALUES (?,?)", (ids[0], ids[2]))
+        conn.commit()
+        conn.close()
+        self._run()
+        wa = self._rows("SELECT weight FROM memories WHERE id=?",
+                        (a,))[0][0]
+        wb = self._rows("SELECT weight FROM memories WHERE content=?",
+                        ("中频记忆乙",))[0][0]
+        self.assertAlmostEqual(wa, round(0.95 * 1.15, 4))  # 巩固 ×1.15
+        self.assertAlmostEqual(wb, 0.95)                   # 只衰减
+        co_edge = self._rows("SELECT weight FROM memory_edge WHERE"
+                             " coactivation_count>=2")[0][0]
+        self.assertAlmostEqual(co_edge, round(1.0 * (1 + 0.20 * 2 / 6), 4))
+        zero_edge = self._rows("SELECT weight FROM memory_edge WHERE"
+                               " coactivation_count<2")[0][0]
+        self.assertEqual(zero_edge, 1.0)  # 零共激活边不被误强化
+
+    def test_sleep_sink_no_delete(self):
+        self._add_mem("低频老记忆丙", weight=0.20)  # 0.20×0.95=0.19<0.30
+        self._add_mem("活跃记忆丁", weight=1.0)
+        total0 = self._rows("SELECT COUNT(*) FROM memories")[0][0]
+        rep = self._run()
+        self.assertEqual(rep["sinked"], 1)
+        total1 = self._rows("SELECT COUNT(*) FROM memories")[0][0]
+        self.assertEqual(total0, total1)  # 打标不删行
+        st = dict(self._rows("SELECT content, sink_status FROM memories"))
+        self.assertEqual(st["低频老记忆丙"], "pending_sink")
+        self.assertEqual(st["活跃记忆丁"], "active")
+
+    def test_sleep_emotional_replay_boost(self):
+        self._add_mem("情绪记忆戊", weight=1.0, ac=2, impact=0.8)
+        self._add_mem("普通记忆己", weight=1.0, ac=2, impact=0.0)
+        self._run()
+        w = dict(self._rows("SELECT content, weight FROM memories"))
+        self.assertAlmostEqual(w["情绪记忆戊"],
+                               round(0.95 * (1 + 0.15 + 0.5), 4))
+        self.assertAlmostEqual(w["普通记忆己"], round(0.95 * 1.15, 4))
+        self.assertGreater(w["情绪记忆戊"], w["普通记忆己"])
+
+    def test_sleep_emotional_sink_guard(self):
+        self._add_mem("情绪记忆庚", weight=0.20, impact=0.5)  # 豁免
+        self._add_mem("普通记忆辛", weight=0.20, impact=0.1)  # 正常下沉
+        self._run()
+        st = dict(self._rows("SELECT content, sink_status FROM memories"))
+        self.assertEqual(st["情绪记忆庚"], "active")        # 近永留
+        self.assertEqual(st["普通记忆辛"], "pending_sink")
+
+    def test_sleep_weight_clamp(self):
+        # 拍板③睡眠侧：2.9×(1+0.30+0.50)=5.22 → 夹钳 3.0
+        self._add_mem("超高频记忆壬", weight=2.9, ac=4, impact=0.8)
+        self._run()
+        w = self._rows("SELECT weight FROM memories")[0][0]
+        self.assertEqual(w, 3.0)
+
+    def test_sleep_idempotent_gate(self):
+        self._add_mem("记忆癸", weight=1.0)
+        rep1 = self._run()
+        self.assertIsNotNone(rep1)
+        rep2 = self._run()  # 同天重入
+        self.assertIsNone(rep2)
+        gate = self._rows("SELECT value FROM memory_meta WHERE key="
+                          "'sleep_last_date'")[0][0]
+        self.assertEqual(gate, "2026-10-13")
+
+    def test_sleep_activation_log_cleanup(self):
+        from datetime import datetime, timedelta
+        self._add_mem("记忆子", weight=1.0, ac=2)
+        now = datetime(2026, 10, 13, 3, 0, 0)
+        conn = sqlite3.connect(self.sm.memory_db)
+        old = (now - timedelta(days=9)).strftime("%Y-%m-%d %H:%M:%S")
+        new = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute("INSERT INTO activation_log (node_id, timestamp,"
+                     " source) VALUES (1, ?, 'old')", (old,))
+        conn.execute("INSERT INTO activation_log (node_id, timestamp,"
+                     " source) VALUES (1, ?, 'new')", (new,))
+        conn.commit()
+        conn.close()
+        self._run(now=now)
+        sources = [r[0] for r in self._rows(
+            "SELECT source FROM activation_log")]
+        self.assertEqual(sources, ["new"])  # 7 天前旧行已清理
+
+    def test_sleep_log_audit_and_summary(self):
+        self._add_mem("高频记忆丑", weight=1.0, ac=2)
+        rep = self._run()
+        self.assertEqual(rep["replayed"], 1)
+        self.assertIn("edges_consolidated", rep)
+        self.assertIn("active_avg_weight", rep)
+        actions = [r[0] for r in self._rows("SELECT action FROM sleep_log")]
+        self.assertIn("replay", actions)
+
+
+class HeartbeatMountTests(MemoryV2TestBase):
+    """批 2：心跳第三槽挂载（源码锚——真链路执行属部署后真机验证）"""
+
+    def test_heartbeat_mounts_memory_sleep(self):
+        import heartbeat
+        src = io.open(heartbeat.__file__, encoding="utf-8").read()
+        self.assertIn("from plugins.memory_sleep import run_daily_sleep",
+                      src)
+        self.assertIn("_sleep = run_daily_sleep()", src)
+        # 可删纪律：ImportError 静默旁路（proactive 同款）
+        mount = src[src.index("from plugins.memory_sleep"):]
+        self.assertIn("except ImportError", mount)
+        # 开关缺省关：不设 env 时插件层首行早退
+        import os as _os
+        from plugins.memory_sleep import run_daily_sleep
+        _os.environ.pop("XIAOJU3_MEMORY_V2", None)
+        self.assertIsNone(run_daily_sleep(db_path=self.sm.memory_db))
