@@ -56,6 +56,7 @@ import time
 import requests
 
 import brain
+import content_handler  # 领域 handler（#227 批 0 首领域：待办族分派层）
 import home_tools
 import paths  # 双根路径锚（方案 §1）：creator.json 等用户数据锚定数据根
 from agent_state.state_manager import state_manager
@@ -1003,7 +1004,11 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return "🔄 收到链接啦！小橘3号正在后台努力阅读和总结（大约需要1分钟）。完成后日志会自动保存到 dev_logs 文件夹里！"
 
     # === 📋 待办指令族（共享分发：QQ 与控制台同一门禁，见 handle_todo_command） ===
-    todo_reply = handle_todo_command(raw_message, message, user_id, group_id)
+    # #227 批 0：分派层迁入 content_handler（领域样板，v2 领域拆分版）；
+    # 本体 handle_todo_command 仍在 main（搬家=后续批，逐块黄金 diff）
+    todo_reply = content_handler.handle_todo(
+        raw_message, message, user_id, group_id,
+        todo_cb=handle_todo_command)
     if todo_reply is not None:
         return todo_reply
 
