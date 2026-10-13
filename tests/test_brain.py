@@ -691,7 +691,7 @@ class SmartAskToolTests(unittest.TestCase):
             result,
             (f"<think>{brain._tool_thinking_placeholder('list_files')}</think>已经帮你弄好了",
              "🏠 本地 (工具)"))
-        mexec.assert_called_once_with("list_files", {}, brain.permission_manager)
+        mexec.assert_called_once_with("list_files", {}, brain.permission_manager, credentials=mock.ANY)
         mcloud.assert_not_called()               # 本地汇总成功，不惊动云端
 
         # 工具结果以 system 角色喂回（发给本地模型的第二轮），且要求不再输出 JSON
@@ -764,7 +764,7 @@ class SmartAskToolTests(unittest.TestCase):
         raw = '好的，我来看看！{"tool": "list_files", "args": {}} 马上就好'
         result, mexec, _, _ = _run_tool_flow(raw)
         self.assertEqual(result[1], "🏠 本地 (工具)")
-        mexec.assert_called_once_with("list_files", {}, brain.permission_manager)
+        mexec.assert_called_once_with("list_files", {}, brain.permission_manager, credentials=mock.ANY)
 
     def test_tool_json_multiline(self):
         raw = ('好的，马上为你操作：\n{\n  "tool": "control_ha_device",\n'
@@ -774,7 +774,7 @@ class SmartAskToolTests(unittest.TestCase):
         mexec.assert_called_once_with(
             "control_ha_device",
             {"entity_id": "light.room", "action": "turn_on"},
-            brain.permission_manager)
+            brain.permission_manager, credentials=mock.ANY)
 
     def test_invalid_json_treated_as_plain_reply(self):
         raw = '{"tool": list_files}'  # 非 JSON（值没加引号）
@@ -913,7 +913,7 @@ class ThinkWrapTests(unittest.TestCase):
         mexec.assert_called_once_with(
             "control_ha_device",
             {"entity_id": "light.room", "action": "turn_on"},
-            brain.permission_manager)
+            brain.permission_manager, credentials=mock.ANY)
 
     def test_wlan_tap_scenario_wraps_captured_cot(self):
         # 用户实测场景："帮我点击手机屏幕上的WLAN"：模型按 [思考] → [计划] →
@@ -933,7 +933,8 @@ class ThinkWrapTests(unittest.TestCase):
             reply.startswith(f"<think>{brain._capture_thinking(raw)}</think>"), reply)
         self.assertTrue(reply.endswith("好的，已经帮你点开WLAN设置页面了。"))
         mexec.assert_called_once_with("ui_tap_element", {"text": "WLAN"},
-                                      brain.permission_manager)
+                                      brain.permission_manager,
+                                      credentials=mock.ANY)
 
     def test_execute_tool_exception_still_wrapped_and_cut(self):
         # 🛡️ 漏包装分支补齐：[CoT] 日志打印后 execute_tool 抛异常（依赖缺失/
@@ -1000,7 +1001,7 @@ class ThinkWrapTests(unittest.TestCase):
             result,
             ("<think>[思考] 准备调用 list_files 尝试完成操作。</think>已经帮你弄好了",
              "🏠 本地 (工具)"))
-        mexec.assert_called_once_with("list_files", {}, brain.permission_manager)
+        mexec.assert_called_once_with("list_files", {}, brain.permission_manager, credentials=mock.ANY)
 
     def test_tool_flow_dynamic_placeholder_names_tap_tool(self):
         # 用户口径：ui_tap_element 等点击工具在占位符里也要点名（无 CoT 时）
@@ -1011,7 +1012,8 @@ class ThinkWrapTests(unittest.TestCase):
             ("<think>[思考] 准备调用 ui_tap_element 尝试完成操作。</think>已经帮你弄好了",
              "🏠 本地 (工具)"))
         mexec.assert_called_once_with(
-            "ui_tap_element", {"element_name": "设置"}, brain.permission_manager)
+            "ui_tap_element", {"element_name": "设置"}, brain.permission_manager,
+            credentials=mock.ANY)
 
     def test_workspace_listing_scenario_wraps_placeholder(self):
         # 用户实测场景："帮我看看工作区有什么文件"（本地 Ollama 不在线 → 云端，
@@ -1032,7 +1034,7 @@ class ThinkWrapTests(unittest.TestCase):
             reply.startswith("<think>[思考] 准备调用 list_files 尝试完成操作。</think>"),
             reply)
         self.assertTrue(reply.endswith("主人，工作区里有 a.txt 和 b.txt"))
-        mexec.assert_called_once_with("list_files", {}, brain.permission_manager)
+        mexec.assert_called_once_with("list_files", {}, brain.permission_manager, credentials=mock.ANY)
 
     def test_cot_terminal_logs_placeholder_and_native(self):
         # [CoT] 终端日志契约（redirect_stdout 捕获）：
@@ -1101,7 +1103,8 @@ class ThinkWrapTests(unittest.TestCase):
                '[行动] {"tool": "read_file", "args": {"filename": "a.json"}}')
         result, mexec, _, _ = _run_tool_flow(raw, tool_result="文件内容...")
         mexec.assert_called_once_with("read_file", {"filename": "a.json"},
-                                      brain.permission_manager)
+                                      brain.permission_manager,
+                                      credentials=mock.ANY)
         self.assertEqual(
             result,
             ("<think>[思考] 先看\n[计划] 1. 读文件</think>已经帮你弄好了",
@@ -1330,7 +1333,7 @@ class ThinkWrapTests(unittest.TestCase):
         mexec.assert_called_once_with(
             "control_ha_device",
             {"entity_id": "light.room", "action": "turn_on"},
-            brain.permission_manager)
+            brain.permission_manager, credentials=mock.ANY)
 
     def test_model_stray_open_tag_in_cot_reply_stays_paired(self):
         # 模型首轮 CoT 自带 <think> 字面量（嵌套风险）→ 同样剥除后成对
