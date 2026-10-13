@@ -56,8 +56,9 @@ import time
 import requests
 
 import brain
-import content_handler  # 领域 handler（#227 批 0 首领域：待办族分派层）
+import content_handler  # 领域 handler（#227 批 0：content 域三件）
 import home_tools
+import system_handler  # 领域 handler（#227 批 0：system 域四件）
 import paths  # 双根路径锚（方案 §1）：creator.json 等用户数据锚定数据根
 from agent_state.state_manager import state_manager
 from auth_lv4 import root_warning
@@ -903,9 +904,9 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
                             "level": permission_manager.current_level}
 
     # === 📍 位置指令（/set_location /clear_location，QQ 与网页共用逻辑） ===
-    # 2026-10-02 隐私口径：位置存本地 agent_state/user_location.json（不写
-    # .env、不入库），网页端经 dashboard /api/chat 调同一 helper
-    location_reply = handle_location_command(command_text)
+    # #227 批 0：system 域四件分派迁入 system_handler（本体留 main/plugins）
+    location_reply = system_handler.handle_location(
+        command_text, location_cb=handle_location_command)
     if location_reply is not None:
         return location_reply
 
@@ -913,18 +914,22 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     # 2026-10-02 修复：QQ 群 @ 消息清洗后残留 "CQ:at,qq=xxx" 前缀，
     # 清洗文本精确匹配失效（实测落模型瞎编）——改用去 CQ 码后的
     # raw_message 精确匹配，群内 @/creator 与私聊 /creator 均命中
-    if command_text == "/creator":
-        return handle_creator_command()
+    creator_reply = system_handler.handle_creator(
+        command_text, creator_cb=handle_creator_command)
+    if creator_reply is not None:
+        return creator_reply
 
     # === 🔒 儿童锁裁决（/approve /deny，QQ 与网页共用，批次②） ===
-    child_reply = handle_child_command(command_text, user_key)
+    child_reply = system_handler.handle_child(
+        command_text, user_key, child_cb=handle_child_command)
     if child_reply is not None:
         return child_reply
 
     # === 🛡️ 指令菜单 ===
-    if command_text.lower() in ["/help", "help", "菜单", "帮助", "指令"]:   # B2c 后补：裸 help/大小写不敏感（幻觉回执实证）
-        from plugins.help_menu import get_help_menu
-        return get_help_menu(permission_manager.current_level)
+    help_reply = system_handler.handle_help(
+        command_text, level_str_cb=lambda: permission_manager.current_level)
+    if help_reply is not None:
+        return help_reply
 
     # === 🛡️ Lv.2 注册（§7：env 注册密码校验，等级落盘） ===
     if command_text.startswith("/register"):

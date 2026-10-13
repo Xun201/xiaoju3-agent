@@ -261,7 +261,9 @@ def test_help_intercept_case_insensitive():
     main_src = open("main.py", encoding="utf-8").read()
     assert 'user_msg.strip().lower() in ("/help", "help", "菜单", "帮助", "指令")' in dash
     assert 'text.lower() in ("/help", "help", "菜单", "帮助", "指令")' in dash
-    assert 'command_text.lower() in ["/help", "help", "菜单", "帮助", "指令"]' in main_src
+    # #227 批 0：help 拦截词表迁 system_handler.py（源码锚跟迁）
+    sys_src = open("system_handler.py", encoding="utf-8").read()
+    assert 'command_text.lower() in ["/help", "help", "菜单", "帮助", "指令"]' in sys_src
 
 
 if __name__ == "__main__":
