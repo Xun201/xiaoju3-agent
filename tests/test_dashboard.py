@@ -2899,9 +2899,16 @@ class ProactiveApiTests(unittest.TestCase):
 
     def test_recent_returns_recent_and_quota(self):
         import proactive
-        now = datetime(2026, 10, 13, 12, 0, 0)
+        # 动态 now（today_fire_count 按"今天"统计，固定时刻跨日即碎）+
+        # mock 掉深夜/冷却抑制（凌晨跑测试 quiet_hours 会拦 fire——
+        # 2026-10-14 00:3x 实锤两种时间脆弱叠加）
+        now = datetime.now()
         with mock.patch.object(proactive, "_collect_events",
-                               return_value=[("todo_stale", 0.9)]):
+                               return_value=[("todo_stale", 0.9)]), \
+                mock.patch.object(proactive, "in_quiet_hours",
+                                  return_value=False), \
+                mock.patch.object(proactive, "in_cooldown",
+                                  return_value=False):
             proactive.proactive_tick(now)
         r = self.client.get("/api/proactive/recent")
         data = r.get_json()["data"]

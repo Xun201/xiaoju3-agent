@@ -1691,8 +1691,6 @@
     // 竞态守卫（请求序号）丢弃慢响应，慢网不回写旧数据。
     const TERMINAL_HISTORY_URL = '/api/history?source=terminal';
     const TERMINAL_REFRESH_MS = 15000;
-    const tabConsoleBtn = document.getElementById('tab-console');
-    const tabTerminalBtn = document.getElementById('tab-terminal');
     // #264 B2d③ B 方案：tab 栏不再有「设置」按钮——入口=右上角⚙️齿轮/
     // 桌宠菜单「设置」，返回=设置页顶部「← 返回」（注册表 settings 条目
     // btn 恒 null，空值安全）
@@ -1855,18 +1853,21 @@
         if (def.enter) def.enter();
     }
 
-    if (tabTerminalBtn) {
-        tabTerminalBtn.addEventListener('click', function () { switchChatTab('terminal'); });
-    }
-    if (tabConsoleBtn) {
-        tabConsoleBtn.addEventListener('click', function () { switchChatTab('console'); });
-    }
+    // #UI修复（2026-10-13）：顶部 tab 栏取消——终端/设置经 🧰 面板进入；
+    // tabConsoleBtn/tabTerminalBtn 常量与绑定随之退役（settings 先例：
+    // btn 恒 null 空值安全，此处直接删——不留引用已删 DOM 的死代码）
     // #264 B2d③ 回归修复：旧 tab-settings 按钮绑定块随 B 方案删除——
     // const 已移除但此块曾残留，对已删变量的事实引用在运行时抛
     // ReferenceError 打断 IIFE 求值，其后所有绑定（⚙️齿轮/桥/关于/返回）
     // 全部失效（node --check 抓不到：语法合法、运行时才炸）。设置入口现只
     // 经齿轮/桌宠菜单。
     const terminalRefreshBtn = document.getElementById('terminal-refresh');
+    const terminalBackBtn = document.getElementById('terminal-back');
+    if (terminalBackBtn) {
+        terminalBackBtn.addEventListener('click', function () {
+            switchChatTab('console');   // #UI修复：tab 取消后的终端页返回回路
+        });
+    }
     if (terminalRefreshBtn) {
         terminalRefreshBtn.addEventListener('click', loadTerminalHistory);
     }
@@ -3251,6 +3252,14 @@
         return card;
     }
 
+    function closeToolsPanel() {
+        const overlay = document.getElementById('tools-overlay');
+        if (overlay) {
+            overlay.hidden = true;
+            overlay.textContent = '';
+        }
+    }
+
     function openToolsPanel() {
         const overlay = document.getElementById('tools-overlay');
         if (!overlay) return;
@@ -3265,10 +3274,7 @@
         const back = document.createElement('button');
         back.className = 'header-btn';
         back.textContent = '← 返回';
-        back.addEventListener('click', function () {
-            overlay.hidden = true;
-            overlay.textContent = '';
-        });
+        back.addEventListener('click', closeToolsPanel);
         top.appendChild(back);
         const title = document.createElement('div');
         title.style.cssText = 'font-size:18px;font-weight:700;';
@@ -3318,8 +3324,11 @@
         proBody.hidden = true;
         g1.appendChild(buildToolCard('记忆查看', '内容+权重/状态（批 2）',
             function () { showToast('批 2 上线（当前可看设置页相关项）'); }));
-        g1.appendChild(buildToolCard('终端记录', '从顶部页签迁入（批 2）',
-            function () { showToast('批 2 上线（暂用顶部「终端记录」页）'); }));
+        g1.appendChild(buildToolCard('终端记录', '终端通道聊天记录（只读）',
+            function () {
+                closeToolsPanel();
+                switchChatTab('terminal');
+            }));
 
         // 🏠 小橘能控制什么
         sectionLabel('🏠 小橘能控制什么');
@@ -3330,6 +3339,11 @@
         // 🔌 管理
         sectionLabel('🔌 管理');
         const g3 = grid();
+        g3.appendChild(buildToolCard('设置', '权限分级配置/界面偏好/密钥管理',
+            function () {
+                closeToolsPanel();
+                switchChatTab('settings');
+            }));
         g3.appendChild(buildToolCard('插件管理', '官方插件启停（Phase 2 / #312）',
             function () { showToast('Phase 2 上线'); }));
         note('面板骨架批 1：监控三类中「主动性监控」可用；其余卡片为占位。');

@@ -418,32 +418,26 @@ class TerminalTabTests(unittest.TestCase):
         return js[start:js.index("==================== 8.")]
 
     def test_tab_bar_markup(self):
-        """标签栏标记：对话窗口 / 终端记录两个标签位于聊天头部与记录区之间；
-        终端面板缺省隐藏（hidden 属性）；含刷新按钮与记录挂载点。"""
+        """终端页结构（#UI修复 2026-10-13：tab 栏退役——对话常显，终端经
+        🧰 面板进入；终端页自带 ← 返回回路；面板缺省隐藏；含刷新按钮与
+        记录挂载点。原标签栏断言随退役更新）。"""
         html = self.index_html
-        self.assertIn('<div class="chat-tabs">', html)
-        self.assertIn(
-            '<button id="tab-console" class="chat-tab active" type="button">对话窗口</button>',
-            html)
-        self.assertIn(
-            '<button id="tab-terminal" class="chat-tab" type="button">终端记录</button>',
-            html)
-        # 标签栏在聊天头部之后、聊天记录区之前
-        self.assertLess(html.index('class="chat-tabs"'),
-                        html.index('id="chat-history"'))
-        self.assertGreater(html.index('class="chat-tabs"'),
-                           html.index('class="chat-header"'))
+        self.assertNotIn('<div class="chat-tabs">', html)     # tab 栏已退役
+        self.assertNotIn('id="tab-console"', html)
+        self.assertNotIn('id="tab-terminal"', html)
+        self.assertIn('id="tools-entry"', html)               # 🧰 唯一入口
         # 终端面板缺省隐藏（hidden），由 console.js 切换显隐
         self.assertIn('<div class="terminal-pane" id="terminal-pane" hidden>', html)
         self.assertIn('id="terminal-history"', html)
         self.assertIn('id="terminal-refresh"', html)
+        self.assertIn('id="terminal-back"', html)             # 返回回路
 
     def test_tab_css_and_hidden_rule(self):
         """样式：全局 [hidden] 显隐兜底（display:flex 类会盖掉 hidden 属性）、
         标签激活态、禁用清空按钮、终端面板样式齐备。"""
         html = self.index_html
         self.assertIn("[hidden] { display: none !important; }", html)
-        self.assertIn(".chat-tab.active", html)
+        self.assertIn(".header-btn", html)
         self.assertIn(".header-btn:disabled", html)
         self.assertIn(".terminal-pane", html)
         self.assertIn(".terminal-history", html)
@@ -479,8 +473,9 @@ class TerminalTabTests(unittest.TestCase):
         section = self._tab_section()
         self.assertIn("function switchChatTab", section)
         self.assertIn("const CHAT_TABS = {", section)
-        self.assertIn("tabTerminalBtn.addEventListener('click'", section)
-        self.assertIn("switchChatTab('terminal')", section)
+        # #UI修复：tab 绑定退役——入口经 🧰 面板卡（closeToolsPanel+切换）
+        self.assertIn("closeToolsPanel()", self.console_js)
+        self.assertIn("switchChatTab('terminal')", self.console_js)
         self.assertIn("switchChatTab('console')", section)
         self.assertIn("show: function () { return [terminalPaneEl]; }", section)
         self.assertIn("hide: function () { return [chatHistoryPaneEl, settingsPaneEl]; }",

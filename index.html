@@ -141,13 +141,6 @@
         /* 终端记录入口（R3 后端 GET /api/history?source=terminal 的前端承接）：
            标签栏挂在聊天头部之下，切换右侧内容区；终端记录为只读展示
            （无输入框、清空按钮禁用、消息不带操作工具栏）。 */
-        .chat-tabs {
-            display: flex;
-            gap: 4px;
-            padding: 6px 20px 0;
-            background-color: var(--color-card);
-            border-bottom: 1px solid var(--color-border);
-        }
         .chat-tab {
             appearance: none;
             background: none;
@@ -695,16 +688,16 @@
         <!-- 聊天标签页：对话窗口 / 终端记录（切换逻辑在 console.js；终端
              记录只读）。设置页=#264 B2d③ 起无 tab 按钮——入口=右上角⚙️
              齿轮/桌宠右键菜单「设置」，返回=设置页顶部「← 返回」 -->
-        <div class="chat-tabs">
-            <button id="tab-console" class="chat-tab active" type="button">对话窗口</button>
-            <button id="tab-terminal" class="chat-tab" type="button">终端记录</button>
-        </div>
+        <!-- #UI修复（2026-10-13）：顶部 tab 栏取消——对话常显，终端/设置
+             经 🧰 小工具面板进入（终端页自带 ← 返回） -->
         <div class="chat-history" id="chat-history">
             <div class="message bot-message">你好！我是小橘3号，很高兴为你服务喵~</div>
         </div>
         <!-- 终端记录面板（只读）：GET /api/history?source=terminal，由 console.js 渲染 -->
         <div class="terminal-pane" id="terminal-pane" hidden>
             <div class="terminal-toolbar">
+                <!-- #UI修复：tab 栏取消后终端页经 🧰 面板进入，返回按钮补齐回路 -->
+                <button id="terminal-back" class="header-btn" type="button" title="返回对话">← 返回</button>
                 <span>终端对话记录（只读）· 运行 python xiaoju3.py 产生</span>
                 <button id="terminal-refresh" class="header-btn" type="button" title="刷新终端记录">⟳ 刷新</button>
             </div>
