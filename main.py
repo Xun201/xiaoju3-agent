@@ -60,7 +60,8 @@ import home_tools
 import paths  # 双根路径锚（方案 §1）：creator.json 等用户数据锚定数据根
 from agent_state.state_manager import state_manager
 from auth_lv4 import root_warning
-from brain import load_memory, reset_tool_fuse, save_memory, smart_ask
+from brain import (load_memory, reset_tool_fuse, save_memory, smart_ask,
+                   _memory_emotion_meta, _memory_v2_enabled)
 from emoji_manager import save_emoji_link
 from heartbeat import start_heartbeat
 from intent_router import dispatch, route
@@ -478,13 +479,27 @@ def handle_soul_command(command_text, raw_message):
 # ================= 大脑链路编排（架构 §10 #2/#3/#4） =================
 
 def _inject_long_term_memories(history):
-    """长期记忆注入（架构 §10 #3）：进入 smart_ask 前取最近 3 条长期记忆，
-    以"以下是关于用户的长期记忆"为中文前缀拼入系统上下文；空则不拼。"""
-    try:
-        memories = state_manager.get_recent_memories(3)
-    except Exception as e:
-        print(f"⚠️ 读取长期记忆失败: {e}")
-        memories = []
+    """长期记忆注入（架构 §10 #3）：进入 smart_ask 前取长期记忆——
+    V2 开=三乘子召回 recall_memories（查询=末条用户消息，#297 批 1）；
+    关/异常=最近 3 条旧通道。以"以下是关于用户的长期记忆"为中文前缀
+    拼入系统上下文；空则不拼。"""
+    rows = None
+    if _memory_v2_enabled():
+        try:
+            query = next((m.get("content", "") for m in reversed(history)
+                          if isinstance(m, dict)
+                          and m.get("role") == "user"), "")
+            rows = state_manager.recall_memories(query=query, limit=3)
+        except Exception as e:
+            print(f"⚠️ 记忆 V2 召回失败（回退旧通道）: {e}")
+            rows = None
+    if rows is None:
+        try:
+            rows = state_manager.get_recent_memories(3)
+        except Exception as e:
+            print(f"⚠️ 读取长期记忆失败: {e}")
+            rows = []
+    memories = rows or []
     if not memories:
         return history
     lines = "\n".join(f"· [{category}] {content}" for category, content in memories)
@@ -1077,7 +1092,10 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         memory_content = remember_match.group(1).strip()
         if memory_content:
             try:
-                state_manager.save_memory("user", memory_content)
+                tag, impact = _memory_emotion_meta(memory_content)
+                state_manager.save_memory("user", memory_content,
+                                          emotion_tag=tag,
+                                          emotional_impact=impact)
                 return f"好的，我记住了：{memory_content}（已存入长期记忆库）"
             except Exception as e:
                 return f"❌ 长期记忆保存失败：{e}"

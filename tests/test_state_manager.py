@@ -41,7 +41,12 @@ class StateManagerTest(unittest.TestCase):
         conn = sqlite3.connect(db_path)
         try:
             cols = [row[1] for row in conn.execute("PRAGMA table_info(memories)")]
-            self.assertEqual(cols, ["id", "category", "content", "timestamp"])
+            # #297 批 1：V2 schema 幂等补 7 列（weight/access_count/
+            # last_access/activation/emotion_tag/sink_status/emotional_impact）
+            self.assertEqual(cols, [
+                "id", "category", "content", "timestamp",
+                "weight", "access_count", "last_access", "activation",
+                "emotion_tag", "sink_status", "emotional_impact"])
         finally:
             conn.close()
 

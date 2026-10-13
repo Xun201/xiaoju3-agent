@@ -1513,6 +1513,39 @@ MEMORY_CONTEXT_LIMIT = 5
 MEMORY_CONTEXT_PREFIX = "以下是关于用户的长期记忆"
 
 
+def _memory_v2_enabled():
+    """#297 记忆 V2 总开关（XIAOJU3_MEMORY_V2）：缺省关（2026-10-13 拍板
+    ——真机 A/B 后手动开，MOOD_TONE 同款 .env 手动口径）。关=旧通道
+    逐字节 + 睡眠批处理不跑（批 2）。"""
+    return str(os.environ.get("XIAOJU3_MEMORY_V2", "0")).strip().lower() \
+        in ("1", "true", "on")
+
+
+def _memory_emotion_meta(sentence):
+    """记忆写入情绪元数据（#297 批 1）：tag=OCC 规则 type（复用
+    mood.match_event 纯查询零副作用，ASCII 稳定键）；impact=当前 PAD 相对
+    基线的最大维偏离（写入时刻情绪快照，0~1+）。tag/impact 独立兜底
+    （任一异常各回 None=save_memory 默认值 neutral/0.0），绝不影响写入
+    链。impact 口径一期为写入时快照，二期情绪段判定（design v2 §7）精化。"""
+    tag = None
+    impact = None
+    try:
+        import mood
+        rule, _label = mood.match_event(sentence)
+        tag = rule.get("type") if rule else None
+    except Exception:
+        tag = None
+    try:
+        import mood
+        s = mood.load_mood()
+        bp, ba, bd = s.get("baseline", (s["p"], s["a"], s["d"]))
+        impact = round(max(abs(s["p"] - bp), abs(s["a"] - ba),
+                           abs(s["d"] - bd)), 4)
+    except Exception:
+        impact = None
+    return tag, impact
+
+
 def _get_state_manager():
     """延迟获取状态外置层单例；模块缺席（ImportError 等）返回 None 不崩溃。"""
     try:
@@ -1548,7 +1581,9 @@ def _remember_user_facts(message):
     category = ("preference" if _MEMORY_PREFERENCE_RE.search(sentence)
                 else "event")
     try:
-        manager.save_memory(category, sentence)
+        tag, impact = _memory_emotion_meta(sentence)
+        manager.save_memory(category, sentence, emotion_tag=tag,
+                            emotional_impact=impact)
     except Exception as e:
         print(f"⚠️ 长期记忆保存失败（已静默跳过）: {e}")
 
@@ -1569,7 +1604,19 @@ def _inject_memory_context(messages, limit=MEMORY_CONTEXT_LIMIT):
     if manager is None:
         return messages
     try:
-        rows = manager.get_recent_memories(limit=limit) or []
+        rows = None
+        if _memory_v2_enabled():
+            # V2：三乘子召回（查询=末条用户消息）；任何异常回退旧通道
+            try:
+                query = next((m.get("content", "") for m in reversed(messages)
+                              if isinstance(m, dict)
+                              and m.get("role") == "user"), "")
+                rows = manager.recall_memories(query=query, limit=limit) or []
+            except Exception as e:
+                print(f"⚠️ 记忆 V2 召回失败（回退旧通道）: {e}")
+                rows = None
+        if rows is None:
+            rows = manager.get_recent_memories(limit=limit) or []
         lines = "\n".join(f"· [{category}] {content}"
                           for category, content in rows)
     except Exception as e:

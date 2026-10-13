@@ -352,3 +352,35 @@ def tone_suffix(state=None):
                 f"{tone}。{table.get('verdict', '')}")
     except Exception:
         return ""
+
+
+# ==================== #297 记忆 V2：mood_factor（2026-10-13 批 1） ====================
+
+# 主项目版因子表：键=mood_rules.json 的 type（ASCII 稳定键；label 中文
+# 短语不做 tag）。数值结构照 exp03 档位表，表驱动可调参不改码。
+# 拍板④：一期只用 P 维（_tier(p) 映射档位），二期评估综合 PAD。
+_MOOD_MEMORY_FACTORS = {
+    "happy":   {"praised": 1.5, "command": 1.0, "neutral": 1.0,
+                "user_apology": 0.8, "scolded": 0.6},
+    "anxious": {"scolded": 1.5, "user_apology": 1.3, "command": 1.0,
+                "neutral": 1.0, "praised": 0.5},
+    "calm":    {"praised": 1.1, "command": 1.0, "neutral": 1.0,
+                "user_apology": 1.0, "scolded": 0.9},
+}
+_TIER_MOOD_KEY = {"high": "happy", "mid": "calm", "low": "anxious"}
+
+
+def mood_factor_for(tag, state=None):
+    """#297 记忆 V2：emotion_tag → 召回因子（mood-congruent memory）。
+
+    P 维档位（_tier(p)：high→happy / low→anxious / mid→calm）→ 因子表；
+    开关关 / 读取异常 / 未知 tag 一律 1.0（中性旁路，绝不影响召回链）。
+    """
+    try:
+        if not enabled():
+            return 1.0
+        s = state or load_mood()
+        key = _TIER_MOOD_KEY.get(_tier(s["p"]))
+        return _MOOD_MEMORY_FACTORS.get(key, {}).get(tag or "neutral", 1.0)
+    except Exception:
+        return 1.0
