@@ -3070,9 +3070,69 @@
         user_busy: '主人忙碌', explicit_stop: '主人说了别烦',
     };
 
+    // ---- 审计三层视图（2026-10-13：不看流水，看"每天干了什么"）----
+    // 层 1 日汇总（默认）→ 层 2 当日区间（同分类合并）→ 层 3 原始行。
+    function classifyAudit(item) {
+        if (item.decision === 'fire') {
+            return { key: 'fire', icon: '🔥', label: '出手' };
+        }
+        const r = item.reason || '';
+        if (r.indexOf('quiet_hours') !== -1) {
+            return { key: 'quiet', icon: '💤', label: '深夜静默' };
+        }
+        if (r.indexOf('daily_quota') !== -1) {
+            return { key: 'quota', icon: '🚫', label: '配额拦截' };
+        }
+        if (r.indexOf('explicit_stop') !== -1) {
+            return { key: 'stop', icon: '🚫', label: '主人说了别烦' };
+        }
+        if (r.indexOf('rejected') !== -1) {
+            return { key: 'rej', icon: '🚫', label: '被拒后抑制' };
+        }
+        if (r.indexOf('cooldown') !== -1) {
+            return { key: 'cool', icon: '⏸', label: '冷却' };
+        }
+        if (r.indexOf('user_busy') !== -1) {
+            return { key: 'busy', icon: '⏸', label: '主人忙碌' };
+        }
+        return { key: 'hold', icon: '🟡', label: '按住' };
+    }
+
+    function groupAuditByDay(itemsAsc) {
+        // ASC 时序 → [{date, items}]（保持 ASC，渲染层再倒序天）
+        const days = [];
+        itemsAsc.forEach(function (it) {
+            const day = (it.ts || '').slice(0, 10);
+            if (!days.length || days[days.length - 1].date !== day) {
+                days.push({ date: day, items: [] });
+            }
+            days[days.length - 1].items.push(it);
+        });
+        return days;
+    }
+
+    function mergeAuditRuns(itemsAsc) {
+        // 同分类连续 → 区间 {cls, start, end, count}
+        const runs = [];
+        itemsAsc.forEach(function (it) {
+            const cls = classifyAudit(it);
+            const last = runs[runs.length - 1];
+            if (last && last.cls.key === cls.key) {
+                last.end = it.ts;
+                last.count += 1;
+                last.items.push(it);
+            } else {
+                runs.push({ cls: cls, start: it.ts, end: it.ts,
+                            count: 1, items: [it] });
+            }
+        });
+        return runs;
+    }
+
     function renderProactiveInto(bodyEl) {
-        // 面板版主动性监控渲染：摘要行+完整审计列表（复用旧逻辑，容器参数化）
-        fetch('/api/proactive/recent').then(function (r) { return r.json(); })
+        // 面板版主动性监控：三层视图（limit=2000 跨天聚合）
+        fetch('/api/proactive/recent?limit=2000')
+            .then(function (r) { return r.json(); })
             .then(function (j) {
                 const d = (j && j.data) || {};
                 bodyEl.textContent = '';
@@ -3089,7 +3149,7 @@
                 head.textContent = '今日出手 ' + (d.today_fire_count || 0) + '/' +
                     (d.daily_limit || 5) + ' · 当前张力 ' + (d.tension || 0);
                 bodyEl.appendChild(head);
-                // 频率调节（批 2 迁移保全：/api/proactive/config admin 门）
+                // 频率调节（迁移保全：/api/proactive/config admin 门）
                 const tuneRow = document.createElement('div');
                 tuneRow.style.cssText = 'display:flex;gap:6px;align-items:center;margin:4px 0 8px;';
                 const num = document.createElement('input');
@@ -3115,27 +3175,58 @@
                 });
                 tuneRow.appendChild(tuneBtn);
                 bodyEl.appendChild(tuneRow);
-                (d.recent || []).forEach(function (item) {
-                    const line = document.createElement('div');
-                    line.className = 'settings-empty';
-                    const fired = item.decision === 'fire';
-                    let reasonText = item.reason || '';
-                    Object.keys(PROACTIVE_REASON_LABELS).forEach(function (k) {
-                        if (reasonText.indexOf(k) !== -1) {
-                            reasonText = PROACTIVE_REASON_LABELS[k];
-                        }
+
+                // ---- 三层聚合（recent DESC → 反转 ASC 处理）----
+                const itemsAsc = (d.recent || []).slice().reverse();
+                const days = groupAuditByDay(itemsAsc).slice().reverse();
+                days.forEach(function (day) {
+                    const runs = mergeAuditRuns(day.items);
+                    const per = {};
+                    day.items.forEach(function (it) {
+                        const k = classifyAudit(it).key;
+                        per[k] = (per[k] || 0) + 1;
                     });
-                    line.textContent = (fired ? '🟢 ' : '⚪ ') + (item.ts || '') +
-                        ' ' + (fired ? '出手了' : '按住了') +
-                        (fired ? '' : '（' + reasonText + '）') +
-                        (item.events ? ' · 触发：' + item.events : '');
-                    const detail = document.createElement('details');
-                    const sum = document.createElement('summary');
-                    sum.textContent = '原始记录';
-                    detail.appendChild(sum);
-                    detail.appendChild(document.createTextNode(item.reason || ''));
-                    line.appendChild(detail);
-                    bodyEl.appendChild(line);
+                    const iconOrder = [['fire', '🔥', '出手'], ['hold', '🟡', '按住'],
+                                       ['quiet', '💤', '深夜'], ['cool', '⏸', '冷却'],
+                                       ['quota', '🚫', '配额'], ['rej', '🚫', '被拒'],
+                                       ['stop', '🚫', '别烦'], ['busy', '⏸', '忙碌']];
+                    const parts = iconOrder
+                        .filter(function (p) { return per[p[0]]; })
+                        .map(function (p) { return p[1] + ' ' + p[2] + ' ' + per[p[0]] + ' 次'; });
+                    const dayDetail = document.createElement('details');
+                    dayDetail.style.cssText = 'margin:4px 0;border:1px solid '
+                        + 'var(--color-border,#e0e4ec);border-radius:8px;padding:6px 8px;';
+                    const daySum = document.createElement('summary');
+                    daySum.style.cssText = 'cursor:pointer;font-size:13px;';
+                    daySum.textContent = '📅 ' + day.date + '　' + parts.join(' · ');
+                    dayDetail.appendChild(daySum);
+                    runs.forEach(function (run) {
+                        const st = (run.start || '').slice(11, 16);
+                        const en = (run.end || '').slice(11, 16);
+                        const mins = Math.round(
+                            (new Date(run.end.replace('T', ' ').replace('-', '/'))
+                             - new Date(run.start.replace('T', ' ').replace('-', '/'))) / 60000);
+                        const runDetail = document.createElement('details');
+                        runDetail.style.cssText = 'margin:3px 0 3px 12px;';
+                        const runSum = document.createElement('summary');
+                        runSum.style.cssText = 'cursor:pointer;font-size:12px;';
+                        runSum.textContent = run.cls.icon + ' ' + st + ' - ' + en +
+                            '　' + run.cls.label + (run.count > 1
+                            ? '（' + run.count + ' 条' +
+                              (mins > 0 ? ' / ' + mins + ' 分钟' : '') + '）' : '');
+                        runDetail.appendChild(runSum);
+                        run.items.forEach(function (it) {
+                            const raw = document.createElement('div');
+                            raw.style.cssText = 'font-size:11px;opacity:.75;'
+                                + 'margin:2px 0 2px 14px;';
+                            raw.textContent = (it.ts || '').slice(11) + ' · ' +
+                                (it.reason || '') +
+                                (it.events ? ' · ' + it.events : '');
+                            runDetail.appendChild(raw);
+                        });
+                        dayDetail.appendChild(runDetail);
+                    });
+                    bodyEl.appendChild(dayDetail);
                 });
             })
             .catch(function () { bodyEl.textContent = '审计读取失败'; });
