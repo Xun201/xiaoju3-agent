@@ -680,6 +680,7 @@
             <button id="sidebar-toggle" class="header-btn" title="监控面板">☰</button>
             <span class="header-title">小橘3号 · 控制台</span>
             <span class="header-actions">
+                <button id="tools-entry" class="header-btn" title="小工具面板">🧰</button>
                 <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
                 <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
                 <button id="auto-tts-toggle" class="header-btn" title="自动朗读开关（AI 回复自动播报，与音效独立）">🔇</button>
@@ -765,6 +766,10 @@
          最小化=桌宠缩球（球跟桌宠原位），控制台永不缩。
          2026-10-01 的下线注释档见 git 历史。 -->
     <script src="/console/desktop-pet.js"></script>
+    <div id="tools-overlay" hidden>
+        <!-- 小工具面板（MAA 式收纳）：内容由 console.js 动态构建；
+             覆盖主区域+左栏（全屏 overlay），返回按钮退出 -->
+    </div>
     <script src="/console/console.js"></script>
 </body>
 </html>

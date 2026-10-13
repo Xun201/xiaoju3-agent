@@ -1957,171 +1957,6 @@
     // 表——主题色=前端偏好（THEME_KEY），退出方式=js_api 读写 ui_pref.json。
     // 浏览器形态（无 pywebview）下退出方式禁用置灰。
 
-    // ==================== 主动性卡（#271③ Phase 1 批 2，2026-10-13） ====================
-    // 频率面板 A（真实现：N 存 proactive_meta，下一 tick 即生效零重启）+
-    // 面板 B 占位灰化（Phase 2 陪伴类事件源后激活）+「你刚才想说什么」
-    // 审计列表（#316 静默可解释）+ 防误导说明（内账期不发真消息）。
-    // POST 需 Lv.3+（后端权限门）；数据走 /api/proactive/* 双 API。
-    const PROACTIVE_REASON_LABELS = {
-        daily_quota: '今日次数已用完', cooldown: '刚聊过（冷却中）',
-        quiet_hours: '深夜时段', rejected: '刚被拒绝过',
-        user_busy: '主人忙碌', explicit_stop: '主人说了别烦',
-    };
-
-    function loadProactiveAudit() {
-        const box = document.getElementById('proactive-audit');
-        if (!box) return;
-        const summaryText = document.getElementById('proactive-summary-text');
-        fetch('/api/proactive/recent').then(function (r) { return r.json(); })
-            .then(function (j) {
-                const d = (j && j.data) || {};
-                if (!d.enabled) {
-                    if (summaryText) summaryText.textContent =
-                        '主动性引擎未启用';
-                    box.textContent = '主动性引擎未启用';
-                    return;
-                }
-                // 摘要行（折叠态也恒显）：最近一次状态+今日配额+张力
-                const lastItem = (d.recent || [])[0];
-                const lastFired = lastItem && lastItem.decision === 'fire';
-                const stateText = lastFired ? '刚出手' : '按住中';
-                if (summaryText) summaryText.textContent =
-                    stateText + ' · 今日出手 ' + (d.today_fire_count || 0) +
-                    '/' + (d.daily_limit || 5) + ' · 张力 ' +
-                    (d.tension || 0);
-                box.textContent = '';
-                const head = document.createElement('div');
-                head.className = 'settings-empty';
-                head.textContent = '今日出手 ' + (d.today_fire_count || 0) + '/' +
-                    (d.daily_limit || 5) + ' · 当前张力 ' + (d.tension || 0);
-                box.appendChild(head);
-                (d.recent || []).forEach(function (item) {
-                    const line = document.createElement('div');
-                    line.className = 'settings-empty';
-                    const fired = item.decision === 'fire';
-                    let reasonText = item.reason || '';
-                    Object.keys(PROACTIVE_REASON_LABELS).forEach(function (k) {
-                        if (reasonText.indexOf(k) !== -1) {
-                            reasonText = PROACTIVE_REASON_LABELS[k];
-                        }
-                    });
-                    line.textContent = (fired ? '🟢 ' : '⚪ ') + (item.ts || '') +
-                        ' ' + (fired ? '出手了' : '按住了') +
-                        (fired ? '' : '（' + reasonText + '）') +
-                        (item.events ? ' · 触发：' + item.events : '');
-                    const detail = document.createElement('details');
-                    const sum = document.createElement('summary');
-                    sum.textContent = '原始记录';
-                    detail.appendChild(sum);
-                    detail.appendChild(document.createTextNode(item.reason || ''));
-                    line.appendChild(detail);
-                    box.appendChild(line);
-                });
-            })
-            .catch(function () {
-                if (summaryText) summaryText.textContent = '审计读取失败';
-                box.textContent = '审计读取失败';
-            });
-    }
-
-    function appendProactiveSection() {
-        if (!settingsListEl) return;
-        const title = document.createElement('div');
-        title.className = 'settings-group-title';
-        title.textContent = '主动性（#271③）';
-        settingsListEl.appendChild(title);
-        // 防误导说明（#316 兄弟约束：可见且不误导——审计≠已发消息）
-        const note = document.createElement('div');
-        note.className = 'settings-empty';
-        note.textContent = '内账观察期：「出手」=仅写审计记录，暂不给主人发真消息。';
-        settingsListEl.appendChild(note);
-        // 面板 A：每天最多主动 N 次（1-50，后端再夹钳一道）
-        const field = document.createElement('label');
-        field.className = 'first-run-field settings-field';
-        const cap = document.createElement('span');
-        cap.textContent = '每天最多主动（次，1-50）';
-        field.appendChild(cap);
-        const num = document.createElement('input');
-        num.type = 'number';
-        num.min = '1'; num.max = '50';
-        num.className = 'settings-input';
-        num.id = 'proactive-limit';
-        field.appendChild(num);
-        settingsListEl.appendChild(field);
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'settings-input';
-        saveBtn.id = 'proactive-limit-save';
-        saveBtn.textContent = '保存频率';
-        saveBtn.addEventListener('click', function () {
-            fetch('/api/proactive/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ daily_limit: parseInt(num.value, 10) }),
-            }).then(function (r) {
-                return r.json().then(function (j) { return { ok: r.ok, j: j }; });
-            }).then(function (res) {
-                if (res.ok) {
-                    showToast('已保存，下一心跳生效（' + res.j.data.daily_limit + ' 次/天）');
-                    loadProactiveAudit();
-                } else {
-                    showToast(res.j.error || '保存失败');
-                }
-            }).catch(function () { showToast('保存失败'); });
-        });
-        settingsListEl.appendChild(saveBtn);
-        // 面板 B：占位灰化（Phase 2 陪伴类事件源实现后激活）
-        const bField = document.createElement('label');
-        bField.className = 'first-run-field settings-field';
-        bField.style.opacity = '0.5';
-        const bCap = document.createElement('span');
-        bCap.textContent = '提醒/陪伴分档（Phase 2 开放）';
-        bField.appendChild(bCap);
-        const bSel = document.createElement('select');
-        bSel.className = 'settings-input';
-        bSel.disabled = true;
-        const bOpt = document.createElement('option');
-        bOpt.textContent = '灰化占位';
-        bSel.appendChild(bOpt);
-        bField.appendChild(bSel);
-        settingsListEl.appendChild(bField);
-        // 审计列表（#UI修复 2026-10-13：默认折叠——摘要行恒显+箭头展开，
-        // 防 60s/条的审计刷屏；交互参考思考卡折叠先例）
-        const auditTitle = document.createElement('div');
-        auditTitle.className = 'settings-group-title';
-        auditTitle.textContent = '你刚才想说什么';
-        settingsListEl.appendChild(auditTitle);
-        const summaryRow = document.createElement('div');
-        summaryRow.id = 'proactive-summary';
-        summaryRow.style.cssText = 'display:flex;align-items:center;'
-            + 'justify-content:space-between;cursor:pointer;padding:6px 4px;'
-            + 'border-radius:6px;user-select:none;';
-        summaryRow.innerHTML = '<span id="proactive-summary-text">'
-            + '加载中…</span><span id="proactive-arrow" '
-            + 'style="transition:transform .2s;">▸</span>';
-        summaryRow.addEventListener('click', function () {
-            const box = document.getElementById('proactive-audit');
-            const arrow = document.getElementById('proactive-arrow');
-            const open = box && !box.hidden;
-            if (box) box.hidden = open;
-            if (arrow) {
-                arrow.textContent = open ? '▸' : '▾';
-                arrow.style.transform = open ? '' : 'rotate(0deg)';
-            }
-            if (!open) loadProactiveAudit();   // 展开时刷新
-        });
-        settingsListEl.appendChild(summaryRow);
-        const auditBox = document.createElement('div');
-        auditBox.id = 'proactive-audit';
-        auditBox.hidden = true;   // 默认折叠：只露摘要行
-        settingsListEl.appendChild(auditBox);
-        const refreshBtn = document.createElement('button');
-        refreshBtn.className = 'settings-input';
-        refreshBtn.id = 'proactive-audit-refresh';
-        refreshBtn.textContent = '刷新审计';
-        refreshBtn.addEventListener('click', loadProactiveAudit);
-        settingsListEl.appendChild(refreshBtn);
-        loadProactiveAudit();   // 摘要行恒需数据（折叠也显示状态）
-    }
 
     function appendUiPrefsSection() {
         if (!settingsListEl) return;
@@ -2202,7 +2037,6 @@
         }
         settingsListEl.innerHTML = '';
         appendUiPrefsSection();   // #264 B2d④ 静态本地组（与 API 组并列，始终渲染）
-        appendProactiveSection();   // #271③ Phase 1 批 2：主动性卡（静态组，始终渲染）
         if (!items.length) {
             appendSettingsTip('暂无可见设置项（当前等级或分档表限制）');
             applyDevSwitchRow();   // 开关行恢复（空列表路径）
@@ -2249,7 +2083,6 @@
                     if (aboutRow) aboutRow.remove();
                     settingsListEl.innerHTML = '';
                     appendUiPrefsSection();   // 静态组不依赖 API 成败
-                appendProactiveSection();   // #271③ Phase 1：主动性卡
                     applyDevSwitchRow();   // 开关行恢复（失败路径）
                     if (aboutRow) settingsListEl.appendChild(aboutRow);
                     appendSettingsTip('设置读取失败' +
@@ -2264,7 +2097,6 @@
                 if (aboutRow) aboutRow.remove();
                 settingsListEl.innerHTML = '';
                 appendUiPrefsSection();   // 静态组不依赖 API 成败
-                appendProactiveSection();   // #271③ Phase 1：主动性卡
                 applyDevSwitchRow();   // 开关行恢复（catch 路径）
                 if (aboutRow) settingsListEl.appendChild(aboutRow);
                 appendSettingsTip('设置读取失败: ' + err.message);
@@ -3227,3 +3059,193 @@
     };
 
 })();
+
+    // ==================== 小工具面板（MAA 式收纳，2026-10-13 批 1） ====================
+    // 顶部 🧰 → 全屏 overlay 卡片墙（三分类）；主动性监控卡=首批实装
+    // （从设置页迁入：折叠摘要+展开审计列表，跃迁日志后端复用）。
+    // 终端记录/记忆查看/家电列表=批 2；插件管理=批 3（#312）。
+    const PROACTIVE_REASON_LABELS = {
+        daily_quota: '今日次数已用完', cooldown: '刚聊过（冷却中）',
+        quiet_hours: '深夜时段', rejected: '刚被拒绝过',
+        user_busy: '主人忙碌', explicit_stop: '主人说了别烦',
+    };
+
+    function renderProactiveInto(bodyEl) {
+        // 面板版主动性监控渲染：摘要行+完整审计列表（复用旧逻辑，容器参数化）
+        fetch('/api/proactive/recent').then(function (r) { return r.json(); })
+            .then(function (j) {
+                const d = (j && j.data) || {};
+                bodyEl.textContent = '';
+                if (!d.enabled) {
+                    bodyEl.textContent = '主动性引擎未启用';
+                    return;
+                }
+                const noteEl = document.createElement('div');
+                noteEl.style.cssText = 'font-size:12px;opacity:.7;margin-bottom:6px;';
+                noteEl.textContent = '内账观察期：「出手」=仅写审计记录，暂不发真消息。';
+                bodyEl.appendChild(noteEl);
+                const head = document.createElement('div');
+                head.className = 'settings-empty';
+                head.textContent = '今日出手 ' + (d.today_fire_count || 0) + '/' +
+                    (d.daily_limit || 5) + ' · 当前张力 ' + (d.tension || 0);
+                bodyEl.appendChild(head);
+                // 频率调节（批 2 迁移保全：/api/proactive/config admin 门）
+                const tuneRow = document.createElement('div');
+                tuneRow.style.cssText = 'display:flex;gap:6px;align-items:center;margin:4px 0 8px;';
+                const num = document.createElement('input');
+                num.type = 'number'; num.min = '1'; num.max = '50';
+                num.value = d.daily_limit || 5;
+                num.style.cssText = 'width:70px;';
+                tuneRow.appendChild(num);
+                const tuneBtn = document.createElement('button');
+                tuneBtn.textContent = '保存每天最多主动次数';
+                tuneBtn.style.cssText = 'font-size:12px;cursor:pointer;';
+                tuneBtn.addEventListener('click', function () {
+                    fetch('/api/proactive/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ daily_limit: parseInt(num.value, 10) }),
+                    }).then(function (r) {
+                        return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+                    }).then(function (res) {
+                        showToast(res.ok ? ('已保存（' + res.j.data.daily_limit + ' 次/天）')
+                                          : (res.j.error || '保存失败'));
+                        renderProactiveInto(bodyEl);
+                    }).catch(function () { showToast('保存失败'); });
+                });
+                tuneRow.appendChild(tuneBtn);
+                bodyEl.appendChild(tuneRow);
+                (d.recent || []).forEach(function (item) {
+                    const line = document.createElement('div');
+                    line.className = 'settings-empty';
+                    const fired = item.decision === 'fire';
+                    let reasonText = item.reason || '';
+                    Object.keys(PROACTIVE_REASON_LABELS).forEach(function (k) {
+                        if (reasonText.indexOf(k) !== -1) {
+                            reasonText = PROACTIVE_REASON_LABELS[k];
+                        }
+                    });
+                    line.textContent = (fired ? '🟢 ' : '⚪ ') + (item.ts || '') +
+                        ' ' + (fired ? '出手了' : '按住了') +
+                        (fired ? '' : '（' + reasonText + '）') +
+                        (item.events ? ' · 触发：' + item.events : '');
+                    const detail = document.createElement('details');
+                    const sum = document.createElement('summary');
+                    sum.textContent = '原始记录';
+                    detail.appendChild(sum);
+                    detail.appendChild(document.createTextNode(item.reason || ''));
+                    line.appendChild(detail);
+                    bodyEl.appendChild(line);
+                });
+            })
+            .catch(function () { bodyEl.textContent = '审计读取失败'; });
+    }
+
+    function buildToolCard(title, hint, onClick) {
+        const card = document.createElement('div');
+        card.className = 'tool-card';
+        card.style.cssText = 'background:var(--color-card,#fff);'
+            + 'border:1px solid var(--color-border,#e0e4ec);'
+            + 'border-radius:var(--radius-card,12px);padding:14px 16px;'
+            + 'cursor:pointer;box-shadow:var(--shadow-card,0 2px 8px rgba(0,0,0,.06));';
+        card.addEventListener('click', onClick);
+        const t = document.createElement('div');
+        t.style.cssText = 'font-weight:700;font-size:14px;margin-bottom:4px;';
+        t.textContent = title;
+        card.appendChild(t);
+        const h = document.createElement('div');
+        h.style.cssText = 'font-size:12px;opacity:.65;';
+        h.textContent = hint;
+        card.appendChild(h);
+        return card;
+    }
+
+    function openToolsPanel() {
+        const overlay = document.getElementById('tools-overlay');
+        if (!overlay) return;
+        overlay.hidden = false;
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147482000;'
+            + 'background:var(--color-bg,#f4f6f9);overflow-y:auto;padding:18px 22px;';
+        overlay.textContent = '';
+
+        const top = document.createElement('div');
+        top.style.cssText = 'display:flex;align-items:center;gap:12px;'
+            + 'margin-bottom:16px;';
+        const back = document.createElement('button');
+        back.className = 'header-btn';
+        back.textContent = '← 返回';
+        back.addEventListener('click', function () {
+            overlay.hidden = true;
+            overlay.textContent = '';
+        });
+        top.appendChild(back);
+        const title = document.createElement('div');
+        title.style.cssText = 'font-size:18px;font-weight:700;';
+        title.textContent = '🧰 小工具面板';
+        top.appendChild(title);
+        overlay.appendChild(top);
+
+        function sectionLabel(text) {
+            const s = document.createElement('div');
+            s.style.cssText = 'font-weight:700;font-size:13px;opacity:.7;'
+                + 'margin:14px 0 8px;';
+            s.textContent = text;
+            overlay.appendChild(s);
+        }
+        function grid() {
+            const g = document.createElement('div');
+            g.style.cssText = 'display:grid;grid-template-columns:'
+                + 'repeat(auto-fill,minmax(220px,1fr));gap:12px;';
+            overlay.appendChild(g);
+            return g;
+        }
+        function note(text) {
+            const n = document.createElement('div');
+            n.style.cssText = 'font-size:12px;opacity:.7;margin:8px 0 4px;';
+            n.textContent = text;
+            overlay.appendChild(n);
+            return n;
+        }
+
+        // 📊 小橘监控
+        sectionLabel('📊 小橘监控');
+        const g1 = grid();
+        const proBody = document.createElement('div');
+        proBody.style.cssText = 'margin:10px 0 20px;';
+        g1.appendChild(buildToolCard('主动性监控', '张力/配额/审计（跃迁日志）',
+            function () {
+                // 卡片点击=就地展开（二次点击收起）
+                if (proBody.hidden) {
+                    proBody.hidden = false;
+                    renderProactiveInto(proBody);
+                } else {
+                    proBody.hidden = true;
+                    proBody.textContent = '';
+                }
+            }));
+        overlay.appendChild(proBody);
+        proBody.hidden = true;
+        g1.appendChild(buildToolCard('记忆查看', '内容+权重/状态（批 2）',
+            function () { showToast('批 2 上线（当前可看设置页相关项）'); }));
+        g1.appendChild(buildToolCard('终端记录', '从顶部页签迁入（批 2）',
+            function () { showToast('批 2 上线（暂用顶部「终端记录」页）'); }));
+
+        // 🏠 小橘能控制什么
+        sectionLabel('🏠 小橘能控制什么');
+        const g2 = grid();
+        g2.appendChild(buildToolCard('家电列表', 'HA 实体清单+控制入口（批 2）',
+            function () { showToast('批 2 上线（暂用对话「帮我搜家电」）'); }));
+
+        // 🔌 管理
+        sectionLabel('🔌 管理');
+        const g3 = grid();
+        g3.appendChild(buildToolCard('插件管理', '官方插件启停（Phase 2 / #312）',
+            function () { showToast('Phase 2 上线'); }));
+        note('面板骨架批 1：监控三类中「主动性监控」可用；其余卡片为占位。');
+    }
+
+    // 🧰 入口绑定（header-actions 最前，齿轮/密钥同款 header-btn）
+    const toolsEntry = document.getElementById('tools-entry');
+    if (toolsEntry) {
+        toolsEntry.addEventListener('click', openToolsPanel);
+    }

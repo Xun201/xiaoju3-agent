@@ -1996,18 +1996,22 @@ class TestProactiveUiFoldAndFooterTap:
 
     def test_audit_fold_structure(self):
         js = self._js()
-        # 折叠三件：摘要行/箭头/默认 hidden
-        assert "proactive-summary" in js
-        assert "proactive-arrow" in js
-        assert "auditBox.hidden = true" in js
-        # 点击切换+展开时刷新
-        assert "loadProactiveAudit();" in js
-        # 摘要行恒显状态文本（折叠也能看到状态）
-        assert "stateText" in js
+        # 面板版（MAA 式收纳批 1）：设置页段已删，主动性监控迁面板
+        assert "renderProactiveInto" in js
+        assert "openToolsPanel" in js
+        assert "proBody.hidden" in js          # 卡片点击就地展开/收起
+        assert "appendProactiveSection" not in js   # 设置页段已迁出
+        assert "🧰 小工具面板" in js
+        # 三分类+占位卡
+        for kw in ("📊 小橘监控", "🏠 小橘能控制什么", "🔌 管理",
+                   "插件管理", "记忆查看", "家电列表"):
+            assert kw in js, kw
 
     def test_footer_version_tap_binding(self):
         js = self._js()
         html = self._html()
+        assert 'id="tools-entry"' in html          # 🧰 入口
+        assert 'id="tools-overlay"' in html        # 面板容器
         assert 'id="footer-version"' in html
         assert "footer-version" in js          # 填充+连点绑定
         assert "markFooterVersionUnlocked" in js   # 解锁变橙反馈
