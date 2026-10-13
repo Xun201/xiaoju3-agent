@@ -979,3 +979,18 @@ class SingleInstanceGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWebView2ArgsMinimizeWhiteFix:
+    """#最小化恢复白屏修复（2026-10-13）：四个防挂起参数齐活。
+    源码断言（不 import 模块——防桌面角色互斥体副作用，同文件先例）。"""
+
+    def test_args_contain_all_four_anti_suspend_flags(self):
+        src = open("desktop_launcher.py", encoding="utf-8").read()
+        assert "--disable-backgrounding-occluded-windows" in src
+        assert "--disable-renderer-backgrounding" in src
+        assert "--disable-background-timer-throttling" in src
+        # 最关键：原生遮挡计算 feature 禁用（最小化白屏 3-5s 根因）
+        assert "CalculateNativeWinOcclusion" in src
+        # setdefault 语义保持（env 可覆盖，追加不是替换用户值）
+        assert 'os.environ.setdefault(\n    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"' in src
