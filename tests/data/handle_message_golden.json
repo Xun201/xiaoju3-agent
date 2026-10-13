@@ -1,0 +1,181 @@
+{
+  "version": "2026-10-12 pre-batch1-golden",
+  "samples": [
+    {
+      "desc": "help_menu",
+      "raw_message": "/help",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_指令"
+    },
+    {
+      "desc": "help_alias",
+      "raw_message": "菜单",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_指令"
+    },
+    {
+      "desc": "help_en",
+      "raw_message": "HELP",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_指令"
+    },
+    {
+      "desc": "clear_memory",
+      "raw_message": "/clear",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_清空"
+    },
+    {
+      "desc": "reset_memory",
+      "raw_message": "重置记忆",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_清空"
+    },
+    {
+      "desc": "creator",
+      "raw_message": "/creator",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_小橘"
+    },
+    {
+      "desc": "register_no_pw",
+      "raw_message": "/register",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_注册"
+    },
+    {
+      "desc": "send_image_no_path",
+      "raw_message": "/send_image",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_路径"
+    },
+    {
+      "desc": "send_image_no_file",
+      "raw_message": "/send_image /nonexistent.png",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_不存在"
+    },
+    {
+      "desc": "location_set",
+      "raw_message": "/set_location 长沙市天心区",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_位置"
+    },
+    {
+      "desc": "location_clear",
+      "raw_message": "/clear_location",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_清除"
+    },
+    {
+      "desc": "soul_export",
+      "raw_message": "/soul_export",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_导出"
+    },
+    {
+      "desc": "approve",
+      "raw_message": "/approve 12345",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "any"
+    },
+    {
+      "desc": "deny",
+      "raw_message": "/deny 12345",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "any"
+    },
+    {
+      "desc": "remember",
+      "raw_message": "记住我爱吃火锅",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_记住"
+    },
+    {
+      "desc": "share_link",
+      "raw_message": "https://chat.deepseek.com/share/abc123",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_待办"
+    },
+    {
+      "desc": "plain_chat",
+      "raw_message": "今天天气怎么样",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "any"
+    },
+    {
+      "desc": "group_at_chat",
+      "raw_message": "[CQ:at,qq=10000] 你好",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": 456,
+      "assert_type": "any"
+    },
+    {
+      "desc": "empty_msg",
+      "raw_message": "",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "equals_空消息"
+    },
+    {
+      "desc": "cjk_only_punct",
+      "raw_message": "。。。",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "equals_空消息"
+    },
+    {
+      "desc": "send_image_lv_denied",
+      "raw_message": "/send_image F:\\x.png",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_权限"
+    },
+    {
+      "desc": "send_image_console_denied",
+      "raw_message": "/send_image C:\\pic.png",
+      "source": "web",
+      "user_id": "admin",
+      "group_id": null,
+      "assert_type": "contains_权限"
+    }
+  ]
+}

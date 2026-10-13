@@ -1013,20 +1013,14 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         return todo_reply
 
     # === 🛡️ 发送图片指令（2026-10-02 权限重构：LV4 主人级专属） ===
-    if command_text.startswith("/send_image"):
-        if permission_manager.level_value() < 4:
-            return "❌ 权限不足，发图需要 Lv.4（主人级）权限。请先 /lv4_auth confirm <6位动态密码> 授权。"
-        # 从清洗前原文提取路径（清洗会剥掉盘符冒号与扩展名里的点）
-        img_path = raw_message.split("/send_image", 1)[-1].strip()
-        if not img_path:
-            return "❌ 请提供图片路径，格式：/send_image <图片路径>"
-        if not os.path.exists(img_path):
-            return f"❌ 图片不存在：{img_path}"
-        if not _is_in_workspace(img_path):
-            return "❌ 只能发送项目工作区内的图片。"
-
-        # CQ 码发图：随回复链路交回 OneBot 实现端解析发送
-        return f"[CQ:image,file=file://{img_path}]"
+    # #227 批 0 续：分派逻辑迁入 content_handler.send_image（领域第二件，
+    # Lv.4 门+存在性+workspace 校验+CQ 拼装随行；回调注入零 import main）
+    send_reply = content_handler.send_image(
+        command_text, raw_message,
+        level_value_cb=permission_manager.level_value,
+        is_in_workspace_cb=_is_in_workspace)
+    if send_reply is not None:
+        return send_reply
 
     # === 💾 灵魂备份（/soul_export Lv.3+ / /soul_import Lv.4，设备自动迁移最小版） ===
     soul_reply = handle_soul_command(command_text, raw_message)
