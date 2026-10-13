@@ -48,11 +48,13 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import threading
 import sys
 import subprocess
 import time
 
+import auth_lv4
 import win_process
 import tool_registry
 from xiaoju3 import WORKSPACE, AGENT_STATE_DIR, VISION_MODEL, VISION_KEY
@@ -313,8 +315,16 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
 
     credentials 可选键：{"totp": 动态密码, "biometric": 生物认证凭据,
     "confirmed": 二次确认标记(True)}。
+
+    #297 注入缓解硬门（2026-10-13 拍板）：credentials 附加键
+    "memory_context"=True（本轮上下文含 <memory_data> 围栏，brain 调用
+    点经 _memory_fence_active 注入）时，write_file 覆盖已有文件需
+    credentials["user_message"] 携带有效 TOTP 码——授权信号只认用户
+    设备生成的动态码（注入者不可伪造），不认上下文文本（可伪造）。
     """
     credentials = credentials or {}
+    memory_context = bool(credentials.get("memory_context"))
+    user_message = credentials.get("user_message")
     try:
         # ---- Lv.2 门槛：read_file / list_files（§7 新口径） ----
         # 等级数值门禁（level >= 2 即通过），不受权限表能力键覆盖度影响。
@@ -388,6 +398,23 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
             filepath = os.path.join(WORKSPACE, args["filename"])
             if not _is_in_workspace(filepath):
                 return _DENY_OUTSIDE
+            # ==== 注入缓解硬门（#297，2026-10-13 拍板）：覆盖写 × 记忆上下文 ====
+            # 危害链：记忆/外部数据里的注入文本诱导模型覆盖用户已有文件
+            # ——等级门是持久等级（Lv.3+ 常开）对此无效。新建文件不拦
+            # （误伤面控制），仅覆盖已存在文件时要求 TOTP。
+            if memory_context and os.path.exists(filepath):
+                secret = os.environ.get("XIAOJU3_TOTP_SECRET", "")
+                ok = False
+                for code in _extract_totp_candidates(user_message):
+                    if secret and auth_lv4.verify_totp(secret, code):
+                        ok = True
+                        break
+                if not ok:
+                    _audit_tool_gate(tool_name, args, "totp_required")
+                    return ("🔐 安全门：本轮对话包含记忆/外部数据，覆盖已有"
+                            "文件需要主人 TOTP 确认——请在消息中附带 2FAS "
+                            "当前 6 位动态码后重试（新建文件不受限）。")
+                _audit_tool_gate(tool_name, args, "totp_pass")
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
             if os.path.exists(filepath):
                 # R2 覆盖保护（2026-10-08 挂机批，安全侦察报告项 2）：覆盖
@@ -550,3 +577,33 @@ def execute_tool(tool_name, args, permission_manager, credentials=None):
         return "未知工具"
     except Exception as e:
         return f"工具执行失败: {e}"
+
+
+# ==================== 注入缓解硬门辅助（#297，2026-10-13） ====================
+
+def _extract_totp_candidates(user_message):
+    """用户消息中的 6 位数字候选码（逐个交 verify_totp 校验——时钟
+    偏移容错由 verify 内建）。非字符串/无候选返回空列表。"""
+    if not user_message:
+        return []
+    return re.findall(r"(?<!\d)\d{6}(?!\d)", str(user_message))
+
+
+def _audit_tool_gate(tool_name, args, verdict):
+    """工具硬门审计（settings_log 同表，只记参数键名不记值——静默）。"""
+    try:
+        conn = sqlite3.connect(os.path.join(AGENT_STATE_DIR, "trace.db"))
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings_log ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,"
+            " actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT)")
+        conn.execute(
+            "INSERT INTO settings_log (ts, actor, action, detail)"
+            " VALUES (?, ?, ?, ?)",
+            (time.strftime("%Y-%m-%d %H:%M:%S"), "tool_gate",
+             verdict + ":" + tool_name,
+             str(sorted((args or {}).keys()))))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass

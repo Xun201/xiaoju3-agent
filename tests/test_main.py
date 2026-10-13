@@ -975,8 +975,11 @@ class TestMemoryAndCompression(_MainCase):
             main.handle_message('web', 'admin', None, "今天穿什么好")
         mem_mock.assert_called_once_with(3)
         args, _ = self.smart_ask.call_args
+        # #297 后过滤器用精确前缀（消费方 brain/main 的去重守卫同判据）——
+        # SYSTEM_PROMPT 防注入铁律也含"长期记忆"字样，泛词过滤会误计
         blocks = [m for m in args[1]
-                  if m.get("role") == "system" and "长期记忆" in (m.get("content") or "")]
+                  if m.get("role") == "system"
+                  and (m.get("content") or "").startswith("以下是关于用户的长期记忆")]
         self.assertEqual(len(blocks), 1)
         self.assertIn("以下是关于用户的长期记忆", blocks[0]["content"])
         self.assertIn("用户喜欢蓝色", blocks[0]["content"])
