@@ -1931,3 +1931,52 @@ class TestContentHandlerSoul(unittest.TestCase):
             "/soul_export", "/soul_export", soul_cb=fake_soul)
         self.assertEqual(out, "🧠 灵魂备份完成")
         self.assertEqual(seen["args"], ("/soul_export", "/soul_export"))
+
+
+class TestSystemHandler(unittest.TestCase):
+    """system 域四件分派（location/creator/child 转发+help 匹配）。"""
+
+    def test_location_forwards(self):
+        import system_handler
+        seen = {}
+
+        def fake_location(text):
+            seen["t"] = text
+            return None   # 非位置指令返回 None
+
+        out = system_handler.handle_location(
+            "/set_location 北京", location_cb=fake_location)
+        self.assertIsNone(out)
+        self.assertEqual(seen["t"], "/set_location 北京")
+
+    def test_creator_match_and_miss(self):
+        import system_handler
+        called = []
+        out = system_handler.handle_creator(
+            "/creator", creator_cb=lambda: called.append(1) or "署名文案")
+        self.assertEqual(out, "署名文案")
+        self.assertIsNone(system_handler.handle_creator(
+            "/todo", creator_cb=lambda: called.append(2) or "x"))
+        self.assertEqual(len(called), 1)   # 非领域不触发 cb
+
+    def test_child_forwards_with_user_key(self):
+        import system_handler
+        seen = {}
+
+        def fake_child(text, key):
+            seen["args"] = (text, key)
+            return "🔒 已拒绝"
+
+        out = system_handler.handle_child(
+            "/deny", "u10001", child_cb=fake_child)
+        self.assertEqual(out, "🔒 已拒绝")
+        self.assertEqual(seen["args"], ("/deny", "u10001"))
+
+    def test_help_match_cn_and_case(self):
+        import system_handler
+        for text in ("/HELP", "菜单", "帮助", "指令", "/help"):
+            out = system_handler.handle_help(
+                text, level_str_cb=lambda: "Lv.1")
+            self.assertIsInstance(out, str)   # 菜单文本（真 get_help_menu）
+        self.assertIsNone(system_handler.handle_help(
+            "/todo", level_str_cb=lambda: "Lv.1"))

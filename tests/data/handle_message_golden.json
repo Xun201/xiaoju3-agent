@@ -192,6 +192,30 @@
       "user_id": "admin",
       "group_id": null,
       "assert_type": "contains_权限"
+    },
+    {
+      "desc": "creator_qq",
+      "raw_message": "/creator",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_署名"
+    },
+    {
+      "desc": "child_deny_qq",
+      "raw_message": "/deny",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_儿童"
+    },
+    {
+      "desc": "help_cn_alias",
+      "raw_message": "指令",
+      "source": "web",
+      "user_id": "admin",
+      "group_id": null,
+      "assert_type": "contains_指令"
     }
   ]
 }
