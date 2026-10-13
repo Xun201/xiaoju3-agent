@@ -83,8 +83,14 @@ def _totp_ok(code):
 def _audit(entry):
     """审计：只记 key 名+时间+档位，绝不记值。trace.db 独立表，静默。"""
     try:
-        base = os.environ.get("AGENT_STATE_DIR") or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "agent_state")
+        # #328 修复（2026-10-13，c6dc178 同款）：base 一律走
+        # xiaoju3.AGENT_STATE_DIR（frozen 路径铁律）——原 env 键读取在
+        # 生产 .env 未设该行时缺失，fallback __file__ 误落 _internal        # agent_state 只读部署区（审计恒失败，新车日志实锤）
+        try:
+            from xiaoju3 import AGENT_STATE_DIR as base
+        except ImportError:
+            base = os.environ.get("AGENT_STATE_DIR") or os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "agent_state")
         conn = sqlite3.connect(os.path.join(base, "trace.db"))
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings_log ("
