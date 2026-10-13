@@ -117,6 +117,12 @@ CREATE TABLE IF NOT EXISTS mood_log (
     p_after REAL NOT NULL, a_after REAL NOT NULL, d_after REAL NOT NULL,
     note TEXT
 );
+CREATE TABLE IF NOT EXISTS mood_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    p REAL NOT NULL, a REAL NOT NULL, d REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'heartbeat'
+);
 """
 
 
@@ -384,3 +390,47 @@ def mood_factor_for(tag, state=None):
         return _MOOD_MEMORY_FACTORS.get(key, {}).get(tag or "neutral", 1.0)
     except Exception:
         return 1.0
+
+
+# ==================== #297b 批 1：情绪快照补点（2026-10-13） ====================
+# 设计稿：_dev/eval_297b_emotional_phase2.md §1.3——mood_log 是交互驱动
+# 采样（用户不聊就没数据点），「一段持续低落」的起点/终点判定需要时序
+# 密度。心跳周期快照补点：15 分钟一行零位移纯快照（不触发记账/不改
+# mood_log），查表式节流（重启安全）。
+
+SNAPSHOT_MIN_INTERVAL_S = 900   # 15 分钟（96 行/天；SQLite 量级无忧）
+
+
+def heartbeat_snapshot(now=None, min_interval_s=SNAPSHOT_MIN_INTERVAL_S):
+    """情绪快照：当前 PAD 落 mood_snapshot 表（source='heartbeat'）。
+
+    - 查表式节流：距上次快照 <min_interval_s → None（上次时间在表里
+      不在内存——重启安全）；
+    - 零位移：只读 load_mood() 落库，绝不触发 observe/记账/回归；
+    - 任何异常静默返回 None（绝不影响心跳主链——mood 同款纪律）。
+    """
+    try:
+        now = now or _now()
+        conn = _connect()
+        try:
+            last = conn.execute(
+                "SELECT ts FROM mood_snapshot ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if last:
+                elapsed = (now - datetime.strptime(
+                    last[0], "%Y-%m-%d %H:%M:%S")).total_seconds()
+                if elapsed < min_interval_s:
+                    return None
+            s = load_mood()
+            ts = now.isoformat(sep=" ", timespec="seconds")
+            conn.execute(
+                "INSERT INTO mood_snapshot (ts, p, a, d, source)"
+                " VALUES (?, ?, ?, ?, 'heartbeat')",
+                (ts, s["p"], s["a"], s["d"]))
+            conn.commit()
+            return {"ts": ts, "p": s["p"], "a": s["a"], "d": s["d"],
+                    "source": "heartbeat"}
+        finally:
+            conn.close()
+    except Exception:
+        return None
