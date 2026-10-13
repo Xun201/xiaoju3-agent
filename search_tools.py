@@ -269,9 +269,15 @@ def web_search(query, max_results=5):
             # 🌦️ 天气类结果过滤（2026-10-02 用户口径）：白名单只留天气数据
             # 源特征结果，全被过滤 → 固定提示；普通搜索不过滤
             if _is_weather_query(query):
-                results = _filter_weather_results(results)
-                if not results:
+                filtered = _filter_weather_results(results)
+                if filtered:
+                    return _format_results(query, filtered)
+                # 天气白名单滤空 = 本引擎无有效天气数据，轮下一引擎
+                # （2026-10-13 实锤：bing 网页版天气查询返回百科/攻略
+                # 被滤空，原 return 短路导致 baidu/后续引擎永不参与）
+                if manual:
                     return NO_WEATHER_RESULT_MSG
+                continue
             return _format_results(query, results)
 
     if connected:  # 有引擎响应但全部零结果 → 保持既有"未搜到"口径
