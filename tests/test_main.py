@@ -1859,3 +1859,53 @@ class TestTodoCommands(_MainCase):
 if __name__ == "__main__":
 
     unittest.main()
+
+
+# ==================== #227 批 0 续：content_handler 领域锚 ====================
+
+class TestContentHandlerSendImage(unittest.TestCase):
+    """send_image 领域分派（Lv.4 门+存在性+workspace+CQ 拼装）。"""
+
+    def test_non_domain_returns_none(self):
+        import content_handler
+        self.assertIsNone(content_handler.send_image(
+            "/help", "/help", level_value_cb=lambda: 4,
+            is_in_workspace_cb=lambda p: True))
+
+    def test_lv4_denied(self):
+        import content_handler
+        out = content_handler.send_image(
+            "/send_image F:/x.png", "/send_image F:/x.png",
+            level_value_cb=lambda: 2, is_in_workspace_cb=lambda p: True)
+        self.assertIn("权限不足", out)
+
+    def test_empty_path(self):
+        import content_handler
+        out = content_handler.send_image(
+            "/send_image", "/send_image",
+            level_value_cb=lambda: 4, is_in_workspace_cb=lambda p: True)
+        self.assertIn("请提供图片路径", out)
+
+    def test_missing_file(self):
+        import content_handler
+        out = content_handler.send_image(
+            "/send_image F:\nope.png", "/send_image F:\nope.png",
+            level_value_cb=lambda: 4, is_in_workspace_cb=lambda p: True,
+            exists_cb=lambda p: False)
+        self.assertIn("图片不存在", out)
+
+    def test_outside_workspace(self):
+        import content_handler
+        out = content_handler.send_image(
+            "/send_image F:/x.png", "/send_image F:/x.png",
+            level_value_cb=lambda: 4, is_in_workspace_cb=lambda p: False,
+            exists_cb=lambda p: True)
+        self.assertIn("工作区", out)
+
+    def test_success_returns_cq(self):
+        import content_handler
+        out = content_handler.send_image(
+            "/send_image F:/x.png", "/send_image F:/x.png",
+            level_value_cb=lambda: 4, is_in_workspace_cb=lambda p: True,
+            exists_cb=lambda p: True)
+        self.assertEqual(out, "[CQ:image,file=file://F:/x.png]")
