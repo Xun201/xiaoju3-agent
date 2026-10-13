@@ -60,6 +60,7 @@ import sys
 import tempfile
 import time
 import types
+from datetime import datetime  # noqa: E402  (#271③ Phase 1 批 2 锚)
 import unittest
 import warnings
 from unittest import mock
@@ -1922,7 +1923,8 @@ class ThinkCardFrontendTests(unittest.TestCase):
         js_ids = set(re.findall(r"getElementById\('([^']+)'\)", self.console_js))
         self.assertTrue(js_ids, msg="console.js 未发现 getElementById 调用")
         dynamic_ids = {"xiaoju3-toast",
-                 "about-overlay", "dev-switch-row"}   # showToast/关于卡（#264 B2d）/开发者开关行（#264 B2c）首次调用时 createElement 自建
+                 "about-overlay", "dev-switch-row",
+                 "proactive-audit"}   # showToast/关于卡（#264 B2d）/开发者开关行（#264 B2c）/主动性审计框（#271③ Phase 1）首次调用时 createElement 自建
         missing = js_ids - dynamic_ids - html_ids
         self.assertEqual(missing, set(),
                          msg="console.js 引用了 index.html 不存在的 id: %s" % missing)
@@ -2856,3 +2858,97 @@ class ConnectingHintAnchorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# #271③ Phase 1 批 2：主动性 API（recent/config，design_271c_phase1.md §9 锚 8-11）
+# ---------------------------------------------------------------------------
+
+class ProactiveApiTests(unittest.TestCase):
+    """审计查询（GET 不设门）+ 配额写入（admin=Lv.3+ 门）；db 全程 tmp 隔离。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xiaoju3_proactive_api_")
+        self.db = os.path.join(self.tmp, "proactive.db")
+        self.client = dashboard.app.test_client()
+        self.env = mock.patch.dict(os.environ, {
+            "XIAOJU3_PROACTIVE_ENABLED": "1",
+            "XIAOJU3_PROACTIVE_DB_PATH": self.db,
+        })
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_recent_disabled_when_switch_off(self):
+        os.environ["XIAOJU3_PROACTIVE_ENABLED"] = "0"
+        try:
+            r = self.client.get("/api/proactive/recent")
+            self.assertEqual(r.status_code, 200)
+            self.assertFalse(r.get_json()["data"]["enabled"])
+        finally:
+            os.environ["XIAOJU3_PROACTIVE_ENABLED"] = "1"
+
+    def test_recent_returns_recent_and_quota(self):
+        import proactive
+        now = datetime(2026, 10, 13, 12, 0, 0)
+        with mock.patch.object(proactive, "_collect_events",
+                               return_value=[("todo_stale", 0.9)]):
+            proactive.proactive_tick(now)
+        r = self.client.get("/api/proactive/recent")
+        data = r.get_json()["data"]
+        self.assertTrue(data["enabled"])
+        self.assertGreaterEqual(len(data["recent"]), 1)
+        fired = [x for x in data["recent"] if x["decision"] == "fire"]
+        self.assertGreaterEqual(len(fired), 1)
+        self.assertEqual(fired[0]["events"], "todo_stale")   # 明细列可见
+        self.assertEqual(data["daily_limit"], 5)             # 缺省 5
+        self.assertGreaterEqual(data["today_fire_count"], 1)
+
+    def test_config_write_and_roundtrip(self):
+        # admin=Lv.3 上下文（真实测试环境档位低于 3，须 mock 过门）
+        with mock.patch.object(main.permission_manager, "level_value",
+                               return_value=3):
+            r = self.client.post("/api/proactive/config",
+                                 json={"daily_limit": 7})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["data"]["daily_limit"], 7)
+        # 面板改完即生效：GET 回读 7
+        r2 = self.client.get("/api/proactive/recent")
+        self.assertEqual(r2.get_json()["data"]["daily_limit"], 7)
+
+    def test_config_out_of_range_400(self):
+        with mock.patch.object(main.permission_manager, "level_value",
+                               return_value=3):
+            r = self.client.post("/api/proactive/config",
+                                 json={"daily_limit": 51})
+            self.assertEqual(r.status_code, 400)
+            r2 = self.client.post("/api/proactive/config",
+                                  json={"daily_limit": "abc"})
+            self.assertEqual(r2.status_code, 400)
+
+    def test_config_requires_admin_level(self):
+        # admin=Lv.3+ 门（拍板②）：Lv.2 → 403
+        with mock.patch.object(main.permission_manager, "level_value",
+                               return_value=2):
+            r = self.client.post("/api/proactive/config",
+                                 json={"daily_limit": 7})
+        self.assertEqual(r.status_code, 403)
+
+
+class ProactiveFrontendAnchorTests(unittest.TestCase):
+    """前端源码锚：主动性卡 DOM/双 API 调用/防误导说明/B 面板灰化。"""
+
+    def test_console_js_has_proactive_section(self):
+        path = os.path.join(PROJECT_ROOT, "console.js")
+        src = io.open(path, encoding="utf-8").read()
+        self.assertIn("appendProactiveSection", src)
+        self.assertIn("proactive-audit", src)
+        self.assertIn("proactive-limit", src)
+        self.assertIn("/api/proactive/recent", src)
+        self.assertIn("/api/proactive/config", src)
+        # 防误导说明（#316 兄弟约束：可见且不误导）
+        self.assertIn("暂不给主人发真消息", src)
+        # 面板 B 占位灰化
+        self.assertIn("Phase 2 开放", src)

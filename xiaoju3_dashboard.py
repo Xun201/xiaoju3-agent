@@ -751,6 +751,60 @@ def _balance_fallback(error):
     })
 
 
+# ==================== 主动性引擎 API（#271③ Phase 1 批 2，2026-10-13） ====================
+
+@app.route("/api/proactive/recent")
+def api_proactive_recent():
+    """「你刚才想说什么」审计查询（#316 落地，design_271c_phase1.md §3.1）。
+
+    只读不设门（GET 日常查看，拍板②）；引擎关/模块缺席 → enabled:false
+    （前端显「未启用」）。proactive.db 只读查询，异常 500 不崩。"""
+    try:
+        import proactive
+    except ImportError:
+        return jsonify({"code": 200, "data": {"enabled": False}})
+    if not proactive.proactive_enabled():
+        return jsonify({"code": 200, "data": {"enabled": False}})
+    try:
+        con = sqlite3.connect(proactive._db_path(), timeout=3.0)
+        rows = con.execute(
+            "SELECT ts, action, decision, reason, COALESCE(events, '')"
+            " FROM proactive_log ORDER BY id DESC LIMIT 50").fetchall()
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = {
+            "enabled": True,
+            "recent": [{"ts": r[0], "action": r[1], "decision": r[2],
+                        "reason": r[3], "events": r[4]} for r in rows],
+            "today_fire_count": proactive._today_fire_count(con, today),
+            "daily_limit": proactive._daily_limit(con),
+        }
+        con.close()
+        st = proactive._load_state(datetime.now())
+        data["tension"] = st["tension"]
+    except Exception as e:
+        return jsonify({"code": 500, "error": f"审计读取失败: {e}"}), 500
+    return jsonify({"code": 200, "data": data})
+
+
+@app.route("/api/proactive/config", methods=["POST"])
+def api_proactive_config():
+    """每日配额 N 写入（admin=Lv.3+ 门，拍板②；频率=行为性格级配置防
+    误改）。proactive_meta 存储，下一 tick 即生效零重启；越界 400。"""
+    if main.permission_manager.level_value() < 3:
+        return jsonify({"code": 403, "error": "权限不足：主动性频率调节"
+                        "需要 Lv.3（代码编写者）权限"}), 403
+    body = request.get_json(silent=True) or {}
+    try:
+        import proactive
+    except ImportError:
+        return jsonify({"code": 404, "error": "主动性引擎未安装"}), 404
+    n = proactive.set_daily_limit(body.get("daily_limit"))
+    if n is None:
+        return jsonify({"code": 400,
+                        "error": "daily_limit 须为 1-50 的整数"}), 400
+    return jsonify({"code": 200, "data": {"daily_limit": n}})
+
+
 @app.route("/api/balance")
 def api_balance():
     """DeepSeek 余额查询 API：{code, data:{balance, currency, today_usage, is_peak}}。"""
