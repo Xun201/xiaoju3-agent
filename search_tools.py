@@ -163,7 +163,80 @@ _ENGINES = {
     "baidu": _search_baidu,
     "serper": _search_serper,
     "tavily": _search_tavily,
+    "open_meteo": None,   # 占位：注册表声明顺序即文档；实现见下方函数定义后回填
 }
+
+
+# ---- Open-Meteo 免 key 天气源（#329 批 A，2026-10-13）----
+# 免费零注册：geocoding（城市名→经纬度）+ forecast（当前天气）双 API；
+# 仅天气类查询参与引擎链（web_search 里 _is_weather_query 命中时插链首），
+# 非天气查询零影响。输出包装成引擎标准 dict 形态（snippet 含温度/天况
+# 词，天然过天气白名单过滤）。
+_OPEN_METEO_GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
+_OPEN_METEO_FCST_URL = "https://api.open-meteo.com/v1/forecast"
+
+# WMO weathercode → 中文天况（常用集；未知码回退「天气」）
+_WMO_CODES = {
+    0: "晴", 1: "大致晴朗", 2: "多云", 3: "阴",
+    45: "雾", 48: "雾凇",
+    51: "毛毛雨", 53: "毛毛雨", 55: "毛毛雨",
+    61: "小雨", 63: "中雨", 65: "大雨",
+    66: "冻雨", 67: "冻雨",
+    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
+    80: "阵雨", 81: "阵雨", 82: "强阵雨",
+    85: "阵雪", 86: "阵雪",
+    95: "雷阵雨", 96: "雷阵雨伴冰雹", 99: "雷阵雨伴冰雹",
+}
+
+
+def _weather_city():
+    """天气查询的城市名：user_location.json（brain 位置链落盘）优先；
+    无位置返回 None（引擎返回空列表，链继续走通用引擎）。"""
+    try:
+        from agent_state.state_manager import get_user_location
+        loc = get_user_location()
+        city = (loc or {}).get("city", "").strip()
+        return city or None
+    except Exception:
+        return None
+
+
+def _search_open_meteo(query, max_results):
+    """Open-Meteo 当前天气：城市 → geocoding → forecast → 单条结果。
+
+    失败（网络/无位置/解析空）一律抛异常 → 引擎链统一 except 静默
+    试下一引擎。max_results 参数对齐引擎签名（本源恒返回 ≤1 条）。
+    """
+    city = _weather_city()
+    if not city:
+        raise RuntimeError("无位置信息（user_location.json 缺失），"
+                           "Open-Meteo 无法定位")
+    geo = requests.get(_OPEN_METEO_GEO_URL, params={
+        "name": city, "count": 5, "language": "zh", "format": "json"},
+        timeout=8).json()
+    candidates = geo.get("results") or []
+    pick = next((c for c in candidates if c.get("name") == city),
+                candidates[0] if candidates else None)
+    if not pick:
+        raise RuntimeError(f"geocoding 无结果: {city}")
+    lat, lon = pick["latitude"], pick["longitude"]
+    fc = requests.get(_OPEN_METEO_FCST_URL, params={
+        "latitude": lat, "longitude": lon, "current_weather": True,
+        "timezone": "auto"}, timeout=8).json()
+    cw = fc.get("current_weather") or {}
+    temp = cw.get("temperature")
+    wind = cw.get("windspeed")
+    code = cw.get("weathercode")
+    if temp is None:
+        raise RuntimeError("forecast 无 current_weather 数据")
+    desc = _WMO_CODES.get(code, "天气")
+    return [{"title": f"{city}当前天气（Open-Meteo）",
+             "snippet": f"{city} 当前{desc}，温度 {temp}°C，"
+                        f"风速 {wind}km/h",
+             "url": _OPEN_METEO_FCST_URL}]
+
+
+_ENGINES["open_meteo"] = _search_open_meteo
 
 
 def _engine_chain():
@@ -256,14 +329,24 @@ def web_search(query, max_results=5):
     else:
         chain = _engine_chain()
 
+    # 🌦️ 天气类查询：Open-Meteo 免 key 源插链首（#329 批 A，2026-10-13
+    # 拍板）——专业天气数据优先于通用搜索；失败由引擎链统一 except
+    # 降级，手动链同样插（SEARCH_ENGINE=bing 现状下天气也能走到本源）。
+    # 非天气查询零影响。
+    if _is_weather_query(query):
+        chain.insert(0, "open_meteo")
+
     connected = False  # 是否有任何引擎成功响应过（区别于"连不上"）
     for name in chain:
         try:
             results = _ENGINES[name](query, max_results)
         except Exception:
-            if manual:  # 手动指定引擎：失败不再链式降级，快速短文案返回
+            # open_meteo 是插入的增值源（非用户指定引擎）——它的失败
+            # 一律静默让位（手动链下也不能短路整链，否则 SEARCH_ENGINE
+            # 锁定场景天气源无位置/网络抖动=全链报废）
+            if manual and name != "open_meteo":
                 return UNAVAILABLE_MSG
-            continue    # 自动链：静默试下一个引擎
+            continue    # 自动链 / 插入源：静默试下一个引擎
         connected = True
         if results:
             # 🌦️ 天气类结果过滤（2026-10-02 用户口径）：白名单只留天气数据
