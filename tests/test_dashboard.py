@@ -2968,3 +2968,43 @@ class ProactiveFrontendAnchorTests(unittest.TestCase):
         # 三分类卡片墙（MAA 式收纳）
         self.assertIn("📊 小橘监控", src)
         self.assertIn("🔌 管理", src)
+
+
+class TestToolsPanelApis(unittest.TestCase):
+    """#UI 批 2：记忆查看/家电列表只读 API（tmp 库隔离；HA 未配置态）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xiaoju3_toolsapi_")
+        self.client = dashboard.app.test_client()
+        # API 内 from agent_state.state_manager import state_manager 读
+        # 模块属性——patch 模块属性（与 _inject_memory_context 隔离同款）
+        from agent_state import state_manager as sm_mod
+        from agent_state.state_manager import StateManager as _SM
+        self.sm = _SM(self.tmp)
+        self.sm_patch = mock.patch.object(sm_mod, "state_manager", self.sm)
+        self.sm_patch.start()
+        self.addCleanup(self.sm_patch.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_memory_list_empty_ok(self):
+        r = self.client.get("/api/memory/list")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()["data"]
+        self.assertEqual(data["total"], 0)
+        self.assertEqual(data["items"], [])
+
+    def test_memory_list_returns_items(self):
+        self.sm.save_memory("preference", "我喜欢蓝色")
+        r = self.client.get("/api/memory/list")
+        data = r.get_json()["data"]
+        self.assertGreaterEqual(data["total"], 1)
+        self.assertEqual(data["items"][0]["content"], "我喜欢蓝色")
+        self.assertEqual(data["items"][0]["weight"], 1.0)
+
+    def test_ha_devices_returns_text(self):
+        # HA 不可达/未配置 → 错误文案也是 200 文本形态（前端 <pre> 直显）
+        r = self.client.get("/api/ha/devices")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("text", r.get_json()["data"])
