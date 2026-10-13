@@ -766,10 +766,16 @@ def api_proactive_recent():
     if not proactive.proactive_enabled():
         return jsonify({"code": 200, "data": {"enabled": False}})
     try:
+        # limit 可选参数（#UI 三层视图批：日汇总聚合需跨天全量，默认 50）
+        try:
+            limit = max(1, min(5000, int(request.args.get("limit", "50"))))
+        except (TypeError, ValueError):
+            limit = 50
         con = sqlite3.connect(proactive._db_path(), timeout=3.0)
         rows = con.execute(
             "SELECT ts, action, decision, reason, COALESCE(events, '')"
-            " FROM proactive_log ORDER BY id DESC LIMIT 50").fetchall()
+            " FROM proactive_log ORDER BY id DESC LIMIT ?",
+            (limit,)).fetchall()
         today = datetime.now().strftime("%Y-%m-%d")
         data = {
             "enabled": True,

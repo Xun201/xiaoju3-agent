@@ -2891,6 +2891,12 @@ class ProactiveApiTests(unittest.TestCase):
         finally:
             os.environ["XIAOJU3_PROACTIVE_ENABLED"] = "1"
 
+    def test_recent_accepts_limit_param(self):
+        # #UI 三层视图：limit 参数（默认 50，面板传 2000 跨天聚合）
+        r = self.client.get("/api/proactive/recent?limit=3")
+        self.assertEqual(r.status_code, 200)
+        assert len(r.get_json()["data"]["recent"]) <= 3
+
     def test_recent_returns_recent_and_quota(self):
         import proactive
         now = datetime(2026, 10, 13, 12, 0, 0)

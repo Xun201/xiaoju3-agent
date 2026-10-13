@@ -1994,6 +1994,16 @@ class TestProactiveUiFoldAndFooterTap:
     def _html(self):
         return open("index.html", encoding="utf-8").read()
 
+    def test_audit_three_layer_view(self):
+        js = self._js()
+        # 三层视图：分类/日分组/区间合并/嵌套 details
+        assert "classifyAudit" in js
+        assert "groupAuditByDay" in js
+        assert "mergeAuditRuns" in js
+        assert "limit=2000" in js            # 跨天聚合取数
+        assert "run.count" in js             # 区间条数
+        assert "run.cls.label" in js
+
     def test_audit_fold_structure(self):
         js = self._js()
         # 面板版（MAA 式收纳批 1）：设置页段已删，主动性监控迁面板
