@@ -80,9 +80,22 @@ import paths  # 双根路径锚（方案 §1）：frozen 分支按 RESOURCE/DATA
 # 白屏缓解（2026-10-07 拍板：低风险快改）：最小化时 WebView2 渲染器不再被
 # 挂起/后台化——恢复窗口即现，无整页白闪重绘。必须在 WebView2 环境创建
 # （webview 懒导入于 main）之前生效，故放模块导入期；setdefault 允许 env 覆盖。
+# 2026-10-13 补强（最小化恢复白屏 3-5s 实锤）：
+# - --disable-features=CalculateNativeWinOcclusion：Windows 原生遮挡
+#   计算把最小化判为"完全遮挡"→合成器冻结出帧→恢复需 3-5s 重建；
+#   前两个参数管后台优先级，管不到这条 feature 机制（真机复现实锤）
+# - --disable-background-timer-throttling：后台定时器节流（前端 2s
+#   状态轮询/15s 终端刷新在最小化期被降频，恢复时积压滞后）
+# - msWebOOUI/msPdfOOUI/msSmartScreenProtection：WebView2 常规推荐
+#   组合（UI 部件特性+SmartScreen 对本地回环误标）
+# 代价（如实记录）：渲染进程最小化期不释放——内存/CPU 代价一条
+# 渲染进程，桌面主窗常驻场景可接受。
 os.environ.setdefault(
     "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-    "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding")
+    "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding "
+    "--disable-background-timer-throttling "
+    "--disable-features=CalculateNativeWinOcclusion,msWebOOUI,msPdfOOUI,"
+    "msSmartScreenProtection")
 
 # 单实例互斥体（#263）：**模块导入期即持锁**——2026-10-07 真机双开实锤：
 # 互斥体若在 main() 里才建，onedir 初始化期（登录风暴下 186MB 依赖导入
