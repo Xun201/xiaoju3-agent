@@ -66,3 +66,9 @@
 - 全仓：2056+4 → **2109+4**（今日 +53 锚；#303 除外全绿）
 - 生产车迭代链：4098C2EF → … → **754977CC 现行**
 - 待推 0；git 净
+
+## 十、#297 记忆系统批 1（深夜补记）
+
+- **批 1 完成（1e6c632，验收推平）**：记忆 V2 三乘子召回链——schema 幂等迁移（**memories schema 4 列 → 11 列（+7 列 V2 扩展：weight/access_count/last_access/activation/emotion_tag/sink_status/emotional_impact）**+memory_edge/activation_log/sleep_log/memory_meta 四表）/写入打标三路径（OCC type 键+PAD 偏离快照）/recall_memories（虚词+段级滑窗种子→扩散→三乘子，增益夹钳 WEIGHT_MAX=3.0）/mood_factor_for P 维/消费方双分流（XIAOJU3_MEMORY_V2 缺省关=旧通道逐字节）
+- +22 锚 全仓 2109 → **2131+4**；黄金样本三态对拍（开关关=零差异/V2 开=分流生效）；真实场景 12 记忆×8 查询预演人工核对固化
+- 设计稿 v2：_dev/design_297_memory_merge_v2.md（四偏差刷新+情绪记忆工程化+§11.5 #271③ 依赖节）
