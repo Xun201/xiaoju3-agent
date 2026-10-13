@@ -123,6 +123,15 @@ CREATE TABLE IF NOT EXISTS mood_snapshot (
     p REAL NOT NULL, a REAL NOT NULL, d REAL NOT NULL,
     source TEXT NOT NULL DEFAULT 'heartbeat'
 );
+CREATE TABLE IF NOT EXISTS emotional_episode (
+    episode_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_ts TEXT NOT NULL,
+    end_ts TEXT NOT NULL,
+    peak_p REAL NOT NULL, peak_a REAL NOT NULL, peak_d REAL NOT NULL,
+    end_p REAL NOT NULL, end_a REAL NOT NULL, end_d REAL NOT NULL,
+    duration REAL NOT NULL,
+    tag TEXT
+);
 """
 
 
@@ -434,3 +443,145 @@ def heartbeat_snapshot(now=None, min_interval_s=SNAPSHOT_MIN_INTERVAL_S):
             conn.close()
     except Exception:
         return None
+
+
+# ==================== #297b 批 2：情绪段判定（2026-10-13） ====================
+# 设计稿：_dev/eval_297b_emotional_phase2.md §二 + design_297_emotional_
+# memory.md §二/§三——「一段持续情绪才是记忆单元；结尾决定整体色彩
+# （峰终定律+缓冲修正）」。本批只做段识别+落表，消费（可感知性四维）
+# =批 3。机制先行：阈值全部可配常量，数值待真机数据后调。
+
+EPISODE_ENTER_THRESHOLD = 0.25   # 起点：任一维偏离基线（明显情绪波动）
+EPISODE_EXIT_THRESHOLD = 0.10    # 终点：回落判据（|偏离|<此值视为平静）
+EPISODE_EXIT_CALM_POINTS = 2     # 终点：连续 N 点平静
+EPISODE_GAP_MINUTES = 30         # 终点：相邻点间隔超时（话题切换的
+                                 # 一期替代判据——无话题信号源）
+EPISODE_BLEND_END = 0.7          # 关键帧缓冲：70% 结尾
+EPISODE_BLEND_PEAK = 0.3         #                 +30% 峰值
+
+
+def blend_frames(end_frame, peak_frame):
+    """关键帧缓冲合成（design §三）：70% 结尾 + 30% 峰值（逐维）。
+
+    结尾决定整体色彩，缓冲防结尾单句劫持整段。输入 (p, a, d) 二元组。
+    """
+    return tuple(round(EPISODE_BLEND_END * e + EPISODE_BLEND_PEAK * pk, 4)
+                 for e, pk in zip(end_frame, peak_frame))
+
+
+def _episode_series():
+    """合并时序（数据源=交互行+心跳快照双流）：[(ts_str, p, a, d)] 按
+    ts 升序。mood_log 取 p_after/a_after/d_after，mood_snapshot 取
+    p/a/d（source 恒 heartbeat——两流合并后 origin 不再区分，段判定
+    只关心时序形状）。任何读取异常返回空列表（静默纪律）。"""
+    try:
+        conn = _connect()
+        try:
+            pts = []
+            for ts, p, a, d in conn.execute(
+                    "SELECT ts, p_after, a_after, d_after FROM mood_log"):
+                pts.append((ts, float(p), float(a), float(d)))
+            for ts, p, a, d in conn.execute(
+                    "SELECT ts, p, a, d FROM mood_snapshot"):
+                pts.append((ts, float(p), float(a), float(d)))
+            pts.sort(key=lambda r: r[0])
+            return pts
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
+def detect_episodes(series, baseline):
+    """情绪段判定（纯函数，锚可直调）：时序+基线 → 段列表。
+
+    - 起点：任一维偏离基线 > EPISODE_ENTER_THRESHOLD；
+    - 终点：相邻点间隔 > EPISODE_GAP_MINUTES（超时闭合）或连续
+      EPISODE_EXIT_CALM_POINTS 点回落（|偏离| < EPISODE_EXIT_THRESHOLD）；
+    - 末点仍偏离 → 段保持开放，以最后一点闭合（ongoing 截断）；
+    - tag：峰值点 p 维符号（机制先行一期口径）。
+    """
+    bp, ba, bd = baseline
+
+    def _dev(point):
+        return max(abs(point[1] - bp), abs(point[2] - ba),
+                   abs(point[3] - bd))
+
+    def _calm(point):
+        return _dev(point) < EPISODE_EXIT_THRESHOLD
+
+    def _parse(ts):
+        return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+
+    episodes = []
+    seg = None   # 开放段：{"start_ts", "points", "peak"}
+    for pt in series:
+        if seg is None:
+            if _dev(pt) > EPISODE_ENTER_THRESHOLD:
+                seg = {"start_ts": pt[0], "points": [pt], "peak": pt}
+            continue
+        # 段内：先查间隔超时（在当前点闭合前段，再判当前点是否开新段）
+        gap_min = (_parse(pt[0]) - _parse(seg["points"][-1][0])).total_seconds() / 60.0
+        calm_streak = sum(1 for q in seg["points"][-EPISODE_EXIT_CALM_POINTS:]
+                          if _calm(q))
+        if gap_min > EPISODE_GAP_MINUTES or calm_streak >= EPISODE_EXIT_CALM_POINTS:
+            episodes.append(seg)
+            seg = None
+            if _dev(pt) > EPISODE_ENTER_THRESHOLD:
+                seg = {"start_ts": pt[0], "points": [pt], "peak": pt}
+            continue
+        seg["points"].append(pt)
+        if _dev(pt) > _dev(seg["peak"]):
+            seg["peak"] = pt
+    if seg is not None:   # ongoing 截断
+        episodes.append(seg)
+
+    out = []
+    for seg in episodes:
+        pts = seg["points"]
+        end_pt = pts[-1]
+        peak = seg["peak"]
+        duration = (_parse(end_pt[0]) - _parse(seg["start_ts"])
+                    ).total_seconds() / 60.0
+        out.append({
+            "start_ts": seg["start_ts"], "end_ts": end_pt[0],
+            "peak": (peak[1], peak[2], peak[3]),
+            "end": (end_pt[1], end_pt[2], end_pt[3]),
+            "duration": round(duration, 2),
+            "tag": "positive" if peak[1] >= bp else "negative",
+        })
+    return out
+
+
+def flush_episodes(now=None):
+    """段判定+落表（幂等：start_ts 已存在则跳过该段）。返回落表段数，
+    异常静默返回 -1（mood 同款纪律——绝不影响调用方）。"""
+    try:
+        s = load_mood()
+        bp, ba, bd = s["baseline"]
+        baseline = (bp, ba, bd)
+        episodes = detect_episodes(_episode_series(), baseline)
+        conn = _connect()
+        try:
+            have = {r[0] for r in conn.execute(
+                "SELECT start_ts FROM emotional_episode")}
+            n = 0
+            for ep in episodes:
+                if ep["start_ts"] in have:
+                    continue
+                blended = blend_frames(ep["end"], ep["peak"])
+                conn.execute(
+                    "INSERT INTO emotional_episode (start_ts, end_ts,"
+                    " peak_p, peak_a, peak_d, end_p, end_a, end_d,"
+                    " duration, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ep["start_ts"], ep["end_ts"],
+                     ep["peak"][0], ep["peak"][1], ep["peak"][2],
+                     ep["end"][0], ep["end"][1], ep["end"][2],
+                     ep["duration"], ep["tag"]))
+                n += 1
+            conn.commit()
+            return n
+        finally:
+            conn.close()
+    except Exception:
+        return -1

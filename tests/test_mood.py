@@ -354,3 +354,98 @@ class TestHeartbeatSnapshot:
         assert "except ImportError" in mount
         # 槽序：快照槽在 memory_sleep 槽之后
         assert src.index("memory_sleep") < src.index("情绪快照补点")
+
+
+# ==================== #297b 批 2：情绪段判定（emotional_episode） ====================
+
+class TestEmotionalEpisode:
+    """段起点/终点判定 / 关键帧缓冲 70-30 / 落表完整 / 空段不落。"""
+
+    BASE = (0.0, 0.4, 0.0)
+
+    def _series(self, points):
+        return [(f"2026-10-13 {h:02d}:{m:02d}:00", p, a, d)
+                for h, m, p, a, d in points]
+
+    def test_blend_frames_70_30(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", str(tmp_path / "m.db"))
+        # 结尾 (0.5, 0.2, 0.0) × 0.7 + 峰值 (0.9, 0.6, 0.1) × 0.3
+        out = mood.blend_frames((0.5, 0.2, 0.0), (0.9, 0.6, 0.1))
+        assert out == (0.62, 0.32, 0.03)
+
+    def test_detect_episode_start_and_calm_end(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", str(tmp_path / "m.db"))
+        # 基线内 → 负偏离(-0.5) → 持续 → 回落(<0.10)×2 → 闭合
+        series = self._series([
+            (10, 0, 0.05, 0.4, 0.0),   # 平静
+            (10, 10, -0.45, 0.4, 0.0),  # 起点：p 偏离 0.45>0.25
+            (10, 20, -0.40, 0.4, 0.0),  # 持续（峰值 -0.45）
+            (10, 30, -0.05, 0.4, 0.0),  # 回落点 1
+            (10, 40, -0.03, 0.4, 0.0),  # 回落点 2 → 闭合
+        ])
+        eps = mood.detect_episodes(series, self.BASE)
+        assert len(eps) == 1
+        ep = eps[0]
+        assert ep["start_ts"] == "2026-10-13 10:10:00"
+        assert ep["end_ts"] == "2026-10-13 10:40:00"
+        assert ep["peak"][0] == -0.45
+        assert ep["tag"] == "negative"
+
+    def test_detect_episode_gap_timeout_closes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", str(tmp_path / "m.db"))
+        # 两点间隔 40 分钟 > 30 → 间隔超时闭合（且第二点开启新段候选不构成段）
+        series = self._series([
+            (10, 0, -0.5, 0.4, 0.0),
+            (10, 40, -0.45, 0.4, 0.0),
+        ])
+        eps = mood.detect_episodes(series, self.BASE)
+        # 间隔 40min 超时 → 前段在 10:00 闭合；后点仍偏离 → 自开新段
+        # （ongoing 截断）= 两次独立波动
+        assert len(eps) == 2
+        assert eps[0]["end_ts"] == "2026-10-13 10:00:00"
+        assert eps[0]["duration"] == 0.0
+        assert eps[1]["start_ts"] == "2026-10-13 10:40:00"
+
+    def test_detect_no_episode_when_all_calm(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", str(tmp_path / "m.db"))
+        series = self._series([
+            (10, 0, 0.05, 0.4, 0.0),
+            (10, 30, 0.08, 0.42, 0.0),
+            (11, 0, 0.02, 0.39, 0.0),
+        ])
+        assert mood.detect_episodes(series, self.BASE) == []   # 空段不产生
+
+    def test_flush_writes_full_row_and_idempotent(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "m.db")
+        monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", db)
+        # 造双源时序：交互行（mood_log）+ 快照行（mood_snapshot）
+        con = sqlite3.connect(db)
+        con.executescript(mood.SCHEMA)
+        con.execute("INSERT INTO mood_log (ts, event_type, dp, da, dd,"
+                    " p_after, a_after, d_after) VALUES"
+                    " ('2026-10-13 10:10:00', 'scolded', -0.35, 0, 0,"
+                    " -0.45, 0.4, 0.0)")
+        con.execute("INSERT INTO mood_snapshot (ts, p, a, d, source)"
+                    " VALUES ('2026-10-13 10:20:00', -0.40, 0.4, 0.0,"
+                    " 'heartbeat')")
+        con.execute("INSERT INTO mood_snapshot (ts, p, a, d, source)"
+                    " VALUES ('2026-10-13 10:40:00', -0.05, 0.4, 0.0,"
+                    " 'heartbeat')")
+        con.commit()
+        con.close()
+        n = mood.flush_episodes()
+        assert n == 1
+        con = sqlite3.connect(db)
+        row = con.execute(
+            "SELECT start_ts, end_ts, peak_p, end_p, duration, tag"
+            " FROM emotional_episode").fetchall()
+        # 幂等：重跑不重复落
+        assert mood.flush_episodes() == 0
+        con.close()
+        assert len(row) == 1
+        assert row[0][0] == "2026-10-13 10:10:00"
+        assert row[0][1] == "2026-10-13 10:40:00"
+        assert row[0][2] == -0.45
+        assert row[0][3] == -0.05
+        assert row[0][4] == 30.0
+        assert row[0][5] == "negative"
