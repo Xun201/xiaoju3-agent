@@ -253,7 +253,11 @@ class BalanceApiTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class HistoryApiTestsBase(unittest.TestCase):
-    """历史接口测试基类：HISTORY_FILE 注入 tmp 目录（自动还原）。"""
+    """历史接口测试基类：HISTORY_FILE 注入 tmp 目录（自动还原）。
+
+    #UI修复批 2 实锤（2026-10-14 凌晨）：RECENT_ACTIONS_FILE 同步注入——
+    dev recent_actions 被 pytest 内真跑的 HA 心跳污染后，smart_ask 注入
+    block 混入设备操作记录导致断言全挂。基类统一隔离。"""
 
     def setUp(self):
         self.client = dashboard.app.test_client()
@@ -263,6 +267,12 @@ class HistoryApiTestsBase(unittest.TestCase):
         patcher = mock.patch.object(dashboard, "HISTORY_FILE", self.history_file)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # 最近设备操作记录：注入 tmp（不存在=get_recent_actions 空列表）
+        import tools as _tools
+        ra = mock.patch.object(_tools, "RECENT_ACTIONS_FILE",
+                               os.path.join(tmp.name, "recent_actions.json"))
+        ra.start()
+        self.addCleanup(ra.stop)
 
     def _write_history(self, messages):
         os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
