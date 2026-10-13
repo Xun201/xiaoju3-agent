@@ -559,6 +559,20 @@ def heartbeat_loop(interval=None, sense_fn=None, ask_fn=None, execute_fn=None,
             pass   # 插件可删纪律：memory_sleep.py 删除时静默旁路
         except Exception as e:
             print(f"⚠️ [记忆睡眠] 执行异常（跳过）: {e}")
+        # 📊 情绪快照补点（#297b 批 1，2026-10-13）：15 分钟一行零位移
+        # 纯快照（mood_snapshot 表，eval_297b_emotional_phase2.md §1.3）
+        # ——为情绪段判定攒时序密度；查表式节流在 snapshot 内部（间隔
+        # 不足返回 None 不打印）；mood 模块缺席静默旁路。
+        try:
+            import mood as _mood_mod
+            _snap = _mood_mod.heartbeat_snapshot()
+            if _snap is not None:
+                print(f"📊 [情绪快照] P={_snap['p']} A={_snap['a']} "
+                      f"D={_snap['d']}")
+        except ImportError:
+            pass   # mood.py 缺席时静默旁路
+        except Exception as e:
+            print(f"⚠️ [情绪快照] 执行异常（跳过）: {e}")
         heartbeat_once(sense_fn=sense_fn, ask_fn=ask_fn, execute_fn=execute_fn,
                        sense_states_fn=sense_states_fn)
         rounds += 1

@@ -5,8 +5,9 @@
 agent_state 接触；时间经 observe_message(now=...) 注入，不 sleep。
 """
 import os
+import io
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -289,3 +290,67 @@ def test_db_path_prefers_xiaoju3_anchor(monkeypatch, tmp_path):
     monkeypatch.delenv("XIAOJU3_MOOD_DB_PATH", raising=False)
     monkeypatch.setattr(xiaoju3, "AGENT_STATE_DIR", str(tmp_path))
     assert mood._db_path() == os.path.join(str(tmp_path), "mood.db")
+
+
+# ==================== #297b 批 1：情绪快照补点（eval_297b_emotional_phase2.md） ====================
+
+class TestHeartbeatSnapshot:
+    """快照写入/查表式节流/零位移/心跳挂载（隔离同款：tmp mood.db）。"""
+
+    def test_snapshot_writes_full_fields(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "mood.db")
+        monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", db)
+        now = datetime(2026, 10, 13, 15, 0, 0)
+        snap = mood.heartbeat_snapshot(now=now)
+        assert snap is not None
+        assert snap["source"] == "heartbeat"
+        assert snap["ts"].startswith("2026-10-13 15:00:00")
+        for k in ("p", "a", "d"):
+            assert isinstance(snap[k], float)
+        con = sqlite3.connect(db)
+        try:
+            row = con.execute(
+                "SELECT ts, p, a, d, source FROM mood_snapshot"
+            ).fetchall()
+        finally:
+            con.close()
+        assert len(row) == 1
+        assert row[0][4] == "heartbeat"
+
+    def test_snapshot_throttled_within_interval(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "mood.db")
+        monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", db)
+        t0 = datetime(2026, 10, 13, 15, 0, 0)
+        assert mood.heartbeat_snapshot(now=t0) is not None
+        # 15 分钟内重入 → None（查表式节流，重启安全）
+        assert mood.heartbeat_snapshot(now=t0 + timedelta(minutes=5)) is None
+        # 超过间隔 → 再写
+        assert mood.heartbeat_snapshot(
+            now=t0 + timedelta(minutes=16)) is not None
+
+    def test_snapshot_zero_displacement_no_accounting(self, tmp_path, monkeypatch):
+        # 零位移：快照不触发记账——mood_state 不变、mood_log 零新增
+        db = str(tmp_path / "mood.db")
+        monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", db)
+        mood.observe_message("你好呀")          # 先造一条正常记账
+        state_before = mood.load_mood()
+        log_before = sqlite3.connect(db).execute(
+            "SELECT COUNT(*) FROM mood_log").fetchone()[0]
+        mood.heartbeat_snapshot(now=datetime(2026, 10, 13, 15, 0, 0))
+        state_after = mood.load_mood()
+        log_after = sqlite3.connect(db).execute(
+            "SELECT COUNT(*) FROM mood_log").fetchone()[0]
+        assert state_after["p"] == state_before["p"]
+        assert state_after["updated_at"] == state_before["updated_at"]
+        assert log_after == log_before
+
+    def test_heartbeat_mounts_snapshot_slot(self):
+        # 心跳第四槽源码锚（todo_aging/proactive/memory_sleep 之后）
+        import heartbeat
+        src = io.open(heartbeat.__file__, encoding="utf-8").read()
+        assert "mood.heartbeat_snapshot()" in src or \
+            "_mood_mod.heartbeat_snapshot()" in src
+        mount = src[src.index("情绪快照补点"):]
+        assert "except ImportError" in mount
+        # 槽序：快照槽在 memory_sleep 槽之后
+        assert src.index("memory_sleep") < src.index("情绪快照补点")
