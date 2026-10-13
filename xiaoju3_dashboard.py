@@ -812,6 +812,57 @@ def api_proactive_config():
     return jsonify({"code": 200, "data": {"daily_limit": n}})
 
 
+# ==================== 小工具面板只读 API（#UI 批 2，2026-10-14） ====================
+
+@app.route("/api/memory/list")
+def api_memory_list():
+    """长期记忆清单（小工具面板「记忆查看」卡，只读）。
+
+    内容+V2 权重字段（weight/emotion_tag/sink_status/emotional_impact/
+    access_count，#297 批 1 schema）——近期 100 条，新在前。"""
+    try:
+        from agent_state.state_manager import state_manager
+        rows = state_manager.get_recent_memories(limit=100)
+    except Exception as e:
+        return jsonify({"code": 500, "error": f"记忆读取失败: {e}"}), 500
+    # get_recent_memories 只回 (category, content)——V2 字段单独查
+    items = []
+    try:
+        import sqlite3 as _sq
+        conn = _sq.connect(state_manager.memory_db, timeout=3.0)
+        raw = conn.execute(
+            "SELECT category, content, weight, emotion_tag, sink_status,"
+            " emotional_impact, access_count, timestamp FROM memories"
+            " ORDER BY id DESC LIMIT 100").fetchall()
+        conn.close()
+        items = [{"category": r[0], "content": r[1], "weight": r[2],
+                  "emotion_tag": r[3], "sink_status": r[4],
+                  "emotional_impact": r[5], "access_count": r[6],
+                  "timestamp": r[7]} for r in raw]
+    except Exception:
+        pass   # V2 字段读失败降级为基础形态
+    if not items:
+        items = [{"category": c, "content": t, "weight": 1.0,
+                  "emotion_tag": "neutral", "sink_status": "active",
+                  "emotional_impact": 0.0, "access_count": 0,
+                  "timestamp": ""} for c, t in rows]
+    return jsonify({"code": 200, "data": {"items": items,
+                                          "total": len(items)}})
+
+
+@app.route("/api/ha/devices")
+def api_ha_devices():
+    """HA 实体清单（小工具面板「家电列表」卡，只读文本形态）。
+
+    home_tools.get_ha_devices 原样输出（文本清单——控制仍走对话）。"""
+    try:
+        from home_tools import get_ha_devices
+        text = get_ha_devices()
+    except Exception as e:
+        text = f"❌ 获取HA设备列表失败: {e}"
+    return jsonify({"code": 200, "data": {"text": text}})
+
+
 @app.route("/api/balance")
 def api_balance():
     """DeepSeek 余额查询 API：{code, data:{balance, currency, today_usage, is_peak}}。"""

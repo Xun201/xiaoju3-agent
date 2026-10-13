@@ -3252,6 +3252,66 @@
         return card;
     }
 
+    function toggleToolBody(bodyId, loader) {
+        let body = document.getElementById(bodyId);
+        const overlay = document.getElementById('tools-overlay');
+        if (!overlay) return;
+        if (!body) {
+            body = document.createElement('div');
+            body.id = bodyId;
+            body.style.cssText = 'margin:10px 0 20px;background:var(--color-card,'
+                + '#fff);border:1px solid var(--color-border,#e0e4ec);'
+                + 'border-radius:var(--radius-card,12px);padding:12px 14px;'
+                + 'max-height:60vh;overflow-y:auto;';
+            overlay.appendChild(body);
+        }
+        if (!body.hidden) {
+            body.hidden = true;
+            return;
+        }
+        body.hidden = false;
+        loader(body);
+    }
+
+    function loadMemoryInto(body) {
+        body.textContent = '加载中…';
+        fetch('/api/memory/list').then(function (r) { return r.json(); })
+            .then(function (j) {
+                const items = (j.data && j.data.items) || [];
+                body.textContent = '';
+                if (!items.length) {
+                    body.textContent = '长期记忆为空（对我说「记住…」即可积累）';
+                    return;
+                }
+                items.forEach(function (m) {
+                    const line = document.createElement('div');
+                    line.style.cssText = 'font-size:12px;padding:4px 0;'
+                        + 'border-bottom:1px dashed var(--color-border,#e0e4ec);';
+                    const sink = m.sink_status === 'pending_sink' ? ' 💤沉睡' : '';
+                    const emo = m.emotion_tag !== 'neutral'
+                        ? ' 🏷' + m.emotion_tag : '';
+                    line.textContent = '· [' + m.category + '] ' + m.content +
+                        '（权重 ' + (m.weight || 1) + emo + sink + '）';
+                    body.appendChild(line);
+                });
+            })
+            .catch(function () { body.textContent = '记忆读取失败'; });
+    }
+
+    function loadHaDevicesInto(body) {
+        body.textContent = '加载中…（HA 可达约需 1-10s）';
+        fetch('/api/ha/devices').then(function (r) { return r.json(); })
+            .then(function (j) {
+                body.textContent = '';
+                const pre = document.createElement('pre');
+                pre.style.cssText = 'white-space:pre-wrap;font-size:12px;'
+                    + 'margin:0;font-family:inherit;';
+                pre.textContent = (j.data && j.data.text) || '（空）';
+                body.appendChild(pre);
+            })
+            .catch(function (e) { body.textContent = '读取失败: ' + e; });
+    }
+
     function closeToolsPanel() {
         const overlay = document.getElementById('tools-overlay');
         if (overlay) {
@@ -3322,8 +3382,8 @@
             }));
         overlay.appendChild(proBody);
         proBody.hidden = true;
-        g1.appendChild(buildToolCard('记忆查看', '内容+权重/状态（批 2）',
-            function () { showToast('批 2 上线（当前可看设置页相关项）'); }));
+        g1.appendChild(buildToolCard('记忆查看', '内容+权重/状态（长期记忆清单）',
+            function () { toggleToolBody('tool-memory-body', loadMemoryInto); }));
         g1.appendChild(buildToolCard('终端记录', '终端通道聊天记录（只读）',
             function () {
                 closeToolsPanel();
@@ -3333,8 +3393,8 @@
         // 🏠 小橘能控制什么
         sectionLabel('🏠 小橘能控制什么');
         const g2 = grid();
-        g2.appendChild(buildToolCard('家电列表', 'HA 实体清单+控制入口（批 2）',
-            function () { showToast('批 2 上线（暂用对话「帮我搜家电」）'); }));
+        g2.appendChild(buildToolCard('家电列表', 'HA 实体清单（只读，控制走对话）',
+            function () { toggleToolBody('tool-ha-body', loadHaDevicesInto); }));
 
         // 🔌 管理
         sectionLabel('🔌 管理');
