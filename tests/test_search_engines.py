@@ -409,3 +409,90 @@ class WeatherFilterFallbackTests(unittest.TestCase):
                                   return_value=["bing", "baidu"]):
             out = search_tools.web_search("长沙今天天气")
         self.assertIn("长沙天气", out)
+
+
+class OpenMeteoWeatherSourceTests(unittest.TestCase):
+    """#329 批 A：Open-Meteo 免 key 天气源——天气查询插链首，
+    非天气零影响；插入源失败静默让位（手动链不短路）。"""
+
+    GEO = {"results": [{"name": "长沙县", "latitude": 30.99,
+                        "longitude": 108.30},
+                       {"name": "长沙", "latitude": 28.23,
+                        "longitude": 112.94}]}
+    FCST = {"current_weather": {"temperature": 25.3, "windspeed": 3.9,
+                                "weathercode": 0}}
+
+    def _mock_requests(self, mr):
+        resp_geo = mock.Mock()
+        resp_geo.json.return_value = self.GEO
+        resp_fc = mock.Mock()
+        resp_fc.json.return_value = self.FCST
+        mr.get.side_effect = [resp_geo, resp_fc]
+        return mr
+
+    def test_weather_query_puts_open_meteo_first(self):
+        # 天气查询：链首插入 open_meteo（手动链 bing 也插）
+        os.environ.pop("SERPER_API_KEY", None)
+        os.environ.pop("TAVILY_API_KEY", None)
+        os.environ.pop("SEARCH_ENGINE", None)
+        with mock.patch.dict(search_tools._ENGINES,
+                             {"open_meteo": lambda q, m: [], "bing":
+                              lambda q, m: []}), \
+                mock.patch.object(search_tools, "_engine_chain",
+                                  return_value=["bing"]):
+            chain = None
+            captured = {}
+            real_ws = search_tools.web_search
+            self.assertEqual(real_ws("长沙今天天气"),
+                             "🔍 未搜到与「长沙今天天气」相关的结果，"
+                             "换个关键词试试吧。")
+
+    def test_open_meteo_success_returns_weather(self):
+        with mock.patch.object(search_tools, "_weather_city",
+                               return_value="长沙"), \
+                mock.patch.object(search_tools, "requests") as mr:
+            self._mock_requests(mr)
+            out = search_tools._search_open_meteo("长沙今天天气", 5)
+        self.assertEqual(len(out), 1)
+        self.assertIn("长沙", out[0]["title"])
+        self.assertIn("25.3", out[0]["snippet"])
+        self.assertIn("晴", out[0]["snippet"])
+
+    def test_open_meteo_geocoding_prefers_exact_city(self):
+        # geocoding 第一个结果是「长沙县」——须精确挑中「长沙」
+        with mock.patch.object(search_tools, "_weather_city",
+                               return_value="长沙"), \
+                mock.patch.object(search_tools, "requests") as mr:
+            self._mock_requests(mr)
+            search_tools._search_open_meteo("天气", 5)
+            fc_call = mr.get.call_args_list[1]
+            self.assertEqual(fc_call.kwargs["params"]["latitude"], 28.23)
+
+    def test_non_weather_query_never_touches_open_meteo(self):
+        # 非天气查询零影响：链不含 open_meteo（占位哨兵抛异常即暴露）
+        def _sentinel(q, m):
+            raise AssertionError("非天气查询不应触达 open_meteo")
+        os.environ.pop("SEARCH_ENGINE", None)
+        with mock.patch.dict(search_tools._ENGINES,
+                             {"open_meteo": _sentinel, "bing":
+                              lambda q, m: [{"title": "T", "snippet": "S",
+                                             "url": "u"}]}), \
+                mock.patch.object(search_tools, "_engine_chain",
+                                  return_value=["bing"]):
+            out = search_tools.web_search("小橘3号是什么")
+        self.assertIn("T", out)
+
+    def test_injected_source_failure_yields_to_manual_engine(self):
+        # 手动链 bing + open_meteo 失败（如无位置）→ 不短路，bing 照走
+        def _boom(q, m):
+            raise RuntimeError("no location")
+        os.environ["SEARCH_ENGINE"] = "bing"
+        try:
+            with mock.patch.dict(search_tools._ENGINES, {
+                    "open_meteo": _boom}), \
+                    mock.patch.object(search_tools, "requests") as mr:
+                mr.get.return_value = _html_resp(BING_HTML)
+                out = search_tools.web_search("小橘3号是什么")
+            self.assertIn("1. ", out)  # bing 正常返回
+        finally:
+            os.environ.pop("SEARCH_ENGINE", None)
