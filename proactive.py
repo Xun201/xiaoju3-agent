@@ -45,6 +45,12 @@ STALE_DAYS = 7   # 久未做阈值（天）——todos 表无 due_date 列，用
 ENABLE_ENV = "XIAOJU3_PROACTIVE_ENABLED"
 DB_ENV = "XIAOJU3_PROACTIVE_DB_PATH"
 
+# ---- Phase 1（2026-10-13 拍板：频率面板+event 明细+审计可见）----
+DAILY_LIMIT_DEFAULT = 5   # 每天最多主动 N 次（design_271c_phase1.md §2.2）
+DAILY_LIMIT_MIN = 1
+DAILY_LIMIT_MAX = 50
+DAILY_LIMIT_KEY = "daily_limit"   # proactive_meta KV 键（面板改完即生效）
+
 
 def proactive_enabled():
     """开关（缺省关——Phase 0 生命线：现有测试与生产行为零影响）。"""
@@ -81,6 +87,14 @@ def _connect():
         action TEXT,
         decision TEXT,
         reason TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS proactive_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT)""")
+    # Phase 1 event 明细列（幂等补列，todos note 先例；旧行 events=NULL 兼容）
+    cols = [row[1] for row in con.execute(
+        "PRAGMA table_info(proactive_log)")]
+    if "events" not in cols:
+        con.execute("ALTER TABLE proactive_log ADD COLUMN events TEXT")
     return con
 
 
@@ -115,14 +129,16 @@ def _save_state(tension, last_fire_at, now):
         pass
 
 
-def _append_log(action, decision, reason, now):
-    """审计追加（#316：出手/静默两态都记）+ 滚动保留 LOG_KEEP。"""
+def _append_log(action, decision, reason, now, events=None):
+    """审计追加（#316：出手/静默两态都记）+ 滚动保留 LOG_KEEP。
+    Phase 1：events=命中事件名逗号串（明细对账，design §2.1）。"""
     try:
         con = _connect()
         con.execute(
-            "INSERT INTO proactive_log (ts, action, decision, reason) "
-            "VALUES (?, ?, ?, ?)",
-            (now.isoformat(timespec="seconds"), action, decision, reason))
+            "INSERT INTO proactive_log (ts, action, decision, reason, events) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (now.isoformat(timespec="seconds"), action, decision, reason,
+             events))
         con.execute(
             "DELETE FROM proactive_log WHERE id NOT IN "
             "(SELECT id FROM proactive_log ORDER BY id DESC LIMIT ?)",
@@ -131,6 +147,55 @@ def _append_log(action, decision, reason, now):
         con.close()
     except Exception:
         pass
+
+
+def _daily_limit(con):
+    """每日配额 N（Phase 1）：proactive_meta 读取，缺省/非法值回退 5。
+    面板写 meta 后下一 tick 即生效（零重启）。"""
+    try:
+        row = con.execute(
+            "SELECT value FROM proactive_meta WHERE key = ?",
+            (DAILY_LIMIT_KEY,)).fetchone()
+        n = int(row[0])
+        if DAILY_LIMIT_MIN <= n <= DAILY_LIMIT_MAX:
+            return n
+    except Exception:
+        pass
+    return DAILY_LIMIT_DEFAULT
+
+
+def set_daily_limit(n):
+    """写每日配额（批 2 dashboard API 调用；夹钳 1-50）→ 1-50 内返回
+    生效值，越界返回 None（调用方 400）。"""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return None
+    if not (DAILY_LIMIT_MIN <= n <= DAILY_LIMIT_MAX):
+        return None
+    try:
+        con = _connect()
+        con.execute(
+            "INSERT INTO proactive_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (DAILY_LIMIT_KEY, str(n)))
+        con.commit()
+        con.close()
+        return n
+    except Exception:
+        return None
+
+
+def _today_fire_count(con, today):
+    """当日 fire 计数（查表式记账，design §2.2——proactive_log 本身就是
+    事实源，零计数器状态可漂移）。"""
+    try:
+        return con.execute(
+            "SELECT COUNT(*) FROM proactive_log "
+            "WHERE action = 'tension_release' AND decision = 'fire' "
+            "AND ts >= ?", (f"{today} 00:00:00",)).fetchone()[0]
+    except Exception:
+        return 0
 
 
 def _decay(tension, last_ts, now):
@@ -256,13 +321,16 @@ def _collect_events(now):
 
 def proactive_tick(now=None):
     """心跳挂载入口（每轮 60s 调一次；出手慢靠冷却/抑制内建，tick 快无妨）。
-    Phase 0 的 fire=只写审计不发消息（design §八 Phase 0 定义）。"""
+    Phase 0 的 fire=只写审计不发消息（design §八 Phase 0 定义）。
+    Phase 1（2026-10-13）：事件名明细落库（不再丢弃）+ 每日配额闸。"""
     now = now or datetime.now()
     if not proactive_enabled():
         return None   # 开关关：早退，不建库不写日志（§6 生命线）
     st = _load_state(now)
     tension = _decay(st["tension"], st["last_fire_at"], now)
-    for name, delta in _collect_events(now):
+    events_list = _collect_events(now)
+    ev_names = ",".join(name for name, _delta in events_list) or None
+    for name, delta in events_list:
         tension = min(CLAMP_MAX, tension + delta)
     sup = []
     if in_quiet_hours(now):
@@ -275,17 +343,28 @@ def proactive_tick(now=None):
         sup.append("user_busy")
     if told_not_to_bother(now):
         sup.append("explicit_stop")
+    # Phase 1 每日配额：当日 fire 达 N → 追加抑制（查表式记账，
+    # proactive_log 即事实源；meta 读取失败回退缺省 5，绝不抛出）
+    today = now.strftime("%Y-%m-%d")
+    try:
+        con = _connect()
+        limit, fired_today = _daily_limit(con), _today_fire_count(con, today)
+        con.close()
+        if fired_today >= limit:
+            sup.append("daily_quota")
+    except Exception:
+        pass
     last_fire = st["last_fire_at"]
     fired = False
     if tension >= FIRE_THRESHOLD and not sup:
         fired = True
         _append_log("tension_release", "fire",
-                    f"tension={tension:.2f}", now)
+                    f"tension={tension:.2f}", now, events=ev_names)
         tension = 0.0
         last_fire = now.isoformat(timespec="seconds")
     else:
         reason = ",".join(sup) if sup else f"tension={tension:.2f}<{FIRE_THRESHOLD}"
-        _append_log("tension_build", "suppress", reason, now)
+        _append_log("tension_build", "suppress", reason, now, events=ev_names)
     _save_state(tension, last_fire, now)
     return {"tension": round(tension, 4), "suppressed": bool(sup),
             "fired": fired}
