@@ -1949,6 +1949,137 @@
     // 界面偏好（#264 B2d④ 静态本地组）：与 API items 并列渲染，不走分档
     // 表——主题色=前端偏好（THEME_KEY），退出方式=js_api 读写 ui_pref.json。
     // 浏览器形态（无 pywebview）下退出方式禁用置灰。
+
+    // ==================== 主动性卡（#271③ Phase 1 批 2，2026-10-13） ====================
+    // 频率面板 A（真实现：N 存 proactive_meta，下一 tick 即生效零重启）+
+    // 面板 B 占位灰化（Phase 2 陪伴类事件源后激活）+「你刚才想说什么」
+    // 审计列表（#316 静默可解释）+ 防误导说明（内账期不发真消息）。
+    // POST 需 Lv.3+（后端权限门）；数据走 /api/proactive/* 双 API。
+    const PROACTIVE_REASON_LABELS = {
+        daily_quota: '今日次数已用完', cooldown: '刚聊过（冷却中）',
+        quiet_hours: '深夜时段', rejected: '刚被拒绝过',
+        user_busy: '主人忙碌', explicit_stop: '主人说了别烦',
+    };
+
+    function loadProactiveAudit() {
+        const box = document.getElementById('proactive-audit');
+        if (!box) return;
+        fetch('/api/proactive/recent').then(function (r) { return r.json(); })
+            .then(function (j) {
+                const d = (j && j.data) || {};
+                box.textContent = '';
+                if (!d.enabled) {
+                    box.textContent = '主动性引擎未启用';
+                    return;
+                }
+                const head = document.createElement('div');
+                head.className = 'settings-empty';
+                head.textContent = '今日出手 ' + (d.today_fire_count || 0) + '/' +
+                    (d.daily_limit || 5) + ' · 当前张力 ' + (d.tension || 0);
+                box.appendChild(head);
+                (d.recent || []).forEach(function (item) {
+                    const line = document.createElement('div');
+                    line.className = 'settings-empty';
+                    const fired = item.decision === 'fire';
+                    let reasonText = item.reason || '';
+                    Object.keys(PROACTIVE_REASON_LABELS).forEach(function (k) {
+                        if (reasonText.indexOf(k) !== -1) {
+                            reasonText = PROACTIVE_REASON_LABELS[k];
+                        }
+                    });
+                    line.textContent = (fired ? '🟢 ' : '⚪ ') + (item.ts || '') +
+                        ' ' + (fired ? '出手了' : '按住了') +
+                        (fired ? '' : '（' + reasonText + '）') +
+                        (item.events ? ' · 触发：' + item.events : '');
+                    const detail = document.createElement('details');
+                    const sum = document.createElement('summary');
+                    sum.textContent = '原始记录';
+                    detail.appendChild(sum);
+                    detail.appendChild(document.createTextNode(item.reason || ''));
+                    line.appendChild(detail);
+                    box.appendChild(line);
+                });
+            })
+            .catch(function () { box.textContent = '审计读取失败'; });
+    }
+
+    function appendProactiveSection() {
+        if (!settingsListEl) return;
+        const title = document.createElement('div');
+        title.className = 'settings-group-title';
+        title.textContent = '主动性（#271③）';
+        settingsListEl.appendChild(title);
+        // 防误导说明（#316 兄弟约束：可见且不误导——审计≠已发消息）
+        const note = document.createElement('div');
+        note.className = 'settings-empty';
+        note.textContent = '内账观察期：「出手」=仅写审计记录，暂不给主人发真消息。';
+        settingsListEl.appendChild(note);
+        // 面板 A：每天最多主动 N 次（1-50，后端再夹钳一道）
+        const field = document.createElement('label');
+        field.className = 'first-run-field settings-field';
+        const cap = document.createElement('span');
+        cap.textContent = '每天最多主动（次，1-50）';
+        field.appendChild(cap);
+        const num = document.createElement('input');
+        num.type = 'number';
+        num.min = '1'; num.max = '50';
+        num.className = 'settings-input';
+        num.id = 'proactive-limit';
+        field.appendChild(num);
+        settingsListEl.appendChild(field);
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'settings-input';
+        saveBtn.id = 'proactive-limit-save';
+        saveBtn.textContent = '保存频率';
+        saveBtn.addEventListener('click', function () {
+            fetch('/api/proactive/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ daily_limit: parseInt(num.value, 10) }),
+            }).then(function (r) {
+                return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+            }).then(function (res) {
+                if (res.ok) {
+                    showToast('已保存，下一心跳生效（' + res.j.data.daily_limit + ' 次/天）');
+                    loadProactiveAudit();
+                } else {
+                    showToast(res.j.error || '保存失败');
+                }
+            }).catch(function () { showToast('保存失败'); });
+        });
+        settingsListEl.appendChild(saveBtn);
+        // 面板 B：占位灰化（Phase 2 陪伴类事件源实现后激活）
+        const bField = document.createElement('label');
+        bField.className = 'first-run-field settings-field';
+        bField.style.opacity = '0.5';
+        const bCap = document.createElement('span');
+        bCap.textContent = '提醒/陪伴分档（Phase 2 开放）';
+        bField.appendChild(bCap);
+        const bSel = document.createElement('select');
+        bSel.className = 'settings-input';
+        bSel.disabled = true;
+        const bOpt = document.createElement('option');
+        bOpt.textContent = '灰化占位';
+        bSel.appendChild(bOpt);
+        bField.appendChild(bSel);
+        settingsListEl.appendChild(bField);
+        // 审计列表
+        const auditTitle = document.createElement('div');
+        auditTitle.className = 'settings-group-title';
+        auditTitle.textContent = '你刚才想说什么';
+        settingsListEl.appendChild(auditTitle);
+        const auditBox = document.createElement('div');
+        auditBox.id = 'proactive-audit';
+        settingsListEl.appendChild(auditBox);
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'settings-input';
+        refreshBtn.id = 'proactive-audit-refresh';
+        refreshBtn.textContent = '刷新审计';
+        refreshBtn.addEventListener('click', loadProactiveAudit);
+        settingsListEl.appendChild(refreshBtn);
+        loadProactiveAudit();
+    }
+
     function appendUiPrefsSection() {
         if (!settingsListEl) return;
         const title = document.createElement('div');
@@ -2028,6 +2159,7 @@
         }
         settingsListEl.innerHTML = '';
         appendUiPrefsSection();   // #264 B2d④ 静态本地组（与 API 组并列，始终渲染）
+        appendProactiveSection();   // #271③ Phase 1 批 2：主动性卡（静态组，始终渲染）
         if (!items.length) {
             appendSettingsTip('暂无可见设置项（当前等级或分档表限制）');
             applyDevSwitchRow();   // 开关行恢复（空列表路径）
@@ -2074,6 +2206,7 @@
                     if (aboutRow) aboutRow.remove();
                     settingsListEl.innerHTML = '';
                     appendUiPrefsSection();   // 静态组不依赖 API 成败
+                appendProactiveSection();   // #271③ Phase 1：主动性卡
                     applyDevSwitchRow();   // 开关行恢复（失败路径）
                     if (aboutRow) settingsListEl.appendChild(aboutRow);
                     appendSettingsTip('设置读取失败' +
@@ -2088,6 +2221,7 @@
                 if (aboutRow) aboutRow.remove();
                 settingsListEl.innerHTML = '';
                 appendUiPrefsSection();   // 静态组不依赖 API 成败
+                appendProactiveSection();   // #271③ Phase 1：主动性卡
                 applyDevSwitchRow();   // 开关行恢复（catch 路径）
                 if (aboutRow) settingsListEl.appendChild(aboutRow);
                 appendSettingsTip('设置读取失败: ' + err.message);
