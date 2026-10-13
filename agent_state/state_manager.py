@@ -8,10 +8,54 @@ save_conversation 会话 JSON 落盘（只保留最近 MAX_MESSAGES 条）。
 """
 import os
 import json
+import re
 import sqlite3
 import time
+from datetime import datetime
 
 from xiaoju3 import AGENT_STATE_DIR, MAX_MESSAGES
+
+
+# ==================== 记忆 V2（#297 批 1：三乘子召回，2026-10-13） ====================
+# 参数唯一口径 = 实验室 exp01-04（design_297_memory_merge_v2.md §1.6），照搬不加戏
+RECALL_DEPTH = 2         # 扩散深度（exp02）
+RECALL_DECAY = 0.5       # 每跳激活衰减（exp02）
+RECALL_THRESHOLD = 0.05  # 激活剪枝阈值（exp02）
+RECALL_GAIN = 0.30       # 召回使用增益（exp01）
+WEIGHT_MAX = 3.0         # 权重上限（2026-10-13 拍板③：增益后夹钳，睡眠回放侧批 2 同款）
+SEED_MAX = 12            # 单次召回种子候选上限（防超长消息全表扫；滑窗词元多，8 会截掉尾部有效词）
+
+# 种子切分（朴素零依赖口径，2026-10-13 拍板②先跑）：中文连续段按虚词表
+# 切短，ASCII/数字连续段直接作候选
+_WORD_SPLIT_RE = re.compile(
+    r'[的吗呢吧是在我你他要有很都就还也不没啊呀哦么及与和为得时这那哪嘛呗'
+    r'个们地着过被把让从向往于而且或若虽但会能]')
+
+
+def _seed_candidates(query):
+    """用户消息 → 种子候选词（保序去重，上限 SEED_MAX）。
+
+    中文段先（虚词切分→整段词），长段（≥4 字）再补 2 字滑窗词元——虚词
+    表切不细的复合词（如「毕业答辩准备」）也能出「答辩」级词元；噪声
+    词元 LIKE 不命中即无害。ASCII/数字段殿后。无候选返回空列表，由调用
+    方回退时间序（旧行为零副作用，不劣于现状）。
+    """
+    text = str(query or "")
+    out = []
+    for seg in re.findall(r'[\u4e00-\u9fa5]{2,}', text):
+        for word in _WORD_SPLIT_RE.split(seg):
+            if len(word) >= 2 and word not in out:
+                out.append(word)
+    tail = []
+    for seg in re.findall(r'[\u4e00-\u9fa5]{4,}', text):
+        for i in range(len(seg) - 1):
+            w = seg[i:i + 2]
+            if w not in out and w not in tail:
+                tail.append(w)
+    for seg in re.findall(r'[A-Za-z0-9]{2,}', text):
+        if seg not in out:
+            out.append(seg)
+    return (out + tail)[:SEED_MAX]
 
 
 class StateManager:
@@ -78,6 +122,57 @@ class StateManager:
         if "effective_priority" not in cols:
             cursor.execute(
                 "ALTER TABLE todos ADD COLUMN effective_priority TEXT DEFAULT NULL")
+        # ===== 记忆 V2 schema（#297 批 1，2026-10-13）：memories 幂等补
+        # 7 列 + 四表（todos note 列先例同款）。schema 不受开关控制——
+        # 加列全带默认值向后兼容（旧代码不读新列照常工作），开关只控行为
+        mem_cols = [row[1] for row in cursor.execute("PRAGMA table_info(memories)")]
+        for col_sql in (
+            "ALTER TABLE memories ADD COLUMN weight REAL NOT NULL DEFAULT 1.0",
+            "ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE memories ADD COLUMN last_access TEXT",
+            "ALTER TABLE memories ADD COLUMN activation REAL NOT NULL DEFAULT 0.0",
+            "ALTER TABLE memories ADD COLUMN emotion_tag TEXT NOT NULL DEFAULT 'neutral'",
+            "ALTER TABLE memories ADD COLUMN sink_status TEXT NOT NULL DEFAULT 'active'",
+            "ALTER TABLE memories ADD COLUMN emotional_impact REAL NOT NULL DEFAULT 0.0",
+        ):
+            col = col_sql.split("ADD COLUMN ")[1].split()[0]
+            if col not in mem_cols:
+                cursor.execute(col_sql)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS memory_edge (
+                from_id INTEGER NOT NULL,
+                to_id INTEGER NOT NULL,
+                weight REAL NOT NULL DEFAULT 1.0,
+                coactivation_count INTEGER NOT NULL DEFAULT 0,
+                last_activated TEXT,
+                PRIMARY KEY (from_id, to_id)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS activation_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                source TEXT NOT NULL
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sleep_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cycle TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                before REAL,
+                after REAL,
+                timestamp TEXT NOT NULL
+            )
+        ''')
+        # 幂等闸 KV：睡眠/召回审计状态属记忆库——不走 get_meta/set_meta
+        # （那连的是 todos_meta=todos.db，拆库后跨库）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS memory_meta
+            (key TEXT PRIMARY KEY, value TEXT)
+        ''')
         conn.commit()
         conn.close()
 
@@ -145,11 +240,18 @@ class StateManager:
         finally:
             conn.close()
 
-    def save_memory(self, category, content):
-        """保存一条长期记忆"""
+    def save_memory(self, category, content, emotion_tag=None,
+                    emotional_impact=None):
+        """保存一条长期记忆（#297 批 1 扩签名：情绪打标，旧调用零改动——
+        emotion_tag/emotional_impact 缺省走 neutral/0.0）。"""
+        tag = emotion_tag or 'neutral'
+        impact = emotional_impact if emotional_impact is not None else 0.0
         conn = sqlite3.connect(self.memory_db)
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO memories (category, content) VALUES (?, ?)", (category, content))
+        cursor.execute(
+            "INSERT INTO memories (category, content, emotion_tag,"
+            " emotional_impact) VALUES (?, ?, ?, ?)",
+            (category, content, tag, impact))
         conn.commit()
         conn.close()
         print(f"💾 [状态外置层] 已保存记忆: {category}")
@@ -162,6 +264,138 @@ class StateManager:
         results = cursor.fetchall()
         conn.close()
         return results
+
+    # ==================== 记忆 V2 三乘子召回（#297 批 1） ====================
+
+    @staticmethod
+    def _seed_hits(conn, query):
+        """种子候选 LIKE 命中（含 pending_sink——种子被想起即复活，exp04
+        wake_round 语义）；返回原始行元组列表，空候选/零命中返回 []。"""
+        cands = _seed_candidates(query)
+        if not cands:
+            return []
+        sql = ("SELECT id, category, content, weight, emotion_tag, sink_status"
+               " FROM memories WHERE "
+               + " OR ".join("content LIKE ?" for _ in cands))
+        return conn.execute(sql, [f"%{c}%" for c in cands]).fetchall()
+
+    @staticmethod
+    def _spread_pure(conn, seed_ids):
+        """扩散激活纯读版（exp02/04 同口径：RECALL_DEPTH/DECAY/THRESHOLD；
+        种子自身激活 1.0、不被邻居回注防自激——exp03 修正后语义）。"""
+        gained = {s: 1.0 for s in seed_ids}
+        frontier = {s: 1.0 for s in seed_ids}
+        for _ in range(RECALL_DEPTH):
+            nxt = {}
+            for nid, act in frontier.items():
+                for nb, ew in conn.execute(
+                        "SELECT to_id, weight FROM memory_edge WHERE from_id=?"
+                        " UNION SELECT from_id, weight FROM memory_edge"
+                        " WHERE to_id=?", (nid, nid)).fetchall():
+                    if nb in seed_ids:
+                        continue
+                    inject = act * RECALL_DECAY * ew
+                    if inject < RECALL_THRESHOLD:
+                        continue
+                    nxt[nb] = max(nxt.get(nb, 0.0), inject)
+                    gained[nb] = max(gained.get(nb, 0.0), inject)
+            frontier = nxt
+            if not frontier:
+                break
+        return gained
+
+    def recall_memories(self, query, limit=5):
+        """三乘子召回（#297 批 1）：种子 LIKE → 扩散激活 →
+        weight × activation × mood_factor 排序；返回 [(category, content)]
+        ——与 get_recent_memories 同形态，消费方 block 格式逐字节不变。
+
+        - 无种子命中 → 回退时间序 TOP limit（旧行为零副作用，不劣于现状）；
+        - 种子命中 pending_sink → 复活回 active（被想起即回活跃区）；
+        - 落库（每轮一次）：TOP 内种子使用增益（weight+0.30 夹钳
+          WEIGHT_MAX，拍板③ / access_count+1 / last_access 刷新）、
+          gained activation+审计 log、gained 节点对共激活+1（边权唯一
+          生长来源，拍板①召回共激活）；
+        - mood_factor 走 mood.mood_factor_for（P 维档位表，异常→1.0）。
+        """
+        conn = sqlite3.connect(self.memory_db)
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            seeds = self._seed_hits(conn, query)
+            if not seeds:
+                return conn.execute(
+                    "SELECT category, content FROM memories"
+                    " ORDER BY timestamp DESC LIMIT ?",
+                    (limit,)).fetchall()
+            seed_ids = {r[0] for r in seeds}
+            # 复活（先于打分：刚复活的种子本轮即参与排序）
+            for row in seeds:
+                if row[5] == "pending_sink":
+                    conn.execute(
+                        "UPDATE memories SET sink_status='active'"
+                        " WHERE id=?", (row[0],))
+            conn.commit()
+            gained = self._spread_pure(conn, list(seed_ids))
+            # mood 因子：一次读档，逐 tag 查表（mood 缺席/异常→1.0 中性旁路）
+            try:
+                import mood as _mood
+                _state = _mood.load_mood()
+            except Exception:
+                _mood = None
+                _state = None
+
+            def _mf(tag):
+                if _mood is None:
+                    return 1.0
+                try:
+                    return _mood.mood_factor_for(tag, _state)
+                except Exception:
+                    return 1.0
+
+            all_rows = conn.execute(
+                "SELECT id, category, content, weight, emotion_tag"
+                " FROM memories WHERE sink_status='active' OR id IN (%s)"
+                % ",".join("?" * len(seed_ids)),
+                list(seed_ids)).fetchall()
+            scored = []
+            for rid, cat, content, w, tag in all_rows:
+                act = gained.get(rid, 0.0)
+                scored.append((round(w * act * _mf(tag), 6),
+                               rid, cat, content))
+            scored.sort(key=lambda r: -r[0])
+            top = scored[:limit]
+            # ---- 落库段（每轮召回一次；失败不影响返回）----
+            try:
+                for _score, rid, _cat, _content in top:
+                    if rid in seed_ids:
+                        # 使用增益（种子级；MIN 夹钳 WEIGHT_MAX=拍板③）
+                        conn.execute(
+                            "UPDATE memories SET weight ="
+                            " MIN(weight + ?, ?), access_count ="
+                            " access_count + 1, last_access = ?"
+                            " WHERE id = ?",
+                            (RECALL_GAIN, WEIGHT_MAX, now, rid))
+                for nid, act in gained.items():
+                    conn.execute(
+                        "UPDATE memories SET activation=? WHERE id=?",
+                        (round(act, 4), nid))
+                    conn.execute(
+                        "INSERT INTO activation_log (node_id, timestamp,"
+                        " source) VALUES (?, ?, ?)",
+                        (nid, now, "recall_seed" if nid in seed_ids
+                         else "recall_spread"))
+                for u, v in conn.execute(
+                        "SELECT from_id, to_id FROM memory_edge").fetchall():
+                    if u in gained and v in gained:
+                        conn.execute(
+                            "UPDATE memory_edge SET coactivation_count ="
+                            " coactivation_count + 1, last_activated = ?"
+                            " WHERE from_id=? AND to_id=?", (now, u, v))
+                conn.commit()
+            except sqlite3.Error as e:
+                print(f"⚠️ [记忆V2] 召回落库失败（已跳过）: {e}")
+            return [(cat, content) for (_s, _r, cat, content) in top]
+        finally:
+            conn.close()
 
     # ==================== 待办清单（DeepSeek 链接提取，docs/TODO_EXTRACT_DESIGN.md §2） ====================
 

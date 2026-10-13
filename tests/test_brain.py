@@ -3030,6 +3030,18 @@ class LongTermMemoryWiringTests(unittest.TestCase):
     def setUp(self):
         self.sm = _STATE_FAKE.state_manager
         self._reset_sm()
+        # #297 批 1：写入链会 import mood 打标——本类隔离掉（match_event
+        # 恒无命中 / load_mood 抛异常）→ save_memory 收到 (None, None)；
+        # 打标本体行为在 tests/test_memory_v2.py 覆盖
+        import mood as _mood_mod
+        _me = mock.patch.object(_mood_mod, "match_event",
+                                return_value=(None, None))
+        _me.start()
+        self.addCleanup(_me.stop)
+        _ml = mock.patch.object(_mood_mod, "load_mood",
+                                side_effect=RuntimeError("test isolated"))
+        _ml.start()
+        self.addCleanup(_ml.stop)
         # 位置/时间上下文（2026-10-02 隐私与时段口径）与本类无关：恒等
         # 旁路，消息结构断言保持原口径（自身行为在 LocationAskTests /
         # TimeContextTests 覆盖）
@@ -3072,25 +3084,34 @@ class LongTermMemoryWiringTests(unittest.TestCase):
 
     def test_preference_keyword_saves_memory(self):
         self._chat("我喜欢蓝色")
-        self.sm.save_memory.assert_called_once_with("preference", "我喜欢蓝色")
+        self.sm.save_memory.assert_called_once_with(
+            "preference", "我喜欢蓝色", emotion_tag=None,
+            emotional_impact=None)
 
     def test_dislike_keyword_saves_memory(self):
         self._chat("我讨厌吃香菜")
-        self.sm.save_memory.assert_called_once_with("preference", "我讨厌吃香菜")
+        self.sm.save_memory.assert_called_once_with(
+            "preference", "我讨厌吃香菜", emotion_tag=None,
+            emotional_impact=None)
 
     def test_remember_keyword_saves_event(self):
         self._chat("请记住周三要开会")
-        self.sm.save_memory.assert_called_once_with("event", "请记住周三要开会")
+        self.sm.save_memory.assert_called_once_with(
+            "event", "请记住周三要开会", emotion_tag=None,
+            emotional_impact=None)
 
     def test_help_me_remember_saves_event(self):
         self._chat("帮我记住我的常用端口是5002")
         self.sm.save_memory.assert_called_once_with(
-            "event", "帮我记住我的常用端口是5002")
+            "event", "帮我记住我的常用端口是5002", emotion_tag=None,
+            emotional_impact=None)
 
     def test_keyword_extracts_matching_sentence_only(self):
         # 多句消息：提取命中规则的那一句，不是整条消息
         self._chat("今天心情不错。我讨厌吃香菜。")
-        self.sm.save_memory.assert_called_once_with("preference", "我讨厌吃香菜")
+        self.sm.save_memory.assert_called_once_with(
+            "preference", "我讨厌吃香菜", emotion_tag=None,
+            emotional_impact=None)
 
     def test_no_keyword_no_save(self):
         self._chat("今天穿什么好")

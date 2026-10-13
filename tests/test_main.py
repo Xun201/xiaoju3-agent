@@ -947,17 +947,23 @@ class TestMemoryAndCompression(_MainCase):
 
     # ---------- 长期记忆（架构 §10 #3） ----------
     def test_remember_saves_long_term_memory_and_confirms(self):
-        with patch.object(main.state_manager, "save_memory") as save_mock:
+        # #297 批 1：写入链打标（mood 隔离 → (None, None) 兜底），
+        # 打标本体行为在 tests/test_memory_v2.py 覆盖
+        with patch.object(main.state_manager, "save_memory") as save_mock,                 patch("mood.match_event", return_value=(None, None)),                 patch("mood.load_mood", side_effect=RuntimeError("isolated")):
             reply = main.handle_message('web', 'admin', None, "帮我记住我最爱的水果是苹果")
-        save_mock.assert_called_once_with("user", "我最爱的水果是苹果")
+        save_mock.assert_called_once_with("user", "我最爱的水果是苹果",
+                                          emotion_tag=None,
+                                          emotional_impact=None)
         self.assertIn("苹果", reply)
         self.assertIn("记住", reply)
         self.smart_ask.assert_not_called()
 
     def test_remember_plain_prefix_also_works(self):
-        with patch.object(main.state_manager, "save_memory") as save_mock:
+        with patch.object(main.state_manager, "save_memory") as save_mock,                 patch("mood.match_event", return_value=(None, None)),                 patch("mood.load_mood", side_effect=RuntimeError("isolated")):
             main.handle_message('web', 'admin', None, "记住我的快递地址是幸福路1号")
-        save_mock.assert_called_once_with("user", "我的快递地址是幸福路1号")
+        save_mock.assert_called_once_with("user", "我的快递地址是幸福路1号",
+                                          emotion_tag=None,
+                                          emotional_impact=None)
 
     def test_recent_memories_injected_into_smart_ask_context(self):
         """进入 smart_ask 前取 get_recent_memories(3) 拼入系统上下文。"""
