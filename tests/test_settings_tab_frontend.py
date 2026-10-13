@@ -140,8 +140,12 @@ class SettingsTabJsTests(unittest.TestCase):
         # B2c 持久化拍板：解锁仪式（未解锁→unlocked+on 同写）/已解锁指路/
         # 徽标统一挂摘 applyDevBadges
         self.assertIn("开发者模式开关已在下方（设置页底部）", cjs)
-        self.assertIn("开发者模式已解锁并开启（开关在下方）", cjs)
+        # 2026-10-13 拍板 B：解锁 toast 文案改 🔓（视觉反馈三件套之一）
+        self.assertIn("🔓 开发者模式已解锁（设置页底部展开「开发者模式」）", cjs)
         self.assertIn("api.set_dev_pref(true, true)", cjs)
+        self.assertIn("权限不足（Lv.' + level + '）", cjs)
+        self.assertIn("function applyDevBadges(on)", cjs)
+        self.assertIn("aboutLabel.textContent += ' 🛠️'", cjs)
         self.assertIn("权限不足（Lv.' + level + '）", cjs)
         self.assertIn("function applyDevBadges(on)", cjs)
         self.assertIn("aboutLabel.textContent += ' 🛠️'", cjs)

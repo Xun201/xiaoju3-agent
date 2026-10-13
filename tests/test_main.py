@@ -2063,3 +2063,32 @@ class TestTabBarRetired:
         # 设置入口统一经面板（管理分类）
         assert "switchChatTab('settings')" in js
         assert "权限分级配置" in js
+
+
+class TestDevVisualFeedbackAndFold:
+    """开发者模式视觉反馈（B toast+D 底色）+折叠式交互（源码锚）。"""
+
+    def _js(self):
+        return open("console.js", encoding="utf-8").read()
+
+    def test_unlock_toast_copy(self):
+        js = self._js()
+        # B 拍板：解锁瞬间 🔓 toast
+        assert "🔓 开发者模式已解锁" in js
+
+    def test_footer_highlight_block(self):
+        js = self._js()
+        # D 拍板：浅橙背景块（非仅变色）；C 图标砍掉（无 🔓 图标追加逻辑）
+        assert "rgba(217, 111, 43, 0.15)" in js
+        assert "markFooterVersionUnlocked" in js
+        # applyDevBadges 恢复链同步（F5/重启）
+        assert "fv.style.background = on ?" in js
+
+    def test_dev_switch_row_folded(self):
+        js = self._js()
+        # 折叠式：details/summary 结构（默认收起）；将来开发者选项都进此 details
+        assert "row = document.createElement('details')" in js
+        assert "sum.textContent = '开发者模式'" in js
+        assert "dev-switch-row" in js
+        # 开关本体仍在（details 内容区）
+        assert "dev-mode-switch" in js

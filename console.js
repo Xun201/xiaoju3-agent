@@ -2309,9 +2309,15 @@
             if (on && !has) cardVer.textContent += ' 🛠️';
             if (!on && has) cardVer.textContent = cardVer.textContent.replace(' 🛠️', '');
         }
-        // footer 版本号：解锁态恒橙（F5/重启恢复）
+        // footer 版本号：解锁态橙字+浅橙底块（F5/重启恢复）
         const fv = document.getElementById('footer-version');
-        if (fv) fv.style.color = on ? 'var(--color-primary, #d96f2b)' : '';
+        if (fv) {
+            fv.style.color = on ? 'var(--color-primary, #d96f2b)' : '';
+            fv.style.background = on ? 'rgba(217, 111, 43, 0.15)' : '';
+            fv.style.padding = on ? '1px 8px' : '';
+            fv.style.borderRadius = on ? '6px' : '';
+            fv.style.fontWeight = on ? '700' : '';
+        }
     }
 
     function setDevMode(on, reason) {
@@ -2364,7 +2370,7 @@
                 applyDevBadges(true);
                 applyDevSwitchRow();
                 markFooterVersionUnlocked();
-                showToast('🛠️ 开发者模式已解锁并开启（开关在下方）');
+                showToast('🔓 开发者模式已解锁（设置页底部展开「开发者模式」）');
                 if (api.dev_audit) api.dev_audit('dev_mode enter tap7 level=' + level);
             }).catch(function () { showToast('解锁失败'); });
             }).catch(function () { showToast('桌面窗口未就绪'); });
@@ -2372,7 +2378,14 @@
     // 解锁瞬间视觉反馈：footer 版本号变橙（#UI修复 2026-10-13）
     function markFooterVersionUnlocked() {
         const fv = document.getElementById('footer-version');
-        if (fv) fv.style.color = 'var(--color-primary, #d96f2b)';
+        if (fv) {
+            // D 拍板：浅橙背景块（一眼可见）；C 图标砍掉
+            fv.style.background = 'rgba(217, 111, 43, 0.15)';
+            fv.style.color = 'var(--color-primary, #d96f2b)';
+            fv.style.padding = '1px 8px';
+            fv.style.borderRadius = '6px';
+            fv.style.fontWeight = '700';
+        }
     }
 
     // 连点绑定（#264 B2c 收尾）：关于卡内版本号（藏得更深=暗入口语义）；
@@ -2391,13 +2404,18 @@
     // 位置=设置页「关于」条目上方；dev_unlocked=true 才显示；拨 ON/OFF 独立
     // 持久化（dev_mode_on）+徽标+审计；F5/重启按文件恢复（无重置路径）。
     function buildDevSwitchRow() {
-        const row = document.createElement('div');
+        // 折叠式交互（2026-10-13 拍板）：标题行「开发者模式」+原生 details
+        // 折叠（默认收起；将来开发者选项都收纳进此 details）
+        const row = document.createElement('details');
         row.className = 'settings-about-row';
         row.id = 'dev-switch-row';
-        const lab = document.createElement('span');
-        lab.className = 'settings-about-label';
-        lab.textContent = '开发者模式';
-        row.appendChild(lab);
+        const sum = document.createElement('summary');
+        sum.style.cssText = 'cursor:pointer;font-weight:700;font-size:13px;'
+            + 'list-style:revert;';
+        sum.textContent = '开发者模式';
+        row.appendChild(sum);
+        const body = document.createElement('div');
+        body.style.cssText = 'padding:6px 0 2px;';
         const sw = document.createElement('label');
         sw.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
         const input = document.createElement('input');
@@ -2411,7 +2429,8 @@
         txt.style.cssText = 'font-size:12px;opacity:.7;';
         txt.textContent = '高危项 TOTP 验证+审计';
         sw.appendChild(txt);
-        row.appendChild(sw);
+        body.appendChild(sw);
+        row.appendChild(body);
         return row;
     }
 
