@@ -1776,7 +1776,7 @@
     // 保留：终端切入拉最新+15s 轮询、切走即停；输入框与清空按钮仅对话窗口。
     const CHAT_TABS = {
         console: {
-            btn: function () { return tabConsoleBtn; },
+            btn: function () { return null; },   // #UI修复：tab 栏退役，按钮已删（空值安全同 settings 条目）
             show: function () { return [chatHistoryPaneEl]; },
             hide: function () { return [terminalPaneEl, settingsPaneEl]; },
             input: true,
@@ -1785,7 +1785,7 @@
             leave: null,
         },
         terminal: {
-            btn: function () { return tabTerminalBtn; },
+            btn: function () { return null; },   // #UI修复：tab 栏退役，按钮已删
             show: function () { return [terminalPaneEl]; },
             hide: function () { return [chatHistoryPaneEl, settingsPaneEl]; },
             input: false,
@@ -3078,12 +3078,6 @@
         quitApp: quitApp,
     };
 
-})();
-
-    // ==================== 小工具面板（MAA 式收纳，2026-10-13 批 1） ====================
-    // 顶部 🧰 → 全屏 overlay 卡片墙（三分类）；主动性监控卡=首批实装
-    // （从设置页迁入：折叠摘要+展开审计列表，跃迁日志后端复用）。
-    // 终端记录/记忆查看/家电列表=批 2；插件管理=批 3（#312）。
     const PROACTIVE_REASON_LABELS = {
         daily_quota: '今日次数已用完', cooldown: '刚聊过（冷却中）',
         quiet_hours: '深夜时段', rejected: '刚被拒绝过',
@@ -3278,6 +3272,7 @@
         if (!body) {
             body = document.createElement('div');
             body.id = bodyId;
+            body.hidden = true;   // 新建默认收起，走下方统一展开+加载
             body.style.cssText = 'margin:10px 0 20px;background:var(--color-card,'
                 + '#fff);border:1px solid var(--color-border,#e0e4ec);'
                 + 'border-radius:var(--radius-card,12px);padding:12px 14px;'
@@ -3433,3 +3428,9 @@
     if (toolsEntry) {
         toolsEntry.addEventListener('click', openToolsPanel);
     }
+})();
+
+    // ==================== 小工具面板（MAA 式收纳，2026-10-13 批 1） ====================
+    // 顶部 🧰 → 全屏 overlay 卡片墙（三分类）；主动性监控卡=首批实装
+    // （从设置页迁入：折叠摘要+展开审计列表，跃迁日志后端复用）。
+    // 终端记录/记忆查看/家电列表=批 2；插件管理=批 3（#312）。
