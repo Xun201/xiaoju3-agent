@@ -81,6 +81,12 @@ def _connect():
         tension REAL NOT NULL DEFAULT 0.0,
         last_fire_at TEXT,
         updated_at TEXT)""")
+    # Phase 1 跃迁日志（2026-10-13）：上次审计签名——连续同状态不重复记
+    sig_cols = [row[1] for row in con.execute(
+        "PRAGMA table_info(tension_state)")]
+    if "last_signature" not in sig_cols:
+        con.execute(
+            "ALTER TABLE tension_state ADD COLUMN last_signature TEXT")
     con.execute("""CREATE TABLE IF NOT EXISTS proactive_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts TEXT,
@@ -103,26 +109,32 @@ def _load_state(now):
     try:
         con = _connect()
         row = con.execute(
-            "SELECT tension, last_fire_at FROM tension_state WHERE id = 1"
-        ).fetchone()
+            "SELECT tension, last_fire_at, last_signature FROM tension_state"
+            " WHERE id = 1").fetchone()
         con.close()
         if row:
-            return {"tension": float(row[0] or 0.0), "last_fire_at": row[1]}
+            return {"tension": float(row[0] or 0.0),
+                    "last_fire_at": row[1],
+                    "last_signature": row[2]}
     except Exception:
         pass
-    return {"tension": 0.0, "last_fire_at": None}
+    return {"tension": 0.0, "last_fire_at": None, "last_signature": None}
 
 
-def _save_state(tension, last_fire_at, now):
-    """写单行状态（UPSERT；失败静默——审计绝不影响主链）。"""
+def _save_state(tension, last_fire_at, now, signature=None):
+    """写单行状态（UPSERT；失败静默——审计绝不影响主链）。
+    signature=上次审计签名（Phase 1 跃迁日志判重）。"""
     try:
         con = _connect()
         con.execute(
-            "INSERT INTO tension_state (id, tension, last_fire_at, updated_at) "
-            "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-            "tension = excluded.tension, last_fire_at = excluded.last_fire_at, "
-            "updated_at = excluded.updated_at",
-            (round(tension, 4), last_fire_at, now.isoformat(timespec="seconds")))
+            "INSERT INTO tension_state (id, tension, last_fire_at, updated_at,"
+            " last_signature) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE"
+            " SET tension = excluded.tension,"
+            " last_fire_at = excluded.last_fire_at,"
+            " updated_at = excluded.updated_at,"
+            " last_signature = excluded.last_signature",
+            (round(tension, 4), last_fire_at,
+             now.isoformat(timespec="seconds"), signature))
         con.commit()
         con.close()
     except Exception:
@@ -356,15 +368,25 @@ def proactive_tick(now=None):
         pass
     last_fire = st["last_fire_at"]
     fired = False
+    signature = None
     if tension >= FIRE_THRESHOLD and not sup:
         fired = True
+        signature = "fire"
         _append_log("tension_release", "fire",
                     f"tension={tension:.2f}", now, events=ev_names)
         tension = 0.0
         last_fire = now.isoformat(timespec="seconds")
     else:
+        # 签名=纯状态（抑制组合），不含 tension 微变值——否则每 tick
+        # 都"不同"判重失效；无抑制按住=calm 单一状态
+        signature = ("suppress:" + ",".join(sup)) if sup else "suppress:calm"
         reason = ",".join(sup) if sup else f"tension={tension:.2f}<{FIRE_THRESHOLD}"
-        _append_log("tension_build", "suppress", reason, now, events=ev_names)
-    _save_state(tension, last_fire, now)
+        # Phase 1 跃迁日志（2026-10-13）：连续同状态不重复记——签名与
+        # 上次一致则跳过（tension 数值漂移不算跃迁；抑制组合/事件明细
+        # 变化=状态变化照记）。fire 恒记（关键事件）。
+        if signature != st.get("last_signature"):
+            _append_log("tension_build", "suppress", reason, now,
+                        events=ev_names)
+    _save_state(tension, last_fire, now, signature=signature)
     return {"tension": round(tension, 4), "suppressed": bool(sup),
             "fired": fired}

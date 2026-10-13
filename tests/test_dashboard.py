@@ -1924,7 +1924,8 @@ class ThinkCardFrontendTests(unittest.TestCase):
         self.assertTrue(js_ids, msg="console.js 未发现 getElementById 调用")
         dynamic_ids = {"xiaoju3-toast",
                  "about-overlay", "dev-switch-row",
-                 "proactive-audit"}   # showToast/关于卡（#264 B2d）/开发者开关行（#264 B2c）/主动性审计框（#271③ Phase 1）首次调用时 createElement 自建
+                 "proactive-audit", "proactive-summary",
+                 "proactive-summary-text", "proactive-arrow"}   # showToast/关于卡（#264 B2d）/开发者开关行（#264 B2c）/主动性审计框（#271③ Phase 1）首次调用时 createElement 自建
         missing = js_ids - dynamic_ids - html_ids
         self.assertEqual(missing, set(),
                          msg="console.js 引用了 index.html 不存在的 id: %s" % missing)

@@ -349,3 +349,49 @@ class Phase1Batch1Tests(ProactiveBase):
         self.assertIsNone(proactive.set_daily_limit("abc"))
         self.assertEqual(proactive.set_daily_limit(1), 1)     # 下边界
         self.assertEqual(proactive.set_daily_limit(50), 50)   # 上边界
+
+
+class TestTransitionLog:
+    """Phase 1 跃迁日志（2026-10-13 UI 修复批）：连续同状态不重复记。"""
+
+    def _count(self, db):
+        import sqlite3
+        con = sqlite3.connect(db)
+        try:
+            return con.execute(
+                "SELECT COUNT(*), COALESCE(SUM(decision='fire'), 0)"
+                " FROM proactive_log").fetchone()
+        finally:
+            con.close()
+
+    def test_same_state_not_repeated(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "p.db")
+        monkeypatch.setenv("XIAOJU3_PROACTIVE_ENABLED", "1")
+        monkeypatch.setenv("XIAOJU3_PROACTIVE_DB_PATH", db)
+        t0 = datetime(2026, 10, 13, 9, 0, 0)
+        # 5 连 tick 同为 suppress:calm（无抑制+张力不足）→ 只记第 1 条
+        for i in range(5):
+            with mock.patch.object(proactive, "_collect_events",
+                                   return_value=[]):
+                proactive.proactive_tick(t0 + timedelta(seconds=60 * i))
+        total, fires = self._count(db)
+        assert total == 1, f"同状态应只记 1 条，实际 {total}"
+        assert fires == 0
+
+    def test_transition_records_and_fire_always(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "p.db")
+        monkeypatch.setenv("XIAOJU3_PROACTIVE_ENABLED", "1")
+        monkeypatch.setenv("XIAOJU3_PROACTIVE_DB_PATH", db)
+        t0 = datetime(2026, 10, 13, 9, 0, 0)
+        step = timedelta(seconds=60)
+        # tick1: calm suppress（记）→ tick2: 带 quiet_hours 抑制（状态变，记）
+        with mock.patch.object(proactive, "_collect_events",
+                               return_value=[]):
+            proactive.proactive_tick(t0)
+        with mock.patch.object(proactive, "_collect_events",
+                               return_value=[]), \
+                mock.patch.object(proactive, "in_quiet_hours",
+                                  return_value=True):
+            proactive.proactive_tick(t0 + step)
+        total, _ = self._count(db)
+        assert total == 2   # calm → quiet_hours 两次跃迁各记一条
