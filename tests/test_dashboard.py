@@ -462,7 +462,7 @@ class ChatApiTests(HistoryApiTestsBase):
         self.assertEqual(payload["code"], 200)
         self.assertEqual(payload["data"]["reply"], "你好呀，主人~")
         self.assertEqual(payload["data"]["source"], "🏠 本地")
-        ms.assert_called_once_with("你好", history)
+        ms.assert_called_once_with("你好", history, user_id="owner")
         # 直连大脑：不写 QQ/网页双通道记忆，agent_state 下无新 history 落盘
         # （控制台历史已注入 tmp 目录，真实 agent_state 不受影响）
         self.assertEqual(_history_files(), before)
@@ -476,7 +476,7 @@ class ChatApiTests(HistoryApiTestsBase):
             resp = self.client.post("/api/chat", json={"message": "在吗"})
 
         self.assertEqual(resp.status_code, 200)
-        ms.assert_called_once_with("在吗", [])
+        ms.assert_called_once_with("在吗", [], user_id="owner")
 
     def test_console_help_returns_menu_not_llm(self):
         """控制台 /help 接线（2026-10-04）：命中菜单别名 → 返回 help_menu
@@ -563,7 +563,7 @@ class ConsoleIntentRouteTests(HistoryApiTestsBase):
             resp = self.client.post(
                 "/api/chat", json={"message": "今天天气不错"})
         self.assertEqual(resp.get_json()["data"]["reply"], "模型回复")
-        ms.assert_called_once_with("今天天气不错", [])   # 空记录不注入
+        ms.assert_called_once_with("今天天气不错", [], user_id="owner")   # 空记录不注入
 
     def test_dispatch_error_reply_falls_through_to_llm(self):
         # ❌ 透传语义与 QQ 链路一致：dispatch 失败不吞消息
@@ -751,7 +751,7 @@ class ConsoleSlashWiringTests(HistoryApiTestsBase):
             resp = self.client.post("/api/chat",
                                     json={"message": "/not_a_command"})
         self.assertEqual(resp.get_json()["data"]["reply"], "模型回复")
-        ms.assert_called_once_with("/not_a_command", [])
+        ms.assert_called_once_with("/not_a_command", [], user_id="owner")
 
     def test_wiring_set_subset_of_main_dispatch(self):
         """清单一致性锚：控制台拦截集 ⊆ main 分发集（防平行清单漂移）；
