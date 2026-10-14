@@ -182,6 +182,15 @@ BARE_COT_BODY_PLACEHOLDER = "（操作已执行）"
 # 的简短正文，取代"（操作已执行）"的正文兜底角色
 DEFAULT_BODY_PLACEHOLDER = "操作已完成。"
 
+# 修 B（design_fix_no_fake_completion 方案 A，2026-10-14）：body 剥空兜底前
+# 否定感知守卫——思考卡含诚实拒绝（否定表述）时禁止注入"操作已完成。"
+# （正文虚假完成，冒烟 R2 实锤），改注诚实文案；真完成场景（工具成功+模型
+# 无正文，思考无否定）维持原兜底逐字节不变。
+THINK_NEGATION_RE = re.compile(
+    r"没有|不能|无法|干不了|做不到|不具备|无权|不支持")
+NO_ABILITY_BODY_PLACEHOLDER = (
+    "这件事我做不到——我没有对应的能力或工具。（详情见上方思考）")
+
 # 回复出口去重（2026-10-02 用户口径，修复本地模型复读）：思考与正文完全相同
 # 收敛为"占位卡 + 正文一份"、正文句级连续重复塌缩；句级去重后正文为空时的
 # 正文占位符（用户口径示例文案）
@@ -349,6 +358,10 @@ def _wrap_think(thinking, body):
                 promoted = candidate
         if promoted:
             body_text = promoted
+        elif THINK_NEGATION_RE.search(thinking_text):
+            # 修 B：思考卡含诚实拒绝（否定表述）→ 正文禁止虚假完成
+            # （冒烟 R2 实锤：think 说"没有删除工具"，正文被兜底成"操作已完成。"）
+            body_text = NO_ABILITY_BODY_PLACEHOLDER
         elif thinking_text.strip() != CHAT_THINKING_PLACEHOLDER:
             # 不可回补（工具占位思考 / 多段思考含裸标记）→ 简短正文兜底
             body_text = DEFAULT_BODY_PLACEHOLDER
