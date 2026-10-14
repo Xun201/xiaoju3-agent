@@ -964,27 +964,12 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     if fuse_reply is not None:
         return fuse_reply
 
-    # === 📝 全自动日志提取（§7：/gen_log 限 Lv.3+，不足只引导不执行） ===
-    if "/gen_log" in message:
-        if permission_manager.level_value() < 3:
-            return ("❌ 权限不足，开发日志提取需要 Lv.3（代码编写者）权限。\n"
-                    "请先发送 /coder_auth <6位动态密码> 升级后再试。")
-        # 从清洗前原文提取链接：标点清洗会剥掉 URL 里的 : . 等字符，导致前缀校验失效
-        log_url = _arg_after(raw_message, "/gen_log")
-
-        if not log_url.startswith(SHARE_PREFIX):
-            return "⚠️ 请提供正确的 DeepSeek 分享链接，格式：/gen_log https://chat.deepseek.com/share/..."
-
-        def run_log_extraction(target_url):
-            print(f"🚀 收到指令，开始后台提取链接: {target_url}")
-            try:
-                import run_link_log
-                run_link_log.run_link_log(target_url)
-            except Exception as e:
-                print(f"⚠️ 提取任务后台报错: {e}")
-
-        threading.Thread(target=run_log_extraction, args=(log_url,), daemon=True).start()
-        return "🔄 收到链接啦！小橘3号正在后台努力阅读和总结（大约需要1分钟）。完成后日志会自动保存到 dev_logs 文件夹里！"
+    # === 📝 全自动日志提取（#227 批 B：分派+线程随迁 memory_handler.gen_log，
+    # === 受理路径需 Lv.3 态=真机验证项 DB5） ===
+    log_reply = memory_handler.gen_log(
+        message, raw_message, level_value_cb=permission_manager.level_value)
+    if log_reply is not None:
+        return log_reply
 
     # === 📋 待办指令族（共享分发：QQ 与控制台同一门禁，见 handle_todo_command） ===
     # #227 批 0：分派层迁入 content_handler（领域样板，v2 领域拆分版）；

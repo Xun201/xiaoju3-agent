@@ -54,3 +54,52 @@ def test_remember_whitespace_only_returns_none():
         "记住   ", strip_cq_cb=lambda t: t,
         remember_cb=lambda c: called.append(c))
     assert reply is None and called == []
+
+
+# B-2 ==================== gen_log ====================
+
+# 7 非本域 → None
+def test_gen_log_non_domain_returns_none():
+    assert memory_handler.gen_log(
+        "今天天气如何", "今天天气如何",
+        level_value_cb=lambda: 4) is None
+
+
+# 8 Lv.3 门：低级只引导不执行
+def test_gen_log_gate_denies_low_level():
+    reply = memory_handler.gen_log(
+        "/gen_log https://chat.deepseek.com/share/abc",
+        "/gen_log https://chat.deepseek.com/share/abc",
+        level_value_cb=lambda: 1)
+    assert "权限不足" in reply and "Lv.3" in reply
+
+
+# 9 坏链接：前缀校验拒绝
+def test_gen_log_bad_link_rejected():
+    reply = memory_handler.gen_log(
+        "/gen_log https://evil.example.com/x",
+        "/gen_log https://evil.example.com/x",
+        level_value_cb=lambda: 3)
+    assert "请提供正确的 DeepSeek 分享链接" in reply
+
+
+# 10 受理路径：daemon 线程被创建（Thread 打桩不真跑网络）
+def test_gen_log_accept_starts_daemon_thread(monkeypatch):
+    started = {}
+
+    class FakeThread:
+        def __init__(self, target, args, daemon):
+            started["target"], started["args"], started["daemon"] = \
+                target, args, daemon
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(memory_handler.threading, "Thread", FakeThread)
+    reply = memory_handler.gen_log(
+        "/gen_log https://chat.deepseek.com/share/abc",
+        "/gen_log https://chat.deepseek.com/share/abc",
+        level_value_cb=lambda: 3)
+    assert reply.startswith("🔄")
+    assert started["daemon"] is True and started["started"] is True
+    assert started["args"] == ("https://chat.deepseek.com/share/abc",)
