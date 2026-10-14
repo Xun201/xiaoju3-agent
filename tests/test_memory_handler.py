@@ -103,3 +103,26 @@ def test_gen_log_accept_starts_daemon_thread(monkeypatch):
     assert reply.startswith("🔄")
     assert started["daemon"] is True and started["started"] is True
     assert started["args"] == ("https://chat.deepseek.com/share/abc",)
+
+
+# B-3 ==================== handle_clear ====================
+
+# 11 四变体全等命中：cb 收 source、回复逐字节
+def test_clear_variants_route_to_cb():
+    seen = []
+    for cmd, src in (("/clear", "web"), ("/reset", "qq"),
+                     ("清空记忆", "web"), ("重置记忆", "qq")):
+        reply = memory_handler.handle_clear(
+            cmd, src, clear_cb=lambda s: seen.append(s))
+        assert reply == "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
+    assert seen == ["web", "qq", "web", "qq"]
+
+
+# 12 非变体不误吞：/reset_fuse 与含字样普通对话均返回 None
+def test_clear_does_not_swallow_reset_fuse():
+    called = []
+    assert memory_handler.handle_clear(
+        "/reset_fuse", "qq", clear_cb=lambda s: called.append(s)) is None
+    assert memory_handler.handle_clear(
+        "帮我清空记忆吧", "qq", clear_cb=lambda s: called.append(s)) is None
+    assert called == []
