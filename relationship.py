@@ -87,6 +87,14 @@ CREATE TABLE IF NOT EXISTS rel_event_log (
     affinity_after REAL NOT NULL,
     note TEXT
 );
+CREATE TABLE IF NOT EXISTS rel_mode (
+    user_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL DEFAULT 'polite',
+    confidence REAL NOT NULL DEFAULT 0.0,
+    source TEXT NOT NULL DEFAULT 'auto',
+    judged_at TEXT NOT NULL,
+    evidence TEXT
+);
 """
 
 
@@ -240,6 +248,43 @@ def get_context(user_id):
     except Exception:
         return {"affinity": 0.0, "display_name": None, "prefs": {},
                 "count": 0}
+
+
+def db_path():
+    """公共路径访问（#271 关系化人格 personality 模块同库借道；frozen
+    归位单点仍在 _db_path，此处只开只读门）。"""
+    return _db_path()
+
+
+def event_stats(user_id, since=None):
+    """逐用户事件统计（#271 关系化人格判定输入；纯读零副作用）。
+
+    since：ISO 字符串下界（None=全历史；rel_event_log 本身 2000 条滚动，
+    窗口实际还受滚动上限约束）。返回 dict 计数（含 n_int 总数）；任何
+    异常返回全零 dict（静默纪律——判定侧拿到零证据即落默认档）。
+    """
+    zero = {"interaction": 0, "thanks": 0, "politeness": 0,
+            "scolded": 0, "n_int": 0}
+    try:
+        conn = _connect()
+        try:
+            q = "SELECT event, COUNT(*) FROM rel_event_log WHERE user_id=?"
+            args = [str(user_id)]
+            if since:
+                q += " AND ts >= ?"
+                args.append(str(since))
+            rows = conn.execute(q + " GROUP BY event", args).fetchall()
+        finally:
+            conn.close()
+        for ev, n in rows:
+            if ev in zero:
+                zero[ev] = int(n)
+        zero["n_int"] = sum(zero[e] for e in
+                            ("interaction", "thanks", "politeness",
+                             "scolded"))
+        return zero
+    except Exception:
+        return dict(zero)
 
 
 def set_call_name(user_id, name):
