@@ -1278,17 +1278,77 @@ def _flush_chat_burst(key):
         delay = random.uniform(_CHAT_RHYTHM["delay_min"],
                                _CHAT_RHYTHM["delay_max"])
         time.sleep(delay)
-        endpoint = ("send_group_msg" if b.get("group_id")
-                    else "send_private_msg")
-        payload = {"message": reply}
-        if b.get("group_id"):
-            payload["group_id"] = b["group_id"]
-        else:
-            payload["user_id"] = b["user_id"]
-        requests.post(f"{ONEBOT_API_URL}/{endpoint}", json=payload,
-                      timeout=10, headers=_onebot_headers())
+        # 打字机（#227 后续批）：开关开且长回复 → 分段连发（段间 1-2s）；
+        # 关/单段 → 单发与既有行为逐字节一致
+        _send_reply_segments(b["user_id"], b.get("group_id"), reply)
     except Exception as e:
         print(f"⚠️ [拟人节奏] 闲聊回复失败（跳过）: {e}")
+
+
+# ================= 打字机分段发送（2026-10-14，方案 B：分段不逐字） =================
+# 用户拍板：接受代价（QQ 显示多条消息）——长回复按自然断点切 2-3 段连发，
+# 段间 1-2s 随机延迟=打字感。与拟人节奏叠加：节奏延迟在整体前（等待），
+# 分段延迟在段间（打字），总体验=等待 20-30s → 逐段出现。
+# 开关 XIAOJU3_CHAT_TYPING 缺省关（M2 先例——首个可感知变化默认关）。
+TYPING_SPLIT_THRESHOLD = 100   # 超过才切（短回复原样）
+TYPING_MIN_SEGMENT = 15        # 单段最小长度（避免碎片）
+TYPING_MAX_SEGMENTS = 3        # 最多 2-3 段
+TYPING_DELAY_RANGE = (1.0, 2.0)
+_SENTENCE_END_CHARS = "。！？!?\n"
+
+
+def _typing_enabled():
+    """打字机分段开关（XIAOJU3_CHAT_TYPING，缺省关）。独立于拟人节奏开关
+    （可单独开/可叠加：节奏管等待、打字机管段间）。"""
+    return str(os.environ.get("XIAOJU3_CHAT_TYPING", "0")).strip().lower() \
+        in ("1", "true", "on")
+
+
+def split_reply_for_typing(text, max_len=TYPING_SPLIT_THRESHOLD,
+                           min_len=TYPING_MIN_SEGMENT,
+                           max_segments=TYPING_MAX_SEGMENTS):
+    """自然断点切段（纯函数，锚可直调）：优先句末标点（。！？换行）后切，
+    无切点强切（>max_len 处）；尾段 <min_len 并入前段防碎片；不足两段返回
+    单段（调用方原样发）。"""
+    text = (text or "").strip()
+    if len(text) <= max_len:
+        return [text]
+    cuts = [i + 1 for i, ch in enumerate(text) if ch in _SENTENCE_END_CHARS]
+    segments, start = [], 0
+    while len(text) - start > max_len and len(segments) < max_segments - 1:
+        best = max((c for c in cuts if start + min_len <= c <= start + max_len),
+                   default=-1)
+        if best == -1:
+            best = min(start + max_len, len(text))   # 强切（无自然断点）
+        segments.append(text[start:best].strip())
+        start = best
+    tail = text[start:].strip()
+    if tail:
+        segments.append(tail)
+    if len(segments) >= 2 and len(segments[-1]) < min_len:
+        segments = segments[:-2] + [segments[-2] + segments[-1]]
+    return segments
+
+
+def _send_reply_segments(user_id, group_id, reply, post=None, sleep_fn=None):
+    """QQ 回复统一发送出口（打字机开关感知）：开关关或单段=一次发送
+    （payload 与既有行为逐字节一致）；开关开且多段=顺序连发+段间随机
+    1-2s。post/sleep_fn 供测试注入（默认 ONEBOT API 真发/真睡）。"""
+    post = post or (lambda endpoint, payload: requests.post(
+        f"{ONEBOT_API_URL}/{endpoint}", json=payload, timeout=10,
+        headers=_onebot_headers()))
+    sleep_fn = sleep_fn or time.sleep
+    segments = split_reply_for_typing(reply) if _typing_enabled() else [reply]
+    endpoint = "send_group_msg" if group_id else "send_private_msg"
+    for idx, seg in enumerate(segments):
+        payload = {"message": seg}
+        if group_id:
+            payload["group_id"] = group_id
+        else:
+            payload["user_id"] = user_id
+        post(endpoint, payload)
+        if idx < len(segments) - 1:
+            sleep_fn(random.uniform(*TYPING_DELAY_RANGE))
 
 
 # ================= QQ大门（业务体；HTTP 视图宿主于 :5003） =================
@@ -1379,15 +1439,9 @@ def onebot_event(data):
 
         if reply:
             try:
-                api_endpoint = "send_group_msg" if group_id else "send_private_msg"
-                payload = {"message": reply}
-                if group_id:
-                    payload["group_id"] = group_id
-                else:
-                    payload["user_id"] = user_id
-
-                requests.post(f"{ONEBOT_API_URL}/{api_endpoint}", json=payload,
-                              timeout=10, headers=_onebot_headers())
+                # 打字机（#227 后续批）：开关开且长回复 → 分段连发；关/短
+                # → 单发与既有行为逐字节一致
+                _send_reply_segments(user_id, group_id, reply)
             except Exception as e:
                 print(f"❌ 发送QQ消息失败: {e}")
                 print("❌ 无法连接至 OneBot 服务，请确认 LLOneBot 是否已启动，"
