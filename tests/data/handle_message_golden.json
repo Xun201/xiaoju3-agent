@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-12 pre-batch1-golden",
+  "version": "2026-10-14 batchA-golden-38",
   "samples": [
     {
       "desc": "help_menu",
@@ -7,7 +7,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_指令"
+      "assert_type": "contains_指令",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "📋 小橘3号 指令菜单\n\n【💬 对话直达 · 无需指令】\n· 直接聊天：双脑问答（本地优先 / 云端兜底）\n· 发 DeepSeek 分享链接：自动总结网页内容\n· “帮我搜…”：联网搜索（天气请带城市区县）\n· “记一下账 / 花了30元”：记账本\n· “把对话导出成电子书”：EPUB 电子书\n· “记住…”：长期记忆\n【🔑 权限】\n· /register <密码>：注册 / 更新注册【Lv.2】\n· /coder_auth <6位动态密码>：激活 Lv.3（持久生效）\n· /name <昵称>：认领称呼【Lv.2】\n【⚙️ 系统】\n· /help（菜单 / 帮助 / 指令）：本手册\n· /creator：创作者署名\n· /clear（/reset）：清空会话记忆\n· /set_location <城市> [区县]：位置记忆（仅存本地）\n· /clear_location：清除位置记录\n🔸 升级指引：/register <密码> → Lv.2（待办 / 认称呼）\n\n你当前的权限等级：Lv.1"
+      }
     },
     {
       "desc": "help_alias",
@@ -15,7 +19,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_指令"
+      "assert_type": "contains_指令",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "📋 小橘3号 指令菜单\n\n【💬 对话直达 · 无需指令】\n· 直接聊天：双脑问答（本地优先 / 云端兜底）\n· 发 DeepSeek 分享链接：自动总结网页内容\n· “帮我搜…”：联网搜索（天气请带城市区县）\n· “记一下账 / 花了30元”：记账本\n· “把对话导出成电子书”：EPUB 电子书\n· “记住…”：长期记忆\n【🔑 权限】\n· /register <密码>：注册 / 更新注册【Lv.2】\n· /coder_auth <6位动态密码>：激活 Lv.3（持久生效）\n· /name <昵称>：认领称呼【Lv.2】\n【⚙️ 系统】\n· /help（菜单 / 帮助 / 指令）：本手册\n· /creator：创作者署名\n· /clear（/reset）：清空会话记忆\n· /set_location <城市> [区县]：位置记忆（仅存本地）\n· /clear_location：清除位置记录\n🔸 升级指引：/register <密码> → Lv.2（待办 / 认称呼）\n\n你当前的权限等级：Lv.1"
+      }
     },
     {
       "desc": "help_en",
@@ -23,7 +31,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_指令"
+      "assert_type": "contains_指令",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "📋 小橘3号 指令菜单\n\n【💬 对话直达 · 无需指令】\n· 直接聊天：双脑问答（本地优先 / 云端兜底）\n· 发 DeepSeek 分享链接：自动总结网页内容\n· “帮我搜…”：联网搜索（天气请带城市区县）\n· “记一下账 / 花了30元”：记账本\n· “把对话导出成电子书”：EPUB 电子书\n· “记住…”：长期记忆\n【🔑 权限】\n· /register <密码>：注册 / 更新注册【Lv.2】\n· /coder_auth <6位动态密码>：激活 Lv.3（持久生效）\n· /name <昵称>：认领称呼【Lv.2】\n【⚙️ 系统】\n· /help（菜单 / 帮助 / 指令）：本手册\n· /creator：创作者署名\n· /clear（/reset）：清空会话记忆\n· /set_location <城市> [区县]：位置记忆（仅存本地）\n· /clear_location：清除位置记录\n🔸 升级指引：/register <密码> → Lv.2（待办 / 认称呼）\n\n你当前的权限等级：Lv.1"
+      }
     },
     {
       "desc": "clear_memory",
@@ -31,7 +43,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_清空"
+      "assert_type": "contains_清空",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
+      }
     },
     {
       "desc": "reset_memory",
@@ -39,7 +55,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_清空"
+      "assert_type": "contains_清空",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
+      }
     },
     {
       "desc": "creator",
@@ -47,7 +67,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_小橘"
+      "assert_type": "contains_小橘",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "🦊 小橘3号 · 由 XUN 创造与维护"
+      }
     },
     {
       "desc": "register_no_pw",
@@ -55,7 +79,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_注册"
+      "assert_type": "contains_注册",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 注册密码错误，Lv.2 注册失败。请联系主人核对注册密码。"
+      }
     },
     {
       "desc": "send_image_no_path",
@@ -63,7 +91,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_路径"
+      "assert_type": "contains_路径",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 权限不足，发图需要 Lv.4（主人级）权限。请先 /lv4_auth confirm <6位动态密码> 授权。"
+      }
     },
     {
       "desc": "send_image_no_file",
@@ -71,7 +103,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_不存在"
+      "assert_type": "contains_不存在",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 权限不足，发图需要 Lv.4（主人级）权限。请先 /lv4_auth confirm <6位动态密码> 授权。"
+      }
     },
     {
       "desc": "location_set",
@@ -79,7 +115,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_位置"
+      "assert_type": "contains_位置",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "✅ 位置已记录：长沙市天心区（仅存本地 agent_state/user_location.json，可用 /clear_location 清除）"
+      }
     },
     {
       "desc": "location_clear",
@@ -87,7 +127,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_清除"
+      "assert_type": "contains_清除",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "✅ 位置记录已清除（本地 agent_state/user_location.json）"
+      }
     },
     {
       "desc": "soul_export",
@@ -95,7 +139,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_导出"
+      "assert_type": "contains_导出",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 安全拒绝：灵魂备份需要 Lv.3（代码编写者）权限。请先 /coder_auth <动态密码> 升级。"
+      }
     },
     {
       "desc": "approve",
@@ -103,7 +151,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "any"
+      "assert_type": "any",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "<think>[思考] 正在理解你的意图...</think>❌ 大脑连接失败，请检查网络。错误：⚠️ 云端连接异常: 'NoneType' object has no attribute 'raise_for_status'"
+      }
     },
     {
       "desc": "deny",
@@ -111,7 +163,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "any"
+      "assert_type": "any",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "<think>[思考] 正在理解你的意图...</think>❌ 大脑连接失败，请检查网络。错误：⚠️ 云端连接异常: 'NoneType' object has no attribute 'raise_for_status'"
+      }
     },
     {
       "desc": "remember",
@@ -119,7 +175,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_记住"
+      "assert_type": "contains_记住",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "好的，我记住了：我爱吃火锅（已存入长期记忆库）"
+      }
     },
     {
       "desc": "share_link",
@@ -127,7 +187,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_待办"
+      "assert_type": "contains_待办",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 权限不足，待办提取需要 Lv.2（普通用户）权限。请先 /register <密码> 注册升级。"
+      }
     },
     {
       "desc": "plain_chat",
@@ -135,7 +199,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "any"
+      "assert_type": "any",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "<think>[思考] 正在理解你的意图...</think>我还不知道你在哪个城市和区，直接回复我或 @ 我都行（例如：长沙天心区），我下次就能直接搜了～"
+      }
     },
     {
       "desc": "group_at_chat",
@@ -143,7 +211,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": 456,
-      "assert_type": "any"
+      "assert_type": "any",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "<think>[思考] 正在理解你的意图...</think>❌ 大脑连接失败，请检查网络。错误：⚠️ 云端连接异常: 'NoneType' object has no attribute 'raise_for_status'"
+      }
     },
     {
       "desc": "empty_msg",
@@ -151,7 +223,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "equals_空消息"
+      "assert_type": "equals_空消息",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "（你发了一条空消息）"
+      }
     },
     {
       "desc": "cjk_only_punct",
@@ -159,7 +235,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "equals_空消息"
+      "assert_type": "equals_空消息",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "（你发了一条空消息）"
+      }
     },
     {
       "desc": "send_image_lv_denied",
@@ -167,7 +247,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_权限"
+      "assert_type": "contains_权限",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 权限不足，发图需要 Lv.4（主人级）权限。请先 /lv4_auth confirm <6位动态密码> 授权。"
+      }
     },
     {
       "desc": "send_image_console_denied",
@@ -175,7 +259,11 @@
       "source": "web",
       "user_id": "admin",
       "group_id": null,
-      "assert_type": "contains_权限"
+      "assert_type": "contains_权限",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 权限不足，发图需要 Lv.4（主人级）权限。请先 /lv4_auth confirm <6位动态密码> 授权。"
+      }
     },
     {
       "desc": "soul_export_qq",
@@ -183,7 +271,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_权限"
+      "assert_type": "contains_权限",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 安全拒绝：灵魂备份需要 Lv.3（代码编写者）权限。请先 /coder_auth <动态密码> 升级。"
+      }
     },
     {
       "desc": "soul_export_console",
@@ -191,7 +283,11 @@
       "source": "web",
       "user_id": "admin",
       "group_id": null,
-      "assert_type": "contains_权限"
+      "assert_type": "contains_权限",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 安全拒绝：灵魂备份需要 Lv.3（代码编写者）权限。请先 /coder_auth <动态密码> 升级。"
+      }
     },
     {
       "desc": "creator_qq",
@@ -199,7 +295,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_署名"
+      "assert_type": "contains_署名",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "🦊 小橘3号 · 由 XUN 创造与维护"
+      }
     },
     {
       "desc": "child_deny_qq",
@@ -207,7 +307,11 @@
       "source": "qq",
       "user_id": 10001,
       "group_id": null,
-      "assert_type": "contains_儿童"
+      "assert_type": "contains_儿童",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 只有在线成人 LV4 可以裁决儿童操作请求。"
+      }
     },
     {
       "desc": "help_cn_alias",
@@ -215,7 +319,143 @@
       "source": "web",
       "user_id": "admin",
       "group_id": null,
-      "assert_type": "contains_指令"
+      "assert_type": "contains_指令",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "📋 小橘3号 指令菜单\n\n【💬 对话直达 · 无需指令】\n· 直接聊天：双脑问答（本地优先 / 云端兜底）\n· 发 DeepSeek 分享链接：自动总结网页内容\n· “帮我搜…”：联网搜索（天气请带城市区县）\n· “记一下账 / 花了30元”：记账本\n· “把对话导出成电子书”：EPUB 电子书\n· “记住…”：长期记忆\n【🔑 权限】\n· /register <密码>：注册 / 更新注册【Lv.2】\n· /coder_auth <6位动态密码>：激活 Lv.3（持久生效）\n· /name <昵称>：认领称呼【Lv.2】\n【⚙️ 系统】\n· /help（菜单 / 帮助 / 指令）：本手册\n· /creator：创作者署名\n· /clear（/reset）：清空会话记忆\n· /set_location <城市> [区县]：位置记忆（仅存本地）\n· /clear_location：清除位置记录\n🔸 升级指引：/register <密码> → Lv.2（待办 / 认称呼）\n\n你当前的权限等级：Lv.1"
+      }
+    },
+    {
+      "desc": "name_bare",
+      "raw_message": "/name",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_称呼",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 称呼不能为空。"
+      }
+    },
+    {
+      "desc": "coder_auth_fail",
+      "raw_message": "/coder_auth 000000",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_动态密码",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 动态密码不正确或已过期，Lv.3 激活失败。"
+      }
+    },
+    {
+      "desc": "sudo_fail",
+      "raw_message": "/sudo 000000",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "any",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 动态密码不正确或已过期，写操作窗口未开启。请用 /sudo <动态密码> 重试。"
+      }
+    },
+    {
+      "desc": "sudo_bare",
+      "raw_message": "/sudo",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_用法",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "用法：/sudo <6位动态密码>——开启 120 秒写操作窗口（Lv.3 已可直接写文件，本指令为兼容保留），窗口内写文件/写代码无需逐次输入动态密码。"
+      }
+    },
+    {
+      "desc": "lv4_auth_warning",
+      "raw_message": "/lv4_auth",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_confirm",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "🚨🚨🚨 类 Root 权限警告（LV4 · 解放全部权限）🚨🚨🚨\n你正在申请小橘3号的最高等级权限（LV4），效力类似系统 Root。授予后小橘3号可执行以下敏感操作：\n  1. 写文件 / 修改代码 —— 可能改动、覆盖任意项目文件，影响小橘3号自身运行；\n  2. 家居控制（含门锁、燃气阀等高危实体）—— 直接关系人身与财产安全；\n  3. ADB 接管手机 —— 可在手机上执行任意点击、滑动等触控操作；\n  4. 删除数据 —— 不可恢复地删除文件与记忆数据。\n后果说明：误操作可能导致数据丢失、设备误控乃至安全事故，请确认你完全理解上述风险。\n二次确认：理解并接受后，请先调用 acknowledge_risk(user_id) 完成风险确认，再申请 grant_lv4(user_id)。\n撤销途径：随时可调用 revoke_lv4(user_id) 撤销 LV4 权限，立即生效。\n\n理解并接受上述风险后，请发送 /lv4_auth confirm <6位动态密码> 完成双因子授权。"
+      }
+    },
+    {
+      "desc": "lv4_auth_confirm_fail",
+      "raw_message": "/lv4_auth confirm 000000",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_未通过",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ Lv.4 双因子认证未通过：\n[totp] ❌ 动态密码不正确或已过期（30 秒步长，±1 窗口）\n[biometric] ❌ 生物认证器未接入：本机无生物识别硬件。请先 register_verifier(自定义验证回调) 注册后启用。"
+      }
+    },
+    {
+      "desc": "lv4_revoke",
+      "raw_message": "/lv4_revoke",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_撤销",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "用户 10001 当前未持有 LV4 权限。"
+      }
+    },
+    {
+      "desc": "reset_fuse_denied",
+      "raw_message": "/reset_fuse",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_权限",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 权限不足，该指令需要 Lv.2（普通用户）权限。请先 /register <密码> 注册升级。"
+      }
+    },
+    {
+      "desc": "reset_bare",
+      "raw_message": "/reset",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_清空",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
+      }
+    },
+    {
+      "desc": "clear_memory_cn2",
+      "raw_message": "清空记忆",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_清空",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
+      }
+    },
+    {
+      "desc": "gen_log_denied",
+      "raw_message": "/gen_log",
+      "source": "qq",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_权限",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "❌ 权限不足，开发日志提取需要 Lv.3（代码编写者）权限。\n请先发送 /coder_auth <6位动态密码> 升级后再试。"
+      }
     }
   ]
 }

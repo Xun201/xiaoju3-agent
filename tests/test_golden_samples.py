@@ -4,7 +4,7 @@
 用法：
 - 固化基线：python -m pytest tests/test_golden_samples.py -q --golden-capture
 - 批后比对：python -m pytest tests/test_golden_samples.py -q（自动比对）
-- 基线文件：_dev/golden_samples/handle_message_golden_output.json
+- 基线文件：tests/data/handle_message_golden_output.json（2026-10-14 起正档=tests/data）
 """
 import json
 import os
@@ -13,8 +13,8 @@ from unittest import mock
 
 import main
 
-GOLDEN_DIR = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "_dev", "golden_samples")
+GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "data")   # D6 拍板：正档=tests/data（2026-10-14 统一，_dev/golden_samples 留作历史）
 GOLDEN_INPUT = os.path.join(GOLDEN_DIR, "handle_message_golden.json")
 GOLDEN_OUTPUT = os.path.join(GOLDEN_DIR, "handle_message_golden_output.json")
 
