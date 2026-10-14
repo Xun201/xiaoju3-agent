@@ -30,3 +30,11 @@
 ## 五、本笔 changelog 自身（同批收尾）
 
 - dev_changelog_20261014.md 建（补记今日五笔）；基线 2228+4；待推 3（309bc95 人格批1+e7534de 纪律+本笔）
+
+## 六、推平 3 笔 + 设计稿 v2.1 + 人格演化批 2（续，批 2 本笔不推）
+
+- **推平 3 笔**（专利筛查零方法级新点通过直接推）：309bc95/e7534de/c073761 → origin/main=c073761 待推 0
+- **设计稿 v2.1**（_dev 未跟踪区，五拍板落档）：①第五模式熟络型 familiar（客气<熟络<斗嘴/依赖/照顾）②照顾放宽 n_scold≤2 ③节流改事件触发 N=20+6h 防抖+evidence.baseline_id 事件基线 ④表现层单用户闸事件 ≥50 开闸 _is_expression_ready ⑤thinking_notes 增「演化放权框架」（情绪记忆军训三态+人格判定/表现分离=同款哲学，二期统一抽象）
+- **批 2 判定算法**：personality.py 六规则 judge_mode 纯函数（退化>斗嘴>照顾>依赖>熟络>客气兜底；证据下限 n_int<10 不判；置信度饱和公式 min(1,主证据/2×门槛)）+maybe_rejudge（事件触发+6h 防抖双闸+手动锁优先+退化可逆=degrade 是判定结果非终身罚）+_is_expression_ready；MODES+familiar；brain 双入口挂钩（relationship 更新后，静默旁路同 mood 纪律）
+- **零行为变化**：判定只写 rel_mode，表现层未接+总开关缺省关——无消费方前全仓与现状逐字节一致
+- +17 锚 全仓 2228→**2245+4**（#303 既有失败除外全绿）；备份 personality.py/brain.py.bak-20261014-batch2 在案；批 3（persona_expressions.json+mode_suffix+真机冒烟）等用户发话
