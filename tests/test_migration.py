@@ -13,6 +13,7 @@
 
 requests 一律 mock.patch 自动还原，不做 sys.modules 永久注入。
 """
+import gc
 import json
 import os
 import socket
@@ -25,6 +26,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import migration
+import soul_manifest
 
 FAKE_SECRET = "sk-test-secret-abc123"  # 仅用于断言"密钥不进包"的假值
 
@@ -781,6 +783,346 @@ class PeerWatchWiringTests(unittest.TestCase):
                 contextlib.redirect_stdout(buf):
             watch.check_peers()
         self.assertIn("🚨 [守望] 对端 http://peer.example:5003 离线", buf.getvalue())
+
+
+def _make_sqlite(path, sql):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.execute(sql)
+    conn.commit()
+    conn.close()
+
+
+class SoulV2BundleTests(unittest.TestCase):
+    """#319 批 1：export_bundle(v2=True) 清单单一事实源 / soul_meta /
+    integrity 前检 / import sha256 校验 / 导入前自动备份。"""
+
+    def _make_full_state(self, base_dir):
+        """典型灵魂态：核档（真 sqlite）+ 扩展档 + 不迁档 + 备份残迹。"""
+        os.makedirs(os.path.join(base_dir, "conversations"), exist_ok=True)
+        _make_sqlite(os.path.join(base_dir, "long_term.db"),
+                     "CREATE TABLE memories (id INTEGER PRIMARY KEY)")
+        _make_sqlite(os.path.join(base_dir, "relationship.db"),
+                     "CREATE TABLE relationship (user_id TEXT PRIMARY KEY)")
+        _make_sqlite(os.path.join(base_dir, "todos.db"),
+                     "CREATE TABLE todos (id INTEGER PRIMARY KEY)")
+        _write(os.path.join(base_dir, "identity.json"), '{"current_level": "Lv.3"}')
+        _write(os.path.join(base_dir, "ui_pref.json"), '{"exit": "ask"}')
+        _write(os.path.join(base_dir, "user_location.json"), '{"city": "杭州"}')
+        _write(os.path.join(base_dir, "history_qq.json"), '[{"role": "user"}]')
+        _write(os.path.join(base_dir, "conversations", "web_history.json"), '[]')
+        # 不迁档（default deny 应全部挡在包外）
+        _write(os.path.join(base_dir, "trace.db"), "junk")
+        _write(os.path.join(base_dir, "recent_actions.json"), "[]")
+        _write(os.path.join(base_dir, "napcat_fire_x.log"), "log")
+        _write(os.path.join(base_dir, "identity.json.bak-20261009"), "{}")
+
+    def test_export_v2_contains_core_ext_meta_and_excludes_not_soul(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True)
+            self.assertTrue(res["ok"])
+            with zipfile.ZipFile(res["path"]) as zf:
+                names = set(zf.namelist())
+            for expected in ("identity.json", "relationship.db", "long_term.db",
+                             "ui_pref.json", "user_location.json",    # 核
+                             "todos.db", "history_qq.json",
+                             "conversations/web_history.json",        # 扩展
+                             "MANIFEST.txt", "soul_meta.json"):
+                self.assertIn(expected, names, f"缺少 {expected}")
+            for banned in ("trace.db", "recent_actions.json",
+                           "napcat_fire_x.log", "identity.json.bak-20261009",
+                           ".env"):
+                self.assertNotIn(banned, names, banned)
+
+    def test_export_v2_soul_meta_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True,
+                                          device_id="dev-x")
+            self.assertEqual(res["meta"]["version"], 2)
+            self.assertEqual(res["meta"]["device_id"], "dev-x")
+            self.assertTrue(res["meta"]["exported_at"])
+            self.assertTrue(res["meta"]["include_extensions"])
+            for rel, entry in res["meta"]["files"].items():
+                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$", rel)
+                self.assertGreater(entry["bytes"], 0, rel)
+            # 包内 soul_meta.json 与返回值一致
+            with zipfile.ZipFile(res["path"]) as zf:
+                on_disk = json.loads(zf.read("soul_meta.json").decode("utf-8"))
+            self.assertEqual(on_disk, res["meta"])
+
+    def test_export_v2_include_extensions_false_only_core(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True,
+                                          include_extensions=False)
+            for expected in ("identity.json", "relationship.db", "long_term.db",
+                             "ui_pref.json", "user_location.json"):
+                self.assertIn(expected, res["files"], expected)
+            for banned in ("todos.db", "mood.db", "history_qq.json",
+                           "conversations/web_history.json"):
+                self.assertNotIn(banned, res["files"], banned)
+            self.assertFalse(res["meta"]["include_extensions"])
+
+    def test_export_v2_manifest_lists_secret_keys_and_env_existence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            env_file = _write(os.path.join(tmp, ".env"), f"K={FAKE_SECRET}\n")
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, env_file=env_file,
+                                          v2=True)
+            with zipfile.ZipFile(res["path"]) as zf:
+                manifest = zf.read("MANIFEST.txt").decode("utf-8")
+            for key in migration.SECRET_KEYS:
+                self.assertIn(key, manifest, f"MANIFEST 应列键名 {key}")
+            self.assertIn(".env 存在性记录：是", manifest)
+            self.assertNotIn(FAKE_SECRET, manifest)
+
+    def test_export_v2_secret_value_never_enters_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            env_file = _write(os.path.join(tmp, ".env"),
+                              f"DEEPSEEK_API_KEY={FAKE_SECRET}\nHA_TOKEN=ha-xyz\n")
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, env_file=env_file,
+                                          v2=True)
+            with zipfile.ZipFile(res["path"]) as zf:
+                for info in zf.infolist():
+                    content = zf.read(info).decode("utf-8", errors="ignore")
+                    self.assertNotIn(FAKE_SECRET, content, info.filename)
+                    self.assertNotIn("ha-xyz", content, info.filename)
+
+    def test_export_v2_refuses_damaged_db(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            _write(os.path.join(state, "long_term.db"), b"not-a-sqlite-file")
+            out = os.path.join(tmp, "soul.zip")
+            res = migration.export_bundle(path=out, base_dir=state, v2=True)
+            self.assertFalse(res["ok"])
+            self.assertIn("损伤", res["report"])
+            self.assertIn("long_term.db", res["report"])
+            self.assertIsNone(res["path"])
+            self.assertFalse(os.path.exists(out))  # 拒绝打包=包不落盘
+
+    def test_export_v2_reads_single_source_manifest(self):
+        """单一事实源实锚：v2 导出确实调 soul_manifest.soul_targets 取清单。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            os.makedirs(state)
+            _write(os.path.join(state, "identity.json"), "{}")
+            with mock.patch.object(soul_manifest, "soul_targets",
+                                   return_value=["identity.json"]) as mst:
+                res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                              base_dir=state, v2=True)
+            mst.assert_called_once_with(state, include_extensions=True)
+            self.assertEqual(res["files"], ["identity.json"])
+
+    @staticmethod
+    def _rebuild_zip(src_zip, out_zip, mutate=None):
+        """重建 zip（篡改/加成员/删成员用）：mutate(dict name→bytes 或 None) 。"""
+        with zipfile.ZipFile(src_zip) as zf:
+            contents = {n: zf.read(n) for n in zf.namelist()}
+        if mutate:
+            contents = mutate(contents)
+        with zipfile.ZipFile(out_zip, "w") as zf:
+            for n, c in contents.items():
+                zf.writestr(n, c)
+        return out_zip
+
+    def test_import_v2_rejects_tampered_member_zero_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True)
+            evil = self._rebuild_zip(
+                res["path"], os.path.join(tmp, "evil.zip"),
+                lambda c: {**c, "identity.json": b'{"current_level": "Lv.9"}'})
+            target = os.path.join(tmp, "restore", "agent_state")
+            imp = migration.import_bundle(evil, base_dir=target)
+            self.assertFalse(imp["ok"])
+            self.assertEqual(imp["restored"], [])
+            self.assertIn("sha256", imp["report"])
+            self.assertIn("identity.json", imp["report"])
+            # 零落盘：目标目录一个文件都没写
+            self.assertFalse(os.path.exists(os.path.join(target, "identity.json")))
+
+    def test_import_v2_rejects_unlisted_extra_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True)
+            evil = self._rebuild_zip(
+                res["path"], os.path.join(tmp, "evil.zip"),
+                lambda c: {**c, "agent_state/evil.txt": b"pwned"})
+            imp = migration.import_bundle(evil, base_dir=os.path.join(tmp, "dst"))
+            self.assertFalse(imp["ok"])
+            self.assertIn("不在 soul_meta 清单", imp["report"])
+
+    def test_import_v2_rejects_missing_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True)
+            evil = self._rebuild_zip(
+                res["path"], os.path.join(tmp, "evil.zip"),
+                lambda c: {n: v for n, v in c.items() if n != "ui_pref.json"})
+            imp = migration.import_bundle(evil, base_dir=os.path.join(tmp, "dst"))
+            self.assertFalse(imp["ok"])
+            self.assertIn("清单有但包内缺失", imp["report"])
+            self.assertIn("ui_pref.json", imp["report"])
+
+    def test_import_v2_corrupt_meta_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True)
+            evil = self._rebuild_zip(
+                res["path"], os.path.join(tmp, "evil.zip"),
+                lambda c: {**c, "soul_meta.json": b"not-json{{"})
+            imp = migration.import_bundle(evil, base_dir=os.path.join(tmp, "dst"))
+            self.assertFalse(imp["ok"])
+            self.assertIn("校验失败", imp["report"])
+            self.assertEqual(imp["restored"], [])
+
+    def test_import_auto_backup_before_overwrite(self):
+        """导入前自动备份：既有数据全目录 zip 留底，旧内容可从备份取回。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True)
+
+            troot = os.path.join(tmp, "restore")
+            target = os.path.join(troot, "agent_state")
+            old_identity = '{"current_level": "Lv.1"}'
+            _write(os.path.join(target, "identity.json"), old_identity)
+
+            imp = migration.import_bundle(res["path"], base_dir=target,
+                                          overwrite=True)
+            self.assertTrue(imp["ok"])
+            self.assertIsNotNone(imp["backup"])
+            self.assertTrue(os.path.isfile(imp["backup"]))
+            with zipfile.ZipFile(imp["backup"]) as zf:
+                self.assertIn("identity.json", zf.namelist())
+                self.assertEqual(zf.read("identity.json").decode("utf-8"),
+                                 old_identity)
+            # 覆盖生效=新内容
+            with open(os.path.join(target, "identity.json"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), '{"current_level": "Lv.3"}')
+
+    def test_import_v2_backup_skipped_for_empty_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            self._make_full_state(state)
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=state, v2=True)
+            target = os.path.join(tmp, "fresh_machine", "agent_state")
+            imp = migration.import_bundle(res["path"], base_dir=target)
+            self.assertTrue(imp["ok"])
+            self.assertIsNone(imp["backup"])
+
+    def test_import_v1_bundle_still_works_and_gets_backup(self):
+        """向后兼容：v1 旧包（无 soul_meta）照常导入；自动备份同样生效。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "agent_state")
+            _make_soul_state(state)
+            path = migration.export_bundle(base_dir=state,
+                                           path=os.path.join(tmp, "v1.zip"))
+            troot = os.path.join(tmp, "restore")
+            target = os.path.join(troot, "agent_state")
+            imp = migration.import_bundle(path, base_dir=target,
+                                          overwrite=True)
+            self.assertTrue(imp["ok"])
+            self.assertIn("identity.json", imp["restored"])
+            self.assertNotIn("sha256", imp["report"])  # v1 无 meta：无 sha256 行
+            self.assertIsNone(imp["backup"])  # 空目标不备份
+
+
+class SoulMigrationAcceptanceTests(unittest.TestCase):
+    """批 1 唯一验收门：单机跨目录迁移 → 行为等价
+    （身份 / 记忆召回 / 关系值 / 称呼全活）。export → 模拟新机（空
+    agent_state + 新 DATA_ROOT）→ import → 用真实属主模块逐项验活。"""
+
+    def test_cross_directory_migration_behavior_equivalence(self):
+        from agent_state.state_manager import StateManager
+        import relationship
+        with tempfile.TemporaryDirectory() as tmp:
+            # ---- 源机：造一个"活"的灵魂 ----
+            src = os.path.join(tmp, "machine_a", "agent_state")
+            sm_src = StateManager(base_dir=src)
+            sm_src.save_memory("fact", "主人喜欢喝冰拿铁")
+            sm_src.save_user_location("杭州", "西湖区")
+            _write(os.path.join(src, "identity.json"), json.dumps(
+                {"current_level": "Lv.3", "owner": "10001",
+                 "display_name": "小橘", "is_adults": True,
+                 "updated_at": "2026-10-14 12:00:00"}, ensure_ascii=False))
+            _write(os.path.join(src, "ui_pref.json"),
+                   '{"exit": "ask", "dev_mode_on": true}')
+            with mock.patch.dict(os.environ, {
+                    "XIAOJU3_RELATIONSHIP_DB_PATH":
+                        os.path.join(src, "relationship.db")}):
+                relationship.set_call_name("10001", "小讯")
+                relationship.observe_rel("10001", "谢谢你今天帮大忙了")
+                src_ctx = relationship.get_context("10001")
+            self.assertEqual(src_ctx["prefs"].get("称呼"), "小讯")
+            self.assertGreater(src_ctx["affinity"], 0)  # 关系值是"活"的
+
+            # ---- export（v2 全档）----
+            res = migration.export_bundle(path=os.path.join(tmp, "soul.zip"),
+                                          base_dir=src, v2=True,
+                                          device_id="machine-a")
+            self.assertTrue(res["ok"], res.get("report"))
+
+            # ---- 新机：空 agent_state（新 DATA_ROOT 树下）----
+            dst = os.path.join(tmp, "machine_b", "agent_state")
+            self.assertFalse(os.path.exists(dst))
+            imp = migration.import_bundle(res["path"], base_dir=dst)
+            self.assertTrue(imp["ok"])
+            self.assertEqual(imp["skipped"], [])
+
+            # ---- 行为等价五连 ----
+            # ① 身份：等级 + 显示名全活
+            with open(os.path.join(dst, "identity.json"), encoding="utf-8") as f:
+                ident = json.loads(f.read())
+            self.assertEqual(ident["current_level"], "Lv.3")
+            self.assertEqual(ident["display_name"], "小橘")
+            self.assertEqual(ident["owner"], "10001")
+            # ② 记忆召回：真召回链（种子/回退均可）能想起迁前记忆
+            sm_dst = StateManager(base_dir=dst)
+            recalled = sm_dst.recall_memories("拿铁")
+            self.assertTrue(any("冰拿铁" in content for _cat, content in recalled),
+                            recalled)
+            # ③④ 关系值 + 称呼：affinity 等值、称呼 KV 活
+            with mock.patch.dict(os.environ, {
+                    "XIAOJU3_RELATIONSHIP_DB_PATH":
+                        os.path.join(dst, "relationship.db")}):
+                dst_ctx = relationship.get_context("10001")
+            self.assertEqual(dst_ctx["prefs"].get("称呼"), "小讯")
+            self.assertAlmostEqual(dst_ctx["affinity"], src_ctx["affinity"])
+            # Windows：get_context 不关连接（relationship 既有模式），句柄
+            # 需回收后才释放文件锁，否则 TemporaryDirectory 清理报 WinError 32
+            gc.collect()
+            # ⑤ ui_pref / 位置：字节等价 + 位置事实可读
+            for rel in ("ui_pref.json", "user_location.json"):
+                with open(os.path.join(src, *rel.split("/")), "rb") as f1, \
+                        open(os.path.join(dst, *rel.split("/")), "rb") as f2:
+                    self.assertEqual(f1.read(), f2.read(), rel)
+            self.assertEqual(sm_dst.get_user_location(),
+                             sm_src.get_user_location())
 
 
 if __name__ == "__main__":

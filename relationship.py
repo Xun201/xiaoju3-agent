@@ -292,6 +292,14 @@ def set_call_name(user_id, name):
     try:
         conn = _connect()
         with conn:
+            ts = _now()
+            # users 行必须同步补（2026-10-14 实锤）：users 是 LRU 幸存名单
+            # 真身，只写 relationship 不写 users → 下一次 observe_rel 的
+            # 对账清理会把整行（含称呼 KV）当孤儿抹掉
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, display_name,"
+                " first_seen, last_seen, perm_level) VALUES"
+                " (?, NULL, ?, ?, 1)", (str(user_id), ts, ts))
             conn.execute(
                 "INSERT OR IGNORE INTO relationship (user_id, affinity,"
                 " interaction_count, tone_preference,"

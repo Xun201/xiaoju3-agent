@@ -143,3 +143,21 @@ def test_db_path_prefers_xiaoju3(monkeypatch, tmp_path):
     monkeypatch.setattr(xiaoju3, "AGENT_STATE_DIR", str(tmp_path))
     assert relationship._db_path() == os.path.join(str(tmp_path),
                                                    "relationship.db")
+
+
+# 12 set_call_name 必须同步补 users 行（2026-10-14 #319 批 1 实锤 bug）：
+# users 是 LRU 幸存名单真身，只写 relationship 不写 users → 下一次
+# observe_rel 对账清理把整行（含称呼 KV）当孤儿抹掉；修后称呼跨 observe_rel 存活
+def test_set_call_name_survives_observe_rel_lru():
+    relationship.set_call_name("10001", "小讯")
+    relationship.observe_rel("10001", "谢谢你今天帮大忙了", now=DAY)
+    ctx = relationship.get_context("10001")
+    assert ctx["prefs"].get("称呼") == "小讯"
+    assert ctx["affinity"] == pytest.approx(0.3, abs=1e-6)
+    c = sqlite3.connect(_DB["path"])
+    n_rel = c.execute(
+        "SELECT COUNT(*) FROM relationship WHERE user_id='10001'").fetchone()[0]
+    n_users = c.execute(
+        "SELECT COUNT(*) FROM users WHERE user_id='10001'").fetchone()[0]
+    c.close()
+    assert n_rel == 1 and n_users == 1
