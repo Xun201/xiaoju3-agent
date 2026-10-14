@@ -58,6 +58,7 @@ import requests
 import brain
 import content_handler  # 领域 handler（#227 批 0：content 域三件）
 import permission_handler  # 领域 handler（#227 批 A：权限/身份域九块）
+import memory_handler  # 领域 handler（#227 批 B：记忆域三件分步迁入）
 import home_tools
 import system_handler  # 领域 handler（#227 批 0：system 域四件）
 import paths  # 双根路径锚（方案 §1）：creator.json 等用户数据锚定数据根
@@ -860,6 +861,20 @@ def handle_todo_command(raw_message, message, user_id, group_id, steps=None):
     return None
 
 
+def handle_remember_command(content):
+    """记住xxx 本体（#227 批 B：正则匹配已迁 memory_handler.handle_remember，
+    打标 _memory_emotion_meta+落库 state_manager.save_memory 留本文件——
+    纯本体无分派语义）。"""
+    try:
+        tag, impact = _memory_emotion_meta(content)
+        state_manager.save_memory("user", content,
+                                  emotion_tag=tag,
+                                  emotional_impact=impact)
+        return f"好的，我记住了：{content}（已存入长期记忆库）"
+    except Exception as e:
+        return f"❌ 长期记忆保存失败：{e}"
+
+
 def handle_message(source, user_id, group_id, message, self_qq=None):
     """所有消息（QQ/网页）都统一交给这个函数处理。
 
@@ -1055,19 +1070,13 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             if pre_reply is not None:
                 return pre_reply
 
-    # 3. 长期记忆"记住"触发词（架构 §10 #3）：落 SQLite 并回复确认
-    remember_match = re.search(r"(?:帮我|请|麻烦|你)*记住[:：,，、]?\s*(.+)", _strip_cq(raw_message))
-    if remember_match:
-        memory_content = remember_match.group(1).strip()
-        if memory_content:
-            try:
-                tag, impact = _memory_emotion_meta(memory_content)
-                state_manager.save_memory("user", memory_content,
-                                          emotion_tag=tag,
-                                          emotional_impact=impact)
-                return f"好的，我记住了：{memory_content}（已存入长期记忆库）"
-            except Exception as e:
-                return f"❌ 长期记忆保存失败：{e}"
+    # 3. 长期记忆"记住"触发词（#227 批 B：正则匹配迁 memory_handler，
+    # 打标+落库本体留 main 回调——handle_remember_command）
+    remember_reply = memory_handler.handle_remember(
+        raw_message, strip_cq_cb=_strip_cq,
+        remember_cb=handle_remember_command)
+    if remember_reply is not None:
+        return remember_reply
 
     # 4. 调用大脑进行思考（根据来源，选择不同的记忆库；
     #    messages_web / messages_qq 已在清空记忆段声明 global，整个函数生效）
