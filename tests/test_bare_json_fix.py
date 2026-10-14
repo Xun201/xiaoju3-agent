@@ -62,3 +62,42 @@ def test_hallucination_guard_wired():
     with open("brain.py", encoding="utf-8") as f:
         src = f.read()
     assert src.count("_hallucinated_tool_reply(raw_reply)") >= 2
+
+
+# ==================== 修 B v2 扩形态（2026-10-14 晚冒烟实锤） ====================
+# 19:27 群聊轮：{"action": "get_file_names"} 工具名在"值"不在键——修①/修②
+# 原判据（顶层键=注册工具名）双漏，末靠 #322 全剥兜成沉默。扩形态三键。
+
+# ②-v2-1 检测器：action 键值形态 → 诚实兜底（19:27 实锤原样）
+def test_v2_action_keyed_json_honest_fallback():
+    assert brain._hallucinated_tool_reply(
+        '{"action": "get_file_names"}') == brain.HALLUCINATED_TOOL_BODY
+
+
+# ②-v2-2 检测器：tool / tool_name 键值形态同判
+def test_v2_tool_and_tool_name_keyed_detected():
+    assert brain._hallucinated_tool_reply(
+        '{"tool": "del_file"}') == brain.HALLUCINATED_TOOL_BODY
+    assert brain._hallucinated_tool_reply(
+        '{"tool_name": "del"}') == brain.HALLUCINATED_TOOL_BODY
+
+
+# ②-v2-3 防误伤：普通 JSON/纯文本/非字符串值（嵌套结构）不判幻觉
+def test_v2_no_false_positive_on_normal_content():
+    assert brain._hallucinated_tool_reply('{"weather": "sunny"}') is None
+    assert brain._hallucinated_tool_reply('今天天气不错') is None
+    assert brain._hallucinated_tool_reply('{"action": {"nested": 1}}') is None
+
+
+# ①-v2-1 消毒器：整段裸 action JSON（含 think 卡前缀）→ 剥净
+def test_v2_whole_text_action_json_stripped():
+    out = chain_of_thought.strip_pollution(
+        '<think>[思考] x</think>{"action": "get_file_names"}')
+    assert out == ""
+    assert chain_of_thought.strip_pollution('{"tool": "x"}') == ""
+
+
+# ①-v2-2 防误伤：行内嵌在自然语言里的讨论原样保留（只剥纯泄漏形态）
+def test_v2_inline_discussion_preserved():
+    out = chain_of_thought.strip_pollution('看看 {"tool": "x"} 这个格式')
+    assert '{"tool": "x"}' in out

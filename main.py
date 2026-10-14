@@ -261,6 +261,25 @@ def _strip_llm_pollution(text):
     return _cot_strip(text)
 
 
+# 消毒剥空兜底文案（修 B v2 修 3，2026-10-14 冒烟实锤：群聊轮裸 JSON 被全剥
+# → 回复空 → 零发送=对用户沉默；沉默≠诚实，#316 静默可解释同族）。
+SANITIZED_EMPTY_FALLBACK = "我不太确定该怎么处理这个请求——能再说一次吗？"
+
+
+def _sanitize_qq_reply(reply):
+    """QQ 出口消毒 + 沉默兜底（修 B v2 修 3）。
+
+    - 消毒后有内容 → 原样返回（逐字节不变）；
+    - 原始回复非空、消毒后被剥空（=模型吐了纯污染物）→ 返回诚实兜底文案，
+      不再静默；
+    - 原始回复本就为空 → 维持旧静默语义（非污染物路径零变化）。
+    """
+    stripped = _strip_llm_pollution(reply)
+    if not stripped.strip() and str(reply or "").strip():
+        return SANITIZED_EMPTY_FALLBACK
+    return stripped
+
+
 # ================= 权限指令族辅助（§7） =================
 
 def _ensure_biometric_sim():
@@ -1272,7 +1291,7 @@ def _flush_chat_burst(key):
         return
     try:
         reply = handle_message('qq', b["user_id"], b["group_id"], combined)
-        reply = _strip_llm_pollution(reply)
+        reply = _sanitize_qq_reply(reply)
         if not reply:
             return
         delay = random.uniform(_CHAT_RHYTHM["delay_min"],
@@ -1432,9 +1451,10 @@ def onebot_event(data):
             _enqueue_chat_burst(user_id, group_id, _nc_text)
             return {"status": "ok", "retcode": 0}
         reply = handle_message('qq', user_id, group_id, raw_message or "", self_qq=self_qq)
-        # 🧠 QQ 消息保持干净（#322 F1）：_strip_llm_pollution = <think> XML
-        # + 方括号 [think]/[plan] 变体 + 幻觉 action JSON（全剥）
-        reply = _strip_llm_pollution(reply)
+        # 🧠 QQ 消息保持干净（#322 F1）：消毒 <think> XML + 方括号 [think]/
+        # [plan] 变体 + 幻觉 action JSON（全剥）；修 B v2 修 3：全剥后为空
+        # 不再静默，补诚实兜底文案（沉默≠诚实）
+        reply = _sanitize_qq_reply(reply)
         print(f"🐛 准备发送回复，内容为: {reply}")
 
         if reply:
