@@ -861,6 +861,20 @@ def handle_todo_command(raw_message, message, user_id, group_id, steps=None):
     return None
 
 
+def handle_clear_command(source):
+    """清空记忆本体（#227 批 B：四变体匹配已迁 memory_handler.handle_clear；
+    **全局 messages 不出 main 红线**——切片赋值置回 [SYSTEM_PROMPT]（不
+    重绑定，管线 append 依赖同一列表对象）+磁盘文件置空数组，双清缺一不可
+    ——只清文件不清内存，下一轮 _compress_and_save 会把旧历史写回）。"""
+    global messages_web, messages_qq
+    if source == 'web':
+        messages_web[:] = [SYSTEM_PROMPT]
+        save_memory([], MEMORY_FILE_WEB)          # 文件内容置空数组 []
+    else:
+        messages_qq[:] = [SYSTEM_PROMPT]
+        save_memory([], MEMORY_FILE_QQ)
+
+
 def handle_remember_command(content):
     """记住xxx 本体（#227 批 B：正则匹配已迁 memory_handler.handle_remember，
     打标 _memory_emotion_meta+落库 state_manager.save_memory 留本文件——
@@ -901,20 +915,17 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     if command_text.startswith("/"):
         print(f"[指令路由] 收到指令: {command_text[:60]}")
 
-    # === 🧹 一键清空记忆（/clear、/reset、清空记忆、重置记忆） ===
+    # === 🧹 一键清空记忆（#227 批 B：四变体匹配迁 memory_handler.handle_clear；
+    # === 全局 messages 不出 main 红线——本体 handle_clear_command 留本文件） ===
     # 精确匹配（清洗后全等）：不误吞更长的 /reset_fuse，也不误伤含"清空记忆"
     # 字样的普通对话。内存列表与磁盘文件双清——只清文件不清内存的话，本会话
     # 记忆并未消失，下一轮 _compress_and_save 又会把旧历史写回文件。
     # 内存仅保留置顶系统提示词（通道历史恒以 system 开头的不变量不破坏）。
-    global messages_web, messages_qq
-    if command_text in ("/clear", "/reset", "清空记忆", "重置记忆"):
-        if source == 'web':
-            messages_web[:] = [SYSTEM_PROMPT]
-            save_memory([], MEMORY_FILE_WEB)          # 文件内容置空数组 []
-        else:
-            messages_qq[:] = [SYSTEM_PROMPT]
-            save_memory([], MEMORY_FILE_QQ)
-        return "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
+    global messages_web, messages_qq   # DB2 拍板保留：冗余但零风险（全函数无重绑定）
+    clear_reply = memory_handler.handle_clear(
+        command_text, source, clear_cb=handle_clear_command)
+    if clear_reply is not None:
+        return clear_reply
 
     user_key = str(user_id)
     # 🔒 儿童锁在线判定数据源：每次交互刷新最近活跃时间与当时等级（在线

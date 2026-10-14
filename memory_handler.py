@@ -69,3 +69,19 @@ def gen_log(message, raw_message, level_value_cb,
     threading.Thread(target=run_log_extraction, args=(log_url,),
                      daemon=True).start()
     return "🔄 收到链接啦！小橘3号正在后台努力阅读和总结（大约需要1分钟）。完成后日志会自动保存到 dev_logs 文件夹里！"
+
+
+# 清空记忆四变体（精确全等：不误吞 /reset_fuse、不误伤含字样普通对话；B-3）
+CLEAR_VARIANTS = ("/clear", "/reset", "清空记忆", "重置记忆")
+CLEAR_REPLY = "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
+
+
+def handle_clear(command_text, source, clear_cb):
+    """一键清空记忆（B-3 压轴）：四变体精确全等匹配；clear_cb(source)=
+    'web'|'qq' → 本体 main.handle_clear_command（global 切片置回
+    [SYSTEM_PROMPT]+磁盘文件置空——**全局 messages 不出 main 红线**）。
+    非本域返回 None。调用点须保持原管线位（user_key/儿童锁之前）。"""
+    if command_text not in CLEAR_VARIANTS:
+        return None
+    clear_cb(source)
+    return CLEAR_REPLY
