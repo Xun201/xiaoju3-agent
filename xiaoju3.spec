@@ -36,6 +36,7 @@ a = Analysis(
         ('.env.example', '.'),             # 首启配置模板（数据根引导用）
         ('mood_rules.json', '.'),          # #271① M1 规则表（缺它 frozen 静默回退最小词表——20261010 真机实锤）
         ('mood_tone.json', '.'),           # #271① M2 语气映射表（缺它 M2 静默失效）
+        ('persona_expressions.json', '.'), # #271 批3 模式表现表（缺它 mode_suffix 空串路径=静默失效，mood_tone 同类教训）
         ('settings_tiers.json', '.'),      # #264 B1 分档表（缺它面板 items 全空——20261010 晚真机实锤，与上述两文件同类教训）
     ] + pw_datas,
     hiddenimports=[

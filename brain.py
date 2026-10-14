@@ -1840,6 +1840,20 @@ def _mood_tone_suffix():
         return ""
 
 
+def _persona_suffix(user_id):
+    """#271 批 3：关系模式参数→表现段后缀（拼在关系段之后、mood 段之前
+    ——时间尺度排序：持久关系参数→中期相处模式→当下情绪）。
+
+    personality.mode_suffix 内部自带总开关/表现闸/异常空串路径；本
+    helper 只兜模块缺席（personality.py 被删时静默空串）。
+    """
+    try:
+        import personality
+        return personality.mode_suffix(user_id)
+    except Exception:
+        return ""
+
+
 def _relationship_suffix(user_id):
     """#271① M1+：关系参数→关系段后缀（主位，拼在 mood 段之前）。
 
@@ -1867,13 +1881,14 @@ def _build_messages(message, history, user_id=None):
     - 返回新列表，不修改调用方传入的 history。
     """
     _rel = _relationship_suffix(user_id)
+    _persona = _persona_suffix(user_id)
     _tone = _mood_tone_suffix()
-    if _rel or _tone:
-        # 双注入（M1+）：关系段主位在前 + 情绪段次位在后（新 dict，
-        # 不污染 prompts 共享常量）；任一空串则该段缺席
+    if _rel or _persona or _tone:
+        # 三段注入（#271 批 3 扩）：关系段主位 + 模式段次位 + 情绪段末位
+        # （新 dict，不污染 prompts 共享常量）；任一空串则该段缺席
         messages = [{"role": SYSTEM_PROMPT.get("role", "system"),
                      "content": SYSTEM_PROMPT.get("content", "")
-                     + _rel + _tone}]
+                     + _rel + _persona + _tone}]
     else:
         messages = [SYSTEM_PROMPT]  # 空串路径：逐字节现状
     history_msgs = _collapse_repeated_user_history(history)

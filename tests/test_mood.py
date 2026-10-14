@@ -255,7 +255,7 @@ def test_tone_brain_anchor():
     src = inspect.getsource(brain)
     assert "_mood_tone_suffix()" in src, "单点后缀调用缺失"
     assert "SYSTEM_PROMPT.get(\"content\", \"\")" in src \
-        and "+ _rel + _tone" in src, "双注入拼接缺失（M1+）"
+        and "+ _rel + _persona + _tone" in src, "三段注入拼接缺失（M1+ 批3 扩）"
     assert "def _mood_tone_suffix" in src
 
 

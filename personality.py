@@ -13,11 +13,10 @@
 - 表现层 = persona_pref.json 6 开关 tri-state（auto/on/off——用户开关
   覆盖模式默认表现，auto=交还自动判定）+ persona_expressions.json（批 3）。
 
-分批落地（v2.1 稿 §七）：批 1 存储与开关已落地（309bc95）；批 2 判定
-（judge_mode 六规则/maybe_rejudge 事件触发节流/_is_expression_ready 单用户
-闸，brain 双入口挂钩）本批落地——判定照常写 rel_mode，但表现层未接、
-总开关缺省关，无调用方消费前全仓行为与现状逐字节一致；批 3 brain 后缀链
-mode_suffix 挂点待开工。
+分批落地（v2.1 稿 §七）：批 1 存储（309bc95）、批 2 判定（f52690b）、
+批 3 表现层本批落地——mode_suffix 挂 brain 后缀链（关系段→模式段→情绪段），
+但总开关 XIAOJU3_PERSONA_ENABLED 缺省关+单用户事件 ≥50 表现闸：拨开关且
+证据够才可见（第一批有可感知变化的批，真机冒烟等用户）。
 
 安全边界（mood/relationship 同款纪律）：
 - XIAOJU3_PERSONA_ENABLED 表现层总开关缺省关（M2 先例：首个用户可感知
@@ -371,3 +370,79 @@ def set_switch(name, value, path=None):
         return True
     except Exception:
         return False
+
+
+# ==================== 批 3：模式表现段合成（design v2.1 §四） ====================
+
+# 表文件=静态资产随模块走（mood_tone.json 同款 __file__ 路径；spec datas
+# 已注册——运行时数据才走 AGENT_STATE_DIR，表文件不是）
+_EXPRESS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "persona_expressions.json")
+
+MODE_LABELS = {"banter": "斗嘴型", "dependent": "依赖型",
+               "polite": "客气型", "caring": "照顾型",
+               "familiar": "熟络型"}
+# 模式↔关联开关一对一映射（v1 仅斗嘴；其余模式的 on 档结构保留待扩）
+MODE_SWITCH_KEY = {"banter": "banter"}
+
+
+def _load_mode_table():
+    """表现表读取；缺失/损坏/形态不对 → None（静默，空串路径之一）。"""
+    try:
+        with open(_EXPRESS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) and data.get("modes") else None
+    except Exception:
+        return None
+
+
+def mode_suffix(user_id):
+    """#271 批 3：关系模式参数→表现段后缀（拼在 SYSTEM_PROMPT 尾部）。
+
+    空串路径六重（任一命中=与现状逐字节一致）：总开关关 / 单用户事件
+    <50（表现闸 _is_expression_ready）/ 无行且未手动 / 表文件缺失损坏 /
+    合成空（模式行被关联开关 off 压制且无加码）/ 任何异常。
+    合成规则：模式选行（关联开关 off=压制 / on=on 档 / auto=auto 档）
+    + 逐开关 on 加码行追加；verdict 恒定尾注（红线：模式只改亲近度与
+    主动度，不改善意与职责）。措辞=关系模式参数口径零体验词。
+    """
+    try:
+        if not enabled():
+            return ""
+        uid = str(user_id or "")
+        if not uid or not _is_expression_ready(uid):
+            return ""
+        cur = get_mode(uid)
+        if cur["source"] == "default":
+            return ""
+        table = _load_mode_table()
+        if not table:
+            return ""
+        mode = cur["mode"]
+        row = (table.get("modes") or {}).get(mode)
+        if not isinstance(row, dict):
+            return ""
+        switches = get_switches()
+        parts = []
+        related = MODE_SWITCH_KEY.get(mode)
+        if related and switches.get(related) == "off":
+            pass                       # 用户终裁：该模式表现整段压制
+        elif related and switches.get(related) == "on" and row.get("on"):
+            parts.append(row["on"])
+        elif row.get("auto"):
+            parts.append(row["auto"])
+        for name in SWITCH_DEFS:
+            if switches.get(name) == "on":
+                line = ((table.get("switches") or {})
+                        .get(name, {}) or {}).get("on")
+                if line:
+                    parts.append(line)
+        if not parts:
+            return ""                  # 合成空
+        verdict = table.get("verdict", "")
+        return (f"\n\n【关系模式参数】：当前对话对象相处模式为"
+                f"「{MODE_LABELS.get(mode, mode)}」。本轮表达偏移："
+                + "；".join(parts)
+                + (f"。{verdict}" if verdict else ""))
+    except Exception:
+        return ""

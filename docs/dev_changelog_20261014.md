@@ -38,3 +38,11 @@
 - **批 2 判定算法**：personality.py 六规则 judge_mode 纯函数（退化>斗嘴>照顾>依赖>熟络>客气兜底；证据下限 n_int<10 不判；置信度饱和公式 min(1,主证据/2×门槛)）+maybe_rejudge（事件触发+6h 防抖双闸+手动锁优先+退化可逆=degrade 是判定结果非终身罚）+_is_expression_ready；MODES+familiar；brain 双入口挂钩（relationship 更新后，静默旁路同 mood 纪律）
 - **零行为变化**：判定只写 rel_mode，表现层未接+总开关缺省关——无消费方前全仓与现状逐字节一致
 - +17 锚 全仓 2228→**2245+4**（#303 既有失败除外全绿）；备份 personality.py/brain.py.bak-20261014-batch2 在案；批 3（persona_expressions.json+mode_suffix+真机冒烟）等用户发话
+
+## 七、会话收官纪律二次扩充 + 人格演化批 3 表现层（续，本笔不推）
+
+- **纪律二次扩充（6b64499）**：换会话前必做两件=①开发者日志（历史轨迹）②BOOT.md 状态快照段（当前状态）——上下文清零时历史与现状都要锚；BOOT.md 增「状态快照」段（exclude 不随 commit）；Hindsight 旧条删新条换新验证（bank 60，旧措辞零残留实抓）
+- **批 3 表现层（本笔）**：persona_expressions.json（5 模式×auto/on+6 开关加码行+verdict 红线尾注：模式只改亲近度与主动度绝不改变善意与职责/安全句子永远严肃/绝不冷暴力）+spec datas 注册（PyInstaller 铁律）+personality.mode_suffix（空串路径六重：总开关关/表现闸<50/无行无手动/表缺失/合成空/异常；合成=模式选行+开关 tri-state 逐维覆盖）+brain 后缀链三段注入（关系段→模式段→情绪段，_persona_suffix 模块缺席兜空串）
+- **锚随结构改动同步两处**：test_relationship/test_mood 旧"双注入拼接"锚更新为三段（+ _rel + _persona + _tone）——拍板结构变更锚随改非违纪
+- **第一可感批**：拨 XIAOJU3_PERSONA_ENABLED=1 且单用户事件 ≥50 才可见；缺省路径逐字节现状；真机冒烟等用户
+- +15 锚 全仓 2245→**2260+4**（#303 既有失败除外全绿）；备份 *.bak-20261014-batch3 / closing2 在案

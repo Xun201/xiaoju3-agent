@@ -123,14 +123,14 @@ def test_lru_cleanup():
     assert old == 0  # 最旧的被清
 
 
-# 10 brain 源码锚：四参签名+双后缀拼接+双入口 rel 观察在位
+# 10 brain 源码锚：四参签名+三段注入拼接（#271 批 3 扩）+双入口 rel 观察在位
 def test_brain_hook_anchor():
     import inspect
     import brain
     src = inspect.getsource(brain)
     assert 'def smart_ask(message, history=None, session_key="default", user_id=None)' in src
     assert src.count("relationship.observe_rel(") == 2
-    assert "+ _rel + _tone" in src
+    assert "+ _rel + _persona + _tone" in src
     assert "def _relationship_suffix" in src
     # 静默纪律：模块缺席旁路
     assert "except ImportError:\n    relationship = None" in src
