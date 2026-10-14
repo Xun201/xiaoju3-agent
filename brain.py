@@ -196,6 +196,56 @@ NO_ABILITY_BODY_PLACEHOLDER = (
 # 正文占位符（用户口径示例文案）
 DEDUPE_BODY_PLACEHOLDER = "我在呢～"
 
+# 修②（裸 JSON bug，2026-10-14）：工具解析失败但原文含"幻觉工具调用证据"
+# （[行动] 标记+注册工具名，或可解析 JSON 顶层键=注册工具名）→ 诚实兜底，
+# 绝不旁路直出幻觉文本（冒烟实锤：QQ 收到裸 {"ui_tap_element":{...}}）。
+HALLUCINATED_TOOL_BODY = (
+    "这个操作我还没学会——我暂时没有对应的能力，帮不了这一步。"
+    "可以告诉我想达成的目标，我看看有没有别的办法。")
+_REGISTERED_TOOL_NAMES = frozenset()   # 惰性填充（见 _registered_tool_names）
+
+
+def _registered_tool_names():
+    """注册表工具名集合（tool_registry 单一事实源；惰性一次性填充）。"""
+    global _REGISTERED_TOOL_NAMES
+    if not _REGISTERED_TOOL_NAMES:
+        try:
+            from tool_registry import TOOL_MANIFEST
+            _REGISTERED_TOOL_NAMES = frozenset(
+                t.get("name") for t in TOOL_MANIFEST if t.get("name"))
+        except Exception:
+            return frozenset()
+    return _REGISTERED_TOOL_NAMES
+
+
+def _hallucinated_tool_reply(raw_reply):
+    """工具解析失败时的幻觉调用检测（修②）：含幻觉证据 → 诚实兜底文案；
+    否则 None（维持旁路普通回复——正文讨论工具名不被误伤）。
+
+    证据（任一）：① [行动] 标记 + 文本含注册工具名；② 可解析 JSON 对象
+    顶层键=注册工具名（冒烟实锤形态）。任何异常返回 None（绝不抛）。
+    """
+    try:
+        text = str(raw_reply or "")
+        names = _registered_tool_names()
+        if not names:
+            return None
+        name_hit = any(name in text for name in names)
+        if "[行动]" in text and name_hit:
+            return HALLUCINATED_TOOL_BODY
+        if "{" in text:
+            decoder = json.JSONDecoder()
+            for m in re.finditer(r'\{', text):
+                try:
+                    obj, _ = decoder.raw_decode(text[m.start():])
+                except ValueError:
+                    continue
+                if isinstance(obj, dict) and any(k in names for k in obj):
+                    return HALLUCINATED_TOOL_BODY
+        return None
+    except Exception:
+        return None
+
 
 def _tool_thinking_placeholder(tool_name):
     """无 CoT 时的 [思考] 占位符：按本轮实际解析出的工具名动态生成。
@@ -2151,6 +2201,12 @@ def _smart_ask_impl(message, history=None, session_key="default",
 
     raw_reply = _normalize_think_labels(raw_reply)   # #322 Bug B：冒号变体归一
     json_str = _extract_tool_json(raw_reply)
+    if not json_str:
+        # 修②（裸 JSON bug）：解析失败但含幻觉工具调用证据 → 诚实兜底，
+        # 绝不旁路直出幻觉 JSON 文本（冒烟实锤 QQ 收到裸 {"ui_tap_element":...}）
+        hallucinated = _hallucinated_tool_reply(raw_reply)
+        if hallucinated:
+            return _seal_bare_cot(hallucinated), label
     if json_str:
         try:
             tool_call = json.loads(json_str)
@@ -2533,6 +2589,11 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
         return final, label
 
     json_str = _extract_tool_json(raw_reply)
+    if not json_str:
+        # 修②（裸 JSON bug，流式入口同款）：幻觉调用证据 → 诚实兜底
+        hallucinated = _hallucinated_tool_reply(raw_reply)
+        if hallucinated:
+            return _seal_bare_cot(hallucinated), label
     if json_str:
         try:
             tool_call = json.loads(json_str)

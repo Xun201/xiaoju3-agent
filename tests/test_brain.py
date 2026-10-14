@@ -1122,25 +1122,23 @@ class ThinkWrapTests(unittest.TestCase):
         mexec.assert_not_called()
         mcloud.assert_not_called()
 
-    def test_cot_with_unparseable_json_sealed_with_placeholder(self):
+    def test_cot_with_unparseable_json_gets_honest_fallback(self):
         # 用户实测场景封口（"帮我点击手机屏幕上的蓝牙"）：模型按协议输出
-        # [思考]/[计划]/[行动]+JSON 但 JSON 残缺（缺逗号）解析不出 → 普通
-        # 回复路径同样包装 <think>；正文剥空 → [计划] 等裸标记不借回补漏进
-        # 正文，以"操作已完成。"兜底（2026-10-01 T5 新口径，废止旧
-        # "（操作已执行）"占位），[行动] 行与 JSON 载荷绝不裸漏
+        # [思考]/[计划]/[行动]+JSON 但 JSON 残缺（缺逗号）解析不出 →
+        # 修②（2026-10-14，design_fix_no_fake_completion 同族）：残缺 JSON
+        # 含注册工具名=幻觉调用证据 → 诚实兜底"这个操作我还没学会..."。
+        # 旧口径"操作已完成。"=正文虚假完成（冒烟 R2 同族），废止；
+        # [行动] 行与 JSON 载荷绝不裸漏、工具绝不真执行（mexec 未调）
         raw = ('[思考] 主人要点击蓝牙，先定位设置入口。\n'
                '[计划] 1. UI解析找蓝牙 2. 失败转视觉\n'
                '[行动] {"tool": "ui_tap_element" "args": {}}')
         result, mexec, mcloud, _ = _run_tool_flow(raw, summary_reply="x")
         reply, source = result
         self.assertEqual(source, "🏠 本地")
-        self.assertTrue(reply.startswith("<think>[思考] 主人要点击蓝牙"), reply)
-        self.assertIn("[计划] 1. UI解析找蓝牙", reply)
-        self.assertTrue(reply.endswith("</think>操作已完成。"), reply)
-        body_part = reply.split("</think>", 1)[1]
-        self.assertNotIn(brain.BARE_COT_BODY_PLACEHOLDER, reply)
-        self.assertNotIn("[行动]", body_part)
-        self.assertNotIn('"tool"', body_part)
+        self.assertIn(brain.HALLUCINATED_TOOL_BODY, reply)
+        self.assertNotIn("操作已完成。", reply)
+        self.assertNotIn("[行动]", reply)
+        self.assertNotIn('"tool"', reply)
         mexec.assert_not_called()
         mcloud.assert_not_called()
 

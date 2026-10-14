@@ -50,12 +50,45 @@ def normalize(text):
 
 
 def strip_pollution(text):
-    """全变体剥除（出口消毒）：XML + 方括号 + action JSON。
+    """全变体剥除（出口消毒）：XML + 方括号 + action JSON + 工具名键 JSON。
     QQ/控制台共用同口径（坑库 #20：消毒通道不对齐防再犯）。"""
     text = normalize(text)
     for rex in STRIP_RES:
         text = rex.sub('', text)
-    return text.strip()
+    return _strip_toolkey_json(text).strip()
+
+
+def _strip_toolkey_json(text):
+    """剥"顶层键=tool_registry 注册工具名"的可解析 JSON 对象（2026-10-14
+    冒烟实锤形态 {"ui_tap_element":{...}}——无 action 键+含嵌套，既有
+    action regex 双不匹配漏出）。
+
+    防误伤：注册表校验兜底——只剥顶层键命中注册工具名的对象，正文讨论的
+    普通 JSON（键非工具名）原样保留。懒加载 tool_registry（单一事实源，
+    避免模块加载环）。任何异常原样返回（消毒层绝不抛）。"""
+    try:
+        import json as _json
+        from tool_registry import TOOL_MANIFEST
+        names = {t.get("name") for t in TOOL_MANIFEST if t.get("name")}
+        decoder = _json.JSONDecoder()
+        out, pos, found = [], 0, False
+        for brace in re.finditer(r'\{', text):
+            if brace.start() < pos:
+                continue
+            try:
+                obj, end = decoder.raw_decode(text[brace.start():])
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and any(k in names for k in obj):
+                out.append(text[pos:brace.start()])
+                pos = brace.start() + end
+                found = True
+        if not found:
+            return text
+        out.append(text[pos:])
+        return "".join(out)
+    except Exception:
+        return text
 
 
 def parse_thinking_field(message_dict):
