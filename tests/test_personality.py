@@ -325,3 +325,137 @@ def test_brain_hook_static_anchor():
     with open("brain.py", encoding="utf-8") as f:
         src = f.read()
     assert src.count("personality.maybe_rejudge") >= 2
+
+
+# ==================== 批 3：模式表现段合成（design v2.1 §四） ====================
+
+def _make_ready(uid, db, mode="banter"):
+    """表现闸开通+手动模式（mode_suffix 合成的公共前置）。"""
+    _seed(uid, ["interaction"] * 50, db)
+    assert personality.set_mode_manual(uid, mode) is True
+
+
+# 32 空串路径①：总开关缺省关（逐字节现状）
+def test_mode_suffix_total_switch_off():
+    assert personality.mode_suffix("u1") == ""
+
+
+# 33 空串路径②：表现闸——事件 <50 判定照跑但返空串
+def test_mode_suffix_expression_gate(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _seed("u1", ["interaction"] * 10, _iso)
+    personality.set_mode_manual("u1", "banter")
+    assert personality._is_expression_ready("u1") is False
+    assert personality.mode_suffix("u1") == ""
+
+
+# 34 空串路径③：50 事件开闸但无模式行（无行且未手动）
+def test_mode_suffix_no_row(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _seed("u1", ["interaction"] * 50, _iso)
+    assert personality.mode_suffix("u1") == ""
+
+
+# 35 空串路径④：表文件缺失
+def test_mode_suffix_table_missing(_iso, monkeypatch, tmp_path):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    monkeypatch.setattr(personality, "_EXPRESS_PATH",
+                        str(tmp_path / "nope.json"))
+    _make_ready("u1", _iso)
+    assert personality.mode_suffix("u1") == ""
+
+
+# 36 空串路径⑤：合成空——唯一模式行被关联开关 off 压制且无加码
+def test_mode_suffix_synthesis_empty(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _make_ready("u1", _iso, mode="banter")
+    assert personality.set_switch("banter", "off") is True
+    assert personality.mode_suffix("u1") == ""
+
+
+# 37 斗嘴合成：auto 档+verdict 红线尾注
+def test_mode_suffix_banter_auto(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _make_ready("u1", _iso, mode="banter")
+    s = personality.mode_suffix("u1")
+    assert "斗嘴型" in s and "接得住玩笑" in s
+    assert "安全与权限相关句子永远严肃" in s
+
+
+# 38 熟络合成（v2.1 第五模式）
+def test_mode_suffix_familiar_auto(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _make_ready("u1", _iso, mode="familiar")
+    s = personality.mode_suffix("u1")
+    assert "熟络型" in s and "老熟人" in s
+
+
+# 39 客气合成：距离感+礼数红线（绝非冷暴力写进文案）
+def test_mode_suffix_polite_auto(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _make_ready("u1", _iso, mode="polite")
+    s = personality.mode_suffix("u1")
+    assert "客气型" in s and "绝不冷暴力" in s
+
+
+# 40 照顾合成
+def test_mode_suffix_caring_auto(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _make_ready("u1", _iso, mode="caring")
+    s = personality.mode_suffix("u1")
+    assert "照顾型" in s and "放在心上" in s
+
+
+# 41 依赖合成
+def test_mode_suffix_dependent_auto(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _make_ready("u1", _iso, mode="dependent")
+    s = personality.mode_suffix("u1")
+    assert "依赖型" in s and "搭档" in s
+
+
+# 42 开关覆盖：关联开关 on → 用 on 档加码行（用户终裁）
+def test_mode_suffix_switch_on_override(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _make_ready("u1", _iso, mode="banter")
+    assert personality.set_switch("banter", "on") is True
+    s = personality.mode_suffix("u1")
+    assert "打趣浓度加码" in s
+    assert "接得住玩笑" not in s   # auto 档被 on 档替换
+
+
+# 43 加码行追加：非关联开关 on → 独立加码行逐维附加
+def test_mode_suffix_addon_lines(_iso, monkeypatch):
+    monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
+    _make_ready("u1", _iso, mode="caring")
+    assert personality.set_switch("clingy", "on") is True
+    s = personality.mode_suffix("u1")
+    assert "放在心上" in s and "撒娇维度加码" in s
+
+
+# 44 表文件红线：零体验词+verdict 三条硬话（善意与职责/安全严肃/绝不冷暴力）
+def test_mode_table_redline_words():
+    with open("persona_expressions.json", encoding="utf-8") as f:
+        table = json.load(f)
+    blob = json.dumps({k: v for k, v in table.items() if k != "_comment"},
+                      ensure_ascii=False)   # _comment 是文档说明非注入文案
+    for bad in ("感到", "开心", "难过", "伤心"):
+        assert bad not in blob
+    verdict = table["verdict"]
+    for must in ("安全与权限相关句子永远严肃", "善意与职责", "绝不冷暴力"):
+        assert must in verdict
+
+
+# 45 brain 后缀链静态锚：_persona_suffix 存在+三段拼接顺序（关系→模式→情绪）
+def test_brain_chain_static_anchor():
+    with open("brain.py", encoding="utf-8") as f:
+        src = f.read()
+    assert "def _persona_suffix" in src
+    assert "_rel + _persona + _tone" in src   # 顺序即此串本身
+
+
+# 46 spec datas 注册静态锚（PyInstaller 铁律——缺它 frozen 静默失效）
+def test_spec_datas_registered():
+    with open("xiaoju3.spec", encoding="utf-8") as f:
+        src = f.read()
+    assert "persona_expressions.json" in src
