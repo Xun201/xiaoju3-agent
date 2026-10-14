@@ -191,6 +191,44 @@ THINK_NEGATION_RE = re.compile(
 NO_ABILITY_BODY_PLACEHOLDER = (
     "这件事我做不到——我没有对应的能力或工具。（详情见上方思考）")
 
+# 修 B v2（2026-10-14 晚冒烟实锤）：澄清反问形态——模型把"要问用户的话"
+# 写在思考卡末段（无否定词，例："哪个文件是你要我帮忙删除的呢？"），
+# 正文被兜底成"操作已完成。"。问句升正文=治根不治形（坑库 #30）。
+# 判定约束（用户拍板）：末段以？/? 结尾 + 含用户指向词 + 段内无裸标记 +
+# 长度 <200；防内部自问守卫见 _promotable_user_question。
+_USER_QUESTION_WORDS = ("你", "您", "哪", "什么", "请告诉我", "是指", "具体是")
+_USER_QUESTION_ADDRESSEE = ("你", "您", "请告诉我")
+_SELF_PLAN_RE = re.compile(r"我(应该|该|要|需|得|先)")
+
+
+def _promotable_user_question(thinking_text):
+    """思考卡末段是否为面向用户的澄清问句（修 B v2 修 1）。命中返回末段
+    文本，否则空串。纯函数。
+
+    判定：末行以？/? 结尾 + 含用户指向词 + 行内无 [思考]/[计划]/[行动]
+    裸标记 + 长度 <200；另加内部自问守卫——不含你/您/请告诉我等收件人
+    词且命中"我应该/我要/我需…"自计划句式 → 内部推理不升（防自问漏出）。
+    """
+    try:
+        text = str(thinking_text or "").strip()
+        if not text:
+            return ""
+        seg = text.splitlines()[-1].strip()
+        if not seg or len(seg) >= 200:
+            return ""
+        if not seg.endswith(("？", "?")):
+            return ""
+        if _BARE_COT_MARK_RE.search(seg):
+            return ""
+        if not any(w in seg for w in _USER_QUESTION_WORDS):
+            return ""
+        if (not any(w in seg for w in _USER_QUESTION_ADDRESSEE)
+                and _SELF_PLAN_RE.search(seg)):
+            return ""
+        return seg
+    except Exception:
+        return ""
+
 # 回复出口去重（2026-10-02 用户口径，修复本地模型复读）：思考与正文完全相同
 # 收敛为"占位卡 + 正文一份"、正文句级连续重复塌缩；句级去重后正文为空时的
 # 正文占位符（用户口径示例文案）
@@ -202,6 +240,10 @@ DEDUPE_BODY_PLACEHOLDER = "我在呢～"
 HALLUCINATED_TOOL_BODY = (
     "这个操作我还没学会——我暂时没有对应的能力，帮不了这一步。"
     "可以告诉我想达成的目标，我看看有没有别的办法。")
+# 修 B v2 扩形态（2026-10-14 晚冒烟实锤 {"action":"get_file_names"}）：幻觉
+# JSON 的通用键名族——工具名在"值"不在顶层键，注册名校验天然漏；值为字符串
+# 才计证据（防 {"action": {...配置...}} 类正常结构误伤）。
+_HALLUCINATION_ACTION_KEYS = ("action", "tool", "tool_name")
 _REGISTERED_TOOL_NAMES = frozenset()   # 惰性填充（见 _registered_tool_names）
 
 
@@ -223,7 +265,9 @@ def _hallucinated_tool_reply(raw_reply):
     否则 None（维持旁路普通回复——正文讨论工具名不被误伤）。
 
     证据（任一）：① [行动] 标记 + 文本含注册工具名；② 可解析 JSON 对象
-    顶层键=注册工具名（冒烟实锤形态）。任何异常返回 None（绝不抛）。
+    顶层键=注册工具名（冒烟实锤形态）；③ 顶层键 ∈ action/tool/tool_name
+    且值为字符串（修 B v2 扩形态：19:27 冒烟实锤 {"action":"get_file_names"}
+    直出——工具名在值不在键，原判据不命中）。任何异常返回 None（绝不抛）。
     """
     try:
         text = str(raw_reply or "")
@@ -241,6 +285,10 @@ def _hallucinated_tool_reply(raw_reply):
                 except ValueError:
                     continue
                 if isinstance(obj, dict) and any(k in names for k in obj):
+                    return HALLUCINATED_TOOL_BODY
+                if isinstance(obj, dict) and any(
+                        k in obj and isinstance(obj[k], str)
+                        for k in _HALLUCINATION_ACTION_KEYS):
                     return HALLUCINATED_TOOL_BODY
         return None
     except Exception:
@@ -412,6 +460,11 @@ def _wrap_think(thinking, body):
             # 修 B：思考卡含诚实拒绝（否定表述）→ 正文禁止虚假完成
             # （冒烟 R2 实锤：think 说"没有删除工具"，正文被兜底成"操作已完成。"）
             body_text = NO_ABILITY_BODY_PLACEHOLDER
+        elif _promotable_user_question(thinking_text):
+            # 修 B v2 修 1：澄清反问形态——思考卡末段是面向用户的问句
+            # （19:27 冒烟实锤："哪个文件是你要我帮忙删除的呢？"被兜底成
+            # "操作已完成。"）→ 末段升为正文（反问本来就是给用户的话）
+            body_text = _promotable_user_question(thinking_text)
         elif thinking_text.strip() != CHAT_THINKING_PLACEHOLDER:
             # 不可回补（工具占位思考 / 多段思考含裸标记）→ 简短正文兜底
             body_text = DEFAULT_BODY_PLACEHOLDER

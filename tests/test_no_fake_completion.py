@@ -68,3 +68,55 @@ def test_prompt_consistency_rule_present():
     content = prompts.SYSTEM_PROMPT["content"]
     assert "正文与思考必须说同一件事" in content
     assert "正文为空比说谎好" in content
+
+
+# ==================== 修 B v2 修 1：澄清反问升正文（2026-10-14 晚冒烟实锤） ====================
+# 19:27 生产实锤：模型把"要问用户的话"写在思考卡末段（无否定词），
+# 正文被兜底成"操作已完成。"（澄清型虚假完成）。问句升正文=治根不治形。
+
+SMOKE_THINKING = ("[思考] 需要确认具体是哪个文件，才能执行删除操作。\n"
+                  "[计划] 请告诉我桌面上具体是哪个测试文件需要删除呢？\n"
+                  "哪个文件是你要我帮忙删除的呢？")
+
+
+def test_v2_clarifying_question_promoted():
+    """19:27 私聊轮原样回放：末段澄清问句升为正文（非"操作已完成"）。"""
+    r = brain._wrap_think(SMOKE_THINKING, "")
+    body = r.split("</think>", 1)[1]
+    assert body == "哪个文件是你要我帮忙删除的呢？", r
+    assert "操作已完成" not in body
+    assert "[思考]" in r.split("</think>")[0]  # 思考卡保留
+
+
+def test_v2_internal_self_question_not_promoted():
+    """内部自问（无收件人词+自计划句式）不升 → 维持占位兜底。"""
+    r = brain._wrap_think("[思考] 用户想删文件。\n[计划] 先查注册表。\n我应该先做什么？", "")
+    body = r.split("</think>", 1)[1]
+    assert "操作已完成。" in body
+    assert "我应该先做什么" not in body
+
+
+def test_v2_negation_priority_unchanged():
+    """否定优先契约不变：不可回补形状含否定+尾部问句 → 仍走诚实拒绝文案。"""
+    r = brain._wrap_think("[思考] 我没有删除工具，无法操作。\n[计划] 建议用户手动处理。\n你想删哪个文件呢？", "")
+    body = r.split("</think>", 1)[1]
+    assert "这件事我做不到" in body
+
+
+def test_v2_plain_statement_not_promoted():
+    """末段普通陈述（非问句）不升 → 占位兜底。"""
+    r = brain._wrap_think("[思考] 用户想删文件。\n[计划] 需要先确认文件名。", "")
+    assert "操作已完成。" in r.split("</think>", 1)[1]
+
+
+def test_v2_overlong_question_not_promoted():
+    """>=200 字超长问句不升（防内部推理误升）。"""
+    longq = "你要我删" + "非" * 200 + "常多的文件吗？"
+    r = brain._wrap_think(f"[思考] x。\n[计划] y。\n{longq}", "")
+    assert "操作已完成。" in r.split("</think>", 1)[1]
+
+
+def test_v2_normal_chat_zero_change():
+    """常规闲聊（正文非空）逐字节零变化（回归闸）。"""
+    r = brain._wrap_think("[思考] 主人在打招呼。", "在呢～")
+    assert r == "<think>[思考] 主人在打招呼。</think>在呢～"

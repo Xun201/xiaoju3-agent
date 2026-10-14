@@ -2092,3 +2092,36 @@ class TestDevVisualFeedbackAndFold:
         assert "dev-switch-row" in js
         # 开关本体仍在（details 内容区）
         assert "dev-mode-switch" in js
+
+
+class TestSanitizeQqReply(unittest.TestCase):
+    """修 B v2 修 3：QQ 出口消毒剥空后沉默改兜底（2026-10-14 19:27 冒烟
+    实锤：群聊轮裸 JSON 被全剥 → 回复空 → 零发送=对用户沉默）。"""
+
+    def test_sanitized_empty_gets_honest_fallback(self):
+        """纯污染物（think 卡+裸 JSON）被剥空 → 诚实兜底文案（非沉默）。"""
+        reply = main._sanitize_qq_reply(
+            '<think>[思考] x</think>{"action": "get_file_names"}')
+        self.assertEqual(reply, main.SANITIZED_EMPTY_FALLBACK)
+
+    def test_normal_content_passthrough_byte_identical(self):
+        """消毒后有内容 → 原样透传（逐字节零变化）。"""
+        self.assertEqual(main._sanitize_qq_reply("<think>t</think>正常回复内容"),
+                         "正常回复内容")
+        self.assertEqual(main._sanitize_qq_reply("直接正文"), "直接正文")
+
+    def test_original_empty_stays_silent(self):
+        """原始回复本就为空 → 维持旧静默语义（非污染物路径零变化）。"""
+        self.assertEqual(main._sanitize_qq_reply(""), "")
+
+    def test_fallback_text_locked(self):
+        """兜底文案锁定（诚实问回式，非"操作已完成"族）。"""
+        self.assertEqual(main.SANITIZED_EMPTY_FALLBACK,
+                         "我不太确定该怎么处理这个请求——能再说一次吗？")
+
+    def test_wired_at_both_qq_send_points(self):
+        """接线锚：直接路径与拟人节奏冲刷两点均走 _sanitize_qq_reply。"""
+        import inspect
+        src = inspect.getsource(main)
+        self.assertEqual(src.count("_sanitize_qq_reply("), 3)  # def+两调用点
+        self.assertNotIn("reply = _strip_llm_pollution(reply)", src)  # 旧直调退役

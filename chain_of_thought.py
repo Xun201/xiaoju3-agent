@@ -58,10 +58,19 @@ def strip_pollution(text):
     return _strip_toolkey_json(text).strip()
 
 
+# 修 B v2 扩形态（2026-10-14 晚冒烟实锤 {"action":"get_file_names"}）：幻觉
+# JSON 通用键族——工具名在"值"不在键。只在对象占据整段文本（无自然语言
+# 上下文）时剥除，正文讨论该 JSON 形态不误伤。
+_HALLUCINATION_ACTION_KEYS = ("action", "tool", "tool_name")
+
+
 def _strip_toolkey_json(text):
     """剥"顶层键=tool_registry 注册工具名"的可解析 JSON 对象（2026-10-14
     冒烟实锤形态 {"ui_tap_element":{...}}——无 action 键+含嵌套，既有
     action regex 双不匹配漏出）。
+
+    修 B v2 增：顶层键 ∈ action/tool/tool_name 且值为字符串的对象，仅当
+    其占据整段文本时剥除（纯泄漏形态；行内嵌在自然语言里的讨论原样保留）。
 
     防误伤：注册表校验兜底——只剥顶层键命中注册工具名的对象，正文讨论的
     普通 JSON（键非工具名）原样保留。懒加载 tool_registry（单一事实源，
@@ -79,7 +88,14 @@ def _strip_toolkey_json(text):
                 obj, end = decoder.raw_decode(text[brace.start():])
             except ValueError:
                 continue
-            if isinstance(obj, dict) and any(k in names for k in obj):
+            qualifies = isinstance(obj, dict) and any(k in names for k in obj)
+            if not qualifies and isinstance(obj, dict):
+                generic = any(k in obj and isinstance(obj[k], str)
+                              for k in _HALLUCINATION_ACTION_KEYS)
+                entire = (text[brace.start():].strip()
+                          == text[brace.start():brace.start() + end].strip())
+                qualifies = generic and entire
+            if qualifies:
                 out.append(text[pos:brace.start()])
                 pos = brace.start() + end
                 found = True
