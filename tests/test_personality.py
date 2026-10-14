@@ -145,3 +145,183 @@ def test_persona_enabled_default_off(monkeypatch):
     assert personality.enabled() is False
     monkeypatch.setenv("XIAOJU3_PERSONA_ENABLED", "1")
     assert personality.enabled() is True
+
+
+# ==================== 批 2：六规则判定 + 事件触发节流（design v2.1） ====================
+
+def _stats(i, t, p, s):
+    """窗口统计构造器（judge_mode 纯函数输入）。"""
+    return {"interaction": i, "thanks": t, "politeness": p,
+            "scolded": s, "n_int": i + t + p + s}
+
+
+def _seed(uid, kinds, db, start=None, step_h=24.0):
+    """直插 rel_event_log（判定的证据源；绕开 observe_rel 词表/日帽——
+    规则矩阵要精确计数）。"""
+    relationship._connect().close()   # 幂等建表（直插前 schema 未必存在）
+    start = start or DAY
+    conn = sqlite3.connect(db)
+    try:
+        for idx, kind in enumerate(kinds):
+            ts = (start + timedelta(hours=step_h * idx)).strftime(
+                "%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                "INSERT INTO rel_event_log (ts, user_id, event, delta,"
+                " affinity_after, note) VALUES (?, ?, ?, 0, 0, NULL)",
+                (ts, uid, kind))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_aff(uid, value, db):
+    """直写 relationship.affinity（判定输入 affinity_now）。"""
+    relationship._connect().close()   # 幂等建表（同 _seed）
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("INSERT OR IGNORE INTO relationship (user_id,"
+                     " affinity, interaction_count) VALUES (?, 0, 0)",
+                     (uid,))
+        conn.execute("UPDATE relationship SET affinity=? WHERE user_id=?",
+                     (value, uid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# 15 v2.1 熟络型进枚举（手动可指定）
+def test_set_mode_manual_familiar():
+    assert personality.set_mode_manual("u1", "familiar") is True
+    assert personality.get_mode("u1")["mode"] == "familiar"
+
+
+# 16 证据下限：n_int<10 不判定（不拿两条消息定性）
+def test_judge_insufficient_evidence():
+    assert personality.judge_mode(_stats(9, 0, 0, 0), 0.0) is None
+
+
+# 17 退化规则：骂声主旋律+关系冷 → 强制 polite（rule=degrade）
+def test_judge_degrade_rule():
+    v = personality.judge_mode(_stats(86, 1, 1, 12), -3.0)
+    assert (v["mode"], v["rule"]) == ("polite", "degrade")
+    assert v["confidence"] == 0.6   # 12/(2×10) 饱和公式
+
+
+# 18 斗嘴规则：骂谢混杂+关系仍暖
+def test_judge_banter_rule():
+    v = personality.judge_mode(_stats(9, 5, 5, 6), 4.0)
+    assert (v["mode"], v["rule"]) == ("banter", "banter")
+
+
+# 19 照顾规则（v2.1 放宽）：2 次口角不挡照顾
+def test_judge_caring_relaxed_scold2():
+    v = personality.judge_mode(_stats(9, 6, 4, 2), 6.0)
+    assert (v["mode"], v["rule"]) == ("caring", "caring")
+
+
+# 20 照顾封顶：3 次口角挡照顾（同批证据滑落熟络档）
+def test_judge_caring_blocked_scold3():
+    v = personality.judge_mode(_stats(17, 6, 4, 3), 6.0)
+    assert v["mode"] == "familiar"   # 证明未落 caring
+
+
+# 21 依赖规则：高频事务型
+def test_judge_dependent_rule():
+    v = personality.judge_mode(_stats(45, 3, 2, 0), 1.0)
+    assert (v["mode"], v["rule"]) == ("dependent", "dependent")
+
+
+# 22 熟络规则（v2.1 新增）：高频中性；affinity 差一口气挡住照顾
+def test_judge_familiar_rule():
+    v = personality.judge_mode(_stats(10, 5, 5, 0), 4.0)
+    assert (v["mode"], v["rule"]) == ("familiar", "familiar")
+
+
+# 23 客气兜底：证据不够任何上档规则
+def test_judge_polite_fallback():
+    v = personality.judge_mode(_stats(8, 1, 1, 0), 1.0)
+    assert (v["mode"], v["rule"], v["confidence"]) == \
+        ("polite", "fallback", personality.FALLBACK_CONFIDENCE)
+
+
+# 24 优先级：同批证据照顾与熟络均可命中 → 照顾胜（序 2 < 序 4）
+def test_judge_priority_caring_over_familiar():
+    v = personality.judge_mode(_stats(10, 5, 5, 0), 6.0)
+    assert v["mode"] == "caring"
+
+
+# 25 置信度饱和封顶 1.0
+def test_judge_confidence_cap():
+    v = personality.judge_mode(_stats(30, 20, 10, 12), 4.0)
+    assert v["mode"] == "banter"
+    assert v["confidence"] == 1.0
+
+
+# 26 首判：20 事件触发落库（source=auto+judged_at+baseline_id 基线）
+def test_rejudge_first_judgment_on_20_events(_iso):
+    _seed("u1", ["interaction"] * 10 + ["thanks"] * 5 + ["politeness"] * 5,
+          _iso)
+    _set_aff("u1", 4.0, _iso)
+    out = personality.maybe_rejudge("u1", now=DAY)
+    assert out["mode"] == "familiar"       # aff 4<5 挡照顾 → 熟络
+    assert out["source"] == "auto"
+    m = personality.get_mode("u1")
+    assert m["judged_at"] == "2026-10-14 09:00:00"
+    ev = json.loads(m["evidence"])
+    assert ev["baseline_id"] == 20 and ev["rule"] == "familiar"
+
+
+# 27 事件触发双闸：新事件 <20 不判；攒够 20 且过 6h 防抖才重判
+def test_rejudge_event_throttle(_iso):
+    _seed("u1", ["interaction"] * 15 + ["thanks"] * 5, _iso)
+    _set_aff("u1", 1.0, _iso)
+    assert personality.maybe_rejudge("u1", now=DAY)["mode"] == "polite"
+    before = personality.get_mode("u1")["judged_at"]
+    _seed("u1", ["interaction"] * 5, _iso, start=DAY + timedelta(days=30))
+    assert personality.maybe_rejudge(
+        "u1", now=DAY + timedelta(hours=1)) is None   # 5<20 且未过 6h
+    assert personality.get_mode("u1")["judged_at"] == before
+    _seed("u1", ["interaction"] * 15, _iso, start=DAY + timedelta(days=31))
+    out = personality.maybe_rejudge("u1", now=DAY + timedelta(hours=7))
+    assert out["mode"] == "dependent"   # 40 事件 generic 0.75 → 依赖
+    assert personality.get_mode("u1")["judged_at"] == \
+        (DAY + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# 28 手动锁优先：source=manual 永不被自动判定覆盖
+def test_rejudge_manual_lock(_iso):
+    _seed("u9", ["interaction"] * 30, _iso)
+    assert personality.set_mode_manual("u9", "caring") is True
+    assert personality.maybe_rejudge("u9", now=DAY) is None
+    m = personality.get_mode("u9")
+    assert m["mode"] == "caring" and m["source"] == "manual"
+
+
+# 29 退化可逆：degrade 是判定结果非终身罚——证据改善后离开 degrade 规则
+def test_rejudge_degrade_reversible(_iso):
+    _seed("u2", ["interaction"] * 7 + ["thanks"] + ["scolded"] * 12, _iso)
+    _set_aff("u2", -3.0, _iso)
+    first = personality.maybe_rejudge("u2", now=DAY)
+    assert (first["mode"], json.loads(first["evidence"])["rule"]) == \
+        ("polite", "degrade")
+    _seed("u2", ["thanks"] * 24, _iso, start=DAY + timedelta(days=1),
+          step_h=6.0)
+    _set_aff("u2", 6.0, _iso)
+    second = personality.maybe_rejudge("u2", now=DAY + timedelta(days=8))
+    assert json.loads(second["evidence"])["rule"] != "degrade"
+    assert second["mode"] == "polite"   # 90 天窗口旧骂声仍在 → 客气兜底
+
+
+# 30 表现层单用户闸：累计事件 <50 判定照跑表现不开；≥50 开
+def test_expression_ready_threshold(_iso):
+    _seed("u1", ["interaction"] * 49, _iso)
+    assert personality._is_expression_ready("u1") is False
+    _seed("u1", ["interaction"], _iso, start=DAY + timedelta(days=60))
+    assert personality._is_expression_ready("u1") is True
+
+
+# 31 brain 双入口挂钩静态锚（smart_ask+stream 两处 maybe_rejudge）
+def test_brain_hook_static_anchor():
+    with open("brain.py", encoding="utf-8") as f:
+        src = f.read()
+    assert src.count("personality.maybe_rejudge") >= 2

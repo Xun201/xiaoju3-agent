@@ -1951,6 +1951,14 @@ def _smart_ask_impl(message, history=None, session_key="default",
         except Exception as _re:
             print(f"⚠️ 关系更新失败（已静默跳过）: {_re}")
 
+    # 🧩 关系模式重判定（#271 批 2）：事件触发 N=20+6h 防抖+手动锁优先，
+    # 全程静默旁路（personality 模块可整体删除，ImportError 即旁路同款纪律）
+    try:
+        import personality
+        personality.maybe_rejudge(user_id or "owner")
+    except Exception as _pe:
+        print(f"⚠️ 关系模式判定失败（已静默跳过）: {_pe}")
+
     # 📍 位置回答兜底提取（2026-10-02 隐私口径）：小模型可能识别不出完整
     # 句式的位置回答、漏带 [LOCATION:] 标记——用户消息里明显含"城市+区县"
     # 组合时直接提取写入本地位置记忆（词表+后缀轻量匹配，异常静默）
@@ -2396,6 +2404,14 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
             relationship.observe_rel(user_id or "owner", message)
         except Exception as _re:
             print(f"⚠️ 关系更新失败（已静默跳过）: {_re}")
+
+    # 🧩 关系模式重判定（#271 批 2，流式入口同款）：事件触发 N=20+6h
+    # 防抖+手动锁优先，全程静默旁路
+    try:
+        import personality
+        personality.maybe_rejudge(user_id or "owner")
+    except Exception as _pe:
+        print(f"⚠️ 关系模式判定失败（已静默跳过）: {_pe}")
     _extract_location_from_user_message(message)
     try:
         _chat_city, _chat_district, _chat_source = _resolve_user_location()
