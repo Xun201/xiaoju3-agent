@@ -6,15 +6,20 @@
 互相守望、谁出问题另一台顶上）、功能文档 §12 路线图、开发日志第十章
 参照系（状态外置层 agent_state/ + 互相守望 + 故障顶替）。
 
-1. export_bundle(path=None)：把"自己是谁、记得什么、喜欢什么、设置成
-   什么样"打包为单一 zip（命名 xiaoju3_soul_*.zip）：agent_state/ 下的
-   identity.json、history_*.json、conversations/、long_term.db、
-   emoji_links.json，以及项目根 .env 的**存在性记录但不打包内容**——
-   密钥不进包；包内 MANIFEST.txt 列明应手工迁移的密钥/配置清单（只列
-   键名，不含值）。
-2. import_bundle(zip_path, overwrite=False)：解包恢复到 agent_state/；
-   冲突默认跳过、overwrite=True 才覆盖；恢复后输出需用户手工核对的
-   密钥清单提示。成员路径做防穿越校验（绝对路径 / .. 一律拒绝）。
+1. export_bundle(path=None, base_dir=None, env_file=None, v2=False)：
+   把"自己是谁、记得什么、喜欢什么、设置成什么样"打包为单一 zip（命名
+   xiaoju3_soul_*.zip）：v1 走既有固定清单；v2=True（#319 批 1）清单改读
+   soul_manifest 单一事实源 + 打包前 SQLite integrity 前检 + 包内
+   soul_meta.json（version/device_id/逐文件 sha256，导入端防篡改拒收）+
+   include_extensions 核/扩展开关。两代口径一致：.env 只记存在性不打包
+   内容——密钥不进包；包内 MANIFEST.txt 列明应手工迁移的密钥/配置清单
+   （只列键名，不含值）。
+2. import_bundle(zip_path, overwrite=False, base_dir=None, backup_dir=None)：
+   解包恢复到 agent_state/；冲突默认跳过、overwrite=True 才覆盖；恢复后
+   输出需用户手工核对的密钥清单提示。成员路径做防穿越校验（绝对路径 /
+   .. 一律拒绝）。#319 批 1 增强：v2 包解包前逐成员 sha256 校验（篡改
+   整体拒收，零落盘）+ 写入前自动备份既有 agent_state 全目录 zip
+   （result["backup"]，误操作可一键还原）。
 3. PeerWatch：多设备守望——对端列表来自 env XIAOJU3_PEERS（逗号分隔
    http://host:port），check_peers() 逐个 GET {peer}/api/health
    （requests，超时 3 秒）记录存活快照；watch_loop(interval=60) 连续
@@ -34,6 +39,7 @@
 import 本模块零副作用（除 flask/requests 常规 import）；env 在函数调用
 时读取，便于测试注入。
 """
+import hashlib
 import json
 import os
 import posixpath
@@ -45,6 +51,7 @@ import zipfile
 import requests
 from flask import Blueprint, jsonify
 
+import soul_manifest
 from xiaoju3 import AGENT_STATE_DIR, PROJECT_ROOT
 
 # ==================== 配置（本模块自读 env；键名已报主控补 .env.example） ====================
@@ -55,6 +62,10 @@ PEERS_ENV = "XIAOJU3_PEERS"
 # 灵魂包命名（主控会把该模式补进 .gitignore：xiaoju3_soul_*.zip）
 SOUL_PREFIX = "xiaoju3_soul_"
 MANIFEST_NAME = "MANIFEST.txt"
+
+# #319 批 1：v2 灵魂包 soul_meta.json（机器可校验清单，区别于人读 MANIFEST.txt）
+SOUL_META_NAME = "soul_meta.json"
+SOUL_META_VERSION = 2
 
 # 对端健康探测路径与超时（秒）
 PEER_HEALTH_PATH = "/api/health"
@@ -125,27 +136,97 @@ def _build_manifest(base_dir, files, env_exists):
     return "\n".join(lines)
 
 
-def export_bundle(path=None, base_dir=None, env_file=None):
-    """打包灵魂为单一 zip，返回包路径。
+def _sha256_file(abs_path):
+    """文件 sha256（流式，64KB 分块）。"""
+    h = hashlib.sha256()
+    with open(abs_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-    - base_dir 缺省取统一配置 xiaoju3.AGENT_STATE_DIR（状态外置层）；
-    - env_file 缺省取项目根 .env：只记录存在性，内容绝不打包；
-    - path 缺省落项目根，命名 xiaoju3_soul_<时间戳>.zip。
+
+def _sqlite_integrity_ok(abs_path):
+    """SQLite integrity_check → bool（打不开/非 SQLite 一律 False，fail-closed）。"""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(abs_path)
+        try:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+            return bool(row) and row[0] == "ok"
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def export_bundle(path=None, base_dir=None, env_file=None, v2=False,
+                  include_extensions=True, device_id=None):
+    """打包灵魂为单一 zip。v1（缺省）返回包路径字符串，行为逐字节不变。
+
+    v2=True（#319 批 1）返回 dict {"ok","path","files","size","meta","report"}：
+    - 清单改读 soul_manifest 单一事实源（default deny，未登记文件不迁）；
+    - 打包前逐 .db SQLite integrity_check，损伤即整体拒绝（防带伤迁移）；
+    - 包内 soul_meta.json：{version:2, exported_at, device_id,
+      include_extensions, files:{path:{sha256, bytes}}}，导入端逐文件
+      sha256 校验（防篡改拒收）；
+    - include_extensions=False 只迁核档（轻量包，回写通道用）；
+    - 密钥仍不进包（MANIFEST.txt 只列键名，.env 不打包）。
     """
     base_dir = base_dir or AGENT_STATE_DIR
     env_file = env_file or os.path.join(PROJECT_ROOT, ".env")
     if path is None:
         path = os.path.join(PROJECT_ROOT, f"{SOUL_PREFIX}"
                             f"{time.strftime('%Y%m%d_%H%M%S')}.zip")
-    files = _soul_targets(base_dir)
+    if not v2:
+        files = _soul_targets(base_dir)
+        env_exists = os.path.isfile(env_file)
+        manifest = _build_manifest(base_dir, files, env_exists)
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for rel in files:
+                zf.write(os.path.join(base_dir, *rel.split("/")), arcname=rel)
+            zf.writestr(MANIFEST_NAME, manifest)
+        print(f"💾 [迁移] 灵魂备份完成：{path}（{len(files)} 个文件；密钥不进包，见 {MANIFEST_NAME}）")
+        return os.path.abspath(path)
+
+    # ---- v2：清单单一事实源 + integrity 前检 + soul_meta ----
+    files = soul_manifest.soul_targets(base_dir,
+                                       include_extensions=include_extensions)
+    damaged = [rel for rel in files if rel.endswith(".db")
+               and not _sqlite_integrity_ok(
+                   os.path.join(base_dir, *rel.split("/")))]
+    if damaged:
+        report = ("❌ 检测到损伤的库文件，已拒绝打包（防带伤迁移）："
+                  + "、".join(damaged)
+                  + "。请先修复或从备份恢复源数据后再迁移。")
+        print(report)
+        return {"ok": False, "path": None, "files": [], "size": 0,
+                "report": report}
+    meta = {
+        "version": SOUL_META_VERSION,
+        "type": SOUL_BUNDLE_TYPE,
+        "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "device_id": device_id or soul_manifest.device_id(),
+        "include_extensions": bool(include_extensions),
+        "files": {rel: {"sha256": _sha256_file(
+                            os.path.join(base_dir, *rel.split("/"))),
+                        "bytes": os.path.getsize(
+                            os.path.join(base_dir, *rel.split("/")))}
+                  for rel in files},
+    }
     env_exists = os.path.isfile(env_file)
     manifest = _build_manifest(base_dir, files, env_exists)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         for rel in files:
             zf.write(os.path.join(base_dir, *rel.split("/")), arcname=rel)
         zf.writestr(MANIFEST_NAME, manifest)
-    print(f"💾 [迁移] 灵魂备份完成：{path}（{len(files)} 个文件；密钥不进包，见 {MANIFEST_NAME}）")
-    return os.path.abspath(path)
+        zf.writestr(SOUL_META_NAME,
+                    json.dumps(meta, ensure_ascii=False, indent=2))
+    size = os.path.getsize(path)
+    report = (f"💾 灵魂备份完成（v2）：{path}（{len(files)} 个文件，{size} 字节；"
+              f"integrity 全过；sha256 已录 soul_meta；密钥不进包）")
+    print(report)
+    return {"ok": True, "path": os.path.abspath(path), "files": files,
+            "size": size, "meta": meta, "report": report}
 
 
 def _safe_member(name):
@@ -156,23 +237,112 @@ def _safe_member(name):
     return norm
 
 
-def import_bundle(zip_path, overwrite=False, base_dir=None):
-    """解包灵魂到 agent_state/，返回 {"restored": [...], "skipped": [...], "report": 文案}。
+def _read_soul_meta(zf):
+    """读包内 soul_meta.json：无 → None（v1 旧包）；有且合法 → dict；
+    有但损坏/版本不符 → ValueError（调用端整体拒绝导入）。"""
+    try:
+        raw = zf.read(SOUL_META_NAME)
+    except KeyError:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise ValueError("soul_meta.json 不是合法 JSON")
+    if (not isinstance(data, dict)
+            or data.get("version") != SOUL_META_VERSION
+            or not isinstance(data.get("files"), dict)):
+        raise ValueError(f"soul_meta.json 版本/结构不符（期望 v{SOUL_META_VERSION}）")
+    return data
+
+
+def _backup_state_dir(base_dir, backup_dir=None):
+    """导入前自动备份：agent_state 全目录打 zip 留底；空目录/不存在 → None。
+
+    备份落 backup_dir（缺省 <base_dir 同级>/backups/），命名
+    agent_state_pre_import_<时间戳>.zip，重名自动追加 -N。
+    """
+    if not os.path.isdir(base_dir):
+        return None
+    if not any(files for _r, _d, files in os.walk(base_dir)):
+        return None
+    if backup_dir is None:
+        backup_dir = os.path.join(os.path.dirname(os.path.abspath(base_dir)),
+                                  "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    stem = f"agent_state_pre_import_{time.strftime('%Y%m%d_%H%M%S')}"
+    path = os.path.join(backup_dir, stem + ".zip")
+    n = 1
+    while os.path.exists(path):
+        path = os.path.join(backup_dir, f"{stem}-{n}.zip")
+        n += 1
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _dirs, files in os.walk(base_dir):
+            for fn in files:
+                abs_p = os.path.join(root, fn)
+                zf.write(abs_p,
+                         os.path.relpath(abs_p, base_dir).replace(os.sep, "/"))
+    print(f"🗄️ [迁移] 导入前自动备份完成：{path}")
+    return path
+
+
+def import_bundle(zip_path, overwrite=False, base_dir=None, backup_dir=None):
+    """解包灵魂到 agent_state/，返回 {"ok","restored","skipped","backup","report"}。
 
     - 冲突默认跳过；overwrite=True 才覆盖已有文件；
     - MANIFEST.txt 为说明文件不落盘；不安全路径（.. / 绝对路径）拒绝并记录；
+    - v2 包（含 soul_meta.json，#319 批 1）：解包前逐成员 sha256 校验+
+      清单互查（多成员/缺成员/哈希不符任一命中 → 整体拒绝，零落盘）；
+    - 写入前自动备份既有 agent_state 全目录 zip（result["backup"] 为路径，
+      空目录不备份返回 None）——导入失败/误覆盖可一键还原；
+    - v1 旧包（无 soul_meta.json）行为不变，仅新增自动备份；
     - 恢复完成后 report 附密钥手工核对清单提示。
     """
     base_dir = base_dir or AGENT_STATE_DIR
     os.makedirs(base_dir, exist_ok=True)
     restored, skipped = [], []
     with zipfile.ZipFile(zip_path, "r") as zf:
-        for info in zf.infolist():
+        try:
+            meta = _read_soul_meta(zf)
+        except ValueError as e:
+            report = f"❌ 灵魂包校验失败（{e}），已拒绝导入。"
+            print(f"📥 [迁移] {report}")
+            return {"ok": False, "restored": [], "skipped": [],
+                    "backup": None, "report": report}
+
+        members = [i for i in zf.infolist()
+                   if not i.filename.endswith("/")
+                   and i.filename not in (MANIFEST_NAME, SOUL_META_NAME)]
+
+        if meta is not None:
+            # v2：逐成员 sha256 校验 + 清单互查，任一不符整体拒绝（防篡改）
+            problems = []
+            zipped = set()
+            for info in members:
+                safe = _safe_member(info.filename)
+                if safe is None or safe not in meta["files"]:
+                    problems.append(f"{info.filename}（不在 soul_meta 清单）")
+                    continue
+                zipped.add(safe)
+                h = hashlib.sha256()
+                with zf.open(info) as src:
+                    for chunk in iter(lambda: src.read(65536), b""):
+                        h.update(chunk)
+                if h.hexdigest() != meta["files"][safe].get("sha256"):
+                    problems.append(f"{safe}（sha256 不符）")
+            for miss in sorted(set(meta["files"]) - zipped):
+                problems.append(f"{miss}（清单有但包内缺失）")
+            if problems:
+                report = ("❌ 灵魂包 sha256 校验失败，已拒绝导入（防篡改）："
+                          + "；".join(problems))
+                print(f"📥 [迁移] {report}")
+                return {"ok": False, "restored": [], "skipped": [],
+                        "backup": None, "report": report}
+
+        # 写入前自动备份（有内容才备；校验拒绝路径不碰盘不备份）
+        backup = _backup_state_dir(base_dir, backup_dir)
+
+        for info in members:
             name = info.filename
-            if name.endswith("/"):
-                continue
-            if name == MANIFEST_NAME:
-                continue
             safe = _safe_member(name)
             if safe is None:
                 skipped.append(f"{name}（不安全路径，已拒绝）")
@@ -192,10 +362,16 @@ def import_bundle(zip_path, overwrite=False, base_dir=None):
         report += "恢复明细：" + "、".join(restored) + "\n"
     if skipped:
         report += "跳过明细：" + "、".join(skipped) + "\n"
+    if meta is not None:
+        report += (f"sha256 校验通过 {len(meta['files'])} 项"
+                   f"（v{meta.get('version')}，导出自 {meta.get('device_id')}）。\n")
+    if backup:
+        report += f"导入前已自动备份既有数据：{backup}\n"
     report += ("⚠️ 密钥不随包迁移：请在新设备 .env 手工核对以下键是否已配置：\n"
                + "、".join(SECRET_KEYS) + "\n（详见包内 MANIFEST.txt）")
     print(f"📥 [迁移] {report.splitlines()[0]}")
-    return {"restored": restored, "skipped": skipped, "report": report}
+    return {"ok": True, "restored": restored, "skipped": skipped,
+            "backup": backup, "report": report}
 
 
 # ==================== 灵魂备份 v2：/soul_export //soul_import（设备自动迁移最小可用版） ====================
