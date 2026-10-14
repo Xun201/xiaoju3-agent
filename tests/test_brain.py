@@ -4491,6 +4491,34 @@ class DangerCloudForceCloudTests(unittest.TestCase):
         for k in ("跑", "执行", "运行", "命令", "脚本", "替换", "终端"):
             self.assertNotIn(k, brain._DANGER_CLOUD_KEYWORDS)
 
+    def test_v3_bare_delete_with_object_forces_cloud(self):
+        """修 B v3 修 B（重测实锤）：口语裸单字"删"+对象词共现 → 踢云端
+        （原双字词表漏此形态 → 落本地 1.5b 编"操作已完成"）。"""
+        p, ml, mc, sm, rf, el = self._smart_ask_mocks()
+        with p, ml as m_local, mc as m_cloud, sm, rf, el:
+            brain.smart_ask("帮我删桌面上一个测试文件", [])
+        m_local.assert_not_called()
+        m_cloud.assert_called_once()
+
+    def test_v3_bare_delete_without_object_stays_local(self):
+        """防误伤：裸"删"无对象词共现 → 不踢云端（既有本地路径零变化）。"""
+        p, ml, mc, sm, rf, el = self._smart_ask_mocks()
+        with p, ml as m_local, mc as m_cloud, sm, rf, el:
+            brain.smart_ask("这个词怎么删", [])
+        m_cloud.assert_not_called()
+
+    def test_v3_cooccur_helper_table(self):
+        """共现判定单元锚：实锤语料/双字词表/防误伤/零变化四象限。"""
+        for text in ("帮我删桌面上一个测试文件", "删掉桌面上的文件吧",
+                     "删除系统文件", "把桌面的文件删了"):
+            self.assertTrue(brain._danger_cloud_hit(text), text)
+        for text in ("这个词怎么删", "今天天气不错",
+                     "帮我把文件夹整理一下", "清理一下软件目录"):
+            self.assertFalse(brain._danger_cloud_hit(text), text)
+        # 子串语义既有口径："删除线怎么加"含"删除"按词表命中踢云端
+        # （云端应答无害）——锁行为防误判为回归
+        self.assertTrue(brain._danger_cloud_hit("删除线怎么加"))
+
     def test_danger_message_forces_cloud(self):
         # 行为锚（真机实锤场景复刻）："帮我删除系统文件"→ 本地绝不接手
         p, ml, mc, sm, rf, el = self._smart_ask_mocks()
@@ -4519,14 +4547,16 @@ class DangerCloudForceCloudTests(unittest.TestCase):
 
     def test_danger_cloud_mode_wired_both_chains(self):
         # 静态锚：smart_ask elif 分支 + stream 条件行都挂 danger_cloud
-        # （防单侧漏接导致流式/同步行为分叉，同 home_cloud 锚口径）
+        # （防单侧漏接导致流式/同步行为分叉，同 home_cloud 锚口径）；
+        # 修 B v3：两链统一走 _danger_cloud_hit（词表+裸删共现判定单点）
         src_path = os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "brain.py")
         with open(src_path, encoding="utf-8") as f:
             src = f.read()
         self.assertIn("elif danger_cloud:", src)
         self.assertIn('if todo_link_mode or home_cloud or danger_cloud or weather_intent or tier == "low":', src)
-        self.assertEqual(src.count("danger_cloud = any("), 2)
+        self.assertEqual(src.count("danger_cloud = _danger_cloud_hit(message)"), 2)
+        self.assertNotIn("danger_cloud = any(", src)  # 旧内联写法退役（防再分叉）
 
 
 class BareJsonSanitizeTests(unittest.TestCase):

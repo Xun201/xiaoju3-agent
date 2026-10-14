@@ -465,6 +465,12 @@ def _wrap_think(thinking, body):
             # （19:27 冒烟实锤："哪个文件是你要我帮忙删除的呢？"被兜底成
             # "操作已完成。"）→ 末段升为正文（反问本来就是给用户的话）
             body_text = _promotable_user_question(thinking_text)
+        elif (_FUTURE_CLAIM_RE.search(thinking_text)
+                and "[行动]" not in thinking_text):
+            # 修 B v3 修 A：能力宣称型——"我会/我将"将来时宣称但无 [行动]
+            # 工具执行、正文剥空=宣称必假（22:2x 重测实锤："我会打开桌面
+            # 看看"被兜底成"操作已完成。"）→ 诚实兜底（非"操作已完成"）
+            body_text = HALLUCINATED_TOOL_BODY
         elif thinking_text.strip() != CHAT_THINKING_PLACEHOLDER:
             # 不可回补（工具占位思考 / 多段思考含裸标记）→ 简短正文兜底
             body_text = DEFAULT_BODY_PLACEHOLDER
@@ -1035,6 +1041,40 @@ _DANGER_CLOUD_KEYWORDS = ("删除", "删掉", "删了", "清空", "清掉", "格
                           "C盘", "分区",
                           "cmd", "powershell", "bash", "rm -rf",
                           "delete", "format", "uninstall")
+
+# 修 B v3 修 B（2026-10-14 晚重测实锤）：口语裸单字"删"滑过双字词表
+# （"帮我删桌面上一个测试文件"落本地 1.5b → 2/3 概率编"操作已完成"）
+# → 裸"删"与删除对象词同句共现即判危险意图踢云端（#278 意图补全，
+# 共现判定原留 #270，重测证明承重提前上）。同句=中间无句界符；12 字
+# 窗口防远距误配对。
+_DELETE_COOCCUR_RE = re.compile(
+    r"删[^。！？!?\n]{0,12}?(文件|桌面|系统|软件|目录|文件夹)"
+    r"|(文件|桌面|系统|软件|目录|文件夹)[^。！？!?\n]{0,12}?删")
+
+
+def _danger_cloud_hit(message):
+    """危险操作强制云端判定（#278 + 修 B v3 修 B 扩形态）。
+
+    命中任一 → True：①双字词表命中（既有口径）；②裸"删"与对象词
+    （文件/桌面/系统/软件/目录/文件夹）同句共现。裸"删"无共现不踢
+    （防误伤，"这个词怎么删"照常本地）。异常安全（兜 False）。
+    """
+    try:
+        text = str(message or "")
+        if any(k in text for k in _DANGER_CLOUD_KEYWORDS):
+            return True
+        return bool(_DELETE_COOCCUR_RE.search(text))
+    except Exception:
+        return False
+
+
+# 修 B v3 修 A（2026-10-14 晚重测实锤）：能力宣称型——模型把"我会做"写进
+# 思考卡（无否定词无问句，"我会打开桌面看看"），正文剥空 → 落占位符
+# "操作已完成。"=虚假完成第三形态。将来时宣称 + 无 [行动] 工具执行 =
+# 宣称必假（什么都没做、正文也没产出）→ 诚实兜底；已完成时态（已/删好）
+# 不匹配 → 真完成零回归。
+_FUTURE_CLAIM_RE = re.compile(
+    r"我会|我将|我需要先|让我先|我来帮你|稍等我来|我来(操作|处理|删除|打开)")
 # 【当前设备列表】system 条目截断上限（防超大家庭列表撑爆上下文）
 _HOME_CONTEXT_MAX_CHARS = 1500
 
@@ -2129,8 +2169,9 @@ def _smart_ask_impl(message, history=None, session_key="default",
     # 🏠 家电强制云端判定（方向③，2026-10-05）：触发词与【家电控制铁律】
     # 同清单，与待办链接强制云端同构
     home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
-    # ⚠️ 危险操作强制云端判定（#278，2026-10-08）：与方向③同构
-    danger_cloud = any(k in (message or "") for k in _DANGER_CLOUD_KEYWORDS)
+    # ⚠️ 危险操作强制云端判定（#278，2026-10-08；修 B v3 扩共现形态）：
+    # 与方向③同构
+    danger_cloud = _danger_cloud_hit(message)
     # 🌤️ 天气意图强制云端（M1+ 天气方案 A 半，2026-10-10 用户拍板）：位置
     # 已知时本地小模型对天气类仍会幻觉"操作已完成"（真机实锤：问天气→
     # 幻觉 control_ha_device 开灯）——云端有【联网搜索规则】提示词约束，
@@ -2569,8 +2610,8 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
                               "https://chat.deepseek.com/share/"))
     # 🏠 家电强制云端判定（方向③）：与 smart_ask 同款
     home_cloud = any(k in (message or "") for k in _HOME_CONTEXT_KEYWORDS)
-    # ⚠️ 危险操作强制云端判定（#278）：与 smart_ask 同款
-    danger_cloud = any(k in (message or "") for k in _DANGER_CLOUD_KEYWORDS)
+    # ⚠️ 危险操作强制云端判定（#278；修 B v3 扩共现形态）：与 smart_ask 同款
+    danger_cloud = _danger_cloud_hit(message)
     # 🌤️ 天气意图强制云端（M1+ 天气方案 A 半）：与 smart_ask 同款
     weather_intent = any(k in (message or "") for k in _WEATHER_KEYWORDS)
     messages = _build_messages(message, history, user_id)

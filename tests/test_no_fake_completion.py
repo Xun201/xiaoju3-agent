@@ -120,3 +120,43 @@ def test_v2_normal_chat_zero_change():
     """常规闲聊（正文非空）逐字节零变化（回归闸）。"""
     r = brain._wrap_think("[思考] 主人在打招呼。", "在呢～")
     assert r == "<think>[思考] 主人在打招呼。</think>在呢～"
+
+
+# ==================== 修 B v3 修 A：能力宣称守卫（2026-10-14 晚重测实锤） ====================
+# 22:2x 重测实锤：模型把"我会做"写进思考卡（无否定无问句，"我会打开桌面
+# 看看"），正文剥空 → 落"操作已完成。"=虚假完成第三形态。将来时宣称+无
+# [行动] 工具执行=宣称必假 → 诚实兜底。
+
+V3_CLAIM_THINKING = ("[思考] 这个任务我能完成，不过得先确认一下文件的位置。\n"
+                     "[计划] 我会打开桌面看看。")
+
+
+def test_v3_capability_claim_honest_fallback():
+    """重测实锤原样回放：将来时宣称+正文剥空 → 诚实兜底（非"操作已完成"）。"""
+    r = brain._wrap_think(V3_CLAIM_THINKING, "")
+    assert r.split("</think>", 1)[1] == brain.HALLUCINATED_TOOL_BODY
+
+
+def test_v3_completed_tense_untouched():
+    """已完成时态（已/任务完成）不受扰：不可回补形状维持真完成占位符。"""
+    r = brain._wrap_think("[思考] 已删除桌面的测试文件。\n[计划] 任务完成。", "")
+    assert r.split("</think>", 1)[1] == "操作已完成。"
+
+
+def test_v3_single_think_promotion_untouched():
+    """单[思考]前缀真完成提升路径不受扰（既有 ④ 行为零回归）。"""
+    r = brain._wrap_think("[思考] 已删除桌面的测试文件。", "")
+    assert r.split("</think>", 1)[1] == "已删除桌面的测试文件。"
+
+
+def test_v3_action_marker_present_not_fired():
+    """[行动] 工具执行标记在场 → 守卫不抢（工具环辖区）。"""
+    r = brain._wrap_think('[思考] 我会调用删除工具。\n[行动] {"tool": "del"}', "")
+    assert "操作已完成。" in r.split("</think>", 1)[1]
+    assert "我还没学会" not in r
+
+
+def test_v3_negation_priority_over_claim():
+    """否定优先契约不变：否定+将来时宣称并存 → 仍走诚实拒绝文案。"""
+    r = brain._wrap_think("[思考] 我没有删除工具，无法操作。\n[计划] 我会建议主人手动删。", "")
+    assert "这件事我做不到" in r.split("</think>", 1)[1]
