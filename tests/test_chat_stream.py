@@ -50,7 +50,7 @@ class ChatStreamSseTests(unittest.TestCase):
     def _mock_stream(self, reply="最终回复", source="🏠 本地"):
         """mock smart_ask_stream：吐 think/tool/answer 增量后返回。"""
         def fake_stream(msg, history=None, session_key="default",
-                       on_event=None):
+                       on_event=None, user_id=None):
             for d in ("[思考] ", "过程"):
                 on_event({"type": "think", "delta": d})
             on_event({"type": "tool", "name": "web_search"})
@@ -83,7 +83,8 @@ class ChatStreamSseTests(unittest.TestCase):
 
     def test_error_event_on_exception(self):
         """异常锚：smart_ask_stream 抛 → error 事件（无 done）。"""
-        def boom(msg, history=None, session_key="default", on_event=None):
+        def boom(msg, history=None, session_key="default", on_event=None,
+                 user_id=None):
             on_event({"type": "think", "delta": "部分"})
             raise RuntimeError("炸了")
         with mock.patch.object(dashboard.brain, "smart_ask_stream",

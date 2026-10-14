@@ -989,7 +989,9 @@ def api_chat():
                          "source": "⚙️ 指令"}
             })
         print(f"[香橙派收到消息] {user_msg}")
-        reply, source = smart_ask(user_msg, history)
+        # 控制台=owner 本机语境（与 relationship.tone_prefix 同源兜底）：
+        # 不传 user_id 时 persona 段 uid 空串→控制台人格永不生效（冒烟实锤）
+        reply, source = smart_ask(user_msg, history, user_id="owner")
         print(f"[香橙派生成回复] 来源: {source}")
         # 🛡️ Web 出口净化（纵深防御）：smart_ask 共享链路可能带回 QQ 专用 CQ 码
         # （face 表情码 / [CQ:image] 表情包等），网页无法解析——返回与落盘前统一
@@ -1120,7 +1122,8 @@ def api_chat_stream():
         def runner():
             try:
                 reply, source = brain.smart_ask_stream(
-                    user_msg, history, on_event=on_event)
+                    user_msg, history, on_event=on_event,
+                    user_id="owner")   # 控制台=owner 语境（persona 修复同 api_chat）
                 holder["reply"] = reply
                 holder["source"] = source
             except Exception as e:
