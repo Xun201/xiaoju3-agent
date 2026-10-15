@@ -15,8 +15,14 @@
 - **三任务禁用撞权限墙**：schtasks /Change /DISABLE 拒绝访问×3（任务注册在管理员权限下）——**并入用户管理员命令组 5 条**（三任务+NI 两条，恢复命令全记台账 §六）
 - 台账 startup_audit_20261015.md 增 §六拍板执行段（含全部恢复命令）；_dev/autostart_backup_20261016/ 备份 lnk
 
-## 三、挂账
+## 三、管理员命令组执行毕——自启清理全案终态（用户执行+ZCode 复验实抓）
 
-- **管理员命令组 5 条**等用户执行（三任务禁用+NI 停+禁）——执行后复验
-- 重启后验 6 项自启清理（挂账④沿用）+本次三项新清理
+- **用户管理员窗口执行 5 条完毕**：三任务（Steamcommunity_302/StartCN/StartDVR）/DISABLE+NI stop（报 1062=服务本就未起，假错误无害）+NI config disabled
+- **ZCode 复验实抓全绿**：三任务 CSV"已禁用"×3+NI START_TYPE=4 DISABLED+STATE STOPPED
+- **至此：自启 7 项（6 禁 2 留）+管理员 5 条全部落地**——:8080 裸奔面消除终态（NI WebServer 双保险禁用）；台账 §六 终态版（.bak-20261016-exec2 在案）
+- 恢复命令全在台账 §六（任务 /ENABLE、NI sc start、Steam reg add 原值、GenuineService lnk 从备份拷回）
+
+## 四、挂账
+
+- 重启后验 9 项自启清理（6 项旧账+今晚 AMD 降噪/GenuineService/NI 新账）
 - C.3 todo 本体搬家=明日开（前置 diff 报告已齐）

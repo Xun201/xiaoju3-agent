@@ -76,18 +76,20 @@
 | 12 | GameViewer（uu远程） | 留 | — | — |
 | 13 | Nutstore（坚果云） | 留 | — | — |
 | 14 | AMDNoiseSuppression | 禁 | `reg delete HKCU...\Run /V AMDNoiseSuppression /F`（原值=C:\Windows\system32\AMD\ANR\AMDNoiseSuppression.exe） | ✓ 键消失实抓 |
-| 15 | Steamcommunity_302 | 禁 | **等管理员命令组**（schtasks /Change /DISABLE 拒绝访问——任务注册在管理员权限下） | 仍"就绪" |
-| 16 | StartCN/StartDVR | 禁 | **等管理员命令组**（同上；已破案=AMD Adrenalin 官方 cncmd.exe/RSServCmd.exe，UI 栈同族） | 仍"就绪" |
+| 15 | Steamcommunity_302 | 禁 | ✅ 已执行（管理员命令组，2026-10-16 凌晨）`schtasks /Change /TN "Steamcommunity_302" /DISABLE` | ✓ ZCode 复验"已禁用"实抓 |
+| 16 | StartCN/StartDVR | 禁 | ✅ 已执行（同上；已破案=AMD Adrenalin 官方 cncmd.exe/RSServCmd.exe，UI 栈同族） | ✓ ZCode 复验"已禁用"实抓 ×2 |
 | 17 | GenuineService | 禁 | 已破案=**Autodesk 正版验证**（非 Windows 服务——333 服务枚举零匹配；仅启动夹 lnk 指向 C:\Users\Xun\Autodesk\Genuine Service\GenuineService.exe）；lnk 已备份 `_dev/autostart_backup_20261016/GenuineService.lnk` 后删除 | ✓ 启动夹零残留 |
 
-**待用户管理员命令组（5 条一次性，管理员 PowerShell/cmd 粘贴执行）**：
+**管理员命令组（5 条，用户 2026-10-16 凌晨执行完毕，ZCode 复验全绿实抓）**：
 
 ```
-schtasks /Change /TN "Steamcommunity_302" /DISABLE
-schtasks /Change /TN "StartCN" /DISABLE
-schtasks /Change /TN "StartDVR" /DISABLE
-sc stop NIApplicationWebServer
-sc config NIApplicationWebServer start= disabled
+schtasks /Change /TN "Steamcommunity_302" /DISABLE   # ✓ 复验"已禁用"
+schtasks /Change /TN "StartCN" /DISABLE              # ✓ 复验"已禁用"
+schtasks /Change /TN "StartDVR" /DISABLE             # ✓ 复验"已禁用"
+sc stop NIApplicationWebServer                       # ✓ 报 1062=服务本就未起（假错误无害）
+sc config NIApplicationWebServer start= disabled     # ✓ 复验 START_TYPE=4 DISABLED+STATE STOPPED
 ```
+
+**至此：自启 7 项（6 禁 2 留）+ 管理员 5 条全部落地（2026-10-16 凌晨终态）。**
 
 - 恢复命令：任务=schtasks /Change /TN "<名>" /ENABLE；NI= sc start NIApplicationWebServer（config 改回 auto 需另查原启动类型）；Steam 如需自启=reg add 原值（见上表）；GenuineService 恢复=从 _dev/autostart_backup_20261016/ 拷回启动夹
