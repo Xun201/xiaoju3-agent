@@ -325,3 +325,26 @@ class PersonaCardFrontendTests(unittest.TestCase):
             fn_body = _fn_body(js, fn)
             for bad in ("三态阶梯", "checkpoint", "autonomous", "report"):
                 self.assertNotIn(bad, fn_body, (fn, bad))
+
+
+class PetHideOnSettingsTests(unittest.TestCase):
+    """桌宠随设置族显隐（批 4 收尾补丁，2026-10-15）：类驱动同缩球态先例，
+    settings/keys enter 加类、leave 移类，desktop-pet.js 零改动。"""
+
+    def test_css_pairing_in_index(self):
+        html = _read("index.html")
+        self.assertIn("body.xiaoju3-settings-open .xiaoju-root"
+                      " { display: none; }", html)
+        self.assertIn("body.xiaoju3-pet-minimized .xiaoju-root", html)  # 先例同款
+
+    def test_enter_add_leave_remove_both_panes(self):
+        js = _read("console.js")
+        self.assertEqual(
+            js.count("classList.add('xiaoju3-settings-open')"), 2)   # settings+keys
+        self.assertEqual(
+            js.count("classList.remove('xiaoju3-settings-open')"), 2)
+
+    def test_desktop_pet_js_untouched(self):
+        """纯类驱动铁律：desktop-pet.js 零 display 控制改动。"""
+        pet = _read("desktop-pet.js")
+        self.assertNotIn("xiaoju3-settings-open", pet)

@@ -1809,8 +1809,13 @@
             hide: function () { return [chatHistoryPaneEl, terminalPaneEl, keysPaneEl]; },
             input: false,
             clearTitle: '',
-            enter: function () { loadSettings(); },   // 切入即拉（后端按 level 过滤）
-            leave: null,
+            enter: function () {
+                document.body.classList.add('xiaoju3-settings-open');   // 桌宠随设置族隐藏（批 4 收尾补丁）
+                loadSettings();   // 链式调 loadPersonaCard（人格卡随设置拉取）
+            },
+            leave: function () {
+                document.body.classList.remove('xiaoju3-settings-open');
+            },
         },
         keys: {
             btn: function () { return keysEntryBtn; },   // #264 B2b：LV3+ 才显示（探针定显隐）
@@ -1818,8 +1823,13 @@
             hide: function () { return [chatHistoryPaneEl, terminalPaneEl, settingsPaneEl]; },
             input: false,
             clearTitle: '',
-            enter: function () { loadKeys(); },   // 切入即拉掩码
-            leave: null,
+            enter: function () {
+                document.body.classList.add('xiaoju3-settings-open');   // 密钥页同族同藏
+                loadKeys();   // 切入即拉掩码
+            },
+            leave: function () {
+                document.body.classList.remove('xiaoju3-settings-open');
+            },
         },
     };
     let activeChatTab = 'console';
