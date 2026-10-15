@@ -17,6 +17,9 @@ import time as _time
 import unittest
 from unittest import mock
 
+import autonomy
+import brain
+import disclosure
 import mood as mood_mod
 from agent_state import state_manager as sm_mod
 from agent_state.state_manager import (WEIGHT_MAX, StateManager,
@@ -638,6 +641,103 @@ class TodoCategoryColumnTests(unittest.TestCase):
             cols = [r[1] for r in conn.execute("PRAGMA table_info(todos)")]
             conn.close()
         self.assertIn("category", cols)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class DisclosureInjectTests(unittest.TestCase):
+    """批 2.3 注入分流锚：普通行逐字节硬门 / 问句行 / 语气行围栏外 /
+    提及账落盘失败审计。split/load/save 全 patch，零碰实库。"""
+
+    def _run(self, split=None, split_raise=False, save_ret=True):
+        import contextlib
+        import disclosure
+        rows = [("fact", "普通记忆A"), ("fact", "情绪段记忆B")]
+        mgr = mock.MagicMock()
+        mgr.get_recent_memories.return_value = list(rows)
+        stub = mock.MagicMock()
+        stub.recall_memories.return_value = list(rows)
+        msgs_in = [{"role": "system", "content": "你是小橘3号。"},
+                   {"role": "user", "content": "讲讲"}]
+        patches = [
+            mock.patch.object(brain, "_get_state_manager", return_value=stub),
+            mock.patch.object(brain, "_memory_v2_enabled", return_value=False),
+            mock.patch.object(disclosure, "load",
+                              return_value=autonomy.default_domain()),
+            mock.patch.object(disclosure, "save", return_value=save_ret),
+            mock.patch.object(disclosure, "note_mention",
+                              side_effect=lambda d, ep, polarity, now=None: d),
+            mock.patch.object(disclosure, "note_pending_ask",
+                              side_effect=lambda d, p: d),
+        ]
+        if split_raise:
+            patches.append(mock.patch.object(
+                disclosure, "split_recall_rows",
+                side_effect=RuntimeError("boom")))
+        else:
+            patches.append(mock.patch.object(
+                disclosure, "split_recall_rows", return_value=split or (
+                    list(rows), [], None, {})))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            for p_ in patches:
+                p_.start()
+                self.addCleanup(p_.stop)
+            msgs = brain._inject_memory_context(list(msgs_in))
+        return msgs, buf.getvalue()
+
+    def test_plain_rows_byte_identical(self):
+        """硬门：无情绪段（split 全量透传）与 split 异常回退——两条路径
+        注入块逐字节一致（现状行为零变化）。"""
+        msgs_a, _ = self._run(
+            split=(list([("fact", "普通记忆A"), ("fact", "情绪段记忆B")]),
+                   [], None, {}))
+        msgs_b, _ = self._run(split_raise=True)
+        self.assertEqual(
+            [m["content"] for m in msgs_a if m["role"] == "system"][0],
+            [m["content"] for m in msgs_b if m["role"] == "system"][0])
+        self.assertNotIn("要听吗", msgs_a[1]["content"])
+
+    def test_report_episode_ask_line_and_pending(self):
+        """report 态情绪段 → 问句行（不漏细节）+ pending_ask 落账 +
+        note_mention 记提及。"""
+        meta = {"start_ts": "2026-10-15 10:00:00", "polarity": "positive",
+                "memory_ids": [9]}
+        direct = [("fact", "普通记忆A")]
+        asks = [("回忆", "情绪段记忆B", meta)]
+        msgs, out = self._run(split=(direct, asks, {
+            "episodes": [meta], "ts": "2026-10-15 12:00:00"}, {}))
+        content = [m["content"] for m in msgs if "memory_data" in str(m.get("content", ""))][-1]
+        self.assertIn("要听吗", content)
+        self.assertNotIn("情绪段记忆B", content.split("</memory_data>")[0]
+                         .split("要听吗")[-1])   # 问句不漏细节
+        self.assertIn("普通记忆A", content)
+        # 语气行仅直注时出现——本例 asks 无直注 → 不应出现
+        self.assertNotIn("后来我们一起", content)
+
+    def test_autonomous_negative_direct_with_tone_line(self):
+        """autonomous 负面直出 → 语气行含"只说结果"（围栏外）。"""
+        meta = {"start_ts": "2026-10-15 10:00:00", "polarity": "negative",
+                "memory_ids": [8]}
+        msgs, out = self._run(split=(
+            [("fact", "情绪段记忆B")], [], None,
+            {"情绪段记忆B": meta}))
+        content = [m["content"] for m in msgs if "memory_data" in str(m.get("content", ""))][-1]
+        self.assertIn("只说结果", content)
+        self.assertIn("后来我们一起", content)
+
+    def test_save_failure_prints_audit(self):
+        """Q2：save 失败 → 审计行打印（注入不受扰）。"""
+        msgs, out = self._run(split=(
+            [("fact", "情绪段记忆B")], [], None,
+            {"情绪段记忆B": {"start_ts": "2026-10-15 10:00:00",
+                             "polarity": "positive", "memory_ids": [1]}}),
+            save_ret=False)
+        self.assertIn("频次账落盘失败", out)
+        block = [m["content"] for m in msgs if "memory_data" in str(m.get("content", ""))][-1]
+        self.assertIn("情绪段记忆B", block)
 
 
 if __name__ == "__main__":

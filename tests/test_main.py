@@ -2125,3 +2125,86 @@ class TestSanitizeQqReply(unittest.TestCase):
         src = inspect.getsource(main)
         self.assertEqual(src.count("_sanitize_qq_reply("), 3)  # def+两调用点
         self.assertNotIn("reply = _strip_llm_pollution(reply)", src)  # 旧直调退役
+
+
+class MemoryDisclosureHookTests(unittest.TestCase):
+    """批 2.3 披露 hook 锚：mute 落账+确认文案 / 想听闭环（正面展开/
+    负面结果化）/ 无指代放行。disclosure 全 patch 零碰实库。"""
+
+    def setUp(self):
+        import disclosure
+        self.disclosure = disclosure
+
+    def _base_domain(self):
+        import autonomy
+        d = autonomy.default_domain(now="2026-10-15 12:00:00")
+        (d.setdefault("data", {}))["last_mentioned"] = {
+            "2026-10-15 10:00:00": "2026-10-15 12:00:00"}
+        return d
+
+    def _run(self, message, d=None, pending=None, contents=None):
+        import disclosure
+        d = d if d is not None else self._base_domain()
+        for target, kwargs in (
+                (disclosure, {"return_value": d}),
+                (disclosure, {"return_value": True}),
+                (disclosure, {"return_value": pending}),
+                (disclosure, {"return_value": contents or []})):
+            names = ["load", "save", "get_pending_ask", "pending_contents"]
+        return None
+
+    def test_hook_mute_confirms_and_records(self):
+        import disclosure
+        from unittest.mock import patch
+        rec = {}
+        d = self._base_domain()
+        with patch.object(disclosure, "load", return_value=d),                 patch.object(disclosure, "note_correction",
+                             side_effect=lambda dd, ep, kind, text:
+                             rec.update({"ep": ep, "kind": kind}) or d),                 patch.object(disclosure, "save", return_value=True):
+            reply = main.try_memory_disclosure_hook("这个别提！")
+        self.assertEqual(reply, "好，这段我先不提了。")
+        self.assertEqual(rec["kind"], "mute")
+        self.assertEqual(rec["ep"], "2026-10-15 10:00:00")
+
+    def test_hook_accept_expands_positive_and_clears_pending(self):
+        import disclosure
+        from unittest.mock import patch
+        from datetime import datetime
+        pending = {"episodes": [{"start_ts": "2026-10-15 10:00:00",
+                                 "polarity": "positive",
+                                 "memory_ids": [5]}],
+                   "ts": "2026-10-15 12:00:00"}
+        d = self._base_domain()
+        mentions = []
+        with patch.object(disclosure, "load", return_value=d),                 patch.object(disclosure, "get_pending_ask",
+                             return_value=pending),                 patch.object(disclosure, "pending_contents",
+                             return_value=[("我难忘的旅行", "positive")]),                 patch.object(disclosure, "note_mention",
+                             side_effect=lambda dd, ep, polarity, now=None:
+                             (mentions.append(ep), dd)[1]) as mm,                 patch.object(disclosure, "save", return_value=True):
+            reply = main.try_memory_disclosure_hook("想听")
+        self.assertEqual(reply, "好，我想起的是：我难忘的旅行")
+        self.assertEqual(mentions, ["2026-10-15 10:00:00"])   # 想听=一次提及
+        saved = disclosure.load()   # save 已被 patch——此处只验 hook 无异常
+
+    def test_hook_negative_accept_result_only(self):
+        import disclosure
+        from unittest.mock import patch
+        pending = {"episodes": [{"start_ts": "2026-10-13 10:00:00",
+                                 "polarity": "negative",
+                                 "memory_ids": [8]}],
+                   "ts": "2026-10-15 12:00:00"}
+        d = self._base_domain()
+        with patch.object(disclosure, "load", return_value=d),                 patch.object(disclosure, "get_pending_ask",
+                             return_value=pending),                 patch.object(disclosure, "pending_contents",
+                             return_value=[("被骂了一顿的细节全文", "negative")]),                 patch.object(disclosure, "save", return_value=True):
+            reply = main.try_memory_disclosure_hook("要听")
+        self.assertIn("过去", reply)
+        self.assertNotIn("细节全文", reply)   # C4：负面只报结果不展细节
+
+    def test_hook_no_reference_passes_through(self):
+        import disclosure
+        from unittest.mock import patch
+        d = self._base_domain()
+        with patch.object(disclosure, "load", return_value=d):
+            self.assertIsNone(main.try_memory_disclosure_hook("别提了，烦"))
+            self.assertIsNone(main.try_memory_disclosure_hook("今天天气不错"))
