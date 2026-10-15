@@ -604,51 +604,6 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
 
 
 # ================= 核心内核（统一入口） =================
-def handle_location_command(message):
-    """位置指令（2026-10-02 隐私口径）：QQ 与网页共用同一处理逻辑。
-
-    - /set_location <城市> [区县] → 写入本地位置记忆
-      （agent_state/user_location.json，gitignore 不入库）；
-    - /clear_location → 清除位置记录；
-    - 命中返回回复文本；未命中返回 None（调用方继续走正常对话链路）。
-    位置不上传 GitHub、不写 .env、不传云端（仅天气/本地搜索时用于拼 query）。
-    """
-    text = (message or "").strip()
-    if text.startswith("/set_location"):
-        arg = text[len("/set_location"):].strip()
-        parts = arg.split()
-        if not parts:
-            return ("📍 用法：/set_location <城市> [区县]，"
-                    "例如：/set_location 长沙 天心区")
-        city = parts[0]
-        district = parts[1] if len(parts) > 1 else None
-        try:
-            from agent_state.state_manager import save_user_location
-            save_user_location(city, district)
-        except Exception as e:
-            return f"❌ 位置记录失败: {e}"
-        shown = city + (f" {district}" if district else "")
-        return (f"✅ 位置已记录：{shown}（仅存本地 agent_state/user_location.json，"
-                "可用 /clear_location 清除）")
-    if text.startswith("/clear_location"):
-        try:
-            from agent_state.state_manager import clear_user_location
-            clear_user_location()
-        except Exception as e:
-            return f"❌ 位置记录清除失败: {e}"
-        # 🚿 清除静默期（2026-10-02 用户口径）：历史消息里的位置仍会把小
-        # 模型带偏（从历史推断位置继续用）——清除后 5 分钟内强制视为位置
-        # 未知，确保 AI 重新询问（brain 内存标记，不落盘）
-        try:
-            import brain
-            brain.mark_location_cleared()
-            brain.clear_waiting_location()   # 遗留的等待回答窗口一并关闭
-        except Exception as mark_err:
-            print(f"⚠️ 位置静默期标记失败（不影响清除）: {mark_err}")
-        return "✅ 位置记录已清除（本地 agent_state/user_location.json）"
-    return None
-
-
 def _notify_todo_done(chat_target):
     """构造待办提取完成回调（docs/TODO_EXTRACT_DESIGN.md §6）。
 
@@ -995,8 +950,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
 
     # === 📍 位置指令（/set_location /clear_location，QQ 与网页共用逻辑） ===
     # #227 批 0：system 域四件分派迁入 system_handler（本体留 main/plugins）
-    location_reply = system_handler.handle_location(
-        command_text, location_cb=handle_location_command)
+    location_reply = system_handler.handle_location(command_text)
     if location_reply is not None:
         return location_reply
 
