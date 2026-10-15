@@ -534,3 +534,26 @@ def test_flush_empty_window_memory_ids_empty_list(tmp_path, monkeypatch):
     row = con.execute("SELECT memory_ids FROM emotional_episode").fetchone()
     con.close()
     assert json.loads(row[0]) == []
+
+
+# ==================== 批 2.2：episode_associations 反查（2026-10-15） ====================
+
+def test_episode_associations_map(tmp_path, monkeypatch):
+    """memory_ids → 段反查表：批 2.1 回填的 memory_ids 解成
+    memory_id → {start_ts, tag} 映射（disclosure 过滤层输入）。"""
+    db = str(tmp_path / "m.db")
+    monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", db)
+    con = sqlite3.connect(db)
+    con.executescript(mood.SCHEMA)
+    con.execute("INSERT INTO emotional_episode (start_ts, end_ts, peak_p,"
+                " peak_a, peak_d, end_p, end_a, end_d, duration, tag,"
+                " memory_ids) VALUES ('2026-10-14 10:00:00',"
+                " '2026-10-14 10:40:00', -0.4, 0.4, 0.0, -0.05, 0.4, 0.0,"
+                " 40.0, 'negative', '[3, 9]')")
+    con.commit()
+    con.close()
+    assoc = mood.episode_associations()
+    assert assoc == {3: {"start_ts": "2026-10-14 10:00:00",
+                         "tag": "negative"},
+                     9: {"start_ts": "2026-10-14 10:00:00",
+                         "tag": "negative"}}

@@ -577,6 +577,29 @@ def _memories_db_path():
     return os.path.join(base, "long_term.db")
 
 
+def episode_associations():
+    """memory_id → {"start_ts","tag"} 段关联反查（批 2.2 disclosure
+    消费侧输入；纯读零副作用，异常静默空表=无关联全走普通直注）。"""
+    try:
+        conn = _connect()
+        try:
+            _ensure_episode_columns(conn)
+            out = {}
+            for ids, start_ts, tag in conn.execute(
+                    "SELECT memory_ids, start_ts, tag"
+                    " FROM emotional_episode"):
+                try:
+                    for mid in json.loads(ids or "[]"):
+                        out[int(mid)] = {"start_ts": start_ts, "tag": tag}
+                except (ValueError, TypeError):
+                    continue
+            return out
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
 def _memory_ids_in_window(conn_src, start_ts, end_ts):
     """段时窗内的记忆 id 列表（批 2.1 段-记忆关联）。
 
