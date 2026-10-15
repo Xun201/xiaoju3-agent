@@ -47,6 +47,7 @@
 |---|---|---|---|
 | Xiaoju3 + Xiaoju3Backend（HKCU Run ×2） | 项目 | 项目 | 生产车自启（方案 A，必需） |
 | Ollama.lnk（启动夹） | 项目系 | 项目 | 本地模型引擎（LOCAL_URL=11434 在役） |
+| llama-server.exe（Ollama 子进程） | Ollama 拉起 | **项目（改判 A 档不可关）** | 724MB（模型常驻，keep_alive=-1） | 深查实锤：父进程=ollama.exe，监听 127.0.0.1:3393 仅本机；杀它=杀本地大脑。早前 ":8080 裸奔"判定误配——真主人=NIApplicationWebServer |
 | Tailscale.lnk（全局启动夹） | 项目系 | 项目 | Pi/HA/多端通道 |
 | ctfmon / SecurityHealth / Sysdiag(火绒 HipsTray) | 系统/安全 | 系统驱动 | 输入法+安全 |
 | RtkAudUService64_BG（计划任务） | 系统驱动 | 系统驱动 | Realtek 音频 |
