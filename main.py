@@ -908,6 +908,77 @@ def handle_remember_command(content):
         return f"❌ 长期记忆保存失败：{e}"
 
 
+# ==================== 情绪记忆披露 hook（2.3，design_297_phase2_23_inject） ====================
+_MEMORY_MUTE_PATTERNS = (("这个别提", "mute"), ("别提这个", "mute"))
+_MEMORY_BOOST_PATTERNS = (("这个该多提", "boost"), ("多提提这个", "boost"))
+_MEMORY_ACCEPT_WORDS = ("想听", "要听")
+
+
+def try_memory_disclosure_hook(message):
+    """情绪记忆披露预分流（2.3）：纠正词/问句应答命中 → 返回固定回复
+    （不进大脑零幻觉）；不命中/无指代对象/过期 → None 放行主链。
+
+    - 纠正词（F3 精确短语）+ 7 天内有提及（有指代对象才拦——防误吞
+      "别提了烦"类抒发）→ mute/boost 落账（autonomy 纠正降档）；
+    - 问句应答（Q1 闭环）：pending_ask（24h 内）+ "想听/要听" → 正面段
+      展开原文 / 负面段结果化不展细节（C4）。
+    异常返回 None（绝不影响主链路）。"""
+    try:
+        from datetime import datetime as _dt
+        import disclosure
+        text = str(message or "").strip()
+        strip_chars = "！!。～~？?，, "
+        while text and text[-1] in strip_chars:
+            text = text[:-1]
+        if not text:
+            return None
+        d = disclosure.load()
+        data = d.get("data") or {}
+        mentioned = data.get("last_mentioned") or {}
+        if not mentioned:
+            return None
+        now = _dt.now()
+        recent = {}
+        for ep, ts in mentioned.items():
+            try:
+                dt = _dt.strptime(ts, "%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                continue
+            if (now - dt).total_seconds() < disclosure.B3_DAYS * 86400:
+                recent[ep] = dt
+        if not recent:
+            return None
+        for pat, kind in (_MEMORY_MUTE_PATTERNS + _MEMORY_BOOST_PATTERNS):
+            if pat in text:
+                ep = max(recent, key=lambda e: recent[e])
+                d2 = disclosure.note_correction(d, ep, kind, text)
+                disclosure.save(d2)
+                return ("好，这段我先不提了。" if kind == "mute"
+                        else "好，之后多跟你聊聊这段。")
+        pending = disclosure.get_pending_ask(d, now=now)
+        if pending and any(w in text for w in _MEMORY_ACCEPT_WORDS) \
+                and len(text) <= 8:
+            parts = []
+            for content, polarity in disclosure.pending_contents(pending):
+                if polarity == "negative":
+                    parts.append("那段不太好的回忆，现在都过去了""——细节咱们先不翻。")
+                else:
+                    parts.append(content)
+            if not parts:
+                return None
+            d2 = d
+            for ep in pending.get("episodes", []):
+                d2 = disclosure.note_mention(
+                    d2, ep.get("start_ts"),
+                    polarity=ep.get("polarity", "positive"), now=now)
+            (d2.setdefault("data", {})).pop("pending_ask", None)
+            disclosure.save(d2)
+            return "好，我想起的是：" + " ".join(parts)
+        return None
+    except Exception:
+        return None
+
+
 def handle_message(source, user_id, group_id, message, self_qq=None):
     """所有消息（QQ/网页）都统一交给这个函数处理。
 
@@ -973,6 +1044,11 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         command_text, user_key, child_cb=handle_child_command)
     if child_reply is not None:
         return child_reply
+    # === 💭 情绪记忆披露 hook（2.3：纠正词"这个别提/该多提"+问句应答
+    # === "想听"；无指代对象放行不拦——design_297_phase2_23_inject） ===
+    memo_reply = try_memory_disclosure_hook(raw_message)
+    if memo_reply is not None:
+        return memo_reply
 
     # === 🛡️ 指令菜单 ===
     help_reply = system_handler.handle_help(

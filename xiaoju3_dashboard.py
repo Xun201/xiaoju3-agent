@@ -911,6 +911,11 @@ def api_chat():
                 "data": {"reply": sanitize_for_web(location_reply),
                          "source": "⚙️ 系统"}
             })
+        memo_reply = main.try_memory_disclosure_hook(user_msg)
+        if memo_reply is not None:
+            return jsonify({"code": 200,
+                            "data": {"reply": memo_reply,
+                                      "source": "💭 回忆"}})
 
         # 🔒 儿童锁裁决 + ✍️ 创作者署名（2026-10-02 批次②）：与 QQ 通道
         # 同一 main 函数；网页控制台视为成人设备（is_console=True）
@@ -1064,6 +1069,12 @@ def api_chat_stream():
             yield _sse_frame("done", {
                 "reply": sanitize_for_web(location_reply),
                 "source": "⚙️ 系统"})
+            return
+        memo_reply = main.try_memory_disclosure_hook(user_msg)
+        if memo_reply is not None:
+            yield _sse_frame("done", {
+                "reply": sanitize_for_web(memo_reply),
+                "source": "💭 回忆"})
             return
         child_reply = main.handle_child_command(user_msg, user_id="console",
                                                 is_console=True)

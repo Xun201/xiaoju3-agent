@@ -1791,6 +1791,16 @@ def _inject_memory_context(messages, limit=MEMORY_CONTEXT_LIMIT):
                 rows = None
         if rows is None:
             rows = manager.get_recent_memories(limit=limit) or []
+        # 情绪记忆披露分流（批 2.3）：普通行现状透传（逐字节硬门）；
+        # 情绪段行走 autonomy 放权闸（report 问句/checkpoint 正直负问/
+        # autonomous 直出）。任何异常回退全量现状（硬门兜底）。
+        try:
+            import disclosure as _disclosure
+            direct, asks, pending, meta_by_content = \
+                _disclosure.split_recall_rows(rows)
+        except Exception:
+            direct, asks, pending, meta_by_content = list(rows), [], None, {}
+        rows = direct
         # #297 注入缓解（2026-10-13 拍板）：可疑指令词行打 [可疑] 标记
         # （消费侧过滤，recall 本体零改动；命中只标记不拦截——提示模型
         # 警惕+人工可见，保守小表防误伤）
@@ -1799,6 +1809,14 @@ def _inject_memory_context(messages, limit=MEMORY_CONTEXT_LIMIT):
              if _MEMORY_SUSPICIOUS_RE.search(content)
              else f"· [{category}] {content}")
             for category, content in rows)
+        if asks:
+            # 情绪段 report/checkpoint 负面 → 问句形态（不漏细节；
+            # "想听"应答闭环见 main.try_memory_disclosure_hook）
+            ask_line = ('· [回忆] 我想起了当时的一些事（要听吗？跟我说"想听"就行）')
+            lines = (lines + "\n" + ask_line) if lines else ask_line
+        tone_line = ("提及这些回忆时：带着当时的情绪温度；负面回忆只说结果"
+                     '不展开细节；若有后续，用"后来我们一起…"的视角。'
+                     if meta_by_content else None)
     except Exception as e:
         print(f"⚠️ 长期记忆读取失败（已静默跳过）: {e}")
         return messages
@@ -1813,6 +1831,30 @@ def _inject_memory_context(messages, limit=MEMORY_CONTEXT_LIMIT):
     if (len(messages) > 1 and isinstance(messages[1], dict)
             and str(messages[1].get("content", "")).startswith(_SUMMARY_PREFIX)):
         insert_at = 2  # 前情提要在前，长期记忆紧随其后
+    if tone_line:
+        # 语气 D2/D3（批 2.3）：行为约束放数据围栏**外**（防注入铁律——
+        # 指令性文字不进 <memory_data>）
+        block = {"role": "system",
+                 "content": block["content"] + "\n" + tone_line}
+    # 提及账+待应答问句（批 2.3，fire-and-forget）：B3 频次/毕业判定 B 的
+    # 记账；落盘失败打审计行（#297b 先例同款）——绝不影响注入本身
+    if asks or meta_by_content:
+        try:
+            import disclosure as _disclosure
+            d = _disclosure.load()
+            for _cat, _c2, meta in asks:
+                d = _disclosure.note_mention(
+                    d, meta["start_ts"], polarity=meta["polarity"])
+            for content, meta in meta_by_content.items():
+                d = _disclosure.note_mention(
+                    d, meta["start_ts"], polarity=meta["polarity"])
+            if asks and pending:
+                d = _disclosure.note_pending_ask(d, pending)
+            if not _disclosure.save(d):
+                print(f"⚠️ [披露] 频次账落盘失败，B3/毕业可能失准"
+                      f"（asks={len(asks)} 直注={len(meta_by_content)}）")
+        except Exception as e:
+            print(f"⚠️ [披露] 状态更新失败（注入不受扰）: {e}")
     messages.insert(insert_at, block)
     return messages
 
