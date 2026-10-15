@@ -569,6 +569,12 @@ def heartbeat_loop(interval=None, sense_fn=None, ask_fn=None, execute_fn=None,
             if _snap is not None:
                 print(f"📊 [情绪快照] P={_snap['p']} A={_snap['a']} "
                       f"D={_snap['d']}")
+            # 段判定落表（批 2.1/2.3 接线，2026-10-15）：快照节拍顺带
+            # flush（幂等 start_ts 去重；无开放段=零插入零日志）——
+            # 不接此线 emotional_episode 永远为空，二期披露链无米下锅
+            _flushed = _mood_mod.flush_episodes()
+            if _flushed > 0:
+                print(f"🧩 [情绪段] 新落表 {_flushed} 段")
         except ImportError:
             pass   # mood.py 缺席时静默旁路
         except Exception as e:

@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 import pytest
+from unittest import mock
 
 import mood
 
@@ -557,3 +558,34 @@ def test_episode_associations_map(tmp_path, monkeypatch):
                          "tag": "negative"},
                      9: {"start_ts": "2026-10-14 10:00:00",
                          "tag": "negative"}}
+
+
+# ==================== 批 2.3 接线：heartbeat 顺带 flush（2026-10-15） ====================
+
+def test_heartbeat_wires_flush_episodes(tmp_path, monkeypatch):
+    """接线锚：心跳情绪快照节拍顺带调 flush_episodes（幂等去重——
+    不接线段永远不产生，二期披露链无米下锅）。"""
+    import heartbeat as heartbeat_mod
+    calls = []
+    fake_mood = mock.MagicMock()
+    fake_mood.heartbeat_snapshot.return_value = {"p": 0.1, "a": 0.1, "d": 0.1}
+    fake_mood.flush_episodes.side_effect = lambda: calls.append(1) or 0
+    monkeypatch.setattr(heartbeat_mod, "_mood_mod", fake_mood, raising=False)
+    # heartbeat.py 内是函数内局部 import mood——直接 patch sys.modules 语义
+    import mood as real_mood
+    monkeypatch.setattr(real_mood, "flush_episodes",
+                        lambda: calls.append(1) or 0)
+    # 触发：快照补点段（语义=情绪快照+flush 同节拍）
+    db = str(tmp_path / "m.db")
+    monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", db)
+    con = sqlite3.connect(db)
+    con.executescript(real_mood.SCHEMA)
+    con.commit()
+    con.close()
+    # 生产路径=heartbeat_loop（每轮 flush 在 heartbeat_once 之前——
+    # once 早退轮也不漏拍）；max_rounds=1 限定单轮（测试阀先例）
+    heartbeat_mod.heartbeat_loop(interval=0.01, sense_fn=lambda: {},
+                                 ask_fn=lambda x: "好的",
+                                 execute_fn=lambda *a, **k: None,
+                                 max_rounds=1)
+    assert len(calls) >= 1   # flush 已随节拍被调
