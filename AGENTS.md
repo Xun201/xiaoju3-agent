@@ -5,11 +5,12 @@
 ## 会话启动纪律（2026-10-15 新增，与"push 前专利筛查"同级硬纪律）
 - 每次工作会话开始第一步：检查 Hindsight 健康（GET http://127.0.0.1:9077/health，
   5 秒超时）——不通则 retain/recall 全程静默空转，工作等于白做
-- 不通 → 自启：schtasks 一次性任务拉起
-  `F:\Hindsight\venv\Scripts\hindsight-api.exe --host 127.0.0.1 --port 9077`
+- 不通 → 自启：schtasks 一次性任务拉起 `cmd /c F:\Hindsight\start.bat`
+  （**禁裸拉 hindsight-api.exe**——exe 缺 start.bat 内 5 个 env
+  （HINDSIGHT_DATA_DIR/HF_HOME/LLM 三件/HF_ENDPOINT）即起即退，2026-10-15 实锤）
   → 等 8 秒复检 → 复检两次仍不通 → **立即告知用户等处理，不静默跳过**
-- 拉起前先查残留 hindsight 进程（防多实例）；依据：Hindsight=手动启动进程
-  无自启机制（2026-10-15 侦察实锤），重启后默认下线
+- 拉起前先查残留 hindsight 进程（防多实例）；开机自启已注册
+  （HKCU Run 键 Hindsight=cmd /c F:\Hindsight\start.bat，2026-10-15 拍板落地）
 
 ## 提交纪律
 - 提交走暂存区，禁 git commit -- <pathspec>
