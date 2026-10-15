@@ -2037,11 +2037,17 @@
         if (aboutRow && aboutRow.parentElement === settingsListEl) {
             aboutRow.remove();
         }
+        // 人格卡（批 4）同款保护：不清空即被抹，重渲染后放回（关于之前）
+        const personaCard = document.getElementById('persona-card');
+        if (personaCard && personaCard.parentElement === settingsListEl) {
+            personaCard.remove();
+        }
         settingsListEl.innerHTML = '';
         appendUiPrefsSection();   // #264 B2d④ 静态本地组（与 API 组并列，始终渲染）
         if (!items.length) {
             appendSettingsTip('暂无可见设置项（当前等级或分档表限制）');
             applyDevSwitchRow();   // 开关行恢复（空列表路径）
+            if (personaCard) settingsListEl.appendChild(personaCard);
             if (aboutRow) settingsListEl.appendChild(aboutRow);
             return;
         }
@@ -2069,6 +2075,7 @@
                 settingsListEl.appendChild(buildSettingsField(it));
             });
         });
+        if (personaCard) settingsListEl.appendChild(personaCard);   // 人格卡放回（关于之前）
         if (aboutRow) settingsListEl.appendChild(aboutRow);   // 关于放回列表尾
         applyDevSwitchRow();   // #264 B2c：开关行按 ui_pref 恢复（渲染尾）（滚动内容一部分）
     }
@@ -2161,8 +2168,9 @@
     function renderPersonaCard(box, body) {
         box.hidden = false;
         box.innerHTML = '';
+        const hasLevel = body.level !== undefined;
         const level = Number(body.level || 0);
-        if (level < 3) {
+        if (hasLevel && level < 3) {
             // 权限预检（D13=Lv3）：未达标置灰+提示，不渲染可点击 UI
             box.classList.add('persona-locked');
             const tip = document.createElement('div');
@@ -2251,18 +2259,28 @@
     }
 
     function postPersona(action, payload) {
+        const box = document.getElementById('persona-card');
+        if (!box) return;
         fetch('/api/persona/' + action, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         }).then(function (res) { return res.json(); })
           .then(function (body) {
+              // 错误路径一律 toast + 卡片原样保留（批 4 验收 Bug 2：
+              // POST 响应无 level 曾把整卡抹成置灰提示）
               if (body && body.code === 403) {
                   showToast('⚠️ 权限不足（需要 Lv.3）');
                   return;
               }
-              const box = document.getElementById('persona-card');
-              if (box) renderPersonaCard(box, body || {});
+              if (!body || body.code !== 200 || !body.state) {
+                  showToast('⚠️ 保存失败，稍后再试');
+                  return;
+              }
+              renderPersonaCard(box, {
+                  level: body.level,          // 后端回传（同 GET 口径）
+                  state: body.state
+              });
           })
           .catch(function () { showToast('⚠️ 保存失败，稍后再试'); });
     }

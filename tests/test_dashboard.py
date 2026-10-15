@@ -3073,6 +3073,9 @@ class PersonaCardRoutesTests(unittest.TestCase):
                                   json={"name": "banter", "value": "on"})
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(calls, [("banter", "on")])
+        # POST 响应必须带 level（批 4 验收 Bug 2 根因：响应无 level 曾把
+        # 前端卡滑进置灰分支抹卡）——GET/POST 同口径
+        self.assertEqual(ok.get_json()["level"], 3)
 
     def test_manual_mode_set_and_clear(self):
         import personality

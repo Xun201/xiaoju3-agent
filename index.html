@@ -727,6 +727,14 @@
                 <button id="settings-save" class="header-btn toolbar-right" type="button" title="保存修改项">💾 保存</button>
             </div>
             <div class="settings-list" id="settings-list">
+                <!-- 人格卡（#271 批 4，2026-10-15）：GET /api/persona/state 渲染
+                     相处状态（行为层描述，严禁心理标签）；写=Lv3 门（后端 403
+                     双保险），前端按返回 level<3 置灰不可点。纯状态展示批——
+                     零触发层改动。容器由 console.js loadPersonaCard 填充。
+                     【滚动修复 2026-10-15】容器必须在 settings-list 滚动容器
+                     **内部**——曾放 pane 直下（滚动区外）导致页不可滚（与
+                     关于条目当年同款 bug，见下方关于注释）。 -->
+                <div class="persona-card" id="persona-card" hidden></div>
                 <!-- 关于条目（#264 B2c 修正：移进滚动容器内部——此前是
                      settings-pane 直接子项，滚动发生在 settings-list 内，
                      它在滚动区外=视觉贴底不动；进列表=普通最后子项跟着滚） -->
@@ -735,11 +743,6 @@
                     <span class="settings-about-arrow">›</span>
                 </div>
             </div>
-            <!-- 人格卡（#271 批 4，2026-10-15）：GET /api/persona/state 渲染
-                 相处状态（行为层描述，严禁心理标签）；写=Lv3 门（后端 403
-                 双保险），前端按返回 level<3 置灰不可点。纯状态展示批——
-                 零触发层改动。容器由 console.js loadPersonaCard 填充。 -->
-            <div class="persona-card" id="persona-card" hidden></div>
         </div>
         <!-- 密钥管理面板（#264 B2b，方案 A）：GET /api/keys 渲染键名+掩码
              （前端不碰明文）；覆盖=POST {key,value,confirm:true}（二次确认）。

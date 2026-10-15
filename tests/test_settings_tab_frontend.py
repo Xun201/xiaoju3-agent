@@ -281,11 +281,27 @@ class PersonaCardFrontendTests(unittest.TestCase):
     def test_container_in_settings_pane(self):
         html = _read("index.html")
         self.assertIn('id="persona-card"', html)
-        # 位置：容器在设置 pane 内部（pane 起点 < 卡 < 密钥面板起点）
-        i_pane = html.index('id="settings-pane"')
+        # 位置（批 4 验收 Bug 1 回归锁）：容器必须在 settings-list 滚动
+        # 容器**内部**——pane 直下（滚动区外）=页不可滚（关于条目同款
+        # bug 复犯实锤 2026-10-15）
+        i_list = html.index('id="settings-list"')
         i_card = html.index('id="persona-card"')
         i_keys = html.index('id="keys-pane"')
-        self.assertTrue(i_pane < i_card < i_keys)
+        self.assertTrue(i_list < i_card < i_keys)
+
+    def test_post_persona_preserves_card(self):
+        """批 4 验收 Bug 2 回归锁：POST 错误路径只 toast 保留卡片；
+        成功路径用响应 level 重渲染（POST 响应必须带 level）。"""
+        js = _read("console.js")
+        body = _fn_body(js, "postPersona")
+        self.assertIn("code === 403", body)
+        self.assertIn("showToast", body)
+        # 403/异常分支先 return，绝不落入 renderPersonaCard（防抹卡）
+        self.assertLess(body.index("return;"), body.index("renderPersonaCard"))
+        self.assertIn("body.level", body)
+        # 渲染防御：无 level 字段不进置灰分支（响应形状滑档保险）
+        rbody = _fn_body(js, "renderPersonaCard")
+        self.assertIn("body.level !== undefined", rbody)
 
     def test_load_and_locked_contract(self):
         js = _read("console.js")
