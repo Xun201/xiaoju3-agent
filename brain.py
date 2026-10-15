@@ -809,7 +809,7 @@ GRACE_HISTORY_KEEP = 5
 
 
 def mark_location_cleared():
-    """/clear_location 指令调用（main.handle_location_command）：记录清除
+    """/clear_location 指令调用（system_handler.location_command）：记录清除
     时间戳，开启位置静默期。"""
     global _location_cleared_at
     _location_cleared_at = time.time()

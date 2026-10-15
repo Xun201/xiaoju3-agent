@@ -904,8 +904,8 @@ def api_chat():
             return jsonify({"code": 400, "error": "消息不能为空"})
 
         # 📍 位置指令（2026-10-02 隐私口径）：与 QQ 通道同一处理逻辑
-        # （main.handle_location_command；命中即系统消息返回，不进大脑）
-        location_reply = main.handle_location_command(user_msg)
+        # （system_handler.location_command；命中即系统消息返回，不进大脑）
+        location_reply = system_handler.location_command(user_msg)
         if location_reply is not None:
             return jsonify({
                 "code": 200,
@@ -1065,7 +1065,7 @@ def api_chat_stream():
         # extract_todos 工具调用 → 用户收到"❌ 缺少参数：需要提供 url"）。
         # 此处与 api_chat 同款平移，命中即 done 单帧短路；口径逐字对齐
         # （儿童锁 is_console=True 控制台=成人设备、待办族 <think> 指令卡）。
-        location_reply = main.handle_location_command(user_msg)
+        location_reply = system_handler.location_command(user_msg)
         if location_reply is not None:
             yield _sse_frame("done", {
                 "reply": sanitize_for_web(location_reply),

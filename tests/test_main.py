@@ -42,6 +42,7 @@ from unittest.mock import MagicMock, patch
 import auth_lv4
 import brain
 import main
+import system_handler
 import xiaoju3_dashboard as dashboard
 from agent_state.state_manager import StateManager
 from intent_router import IntentResult
@@ -1201,7 +1202,7 @@ class TestLocationCommands(unittest.TestCase):
 
     def test_set_location_usage_hint(self):
         """/set_location 无参数 → 返回用法提示，不写入。"""
-        reply = main.handle_location_command("/set_location")
+        reply = system_handler.location_command("/set_location")
         self.assertIn("用法", reply)
         self.assertIsNone(self.sm.get_user_location())
 
@@ -1214,7 +1215,7 @@ class TestLocationCommands(unittest.TestCase):
 
     def test_clear_location_when_absent_still_ok(self):
         """/clear_location 无记录时同样返回成功文案（幂等）。"""
-        reply = main.handle_location_command("/clear_location")
+        reply = system_handler.location_command("/clear_location")
         self.assertIn("已清除", reply)
 
     def test_clear_location_marks_grace_period(self):
@@ -1222,13 +1223,13 @@ class TestLocationCommands(unittest.TestCase):
         清除后 5 分钟内忽略历史位置，强制 AI 重新询问）。"""
         import brain
         self.addCleanup(setattr, brain, "_location_cleared_at", 0.0)
-        main.handle_location_command("/clear_location")
+        system_handler.location_command("/clear_location")
         self.assertGreater(brain._location_cleared_at, 0)
         self.assertTrue(brain._location_in_clear_grace())
 
     def test_normal_message_not_intercepted(self):
         """普通对话（含"位置"字样）不被位置指令误拦截。"""
-        self.assertIsNone(main.handle_location_command("你住什么位置呀"))
+        self.assertIsNone(system_handler.location_command("你住什么位置呀"))
 
     def test_dashboard_api_chat_set_location(self):
         """网页端：/api/chat 走同一 helper（命中即系统消息返回，不进大脑）。"""
@@ -1954,8 +1955,8 @@ class TestSystemHandler(unittest.TestCase):
             seen["t"] = text
             return None   # 非位置指令返回 None
 
-        out = system_handler.handle_location(
-            "/set_location 北京", location_cb=fake_location)
+        with patch.object(system_handler, "location_command", fake_location):
+            out = system_handler.handle_location("/set_location 北京")
         self.assertIsNone(out)
         self.assertEqual(seen["t"], "/set_location 北京")
 
