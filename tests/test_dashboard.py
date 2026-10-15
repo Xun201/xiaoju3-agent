@@ -3018,3 +3018,92 @@ class TestToolsPanelApis(unittest.TestCase):
         r = self.client.get("/api/ha/devices")
         self.assertEqual(r.status_code, 200)
         self.assertIn("text", r.get_json()["data"])
+
+
+class PersonaCardRoutesTests(unittest.TestCase):
+    """批 4 UI 卡路由锚：GET state / POST switch / POST manual_mode +
+    Lv3 写门（D13）。personality 走模块晚绑定 → 全程 patch，零碰实库。"""
+
+    def setUp(self):
+        import settings_api
+        self.settings_api = settings_api
+        self.client = dashboard.app.test_client()
+
+    def _patch(self, level, state=None):
+        import personality
+        state = state or {"mode": "polite", "mode_label": "客气型",
+                          "confidence": 0.0, "source": "default",
+                          "judged_at": None, "manual": False,
+                          "switches": {}, "expression_ready": False,
+                          "interactions": 0}
+        p_level = mock.patch.object(self.settings_api, "get_level",
+                                    return_value=level)
+        p_state = mock.patch.object(personality, "persona_state",
+                                    return_value=state)
+        return p_level, p_state
+
+    def test_get_state_shape_and_level(self):
+        p_level, p_state = self._patch(3)
+        with p_level, p_state:
+            resp = self.client.get("/api/persona/state")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertEqual(body["code"], 200)
+        self.assertEqual(body["level"], 3)
+        self.assertEqual(body["state"]["mode"], "polite")
+
+    def test_switch_write_gate_and_validation(self):
+        import personality
+        p_level, p_state = self._patch(2)
+        with p_level, p_state:
+            resp = self.client.post("/api/persona/switch",
+                                    json={"name": "banter", "value": "on"})
+        self.assertEqual(resp.status_code, 403)   # Lv3 写门
+        self.assertEqual(resp.get_json()["required"], 3)
+
+        calls = []
+        p_level, p_state = self._patch(3)
+        p_set = mock.patch.object(personality, "set_switch",
+                                  side_effect=lambda n, v: calls.append((n, v)))
+        with p_level, p_state, p_set:
+            bad = self.client.post("/api/persona/switch",
+                                   json={"name": "banter", "value": "oops"})
+            self.assertEqual(bad.status_code, 400)   # 非法 tri-state
+            ok = self.client.post("/api/persona/switch",
+                                  json={"name": "banter", "value": "on"})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(calls, [("banter", "on")])
+
+    def test_manual_mode_set_and_clear(self):
+        import personality
+        calls = []
+        p_level, p_state = self._patch(3)
+        p_set = mock.patch.object(personality, "set_mode_manual",
+                                  side_effect=lambda u, m: calls.append(m))
+        p_clr = mock.patch.object(personality, "clear_mode_manual",
+                                  side_effect=lambda u: calls.append("clear"))
+        with p_level, p_state, p_set, p_clr:
+            bad = self.client.post("/api/persona/manual_mode",
+                                   json={"mode": "nope"})
+            self.assertEqual(bad.status_code, 400)   # 非法模式
+            ok = self.client.post("/api/persona/manual_mode",
+                                  json={"mode": "banter"})
+            clr = self.client.post("/api/persona/manual_mode",
+                                   json={"clear": True})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(clr.status_code, 200)
+        self.assertEqual(calls, ["banter", "clear"])
+
+    def test_write_gate_lv3_exact(self):
+        """D13 锁定：写门恰好 Lv3（Lv3 过/Lv2 拒），防顺手改档。"""
+        p_level, p_state = self._patch(3)
+        with p_level, p_state:
+            self.assertEqual(
+                self.client.post("/api/persona/switch",
+                                 json={"name": "banter",
+                                       "value": "auto"}).status_code, 200)
+        p_level, p_state = self._patch(2)
+        with p_level, p_state:
+            self.assertEqual(
+                self.client.post("/api/persona/manual_mode",
+                                 json={"mode": "banter"}).status_code, 403)

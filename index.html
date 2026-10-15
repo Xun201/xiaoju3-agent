@@ -248,6 +248,18 @@
         .settings-about-arrow { opacity: .5; font-size: 18px; line-height: 1; }
         .settings-group-title { font-weight: 600; font-size: 13px; opacity: .75; margin: 14px 0 4px; }
         .settings-empty { opacity: .65; padding: 18px 0; text-align: center; }
+        /* 人格卡（#271 批 4）：只读状态+手动锁+六开关；locked=低于 Lv3 置灰不可点 */
+        .persona-card { padding: 10px 12px; border: 1px solid var(--color-border, #e3e6ee); border-radius: 10px; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+        .persona-card.persona-locked { opacity: .55; pointer-events: none; }
+        .persona-card .persona-title { font-weight: 600; font-size: 13px; opacity: .75; }
+        .persona-card .persona-mode-main { font-size: 15px; }
+        .persona-card .persona-sub { opacity: .65; font-size: 12px; }
+        .persona-card .persona-modes { display: flex; flex-wrap: wrap; gap: 6px; }
+        .persona-card .persona-modes button, .persona-card .persona-auto-btn { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--color-border, #d8dce6); background: transparent; cursor: pointer; font-size: 13px; }
+        .persona-card .persona-modes button.active { background: var(--color-progress, #f5a623); color: #fff; border-color: var(--color-progress, #f5a623); }
+        .persona-card .persona-switches { display: flex; flex-direction: column; gap: 6px; }
+        .persona-card .persona-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .persona-card .persona-switch-row button { min-width: 96px; }
         .settings-field select.settings-input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid rgba(127,127,127,.4); border-radius: 6px; background: var(--color-panel, #fff); color: var(--color-text, #222); }
         .keys-row { display: flex; align-items: center; gap: 8px; }
         .keys-masked { font-family: Consolas, monospace; letter-spacing: .05em; }
@@ -723,6 +735,11 @@
                     <span class="settings-about-arrow">›</span>
                 </div>
             </div>
+            <!-- 人格卡（#271 批 4，2026-10-15）：GET /api/persona/state 渲染
+                 相处状态（行为层描述，严禁心理标签）；写=Lv3 门（后端 403
+                 双保险），前端按返回 level<3 置灰不可点。纯状态展示批——
+                 零触发层改动。容器由 console.js loadPersonaCard 填充。 -->
+            <div class="persona-card" id="persona-card" hidden></div>
         </div>
         <!-- 密钥管理面板（#264 B2b，方案 A）：GET /api/keys 渲染键名+掩码
              （前端不碰明文）；覆盖=POST {key,value,confirm:true}（二次确认）。

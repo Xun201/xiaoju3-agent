@@ -1895,6 +1895,7 @@
     // 等级/TOTP 原因）；响应 applied=已写 .env 并补 os.environ（🟢 即改
     // 即生效），其余 written=需重启。类型渲染：str/int/bool/enum(:a,b,c)。
     let settingsFetchSeq = 0;
+    let personaFetchSeq = 0;   // 人格卡独立竞态守卫（与 settings 互不挤兑）
     const SETTINGS_STATE = { level: null, original: {}, tiers: {} };
     const SETTINGS_TIER_LABELS = {
         daily: '常规设置',
@@ -2102,6 +2103,168 @@
                 if (aboutRow) settingsListEl.appendChild(aboutRow);
                 appendSettingsTip('设置读取失败: ' + err.message);
             });
+        loadPersonaCard();   // 人格卡（#271 批 4）：独立容器，与 settings-list 成败互不牵连
+    }
+
+    // ==================== 人格卡（#271 批 4，2026-10-15） ====================
+    // 纯状态展示批铁律：只展示+手动锁+开关，零触发层改动；文案=行为层
+    // 描述（用户化翻译，禁止标签化/临床表述）；权限预检=state 自带 level，
+    // 低于 3 → 置灰 + 提示，不渲染任何可点击 UI。
+    const PERSONA_MODE_PHRASES = {
+        banter: '爱跟你拌嘴，像老朋友损你',
+        familiar: '自来熟，说话不绕弯',
+        caring: '爱操心，嘘寒问暖',
+        dependent: '爱粘着你，有事没事找你聊',
+        polite: '客客气气，保持一点距离'
+    };
+    const PERSONA_MODE_LABELS = {
+        banter: '斗嘴型', familiar: '熟络型', caring: '照顾型',
+        dependent: '依赖型', polite: '客气型'
+    };
+    const PERSONA_SWITCH_UI = {
+        banter: { label: '爱拌嘴', on: '一定要拌嘴', off: '别拌嘴' },
+        clingy: { label: '偶尔撒娇', on: '撒娇管够', off: '不撒娇' },
+        tsundere: { label: '嘴硬心软', on: '傲娇上线', off: '直来直去' },
+        quiet_companion: { label: '安静陪着', on: '多陪少说', off: '该说说' },
+        proactive_care: { label: '主动问冷暖', on: '会主动问', off: '先别主动' },
+        proactive_banter: { label: '主动找你斗嘴', on: '会来找茬', off: '安分点' }
+    };
+    const PERSONA_AUTO_TEXT = '跟着感觉走';
+
+    function personaSourceText(state) {
+        if (state.manual) return '这是你亲手定的';
+        if (state.source === 'auto') {
+            const pct = Math.round((state.confidence || 0) * 100);
+            return '这是它自己判断的' + (pct > 0 ? ('（把握 ' + pct + '%）') : '');
+        }
+        return '还没摸熟，先客客气气相处';
+    }
+
+    function loadPersonaCard() {
+        const box = document.getElementById('persona-card');
+        if (!box) return;
+        const seq = ++personaFetchSeq;   // 独立竞态守卫（共用会挤掉 settings 渲染）
+        fetch('/api/persona/state')
+            .then(function (res) { return res.json(); })
+            .then(function (body) {
+                if (seq !== personaFetchSeq) return;
+                renderPersonaCard(box, body || {});
+            })
+            .catch(function () {
+                if (seq !== personaFetchSeq) return;
+                box.hidden = false;
+                box.classList.add('persona-locked');
+                box.textContent = '人格状态读取失败，稍后再试。';
+            });
+    }
+
+    function renderPersonaCard(box, body) {
+        box.hidden = false;
+        box.innerHTML = '';
+        const level = Number(body.level || 0);
+        if (level < 3) {
+            // 权限预检（D13=Lv3）：未达标置灰+提示，不渲染可点击 UI
+            box.classList.add('persona-locked');
+            const tip = document.createElement('div');
+            tip.className = 'persona-sub';
+            tip.textContent = '人格设置需要 Lv.3' +
+                (level > 0 ? ('（当前 Lv.' + level + '）') : '') +
+                '——提升等级后可以查看和调整小橘的相处状态。';
+            box.appendChild(tip);
+            return;
+        }
+        box.classList.remove('persona-locked');
+        const state = body.state || {};
+        const title = document.createElement('div');
+        title.className = 'persona-title';
+        title.textContent = '人格';
+        box.appendChild(title);
+
+        const main = document.createElement('div');
+        main.className = 'persona-mode-main';
+        main.textContent = PERSONA_MODE_PHRASES[state.mode] ||
+            '还在摸脾气的阶段';
+        box.appendChild(main);
+
+        const sub = document.createElement('div');
+        sub.className = 'persona-sub';
+        const label = PERSONA_MODE_LABELS[state.mode] || '';
+        sub.textContent = personaSourceText(state) +
+            (label ? ('（' + label + '）') : '');
+        box.appendChild(sub);
+
+        const lockRow = document.createElement('div');
+        lockRow.className = 'persona-modes';
+        Object.keys(PERSONA_MODE_PHRASES).forEach(function (mode) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = PERSONA_MODE_PHRASES[mode];
+            if (state.mode === mode && state.manual) btn.classList.add('active');
+            btn.addEventListener('click', function () {
+                postPersona('manual_mode', { mode: mode });
+            });
+            lockRow.appendChild(btn);
+        });
+        const autoBtn = document.createElement('button');
+        autoBtn.className = 'persona-auto-btn';
+        autoBtn.textContent = '恢复自动判断';
+        if (!state.manual) autoBtn.classList.add('active');
+        autoBtn.addEventListener('click', function () {
+            postPersona('manual_mode', { clear: true });
+        });
+        lockRow.appendChild(autoBtn);
+        box.appendChild(lockRow);
+
+        const switches = document.createElement('div');
+        switches.className = 'persona-switches';
+        Object.keys(PERSONA_SWITCH_UI).forEach(function (name) {
+            const ui = PERSONA_SWITCH_UI[name];
+            const cur = (state.switches && state.switches[name]) || {};
+            const value = cur.value || 'auto';
+            const row = document.createElement('div');
+            row.className = 'persona-switch-row';
+            const labelEl = document.createElement('span');
+            labelEl.textContent = ui.label;
+            row.appendChild(labelEl);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = value === 'auto' ? PERSONA_AUTO_TEXT
+                : (value === 'on' ? ui.on : ui.off);
+            btn.addEventListener('click', function () {
+                const next = value === 'auto' ? 'on'
+                    : (value === 'on' ? 'off' : 'auto');
+                postPersona('switch', { name: name, value: next });
+            });
+            row.appendChild(btn);
+            switches.appendChild(row);
+        });
+        box.appendChild(switches);
+
+        const meta = document.createElement('div');
+        meta.className = 'persona-sub';
+        meta.textContent = '你们已经聊了 ' + (state.interactions || 0) +
+            ' 次。' + (state.expression_ready
+                ? '个性语气已上线。'
+                : '还在熟悉中（聊满 50 次后个性语气上线，当前 ' +
+                  (state.interactions || 0) + ' 次）。');
+        box.appendChild(meta);
+    }
+
+    function postPersona(action, payload) {
+        fetch('/api/persona/' + action, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).then(function (res) { return res.json(); })
+          .then(function (body) {
+              if (body && body.code === 403) {
+                  showToast('⚠️ 权限不足（需要 Lv.3）');
+                  return;
+              }
+              const box = document.getElementById('persona-card');
+              if (box) renderPersonaCard(box, body || {});
+          })
+          .catch(function () { showToast('⚠️ 保存失败，稍后再试'); });
     }
 
     function collectSettingsUpdates() {

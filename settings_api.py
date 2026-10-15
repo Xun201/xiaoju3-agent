@@ -296,4 +296,50 @@ def register_settings_routes(app):
         return jsonify({"code": 200, "written": bool(written),
                         "backup_path": backup or ""})
 
+    # ==================== 人格卡（批 4 UI 卡，2026-10-15） ====================
+    # 读=登录即可（state 自带 level 供前端置灰判定，同 /api/settings 口径）；
+    # 写=Lv3（D13 拍板：人格是行为层不是密钥层）。纯展示批：零触发层改动。
+
+    import personality as _persona  # 模块晚绑定：测试可 patch，不误碰实库
+
+    @app.route("/api/persona/state", methods=["GET"])
+    def api_persona_state():
+        level = get_level()
+        return jsonify({"code": 200, "level": level,
+                        "state": _persona.persona_state("owner")})
+
+    @app.route("/api/persona/switch", methods=["POST"])
+    def api_persona_switch():
+        level = get_level()
+        if level < 3:
+            return jsonify({"code": 403, "error": "level_insufficient",
+                            "required": 3}), 403
+        data = request.get_json(silent=True) or {}
+        name, value = data.get("name", ""), data.get("value", "")
+        if name not in _persona.SWITCH_DEFS or value not in _persona.SWITCH_VALUES:
+            return jsonify({"code": 400,
+                            "error": "invalid_switch"}), 400
+        _persona.set_switch(name, value)
+        _audit({"action": "persona_switch",
+                "detail": f"name={name} value={value}"})
+        return jsonify({"code": 200, "state": _persona.persona_state("owner")})
+
+    @app.route("/api/persona/manual_mode", methods=["POST"])
+    def api_persona_manual_mode():
+        level = get_level()
+        if level < 3:
+            return jsonify({"code": 403, "error": "level_insufficient",
+                            "required": 3}), 403
+        data = request.get_json(silent=True) or {}
+        if data.get("clear") is True:
+            _persona.clear_mode_manual("owner")
+            _audit({"action": "persona_manual", "detail": "clear"})
+            return jsonify({"code": 200, "state": _persona.persona_state("owner")})
+        mode = data.get("mode", "")
+        if mode not in _persona.MODES:
+            return jsonify({"code": 400, "error": "invalid_mode"}), 400
+        _persona.set_mode_manual("owner", mode)
+        _audit({"action": "persona_manual", "detail": f"mode={mode}"})
+        return jsonify({"code": 200, "state": _persona.persona_state("owner")})
+
     return app

@@ -272,3 +272,40 @@ def test_help_intercept_case_insensitive():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PersonaCardFrontendTests(unittest.TestCase):
+    """批 4 人格卡前端锚（源码级静态，仓库前端锚惯例）：
+    容器在位 / 加载契约+置灰预检 / 翻译红线+出界铁律锁。"""
+
+    def test_container_in_settings_pane(self):
+        html = _read("index.html")
+        self.assertIn('id="persona-card"', html)
+        # 位置：容器在设置 pane 内部（pane 起点 < 卡 < 密钥面板起点）
+        i_pane = html.index('id="settings-pane"')
+        i_card = html.index('id="persona-card"')
+        i_keys = html.index('id="keys-pane"')
+        self.assertTrue(i_pane < i_card < i_keys)
+
+    def test_load_and_locked_contract(self):
+        js = _read("console.js")
+        self.assertIn("function loadPersonaCard()", js)
+        self.assertIn("fetch('/api/persona/state')", js)
+        self.assertIn("personaFetchSeq", js)   # 独立竞态守卫（不挤 settings）
+        body = _fn_body(js, "renderPersonaCard")
+        self.assertIn("level < 3", body)             # 权限预检
+        self.assertIn("persona-locked", body)        # 置灰类
+        locked_part = body.split("return;")[0]
+        self.assertNotIn("addEventListener", locked_part)   # 置灰态零可点
+
+    def test_translation_table_redlines_and_scope_lock(self):
+        js = _read("console.js")
+        self.assertIn("PERSONA_MODE_PHRASES", js)
+        # 翻译红线：标签/临床词零容忍（用户化翻译铁律）
+        for bad in ("人格障碍", "心理", "病理", "治疗", "纠正", "依赖型人格"):
+            self.assertNotIn(bad, js, bad)
+        # 出界铁律锁：人格函数体内禁现三态阶梯/触发层字样（那是别的批）
+        for fn in ("renderPersonaCard", "loadPersonaCard"):
+            fn_body = _fn_body(js, fn)
+            for bad in ("三态阶梯", "checkpoint", "autonomous", "report"):
+                self.assertNotIn(bad, fn_body, (fn, bad))
