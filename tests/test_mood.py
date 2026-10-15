@@ -6,6 +6,7 @@ agent_state 接触；时间经 observe_message(now=...) 注入，不 sleep。
 """
 import os
 import io
+import json
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -449,3 +450,87 @@ class TestEmotionalEpisode:
         assert row[0][3] == -0.05
         assert row[0][4] == 30.0
         assert row[0][5] == "negative"
+
+
+# ==================== 批 2.1：段-记忆关联（2026-10-15） ====================
+
+def test_flush_backfills_memory_ids_from_window(tmp_path, monkeypatch):
+    """落表时按 [start_ts, end_ts] 窗回填 memory_ids：窗内记忆 id 命中、
+    窗外不混入；旧库（无列）幂等补列。"""
+    db = str(tmp_path / "m.db")
+    monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", db)
+    con = sqlite3.connect(db)
+    con.executescript(mood.SCHEMA)
+    con.execute("INSERT INTO mood_log (ts, event_type, dp, da, dd,"
+                " p_after, a_after, d_after) VALUES"
+                " ('2026-10-13 10:10:00', 'scolded', -0.35, 0, 0,"
+                " -0.45, 0.4, 0.0)")
+    con.execute("INSERT INTO mood_snapshot (ts, p, a, d, source)"
+                " VALUES ('2026-10-13 10:20:00', -0.40, 0.4, 0.0,"
+                " 'heartbeat')")
+    con.execute("INSERT INTO mood_snapshot (ts, p, a, d, source)"
+                " VALUES ('2026-10-13 10:40:00', -0.05, 0.4, 0.0,"
+                " 'heartbeat')")
+    con.commit()
+    con.close()
+    # memories 库（tmp 独立）：窗内两条 + 窗外一条。生产语义
+    # memories.timestamp=UTC（CURRENT_TIMESTAMP）、episode ts=本地——
+    # 测试按本机偏移把语料换算成 UTC 写入（跨时区确定性）
+    offset = datetime.now() - datetime.utcnow()
+
+    def _utc(local_s):
+        dt = datetime.strptime(local_s, "%Y-%m-%d %H:%M:%S") - offset
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    mem_db = str(tmp_path / "long_term.db")
+    con = sqlite3.connect(mem_db)
+    con.execute("CREATE TABLE memories (id INTEGER PRIMARY KEY"
+                " AUTOINCREMENT, category TEXT, content TEXT,"
+                " timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
+    con.execute("INSERT INTO memories (category, content, timestamp)"
+                " VALUES ('fact', '窗内一', '" + _utc('2026-10-13 10:12:00') + "')")
+    con.execute("INSERT INTO memories (category, content, timestamp)"
+                " VALUES ('fact', '窗内二', '" + _utc('2026-10-13 10:35:00') + "')")
+    con.execute("INSERT INTO memories (category, content, timestamp)"
+                " VALUES ('fact', '窗外', '" + _utc('2026-10-13 09:00:00') + "')")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(mood, "_memories_db_path", lambda: mem_db)
+
+    assert mood.flush_episodes() == 1   # 旧库无列 → _ensure 幂等补列后落表
+    con = sqlite3.connect(db)
+    row = con.execute("SELECT memory_ids FROM emotional_episode").fetchone()
+    con.close()
+    ids = json.loads(row[0])
+    assert sorted(ids) == [1, 2]   # 窗内两条命中，窗外不混入
+
+
+def test_flush_empty_window_memory_ids_empty_list(tmp_path, monkeypatch):
+    """窗内无记忆 → memory_ids='[]'（消费侧空关联=走普通直注）。"""
+    db = str(tmp_path / "m.db")
+    monkeypatch.setenv("XIAOJU3_MOOD_DB_PATH", db)
+    con = sqlite3.connect(db)
+    con.executescript(mood.SCHEMA)
+    con.execute("INSERT INTO mood_log (ts, event_type, dp, da, dd,"
+                " p_after, a_after, d_after) VALUES"
+                " ('2026-10-13 10:10:00', 'scolded', -0.35, 0, 0,"
+                " -0.45, 0.4, 0.0)")
+    con.execute("INSERT INTO mood_snapshot (ts, p, a, d, source)"
+                " VALUES ('2026-10-13 10:40:00', -0.05, 0.4, 0.0,"
+                " 'heartbeat')")
+    con.commit()
+    con.close()
+    mem_db = str(tmp_path / "long_term.db")
+    con = sqlite3.connect(mem_db)
+    con.execute("CREATE TABLE memories (id INTEGER PRIMARY KEY"
+                " AUTOINCREMENT, category TEXT, content TEXT,"
+                " timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(mood, "_memories_db_path", lambda: mem_db)
+
+    assert mood.flush_episodes() == 1
+    con = sqlite3.connect(db)
+    row = con.execute("SELECT memory_ids FROM emotional_episode").fetchone()
+    con.close()
+    assert json.loads(row[0]) == []
