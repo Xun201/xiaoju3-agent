@@ -6,7 +6,7 @@
 - 每次工作会话开始第一步：检查 Hindsight 健康（GET http://127.0.0.1:9077/health，
   5 秒超时）——不通则 retain/recall 全程静默空转，工作等于白做
 - 不通 → 自启：schtasks 一次性任务拉起
-  `F:\Hindsightvenv\Scripts\hindsight-api.exe --host 127.0.0.1 --port 9077`
+  `F:\Hindsight\venv\Scripts\hindsight-api.exe --host 127.0.0.1 --port 9077`
   → 等 8 秒复检 → 复检两次仍不通 → **立即告知用户等处理，不静默跳过**
 - 拉起前先查残留 hindsight 进程（防多实例）；依据：Hindsight=手动启动进程
   无自启机制（2026-10-15 侦察实锤），重启后默认下线
