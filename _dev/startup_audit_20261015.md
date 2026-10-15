@@ -7,15 +7,15 @@
 
 ---
 
-## 一、禁的排最前（拍板后执行）
+## 一、禁的排最前（✅ 2026-10-15 深夜用户管理员窗口执行全绿：NI 停+禁/PCManager 停+禁/AMDInstallLauncher 禁——:8080 裸奔面已消除）
 
 ### 需管理员（用户开管理员窗口复制运行）
 
 | # | 项 | 来源 | 归属 | 内存/影响 | 建议 | 命令 |
 |---|---|---|---|---|---|---|
-| 1 | AMDInstallLauncher（计划任务） | 系统驱动(AMD) | 系统驱动 | 无常驻，装器 | **禁** | `schtasks /change /tn "AMDInstallLauncher" /disable` |
+| 1 | AMDInstallLauncher（计划任务） | 系统驱动(AMD) | 系统驱动 | 无常驻，装器 | **已禁 ✓**（2026-10-15 深夜用户执行） | `schtasks /change /tn "AMDInstallLauncher" /disable` |
 | 2 | TX Mascot（HKLM Run） | 用户装(ASUS) | 用户应用 | 吉祥物装饰（进程已在） | **关+禁自启** | `reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "TX Mascot" /f` |
-| 3 | PCManager Service Store（服务，微软电脑管家 133MB） | 用户装 | 用户应用 | 常驻 133MB | **禁自启+停** | `sc stop "PCManager Service Store"` → `sc config "PCManager Service Store" start= disabled` |
+| 3 | PCManager Service Store（服务，微软电脑管家 133MB） | 用户装 | 用户应用 | 常驻 133MB | **已停+禁 ✓**（2026-10-15 深夜用户执行） | `sc stop "PCManager Service Store"` → `sc config "PCManager Service Store" start= disabled` |
 | 4 | NIApplicationWebServer（服务，21MB，:8080 裸奔） | **第三方捆绑（Multisim 捆绑 WebServer，D:\learn and work\multisim\）** | 第三方捆绑 | 21MB+8080 裸奔面 | **已拍板禁用（2026-10-15 深夜，用户确认暂不用 Multisim）——待管理员执行两条命令；需要时手动恢复：`sc start NIApplicationWebServer`** | 同左两条 |
 
 ### 非管理员（ZCode 可代跑/用户点两下）
