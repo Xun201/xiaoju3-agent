@@ -150,5 +150,9 @@
   "gen_log_denied": {
     "resp_status": "ok",
     "sent_reply": "❌ 权限不足，开发日志提取需要 Lv.3（代码编写者）权限。\n请先发送 /coder_auth <6位动态密码> 升级后再试。"
+  },
+  "clear_memory_web": {
+    "resp_status": "ok",
+    "sent_reply": "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
   }
 }

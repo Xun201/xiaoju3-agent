@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-14 batchA-golden-38",
+  "version": "2026-10-14 batchB-golden-39",
   "samples": [
     {
       "desc": "help_menu",
@@ -455,6 +455,18 @@
       "expected": {
         "resp_status": "ok",
         "sent_reply": "❌ 权限不足，开发日志提取需要 Lv.3（代码编写者）权限。\n请先发送 /coder_auth <6位动态密码> 升级后再试。"
+      }
+    },
+    {
+      "desc": "clear_memory_web",
+      "raw_message": "/clear",
+      "source": "web",
+      "user_id": 10001,
+      "group_id": null,
+      "assert_type": "contains_清空",
+      "expected": {
+        "resp_status": "ok",
+        "sent_reply": "✨ 记忆已清空！我现在的大脑非常干净，可以重新开始对话了。"
       }
     }
   ]
