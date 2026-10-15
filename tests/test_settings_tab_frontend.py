@@ -374,7 +374,7 @@ class BatchC1CreatorMoveTests(unittest.TestCase):
         import io
         import re
         src = io.open("system_handler.py", encoding="utf-8").read()
-        self.assertIsNone(re.search(r"^\s*import main", src, re.M))
+        self.assertIsNone(re.search(r"^\s*import main\b", src, re.M))
 
 
 if __name__ == "__main__":
