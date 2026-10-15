@@ -348,3 +348,34 @@ class PetHideOnSettingsTests(unittest.TestCase):
         """纯类驱动铁律：desktop-pet.js 零 display 控制改动。"""
         pet = _read("desktop-pet.js")
         self.assertNotIn("xiaoju3-settings-open", pet)
+
+
+class BatchC1CreatorMoveTests(unittest.TestCase):
+    """批 C.1 薄化对账锚（design_227c_batch_c §一 数据域审计地图）：
+    creator 本体迁 system_handler 后 main 零残留/依赖方向/数据域标注。"""
+
+    def test_main_zero_creator_residual(self):
+        import io
+        src = io.open("main.py", encoding="utf-8").read()
+        self.assertNotIn("def get_creator_name", src)
+        self.assertNotIn("def handle_creator_command", src)
+        self.assertNotIn("creator_cb=handle_creator_command", src)
+
+    def test_data_domain_annotation_in_handler(self):
+        """#319 审计地图落地件：模块头标注 creator=灵魂核 core 不可镜像。"""
+        import io
+        src = io.open("system_handler.py", encoding="utf-8").read()
+        self.assertIn("灵魂核 core，不可镜像", src)
+        self.assertIn("数据域审计地图", src)
+
+    def test_dependency_direction_zero_import_main(self):
+        """依赖方向纪律：system_handler 零 import main **语句**
+        （行首锚——docstring 纪律措辞不参与断言，待验证假设 2026-10-15）。"""
+        import io
+        import re
+        src = io.open("system_handler.py", encoding="utf-8").read()
+        self.assertIsNone(re.search(r"^\s*import main", src, re.M))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -73,7 +73,8 @@ import prompts  # noqa: E402
 import web_sanitize  # noqa: E402
 import main  # noqa: E402  QQ 接入层业务模块（/onebot 迁移路由打桩用）
 import xiaoju3  # noqa: E402
-import xiaoju3_dashboard as dashboard  # noqa: E402
+import xiaoju3_dashboard as dashboard
+import system_handler  # noqa: E402
 from agent_state.state_manager import StateManager  # noqa: E402
 from permission import PermissionManager  # noqa: E402
 
@@ -2271,7 +2272,7 @@ class ConsoleCacheBustingTests(unittest.TestCase):
 
 class CreatorCommandTests(unittest.TestCase):
     """/api/chat /creator 分流（2026-10-02 修复：与 QQ 通道共用
-    main.handle_creator_command，缺失时返回开源项目链接）。"""
+    system_handler.creator_command（批 C.1 本体迁入），缺失时返回开源项目链接）。"""
 
     def test_console_page_title_has_no_creator_suffix(self):
         """2026-10-02 用户口径：标题栏隐藏"为 XUN 而建"——/console 页面
@@ -2290,7 +2291,7 @@ class CreatorCommandTests(unittest.TestCase):
     def test_creator_with_name_returns_card(self):
         import xiaoju3_dashboard as dashboard
         from xiaoju3_dashboard import main
-        with mock.patch.object(main, "get_creator_name",
+        with mock.patch.object(system_handler, "get_creator_name",
                                return_value="XUN"):
             client = dashboard.app.test_client()
             resp = client.post("/api/chat", json={"message": "/creator"})
@@ -2303,7 +2304,7 @@ class CreatorCommandTests(unittest.TestCase):
     def test_creator_without_name_returns_oss_link(self):
         import xiaoju3_dashboard as dashboard
         from xiaoju3_dashboard import main
-        with mock.patch.object(main, "get_creator_name", return_value=""):
+        with mock.patch.object(system_handler, "get_creator_name", return_value=""):
             client = dashboard.app.test_client()
             resp = client.post("/api/chat", json={"message": "/creator"})
         payload = resp.get_json()

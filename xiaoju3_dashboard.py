@@ -66,6 +66,7 @@ import time
 from datetime import datetime
 
 import main  # QQ 接入层业务逻辑模块（架构合并：webhook 业务体宿主于此进程）
+import system_handler  # 系统域 handler（批 C.1：creator 本体迁入，署名卡直调）
 import paths  # 双根路径锚（方案 §1）：资源根=静态托管基准，非 frozen 与项目根同值
 import vision_tools  # 仅用 preheat_openai_async（拍板①）；随 main→tools 链已加载，零额外开销
 import psutil
@@ -554,7 +555,7 @@ def api_status():
             "timestamp": int(time.time()),
             "tts_voice": TTS_VOICE,          # 前端 TTS 音色（组 B 前端消费）
             "version": XIAOJU3_VERSION,      # 程序版本（步 A1，前端标题徽标）
-            "creator": main.get_creator_name() or None,   # 创作者署名（批次②）
+            "creator": system_handler.get_creator_name() or None,   # 创作者署名（批次②）
         }
     })
 
@@ -930,7 +931,7 @@ def api_chat():
         if user_msg.strip() == "/creator":
             return jsonify({
                 "code": 200,
-                "data": {"reply": sanitize_for_web(main.handle_creator_command()),
+                "data": {"reply": sanitize_for_web(system_handler.creator_command()),
                          "source": "⚙️ 系统"}
             })
 
@@ -1085,7 +1086,7 @@ def api_chat_stream():
             return
         if user_msg.strip() == "/creator":
             yield _sse_frame("done", {
-                "reply": sanitize_for_web(main.handle_creator_command()),
+                "reply": sanitize_for_web(system_handler.creator_command()),
                 "source": "⚙️ 系统"})
             return
         todo_steps = []
@@ -1410,7 +1411,7 @@ def serve():
     from xiaoju3_launcher import _redirect_stdio  # 延迟导入：保持现依赖面
     _redirect_stdio("dashboard")  # frozen 入口重定向（步 3）；非 frozen 空操作
     print(f"🍊 小橘3号监控仪表盘已启动（端口 {DASHBOARD_PORT}）")
-    _creator = main.get_creator_name()
+    _creator = system_handler.get_creator_name()
     if _creator:
         print(f"✍️ 创作者署名：{_creator}")
     print("🔌 QQ 接入层已并入本进程（5002 端口废弃）：webhook 地址 "

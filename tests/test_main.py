@@ -1489,17 +1489,23 @@ class TestCreatorCommand(_MainCase):
             json.dump({"name": name}, f, ensure_ascii=False)
 
     def _patch_name(self, name):
-        p = patch("main.get_creator_name", return_value=name)
+        import system_handler
+        p = patch("system_handler.get_creator_name", return_value=name)
         p.start()
         self.addCleanup(p.stop)
 
     def test_get_creator_name_reads_json(self):
-        """get_creator_name 读 creator.json 的 name 字段（base_dir 注入隔离）。"""
+        """get_creator_name 读 creator.json 的 name 字段（base_dir 注入隔离）。
+        （批 C.1：本体迁 system_handler，main 侧零残留。）"""
+        import system_handler
         self._write_creator("XUN")
-        self.assertEqual(main.get_creator_name(self.creator_dir), "XUN")
+        self.assertEqual(system_handler.get_creator_name(self.creator_dir),
+                         "XUN")
+        self.assertFalse(hasattr(main, "get_creator_name"))   # 本体零残留
 
     def test_get_creator_name_missing_returns_empty(self):
-        self.assertEqual(main.get_creator_name(self.creator_dir), "")
+        import system_handler
+        self.assertEqual(system_handler.get_creator_name(self.creator_dir), "")
 
     def test_qq_group_at_creator_returns_card(self):
         """任务口径用例：QQ 群 @小橘3号 /creator（raw 带 CQ:at 前缀）→
@@ -1556,7 +1562,8 @@ class TestCommandAtPrefix(_MainCase):
         self.assertIn("指令菜单", self.napcat_payload()["message"])
 
     def test_text_at_creator_returns_card(self):
-        p = patch("main.get_creator_name", return_value="XUN")
+        import system_handler
+        p = patch("system_handler.get_creator_name", return_value="XUN")
         p.start()
         self.addCleanup(p.stop)
         self._onebot_group("@小橘3号 /creator")
@@ -1953,14 +1960,16 @@ class TestSystemHandler(unittest.TestCase):
         self.assertEqual(seen["t"], "/set_location 北京")
 
     def test_creator_match_and_miss(self):
+        # 批 C.1：本体 creator_command 迁入本模块，分派器内聚直调
+        # （cb 注入退役）；非领域不触发。
         import system_handler
         called = []
-        out = system_handler.handle_creator(
-            "/creator", creator_cb=lambda: called.append(1) or "署名文案")
-        self.assertEqual(out, "署名文案")
-        self.assertIsNone(system_handler.handle_creator(
-            "/todo", creator_cb=lambda: called.append(2) or "x"))
-        self.assertEqual(len(called), 1)   # 非领域不触发 cb
+        with patch.object(system_handler, "creator_command",
+                          side_effect=lambda: called.append(1) or "署名文案"):
+            out = system_handler.handle_creator("/creator")
+            self.assertEqual(out, "署名文案")
+            self.assertIsNone(system_handler.handle_creator("/todo"))
+        self.assertEqual(len(called), 1)   # 非领域不触发本体
 
     def test_child_forwards_with_user_key(self):
         import system_handler
