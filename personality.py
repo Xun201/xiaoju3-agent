@@ -446,3 +446,43 @@ def mode_suffix(user_id):
                 + (f"。{verdict}" if verdict else ""))
     except Exception:
         return ""
+
+
+# ==================== 控制台人格卡聚合状态（批 4 UI 卡，2026-10-15） ====================
+
+def persona_state(user_id="owner"):
+    """控制台「人格」卡聚合状态（批 4）：纯读打包，零写零副作用。
+
+    打包 get_mode（模式/把握/来源）+ get_switches（六开关）+
+    _is_expression_ready（表现层就绪闸）+ relationship.event_stats
+    （相处次数）。异常静默兜默认（与全模块纪律一致）。
+    返回 dict：
+      mode/mode_label/confidence/source/judged_at,
+      manual（source=="manual"）,
+      switches: {name: {"label", "value"}},
+      expression_ready: bool, interactions: int
+    """
+    st = get_mode(str(user_id or "owner"))
+    switches = get_switches()
+    try:
+        ready = bool(_is_expression_ready(str(user_id or "owner")))
+    except Exception:
+        ready = False
+    try:
+        n_int = int((relationship.event_stats(str(user_id)) or {}).get(
+            "n_int", 0))
+    except Exception:
+        n_int = 0
+    return {
+        "mode": st.get("mode", DEFAULT_MODE),
+        "mode_label": MODE_LABELS.get(st.get("mode", DEFAULT_MODE), ""),
+        "confidence": st.get("confidence", 0.0),
+        "source": st.get("source", "default"),
+        "judged_at": st.get("judged_at"),
+        "manual": st.get("source") == "manual",
+        "switches": {name: {"label": SWITCH_DEFS.get(name, name),
+                            "value": switches.get(name, "auto")}
+                     for name in SWITCH_DEFS},
+        "expression_ready": ready,
+        "interactions": n_int,
+    }

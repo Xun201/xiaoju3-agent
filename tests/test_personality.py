@@ -459,3 +459,47 @@ def test_spec_datas_registered():
     with open("xiaoju3.spec", encoding="utf-8") as f:
         src = f.read()
     assert "persona_expressions.json" in src
+
+
+# ==================== 批 4 UI 卡：persona_state 聚合（2026-10-15） ====================
+
+def test_persona_state_full_package(_iso):
+    """手动锁+开关+相处次数三源打包：manual 判定/标签/值齐全。"""
+    personality.set_mode_manual("owner", "banter")
+    personality.set_switch("banter", "on")
+    relationship.observe_rel("owner", "在吗")
+    st = personality.persona_state("owner")
+    assert st["mode"] == "banter"
+    assert st["manual"] is True
+    assert st["mode_label"] == "斗嘴型"
+    assert st["switches"]["banter"] == {"label": "斗嘴", "value": "on"}
+    assert set(st["switches"]) == set(personality.SWITCH_DEFS)
+    assert st["interactions"] >= 1
+    assert isinstance(st["expression_ready"], bool)
+
+
+def test_persona_state_default_empty(_iso):
+    """空库缺省档：DEFAULT_MODE/auto 开关/零次数/未就绪/非手动。"""
+    st = personality.persona_state()   # 缺省 owner
+    assert st["mode"] == personality.DEFAULT_MODE
+    assert st["manual"] is False
+    assert st["source"] == "default"
+    assert all(v["value"] == "auto" for v in st["switches"].values())
+    assert st["interactions"] == 0
+    assert st["expression_ready"] is False
+
+
+def test_persona_state_silent_when_ready_probe_raises(_iso, monkeypatch):
+    """就绪探针异常 → 静默兜 False（全模块静默纪律）。"""
+    monkeypatch.setattr(personality, "_is_expression_ready",
+                        lambda uid: 1 / 0)
+    st = personality.persona_state("owner")
+    assert st["expression_ready"] is False
+
+
+def test_persona_state_contract_keys(_iso):
+    """契约键集合锁定（前端消费面；增删键须过拍板）。"""
+    st = personality.persona_state("owner")
+    assert set(st) == {"mode", "mode_label", "confidence", "source",
+                       "judged_at", "manual", "switches",
+                       "expression_ready", "interactions"}
