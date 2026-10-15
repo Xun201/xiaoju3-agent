@@ -122,6 +122,10 @@ class StateManager:
         if "effective_priority" not in cols:
             cursor.execute(
                 "ALTER TABLE todos ADD COLUMN effective_priority TEXT DEFAULT NULL")
+        # category 列迁移（2026-10-15 待办分类）：''=普通待办；
+        # 「维护单」=独立可做不阻塞主线修完就了事的小活（#331 首例）
+        if "category" not in cols:
+            cursor.execute("ALTER TABLE todos ADD COLUMN category TEXT DEFAULT ''")
         # ===== 记忆 V2 schema（#297 批 1，2026-10-13）：memories 幂等补
         # 7 列 + 四表（todos note 列先例同款）。schema 不受开关控制——
         # 加列全带默认值向后兼容（旧代码不读新列照常工作），开关只控行为
@@ -205,6 +209,9 @@ class StateManager:
             if "effective_priority" not in cols:
                 conn.execute(
                     "ALTER TABLE todos ADD COLUMN effective_priority TEXT DEFAULT NULL")
+            # category 列迁移（2026-10-15 待办分类）：同 _init_db 口径
+            if "category" not in cols:
+                conn.execute("ALTER TABLE todos ADD COLUMN category TEXT DEFAULT ''")
             conn.commit()
             target_count = conn.execute(
                 "SELECT COUNT(*) FROM todos").fetchone()[0]
