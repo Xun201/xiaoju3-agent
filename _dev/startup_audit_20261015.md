@@ -65,3 +65,29 @@
 ## 五、复查纪律（新增）
 
 **一劳永逸做法=本台账即基线：新装任何软件后往台账加一行（项名/来源/归属/内存/建议），季度复查一次"禁-待确认-留"三档漂移。**
+
+## 六、待确认 7 项拍板执行（2026-10-16 凌晨收官，用户逐项拍板）
+
+**拍板结果：6 禁 2 留**（11 Steam 中途改判留——Wallpaper Engine 小红车依赖 Steam 后台常驻，禁则壁纸崩）。
+
+| # | 项 | 拍板 | 执行 | 复验 |
+|---|---|---|---|---|
+| 11 | Steam -silent | **留**（改判） | 误删已恢复：`reg add HKCU...\Run /V Steam /D "\"D:\youxi\Steam\steam.exe\" -silent"` | ✓ 原值还原实抓 |
+| 12 | GameViewer（uu远程） | 留 | — | — |
+| 13 | Nutstore（坚果云） | 留 | — | — |
+| 14 | AMDNoiseSuppression | 禁 | `reg delete HKCU...\Run /V AMDNoiseSuppression /F`（原值=C:\Windows\system32\AMD\ANR\AMDNoiseSuppression.exe） | ✓ 键消失实抓 |
+| 15 | Steamcommunity_302 | 禁 | **等管理员命令组**（schtasks /Change /DISABLE 拒绝访问——任务注册在管理员权限下） | 仍"就绪" |
+| 16 | StartCN/StartDVR | 禁 | **等管理员命令组**（同上；已破案=AMD Adrenalin 官方 cncmd.exe/RSServCmd.exe，UI 栈同族） | 仍"就绪" |
+| 17 | GenuineService | 禁 | 已破案=**Autodesk 正版验证**（非 Windows 服务——333 服务枚举零匹配；仅启动夹 lnk 指向 C:\Users\Xun\Autodesk\Genuine Service\GenuineService.exe）；lnk 已备份 `_dev/autostart_backup_20261016/GenuineService.lnk` 后删除 | ✓ 启动夹零残留 |
+
+**待用户管理员命令组（5 条一次性，管理员 PowerShell/cmd 粘贴执行）**：
+
+```
+schtasks /Change /TN "Steamcommunity_302" /DISABLE
+schtasks /Change /TN "StartCN" /DISABLE
+schtasks /Change /TN "StartDVR" /DISABLE
+sc stop NIApplicationWebServer
+sc config NIApplicationWebServer start= disabled
+```
+
+- 恢复命令：任务=schtasks /Change /TN "<名>" /ENABLE；NI= sc start NIApplicationWebServer（config 改回 auto 需另查原启动类型）；Steam 如需自启=reg add 原值（见上表）；GenuineService 恢复=从 _dev/autostart_backup_20261016/ 拷回启动夹
