@@ -130,7 +130,8 @@ CREATE TABLE IF NOT EXISTS emotional_episode (
     peak_p REAL NOT NULL, peak_a REAL NOT NULL, peak_d REAL NOT NULL,
     end_p REAL NOT NULL, end_a REAL NOT NULL, end_d REAL NOT NULL,
     duration REAL NOT NULL,
-    tag TEXT
+    tag TEXT,
+    memory_ids TEXT NOT NULL DEFAULT '[]'
 );
 """
 
@@ -553,9 +554,54 @@ def detect_episodes(series, baseline):
     return out
 
 
+def _ensure_episode_columns(conn):
+    """旧库幂等补列（批 2 建表无 memory_ids；批 2.1 段-记忆关联补），
+    PRAGMA 查一次缺了才 ALTER（flush 低频，开销可忽略）。"""
+    cols = [r[1] for r in conn.execute(
+        "PRAGMA table_info(emotional_episode)")]
+    if "memory_ids" not in cols:
+        conn.execute(
+            "ALTER TABLE emotional_episode"
+            " ADD COLUMN memory_ids TEXT NOT NULL DEFAULT '[]'")
+
+
+def _memories_db_path():
+    """memories 库路径（段-记忆回填的跨库读）：mirror _db_path 口径
+    （xiaoju3.AGENT_STATE_DIR 归位，__file__ fallback 历史教训同防）。"""
+    try:
+        import xiaoju3
+        base = xiaoju3.AGENT_STATE_DIR
+    except Exception:
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "agent_state")
+    return os.path.join(base, "long_term.db")
+
+
+def _memory_ids_in_window(conn_src, start_ts, end_ts):
+    """段时窗内的记忆 id 列表（批 2.1 段-记忆关联）。
+
+    memories.timestamp=UTC（CURRENT_TIMESTAMP 缺省），episode ts=本地
+    naive——用 datetime(?, 'utc') 把窗边界本地→UTC 后字符串比较（两边
+    同格式 YYYY-MM-DD HH:MM:SS）。跨库只读（连接由调用方开闭）；异常
+    返回空列表（静默纪律）。"""
+    try:
+        rows = conn_src.execute(
+            "SELECT id FROM memories WHERE timestamp"
+            " BETWEEN datetime(?, 'utc') AND datetime(?, 'utc')"
+            " ORDER BY id", (start_ts, end_ts)).fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
+
+
 def flush_episodes(now=None):
     """段判定+落表（幂等：start_ts 已存在则跳过该段）。返回落表段数，
-    异常静默返回 -1（mood 同款纪律——绝不影响调用方）。"""
+    异常静默返回 -1（mood 同款纪律——绝不影响调用方）。
+
+    批 2.1（2026-10-15）：落表时按 [start_ts, end_ts] 时窗回填
+    memory_ids（跨库只读 memories）——闭合时窗回填覆盖"段开放期写入"
+    的全部记忆（开放段本就不在表中），phase3 3.1 的写入链打标由此
+    简化掉，终态等价少一条写链侵入。"""
     try:
         s = load_mood()
         bp, ba, bd = s["baseline"]
@@ -563,25 +609,39 @@ def flush_episodes(now=None):
         episodes = detect_episodes(_episode_series(), baseline)
         conn = _connect()
         try:
+            _ensure_episode_columns(conn)
             have = {r[0] for r in conn.execute(
                 "SELECT start_ts FROM emotional_episode")}
+            mem_conn = None
             n = 0
             for ep in episodes:
                 if ep["start_ts"] in have:
                     continue
+                if mem_conn is None:
+                    try:
+                        mem_conn = sqlite3.connect(_memories_db_path())
+                    except Exception:
+                        mem_conn = None
+                mem_ids = ([] if mem_conn is None else
+                           _memory_ids_in_window(mem_conn, ep["start_ts"],
+                                                 ep["end_ts"]))
                 blended = blend_frames(ep["end"], ep["peak"])
                 conn.execute(
                     "INSERT INTO emotional_episode (start_ts, end_ts,"
                     " peak_p, peak_a, peak_d, end_p, end_a, end_d,"
-                    " duration, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " duration, tag, memory_ids)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (ep["start_ts"], ep["end_ts"],
                      ep["peak"][0], ep["peak"][1], ep["peak"][2],
                      ep["end"][0], ep["end"][1], ep["end"][2],
-                     ep["duration"], ep["tag"]))
+                     ep["duration"], ep["tag"],
+                     json.dumps(mem_ids)))
                 n += 1
             conn.commit()
             return n
         finally:
+            if mem_conn is not None:
+                mem_conn.close()
             conn.close()
     except Exception:
         return -1
