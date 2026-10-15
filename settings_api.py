@@ -322,7 +322,8 @@ def register_settings_routes(app):
         _persona.set_switch(name, value)
         _audit({"action": "persona_switch",
                 "detail": f"name={name} value={value}"})
-        return jsonify({"code": 200, "state": _persona.persona_state("owner")})
+        return jsonify({"code": 200, "level": level,
+                        "state": _persona.persona_state("owner")})
 
     @app.route("/api/persona/manual_mode", methods=["POST"])
     def api_persona_manual_mode():
@@ -334,12 +335,14 @@ def register_settings_routes(app):
         if data.get("clear") is True:
             _persona.clear_mode_manual("owner")
             _audit({"action": "persona_manual", "detail": "clear"})
-            return jsonify({"code": 200, "state": _persona.persona_state("owner")})
+            return jsonify({"code": 200, "level": level,
+                            "state": _persona.persona_state("owner")})
         mode = data.get("mode", "")
         if mode not in _persona.MODES:
             return jsonify({"code": 400, "error": "invalid_mode"}), 400
         _persona.set_mode_manual("owner", mode)
         _audit({"action": "persona_manual", "detail": f"mode={mode}"})
-        return jsonify({"code": 200, "state": _persona.persona_state("owner")})
+        return jsonify({"code": 200, "level": level,
+                        "state": _persona.persona_state("owner")})
 
     return app
