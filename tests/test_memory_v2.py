@@ -9,6 +9,7 @@ mood_factor / 开关分流 / 真实场景召回验收。
 """
 import contextlib
 import io
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -596,3 +597,48 @@ class HeartbeatMountTests(MemoryV2TestBase):
         from plugins.memory_sleep import run_daily_sleep
         _os.environ.pop("XIAOJU3_MEMORY_V2", None)
         self.assertIsNone(run_daily_sleep(db_path=self.sm.memory_db))
+
+
+class TodoCategoryColumnTests(unittest.TestCase):
+    """category 列迁移（2026-10-15 待办分类「维护单」）：幂等补列先例
+    （note/effective_priority 同款），''=普通待办。"""
+
+    def test_legacy_db_gets_category_column(self):
+        """旧库（无 category 列）经 init 幂等补列，既有行默认 ''。"""
+        with tempfile.TemporaryDirectory() as base:
+            db = os.path.join(base, "long_term.db")
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "CREATE TABLE todos (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " content TEXT NOT NULL, source_url TEXT DEFAULT '',"
+                " status TEXT NOT NULL DEFAULT 'pending',"
+                " priority TEXT NOT NULL DEFAULT 'P1',"
+                " created_at DATETIME DEFAULT CURRENT_TIMESTAMP,"
+                " done_at DATETIME, note TEXT DEFAULT '',"
+                " effective_priority TEXT DEFAULT NULL)")
+            conn.execute(
+                "INSERT INTO todos (content) VALUES ('旧待办')")
+            conn.commit()
+            conn.close()
+            StateManager(base_dir=base)   # init 幂等补列
+            conn = sqlite3.connect(db)
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(todos)")]
+            row = conn.execute(
+                "SELECT category FROM todos WHERE content='旧待办'"
+            ).fetchone()
+            conn.close()
+        self.assertIn("category", cols)
+        self.assertEqual(row[0], "")
+
+    def test_fresh_db_has_category_column(self):
+        """新库建表即带 category 列。"""
+        with tempfile.TemporaryDirectory() as base:
+            sm = StateManager(base_dir=base)
+            conn = sqlite3.connect(sm.memory_db)
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(todos)")]
+            conn.close()
+        self.assertIn("category", cols)
+
+
+if __name__ == "__main__":
+    unittest.main()
