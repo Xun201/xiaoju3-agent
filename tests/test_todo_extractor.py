@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from agent_state.state_manager import StateManager
 from plugins import todo_extractor
+import todo_handler
 
 
 def _fake_async_fetch(return_text):
@@ -251,7 +252,7 @@ class ExtractJobTests(unittest.TestCase):
 class EmptyPageGuardTests(unittest.TestCase):
     """#262（2026-10-07）：<EMPTY_PAGE_MIN_CHARS 的失效/空内容提示页 →
     跳过云端提炼直接落 empty_page 态（零 token 防 corpse 幻觉），通知层
-    （main._notify_todo_done）与控制台日志（tools._run_extract_job）据此
+    （todo_handler._notify_todo_done）与控制台日志（tools._run_extract_job）据此
     换明确文案，不再静默"0 条完成"。"""
 
     URL = "https://chat.deepseek.com/share/abc"
@@ -303,7 +304,7 @@ class EmptyPageGuardTests(unittest.TestCase):
         import io
         import contextlib
         import main
-        notify = main._notify_todo_done(None)   # 终端路径：打印不发送
+        notify = todo_handler._notify_todo_done(None)   # 终端路径：打印不发送
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             notify({"ok": True, "empty_page": True, "items": [],

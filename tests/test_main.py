@@ -42,6 +42,7 @@ from unittest.mock import MagicMock, patch
 import auth_lv4
 import brain
 import main
+import todo_handler
 import system_handler
 import xiaoju3_dashboard as dashboard
 from agent_state.state_manager import StateManager
@@ -78,6 +79,10 @@ class _MainCase(unittest.TestCase):
             ("main.messages_web", [main.SYSTEM_PROMPT]),
             ("main.messages_qq", [main.SYSTEM_PROMPT]),
             ("main.state_manager", state_manager),
+            # 批 C.3：todo 本体迁 todo_handler（from-import 独立绑定）——
+            # 同一临时 StateManager/napcat 替身须注入两处，防测试读写生产库
+            ("todo_handler.state_manager", state_manager),
+            ("todo_handler.requests", self.napcat),
             ("tools.RECENT_ACTIONS_FILE", self.actions_file),
         ]:
             p = patch(target, value)
@@ -741,7 +746,7 @@ class TestHandleMessageRouting(_MainCase):
         raw = ("[CQ:at,qq=999] 记下来这些待办 "
                "https://chat.deepseek.com/share/jmd1v452ojord0z36p")
         ht = self._todo_cmd_mock()
-        with patch("main.handle_todo_command", ht), \
+        with patch("todo_handler.handle_todo_command", ht), \
                 contextlib.redirect_stdout(io.StringIO()):
             reply = main.handle_message(
                 'qq', 123, 456, raw, self_qq=999)
@@ -758,7 +763,7 @@ class TestHandleMessageRouting(_MainCase):
         """私聊自然语言 + 链接同样预分流（清洗毁 URL 无通道差异）。"""
         self.pm.current_level = "Lv.1"
         ht = self._todo_cmd_mock()
-        with patch("main.handle_todo_command", ht), \
+        with patch("todo_handler.handle_todo_command", ht), \
                 contextlib.redirect_stdout(io.StringIO()):
             main.handle_message(
                 'qq', 123, None,
@@ -783,7 +788,7 @@ class TestHandleMessageRouting(_MainCase):
         形态调用，消息照走原对话链路（L879 待办族点的既有调用不算）。"""
         self.pm.current_level = "Lv.1"
         ht = MagicMock(return_value=None)   # 既有调用点放行，不替身命中
-        with patch("main.handle_todo_command", ht), \
+        with patch("todo_handler.handle_todo_command", ht), \
                 contextlib.redirect_stdout(io.StringIO()):
             reply = main.handle_message('web', 'u', None,
                                         "读一下 https://example.com/article")
@@ -1632,7 +1637,7 @@ class TestTodoCommands(_MainCase):
     def test_todo_from_link_recent_url_rejected(self):
         self.pm.current_level = "Lv.2"
         with patch("main.threading.Thread") as thread_mock, \
-                patch("main.check_recent_url", return_value=True):
+                patch("todo_handler.check_recent_url", return_value=True):
             reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
         self.assertIn("24 小时内已提取过", reply)
         thread_mock.assert_not_called()
@@ -1642,8 +1647,8 @@ class TestTodoCommands(_MainCase):
         extract_mock = MagicMock(return_value={"ok": True, "inserted": 1,
                                                "skipped": 0, "items": ["A"]})
         with patch("main.threading.Thread", self._immediate_thread()), \
-                patch("main.extract_todos_from_url_sync", extract_mock), \
-                patch("main.mark_url") as mark_mock:
+                patch("todo_handler.extract_todos_from_url_sync", extract_mock), \
+                patch("todo_handler.mark_url") as mark_mock:
             reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
         self.assertTrue(reply.startswith("🔄"))
         mark_mock.assert_called_once_with(self.URL)
@@ -1656,9 +1661,9 @@ class TestTodoCommands(_MainCase):
         self.pm.current_level = "Lv.2"
         extract_mock = MagicMock(side_effect=RuntimeError("boom"))
         with patch("main.threading.Thread", self._immediate_thread()), \
-                patch("main.extract_todos_from_url_sync", extract_mock), \
-                patch("main.mark_url"), \
-                patch("main.check_recent_url", return_value=False):
+                patch("todo_handler.extract_todos_from_url_sync", extract_mock), \
+                patch("todo_handler.mark_url"), \
+                patch("todo_handler.check_recent_url", return_value=False):
             reply = main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
         self.assertTrue(reply.startswith("🔄"))   # 受理不受后台失败影响
 
@@ -1676,12 +1681,12 @@ class TestTodoCommands(_MainCase):
         def fake_notify(result):
             notified.append(result)
 
-        with patch("main.extract_todos_from_url_sync", stuck), \
-                patch("main.mark_url"), \
-                patch("main.check_recent_url", return_value=False), \
-                patch("main._notify_todo_done", return_value=fake_notify), \
-                patch("main.TODO_EXTRACT_WATCHDOG_S", 0.15), \
-                patch("main._extract_work_thread", _th.Thread), \
+        with patch("todo_handler.extract_todos_from_url_sync", stuck), \
+                patch("todo_handler.mark_url"), \
+                patch("todo_handler.check_recent_url", return_value=False), \
+                patch("todo_handler._notify_todo_done", return_value=fake_notify), \
+                patch("todo_handler.TODO_EXTRACT_WATCHDOG_S", 0.15), \
+                patch("todo_handler._extract_work_thread", _th.Thread), \
                 patch("main.threading.Thread", self._immediate_thread()), \
                 contextlib.redirect_stdout(io.StringIO()):
             self.pm.current_level = "Lv.2"
@@ -1696,10 +1701,10 @@ class TestTodoCommands(_MainCase):
         notified = []
         extract_mock = MagicMock(return_value={"ok": False, "error": "提炼失败"})
         with patch("main.threading.Thread", self._immediate_thread()), \
-                patch("main.extract_todos_from_url_sync", extract_mock), \
-                patch("main.mark_url"), \
-                patch("main.check_recent_url", return_value=False), \
-                patch("main._notify_todo_done") as nd:
+                patch("todo_handler.extract_todos_from_url_sync", extract_mock), \
+                patch("todo_handler.mark_url"), \
+                patch("todo_handler.check_recent_url", return_value=False), \
+                patch("todo_handler._notify_todo_done") as nd:
             nd.return_value = lambda r: notified.append(r)
             self.pm.current_level = "Lv.2"
             main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
@@ -1713,10 +1718,10 @@ class TestTodoCommands(_MainCase):
         extract_mock = MagicMock(
             return_value={"ok": True, "inserted": 2, "skipped": 0, "notified": True})
         with patch("main.threading.Thread", self._immediate_thread()), \
-                patch("main.extract_todos_from_url_sync", extract_mock), \
-                patch("main.mark_url"), \
-                patch("main.check_recent_url", return_value=False), \
-                patch("main._notify_todo_done") as nd:
+                patch("todo_handler.extract_todos_from_url_sync", extract_mock), \
+                patch("todo_handler.mark_url"), \
+                patch("todo_handler.check_recent_url", return_value=False), \
+                patch("todo_handler._notify_todo_done") as nd:
             nd.return_value = lambda r: notified.append(r)
             self.pm.current_level = "Lv.2"
             main.handle_message('web', 'u', None, f"/todo_from_link {self.URL}")
@@ -1807,7 +1812,7 @@ class TestTodoCommands(_MainCase):
     def test_todos_clear_resets_recent_urls(self):
         # 清空后 24h 查重内存层同步失效（同链接可重新提取的预期语义）
         self.pm.current_level = "Lv.3"
-        with patch("main.clear_recent_urls") as clear_mock:
+        with patch("todo_handler.clear_recent_urls") as clear_mock:
             main.handle_message('web', 'u', None, "/todos clear confirm")
         clear_mock.assert_called_once()
 
@@ -1832,7 +1837,7 @@ class TestTodoCommands(_MainCase):
         self.assertIn("没有找到未完成的待办 #999", reply)
 
     def test_notify_todo_done_group_uses_group_msg(self):
-        notify = main._notify_todo_done({"group_id": 456})
+        notify = todo_handler._notify_todo_done({"group_id": 456})
         notify({"ok": True, "inserted": 6, "skipped": 0, "items": [
             {"content": c, "priority": "P1"} for c in ("A", "B", "C", "D", "E", "F")]})
         self.napcat.post.assert_called_once()
@@ -1843,27 +1848,27 @@ class TestTodoCommands(_MainCase):
         self.assertNotIn("6. [P1] F", msg)  # 第 6 条不入预览
 
     def test_notify_todo_done_private_and_zero_items(self):
-        notify = main._notify_todo_done({"user_id": "u1"})
+        notify = todo_handler._notify_todo_done({"user_id": "u1"})
         notify({"ok": True, "inserted": 0, "skipped": 0, "items": []})
         self.assertIn("send_private_msg", self.napcat.post.call_args[0][0])
         self.assertIn("没有发现待办事项", self.napcat.post.call_args[1]["json"]["message"])
 
     def test_notify_preview_uses_dict_items(self):
         # 尾巴 C：编排产出 dict 条目（content+priority），预览按 [P] 前缀渲染
-        notify = main._notify_todo_done({"user_id": "u1"})
+        notify = todo_handler._notify_todo_done({"user_id": "u1"})
         notify({"ok": True, "inserted": 1, "skipped": 0,
                 "items": [{"content": "A", "priority": "P0"}]})
         msg = self.napcat.post.call_args[1]["json"]["message"]
         self.assertIn("1. [P0] A", msg)
 
     def test_notify_todo_done_failure_message(self):
-        notify = main._notify_todo_done({})   # 无 QQ 上下文 → 仅打印不报错
+        notify = todo_handler._notify_todo_done({})   # 无 QQ 上下文 → 仅打印不报错
         notify({"ok": False, "error": "超时"})
         self.napcat.post.assert_not_called()
 
     def test_notify_todo_done_send_failure_swallowed(self):
         self.napcat.post.side_effect = RuntimeError("network down")
-        notify = main._notify_todo_done({"user_id": "u1"})
+        notify = todo_handler._notify_todo_done({"user_id": "u1"})
         notify({"ok": True, "inserted": 1, "skipped": 0, "items": ["A"]})   # 不抛错
 
 
