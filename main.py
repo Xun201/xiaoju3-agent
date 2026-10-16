@@ -137,6 +137,20 @@ def _on_peer_down(peer):
     print(f"🚨 [守望] 对端 {peer} 离线")
 
 
+def _on_peer_recover(peer):
+    """对端恢复在线（#319 批 2-c）：outbox 立即重排（§3.4 探活恢复触发）。
+
+    未配置 XIAOJU3_SOUL_CORE 时 outbox 空/ tick 旁路=纯现状零行为。
+    """
+    try:
+        import soul_sync
+        done = soul_sync.process_outbox()
+        if done:
+            print(f"🌌 [灵魂回写] 对端恢复，补投 {done} 件")
+    except Exception as e:
+        print(f"⚠️ [灵魂回写] 恢复重排失败（不影响本地）: {e}")
+
+
 def _is_in_workspace(filepath):
     """realpath 前缀校验：目标必须落在工作区目录之内（与 tools.py 同口径）。"""
     base = os.path.realpath(WORKSPACE)
@@ -1278,7 +1292,8 @@ def start_background_services():
     peers = _peer_urls()
     if peers:
         threading.Thread(
-            target=PeerWatch(peers=peers, on_peer_down=_on_peer_down).watch_loop,
+            target=PeerWatch(peers=peers, on_peer_down=_on_peer_down,
+                             on_peer_recover=_on_peer_recover).watch_loop,
             daemon=True, name="xiaoju3-peer-watch").start()
         print(f"👀 [守望] 多设备互相守望已启动（对端：{'、'.join(peers)}）")
 

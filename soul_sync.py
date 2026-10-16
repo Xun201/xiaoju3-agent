@@ -21,8 +21,8 @@ import sqlite3
 import threading
 import time
 
-import paths
 from migration import export_bundle
+from xiaoju3 import AGENT_STATE_DIR, PROJECT_ROOT
 
 # ==================== 常量 ====================
 
@@ -38,17 +38,18 @@ _outbox_lock = threading.Lock()             # S2：心跳线程与退出链并�
 
 # 生活化积压提示（§十.11：outbox 满=生活事件，非技术故障——禁 ERROR 词族）
 BACKLOG_ALERT_TEXT = (
-    "⏳ 我这边攒了几份没送到的灵魂备份，有点想另一头的自己了——"
-    "网络恢复后我会自己再试试。")
+    "⏳ 我这攒了几份备份还没送出去，等网络稳了我自己再试。")
+# （2026-10-16 用户拍板软化版：小橘现处客气型，甜版抢跑；真到"爱粘着你"
+#  模式可升级文案——与 #271 关系模式联动的文案分级留批 4+）
 
 
 def _outbox_path(base_dir=None):
-    base = base_dir or paths.AGENT_STATE_DIR
+    base = base_dir or AGENT_STATE_DIR
     return os.path.join(base, *SOUL_OUTBOX_FILE.split("/"))
 
 
 def _soul_db_path(base_dir=None):
-    base = base_dir or paths.AGENT_STATE_DIR
+    base = base_dir or AGENT_STATE_DIR
     return os.path.join(base, *SOUL_DB_FILE.split("/"))
 
 
@@ -240,6 +241,54 @@ def writeback_once(entry, token=None, timeout=15, sync=False):
                 f"HTTP {resp.status_code}")
     except Exception as e:
         return ("deferred", str(e)[:120])
+
+
+def heartbeat_soul_tick(now=None):
+    """心跳兜底（D6 拍板时机）：到期 outbox 投递+每日一次全量入队。
+
+    - XIAOJU3_SOUL_CORE 未配置（缺省空）→ 返回 None，纯现状零行为；
+    - 每日全量：.soul_daily_watermark 按天去重（NOT_SOUL 设备私有），
+      固定名 backups/soul_daily.zip 覆盖写（不堆积）；
+    - 返回状态串（有动作/告警时）或 None（心跳打印节流由调用方定）。
+    """
+    now = now or time.time()
+    core = (os.environ.get("XIAOJU3_SOUL_CORE", "") or "").strip()
+    if not core:
+        return None
+    token = (os.environ.get("XIAOJU3_SOUL_TOKEN", "") or "").strip()
+    box = SoulOutbox()
+    notes = []
+    today = time.strftime("%Y-%m-%d", time.localtime(now))
+    wm_path = os.path.join(AGENT_STATE_DIR, ".soul_daily_watermark")
+    try:
+        with open(wm_path, encoding="utf-8") as f:
+            last = f.read().strip()
+    except OSError:
+        last = ""
+    if last != today:
+        try:
+            daily_path = os.path.join(PROJECT_ROOT, "backups",
+                                      "soul_daily.zip")
+            r = make_writeback_bundle(path=daily_path)
+            box.enqueue(r["path"], core, device_id=manifest_device_id())
+            with open(wm_path, "w", encoding="utf-8") as f:
+                f.write(today)
+            notes.append(f"每日全量入队（{r['size']}B）")
+        except Exception as e:
+            notes.append(f"每日全量打包失败: {e}")
+    done = process_outbox(box, token=token)
+    if done:
+        notes.append(f"投递 {done} 件")
+    alert = box.backlog_alert(now=now)
+    if alert:
+        notes.append(alert)
+    return "；".join(notes) if notes else None
+
+
+def manifest_device_id():
+    """设备标识（soul_manifest.device_id 转发——queue entry 用）。"""
+    import soul_manifest
+    return soul_manifest.device_id()
 
 
 def process_outbox(outbox=None, token=None, sync=False, total_timeout=10.0):

@@ -746,8 +746,10 @@ class PeerWatchWiringTests(unittest.TestCase):
                 mock.patch.object(self.main, "threading") as mthreading, \
                 contextlib.redirect_stdout(io.StringIO()) as buf:
             self.main.start_background_services()
-        mwatch.assert_called_once_with(peers=["http://192.168.1.4:5003"],
-                                       on_peer_down=self.main._on_peer_down)
+        mwatch.assert_called_once_with(
+            peers=["http://192.168.1.4:5003"],
+            on_peer_down=self.main._on_peer_down,
+            on_peer_recover=self.main._on_peer_recover)   # #319 批 2-c 恢复重排
         kwargs = mthreading.Thread.call_args.kwargs
         self.assertTrue(kwargs.get("daemon"))
         self.assertEqual(kwargs.get("name"), "xiaoju3-peer-watch")
@@ -827,14 +829,15 @@ class SoulV2BundleTests(unittest.TestCase):
             with zipfile.ZipFile(res["path"]) as zf:
                 names = set(zf.namelist())
             for expected in ("identity.json", "relationship.db", "long_term.db",
-                             "ui_pref.json", "user_location.json",    # 核
+                             "user_location.json",                    # 核
                              "todos.db", "history_qq.json",
                              "conversations/web_history.json",        # 扩展
                              "MANIFEST.txt", "soul_meta.json"):
                 self.assertIn(expected, names, f"缺少 {expected}")
             for banned in ("trace.db", "recent_actions.json",
                            "napcat_fire_x.log", "identity.json.bak-20261009",
-                           ".env"):
+                           ".env",
+                           "ui_pref.json"):   # 2026-10-16 拍板：设备偏好不进核
                 self.assertNotIn(banned, names, banned)
 
     def test_export_v2_soul_meta_fields(self):
@@ -864,10 +867,11 @@ class SoulV2BundleTests(unittest.TestCase):
                                           base_dir=state, v2=True,
                                           include_extensions=False)
             for expected in ("identity.json", "relationship.db", "long_term.db",
-                             "ui_pref.json", "user_location.json"):
+                             "user_location.json"):
                 self.assertIn(expected, res["files"], expected)
             for banned in ("todos.db", "mood.db", "history_qq.json",
-                           "conversations/web_history.json"):
+                           "conversations/web_history.json",
+                           "ui_pref.json"):   # 设备偏好不进核（含 core-only 包）
                 self.assertNotIn(banned, res["files"], banned)
             self.assertFalse(res["meta"]["include_extensions"])
 
@@ -978,11 +982,11 @@ class SoulV2BundleTests(unittest.TestCase):
                                           base_dir=state, v2=True)
             evil = self._rebuild_zip(
                 res["path"], os.path.join(tmp, "evil.zip"),
-                lambda c: {n: v for n, v in c.items() if n != "ui_pref.json"})
+                lambda c: {n: v for n, v in c.items() if n != "identity.json"})
             imp = migration.import_bundle(evil, base_dir=os.path.join(tmp, "dst"))
             self.assertFalse(imp["ok"])
             self.assertIn("清单有但包内缺失", imp["report"])
-            self.assertIn("ui_pref.json", imp["report"])
+            self.assertIn("identity.json", imp["report"])
 
     def test_import_v2_corrupt_meta_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1116,8 +1120,10 @@ class SoulMigrationAcceptanceTests(unittest.TestCase):
             # Windows：get_context 不关连接（relationship 既有模式），句柄
             # 需回收后才释放文件锁，否则 TemporaryDirectory 清理报 WinError 32
             gc.collect()
-            # ⑤ ui_pref / 位置：字节等价 + 位置事实可读
-            for rel in ("ui_pref.json", "user_location.json"):
+            # ⑤ 位置：字节等价可读（ui_pref 已移出核——2026-10-16 拍板，
+            #    设备偏好跟设备走，迁移后新机 ui_pref 缺省=预期行为）
+            self.assertFalse(os.path.exists(os.path.join(dst, "ui_pref.json")))
+            for rel in ("user_location.json",):
                 with open(os.path.join(src, *rel.split("/")), "rb") as f1, \
                         open(os.path.join(dst, *rel.split("/")), "rb") as f2:
                     self.assertEqual(f1.read(), f2.read(), rel)
