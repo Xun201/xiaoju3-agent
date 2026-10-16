@@ -186,8 +186,12 @@ def _perm_ok(tier_name, level, totp_code):
 
 
 def register_settings_routes(app):
-    """挂载四端点到 Flask app（xiaoju3_dashboard 创建 app 后调用）。"""
-    from xiaoju3 import save_env_file, _load_env_file
+    """挂载七端点到 Flask app（xiaoju3_dashboard 创建 app 后调用）。
+
+    晚绑定纪律（#331 专扫，2026-10-17）：跨模块依赖一律 `import 模块 as 别名`
+    （属性运行时查，测试 patch 模块属性生效）——禁止 register 内
+    `from xiaoju3 import fn` 注册期局部绑定（坑库 #32 同款）。"""
+    import xiaoju3 as _xj3
 
     @app.route("/api/settings", methods=["GET"])
     def api_settings_get():  # noqa: F811
@@ -244,8 +248,7 @@ def register_settings_routes(app):
                 return jsonify({"code": 403,
                                 "error": "childlock_off_requires_lv4_totp"}), 403
 
-        written, skipped, backup = save_env_file(updates,
-                                                 path=_env_path())
+        written, skipped, backup = _xj3.save_env_file(updates, path=_env_path())
         applied = []
         for k, v in updates.items():
             it = _tier_of(k)
@@ -290,8 +293,7 @@ def register_settings_routes(app):
             return jsonify({"code": 403, "error": "key_not_allowed"}), 403
         if not str(value).strip():
             return jsonify({"code": 400, "error": "value_required"}), 400
-        written, skipped, backup = save_env_file({key: value},
-                                                 path=_env_path())
+        written, skipped, backup = _xj3.save_env_file({key: value}, path=_env_path())
         _audit({"action": "key_overwrite", "detail": f"key={key}"})
         return jsonify({"code": 200, "written": bool(written),
                         "backup_path": backup or ""})
