@@ -36,6 +36,16 @@ STRIP_RES = [
     re.compile(r'\[思考\].*?\[/思考\]', re.DOTALL),           # 方括号中文
     re.compile(r'\[plan\].*?\[/plan\]', re.DOTALL | re.I),    # 计划方括号
     re.compile(r'\{[^{}]*"action"\s*:[^{}]*\}', re.DOTALL),   # 幻觉 action JSON
+    # G1（#322 对齐，2026-10-17）：未闭合标签——行首开标签到文末整段剥
+    # （模型只吐 [think] 无 [/think] 的半截形态；行首锚防正文引用字样误伤）
+    re.compile(r'^\s*\[think\].*$', re.DOTALL | re.M | re.I),
+    re.compile(r'^\s*\[思考\].*$', re.DOTALL | re.M),
+    re.compile(r'^\s*\[计划\].*$', re.DOTALL | re.M),
+    re.compile(r'^\s*\[plan\].*$', re.DOTALL | re.M | re.I),
+    # G2（同批）：标签内空白变体 [ think ] / [思考 ] 成对剥
+    re.compile(r'\[\s*think\s*\].*?\[\s*/\s*think\s*\]', re.DOTALL | re.I),
+    re.compile(r'\[\s*思考\s*\].*?\[\s*/\s*思考\s*\]', re.DOTALL),
+    re.compile(r'\[\s*plan\s*\].*?\[\s*/\s*plan\s*\]', re.DOTALL | re.I),
 ]
 
 
