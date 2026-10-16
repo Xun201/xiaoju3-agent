@@ -40,6 +40,7 @@ SOUL_CORE = (
     "ui_pref.json",        # 控制台偏好（exit/dev_unlocked/dev_mode_on）
     "user_location.json",  # 主人位置事实
     "persona_pref.json",   # 人格开关（#271 批 3，按需生成）
+    "soul.db",             # 灵魂审计（#319 批 2：writeback_log+conflicts，跟人走）
 )
 
 # 扩展（可选迁，include_extensions 开关控制）：体验连续性，体积/隐私可权衡
@@ -67,6 +68,8 @@ NOT_SOUL = (
     "proactive.db",          # #271③ 主动性观测（派生可重建）
     "recent_actions.json",   # 近期动作缓存（派生可重建）
     ".todo_sync_watermark",  # 已退役同步线残迹
+    "soul_outbox.json",      # 回写投递队列（#319 批 2：设备私有投递态）
+    ".soul_daily_watermark", # 每日全量回写按天去重戳（设备私有）
 )
 NOT_SOUL_PATTERNS = (
     "napcat_fire_*.log",  # NapCat 发送审计日志（设备私有）
