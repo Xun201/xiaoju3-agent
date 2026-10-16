@@ -60,7 +60,7 @@ class SoulTargetsTests(unittest.TestCase):
         os.makedirs(base, exist_ok=True)
         files = [
             "identity.json", "relationship.db", "long_term.db",      # 核
-            "ui_pref.json", "user_location.json",
+            "user_location.json",
             "todos.db", "mood.db", "history_qq.json",                # 扩展
             "conversations/web_history.json",                        # 扩展目录
             "trace.db", "recent_actions.json", "napcat_fire_x.log",  # 不迁
@@ -78,7 +78,7 @@ class SoulTargetsTests(unittest.TestCase):
             self._make(tmp)
             targets = soul_manifest.soul_targets(tmp)
             for expected in ("identity.json", "relationship.db", "long_term.db",
-                             "ui_pref.json", "user_location.json",
+                             "user_location.json",
                              "todos.db", "mood.db", "history_qq.json",
                              "conversations/web_history.json"):
                 self.assertIn(expected, targets, expected)

@@ -579,6 +579,18 @@ def heartbeat_loop(interval=None, sense_fn=None, ask_fn=None, execute_fn=None,
             pass   # mood.py 缺席时静默旁路
         except Exception as e:
             print(f"⚠️ [情绪快照] 执行异常（跳过）: {e}")
+        # 🌌 灵魂回写兜底（#319 批 2-c，2026-10-16）：到期 outbox 投递+每日
+        # 一次全量入队（watermark 按天去重）。未配置 XIAOJU3_SOUL_CORE=
+        # tick 返回 None 纯现状零行为；soul_sync.py 缺席静默旁路（插件可删纪律）。
+        try:
+            import soul_sync as _soul_mod
+            _soul_note = _soul_mod.heartbeat_soul_tick()
+            if _soul_note:
+                print(f"🌌 [灵魂回写] {_soul_note}")
+        except ImportError:
+            pass   # soul_sync.py 缺席时静默旁路
+        except Exception as e:
+            print(f"⚠️ [灵魂回写] 执行异常（跳过）: {e}")
         heartbeat_once(sense_fn=sense_fn, ask_fn=ask_fn, execute_fn=execute_fn,
                        sense_states_fn=sense_states_fn)
         rounds += 1

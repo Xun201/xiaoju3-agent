@@ -8,8 +8,9 @@
 
 三档清单：
 - SOUL_CORE（核，必迁）：long_term.db（记忆库）/ relationship.db（关系
-  库，含称呼 KV+rel_mode）/ identity.json（身份等级）/ ui_pref.json /
-  user_location.json / persona_pref.json（人格开关，按需生成）；
+  库，含称呼 KV+rel_mode）/ identity.json（身份等级）/ user_location.json /
+  persona_pref.json（人格开关，按需生成）/ soul.db（#319 批 2 审计）；
+  ui_pref.json 已移出（2026-10-16 拍板：设备偏好语义跟设备走，归 NOT_SOUL）；
 - SOUL_EXTENSION（扩展，可选迁，开关控制）：mood.db / todos.db /
   context_summary.json / account_book.json / emoji_links.json /
   stickers_meta.json + history_*.json + conversations/；
@@ -37,7 +38,6 @@ SOUL_CORE = (
     "long_term.db",        # 长期记忆库（V2 11 列+四表）
     "relationship.db",     # 关系库（users/relationship/rel_event_log/rel_mode+称呼 KV）
     "identity.json",       # 身份等级（current_level/owner/display_name）
-    "ui_pref.json",        # 控制台偏好（exit/dev_unlocked/dev_mode_on）
     "user_location.json",  # 主人位置事实
     "persona_pref.json",   # 人格开关（#271 批 3，按需生成）
     "soul.db",             # 灵魂审计（#319 批 2：writeback_log+conflicts，跟人走）
@@ -70,6 +70,8 @@ NOT_SOUL = (
     ".todo_sync_watermark",  # 已退役同步线残迹
     "soul_outbox.json",      # 回写投递队列（#319 批 2：设备私有投递态）
     ".soul_daily_watermark", # 每日全量回写按天去重戳（设备私有）
+    "ui_pref.json",          # 控制台偏好（2026-10-16 拍板：设备偏好语义，
+                             #  跟设备不跟人——退出行为/dev_unlocked/dev_mode_on）
 )
 NOT_SOUL_PATTERNS = (
     "napcat_fire_*.log",  # NapCat 发送审计日志（设备私有）

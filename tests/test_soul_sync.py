@@ -221,16 +221,16 @@ class VerifyAndApplyTests(unittest.TestCase):
         migration.apply_soul_bundle_to_core(
             self.bundle, base_dir=self.core, device_id="dev-a",
             db_path=os.path.join(self.core, "soul.db"))
-        with open(os.path.join(self.core, "ui_pref.json"), "w") as f:
+        with open(os.path.join(self.core, "identity.json"), "w") as f:
             f.write('{"v":2,"changed":"core-side"}')   # 核心侧变更
         r = migration.apply_soul_bundle_to_core(
             self.bundle, base_dir=self.core, device_id="dev-a",
             db_path=os.path.join(self.core, "soul.db"))
-        self.assertTrue(any(c["path"] == "ui_pref.json" for c in r["conflicts"]))
+        self.assertTrue(any(c["path"] == "identity.json" for c in r["conflicts"]))
         con = sqlite3.connect(os.path.join(self.core, "soul.db"))
         row = con.execute(
             "SELECT path, status, replica_trace FROM soul_conflicts"
-            " WHERE path='ui_pref.json'").fetchone()
+            " WHERE path='identity.json'").fetchone()
         con.close()
         self.assertIsNotNone(row)
         self.assertEqual(row[1], "pending")
@@ -306,3 +306,73 @@ class WritebackEndpointTests(unittest.TestCase):
                            " soul_writeback_log").fetchall()
         con.close()
         self.assertTrue(any(x == ("dev-http", "recv", "accepted") for x in rows))
+
+
+class HeartbeatTickTests(unittest.TestCase):
+    """2-c：heartbeat_soul_tick（心跳兜底）+PeerWatch 恢复重排+挂点形态。
+    全 env 沙盒（mock.patch.dict），零碰生产。"""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="xj3_b2c_")
+        self.box = soul_sync.SoulOutbox(
+            path=os.path.join(self.tmp, "soul_outbox.json"))
+
+    def test_tick_noop_without_core_config(self):
+        """未配置 XIAOJU3_SOUL_CORE → tick 返回 None（纯现状零行为）。"""
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"XIAOJU3_SOUL_CORE": ""},
+                             clear=False):
+            self.assertIsNone(soul_sync.heartbeat_soul_tick(now=1000.0))
+
+    def test_tick_daily_watermark_and_outbox(self):
+        """每日全量：跨天入队+watermark 更新；同天不重复。"""
+        from unittest import mock
+        wm = os.path.join(self.tmp, ".soul_daily_watermark")
+        now = time.mktime(time.strptime("2026-10-16", "%Y-%m-%d"))
+        with mock.patch.dict(os.environ, {
+                "XIAOJU3_SOUL_CORE": "http://127.0.0.1:59999"}, clear=False), \
+                mock.patch.object(soul_sync, "AGENT_STATE_DIR", self.tmp), \
+                mock.patch.object(soul_sync, "make_writeback_bundle") as mw, \
+                mock.patch.object(soul_sync, "process_outbox", return_value=0):
+            mw.return_value = {"ok": True, "path": os.path.join(
+                self.tmp, "soul_daily.zip"), "size": 10}
+            n1 = soul_sync.heartbeat_soul_tick(now=now)
+            self.assertIsNotNone(n1)
+            self.assertIn("每日全量入队", n1)
+            n2 = soul_sync.heartbeat_soul_tick(now=now + 60)
+            self.assertNotIn("每日全量入队", n2 or "")   # 同天 watermark 拦重复
+        self.assertEqual(open(wm, encoding="utf-8").read().strip(), "2026-10-16")
+
+    def test_peer_watch_recover_callback(self):
+        """PeerWatch 恢复回调：失联达阈值→on_peer_down；恢复→on_peer_recover
+        恰一次；未传 recover（默认 None）不炸。"""
+        from migration import PeerWatch
+        from unittest import mock
+        events = []
+        pw = PeerWatch(peers=["http://127.0.0.1:59998"], fail_threshold=2,
+                       on_peer_down=lambda p: events.append("down"),
+                       on_peer_recover=lambda p: events.append("recover"),
+                       timeout=0.2)
+        def fake_get(url, timeout=None):
+            raise OSError("down")
+        with mock.patch.object(PeerWatch, "watch_loop", lambda self, **k: None):
+            with mock.patch("migration.requests.get", side_effect=fake_get):
+                pw.check_peers(); pw.check_peers()
+                self.assertIn("down", events)
+            with mock.patch("migration.requests.get") as ok_get:
+                ok_get.return_value.status_code = 200
+                pw.check_peers()
+        self.assertIn("recover", events)
+        # 默认 None：不炸即可
+        PeerWatch(peers=["http://127.0.0.1:59998"], fail_threshold=1,
+                  timeout=0.2).check_peers()
+
+    def test_heartbeat_hook_wired(self):
+        """挂点形态锚：heartbeat.py 快照节拍区含 soul_sync 旁路接线
+        （语句形态：import 行+ImportError 旁路）。"""
+        import io
+        src = io.open("heartbeat.py", encoding="utf-8").read()
+        self.assertIn("import soul_sync as _soul_mod", src)
+        self.assertIn("heartbeat_soul_tick()", src)
+        self.assertIn("soul_sync.py 缺席时静默旁路", src)

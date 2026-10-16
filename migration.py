@@ -553,12 +553,16 @@ class PeerWatch:
     """
 
     def __init__(self, peers=None, fail_threshold=3, on_peer_down=None,
-                 backup_on_down=False, timeout=PEER_TIMEOUT):
+                 backup_on_down=False, timeout=PEER_TIMEOUT,
+                 on_peer_recover=None):
         self.peers = list(peers) if peers is not None else _peers_from_env()
         self.fail_threshold = max(1, int(fail_threshold))
         self.timeout = timeout
         self.backup_on_down = backup_on_down
         self.on_peer_down = on_peer_down or self._default_on_peer_down
+        # #319 批 2-c：对端恢复在线回调（默认 None=原行为只记日志）——
+        # 分身侧用它触发 outbox 立即重排（§3.4 探活恢复触发）
+        self.on_peer_recover = on_peer_recover
         self._fail_counts = {}      # peer -> 连续失联次数
         self._down_notified = set() # 已触发告警且尚未恢复的 peer
 
@@ -592,6 +596,11 @@ class PeerWatch:
             if alive:
                 if peer in self._down_notified:
                     print(f"💚 [守望] 对端恢复在线：{peer}")
+                    if self.on_peer_recover is not None:
+                        try:
+                            self.on_peer_recover(peer)
+                        except Exception as e:
+                            print(f"⚠️ [守望] on_peer_recover 回调异常：{e}")
                 self._down_notified.discard(peer)
                 self._fail_counts[peer] = 0
             else:
