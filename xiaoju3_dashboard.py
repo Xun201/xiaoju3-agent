@@ -68,6 +68,8 @@ from datetime import datetime
 import main  # QQ 接入层业务逻辑模块（架构合并：webhook 业务体宿主于此进程）
 import system_handler  # 系统域 handler（批 C.1：creator 本体迁入，署名卡直调）
 import todo_handler  # 待办域 handler（批 C.3：todo 本体迁入，控制台两通道直调）
+import soul_sync  # 灵魂同步（#319 批 2：回写端点审计/outbox 常量）
+import migration  # 灵魂收包共用校验/落盘（#319 批 2：apply_soul_bundle_to_core）
 import paths  # 双根路径锚（方案 §1）：资源根=静态托管基准，非 frozen 与项目根同值
 import vision_tools  # 仅用 preheat_openai_async（拍板①）；随 main→tools 链已加载，零额外开销
 import psutil
@@ -507,6 +509,40 @@ def _clear_console_history():
     """清空控制台会话历史（写回空列表；确认语义由前端 confirm 承担）。"""
     save_memory([], HISTORY_FILE)
 
+
+# === #319 批 2：灵魂回写端点（分身→核心；多端预留：device_id+protocol_version，
+#     token 独立于设备、角色由 XIAOJU3_SOUL_CORE 配置定不焊死拓扑——roadmap §十） ===
+# XIAOJU3_SOUL_TOKEN 未配置（缺省空）→ 恒 401=端点关闭，纯现状零行为变化。
+@app.route("/api/soul/writeback", methods=["POST"])
+def soul_writeback():
+    token = (os.environ.get("XIAOJU3_SOUL_TOKEN", "") or "").strip()
+    if not token or request.headers.get("X-Soul-Token", "") != token:
+        return jsonify({"ack": False, "reason": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    b64 = body.get("bundle") or ""
+    if not b64 or len(b64) > int(migration.SOUL_WRITEBACK_MAX_BYTES * 1.4):
+        return jsonify({"ack": False, "reason": "bundle missing or too large"}), 413
+    import base64 as _b64
+    try:
+        zip_bytes = _b64.b64decode(b64)
+    except Exception:
+        return jsonify({"ack": False, "reason": "bundle 不是合法 base64"}), 409
+    if len(zip_bytes) > migration.SOUL_WRITEBACK_MAX_BYTES:
+        return jsonify({"ack": False, "reason": "bundle too large"}), 413
+    try:
+        # 测试注入钩子（RECENT_ACTIONS_FILE 同款惯例）：XIAOJU3_SOUL_CORE_BASE
+        # 指向沙盒目录；生产缺省空=真 agent_state。
+        base_dir = (os.environ.get("XIAOJU3_SOUL_CORE_BASE", "").strip()
+                    or paths.AGENT_STATE_DIR)
+        result = migration.apply_soul_bundle_to_core(
+            zip_bytes, base_dir=base_dir,
+            device_id=str(body.get("device_id") or ""),
+            db_path=os.path.join(base_dir, "soul.db"))
+    except ValueError as e:
+        return jsonify({"ack": False, "reason": str(e)}), 409
+    except Exception as e:
+        return jsonify({"ack": False, "reason": f"内部异常: {e}"}), 500
+    return jsonify({"ack": True, "protocol_version": 1, **result}), 202
 
 @app.route("/api/history", methods=["GET"])
 def api_history():
