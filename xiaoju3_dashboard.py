@@ -515,20 +515,12 @@ def _clear_console_history():
 # XIAOJU3_SOUL_TOKEN 未配置（缺省空）→ 恒 401=端点关闭，纯现状零行为变化。
 @app.route("/api/soul/writeback", methods=["POST"])
 def soul_writeback():
-    token = (os.environ.get("XIAOJU3_SOUL_TOKEN", "") or "").strip()
-    if not token or request.headers.get("X-Soul-Token", "") != token:
-        return jsonify({"ack": False, "reason": "unauthorized"}), 401
     body = request.get_json(silent=True) or {}
-    b64 = body.get("bundle") or ""
-    if not b64 or len(b64) > int(migration.SOUL_WRITEBACK_MAX_BYTES * 1.4):
-        return jsonify({"ack": False, "reason": "bundle missing or too large"}), 413
-    import base64 as _b64
-    try:
-        zip_bytes = _b64.b64decode(b64)
-    except Exception:
-        return jsonify({"ack": False, "reason": "bundle 不是合法 base64"}), 409
-    if len(zip_bytes) > migration.SOUL_WRITEBACK_MAX_BYTES:
-        return jsonify({"ack": False, "reason": "bundle too large"}), 413
+    err, reason, zip_bytes, device_id = migration.parse_writeback_request(
+        body, request.headers.get("X-Soul-Token", ""),
+        (os.environ.get("XIAOJU3_SOUL_TOKEN", "") or "").strip())
+    if err is not None:
+        return jsonify({"ack": False, "reason": reason}), err
     try:
         # 测试注入钩子（RECENT_ACTIONS_FILE 同款惯例）：XIAOJU3_SOUL_CORE_BASE
         # 指向沙盒目录；生产缺省空=真 agent_state。
@@ -536,7 +528,7 @@ def soul_writeback():
                     or paths.AGENT_STATE_DIR)
         result = migration.apply_soul_bundle_to_core(
             zip_bytes, base_dir=base_dir,
-            device_id=str(body.get("device_id") or ""),
+            device_id=device_id,
             db_path=os.path.join(base_dir, "soul.db"))
     except ValueError as e:
         return jsonify({"ack": False, "reason": str(e)}), 409

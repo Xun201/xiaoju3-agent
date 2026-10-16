@@ -194,6 +194,22 @@ class VerifyAndApplyTests(unittest.TestCase):
         self.assertNotIn("identity.json", r2["applied"])
         self.assertIn("identity.json", r2["skipped"])
 
+    def test_apply_persisted_sha_matches_bundle(self):
+        """Pi 落盘核档文件内容与笔记本发出的包内容一致（sha256 逐文件核验
+        ——2026-10-16 用户补充拍板验收锚）。"""
+        import hashlib
+        migration.apply_soul_bundle_to_core(
+            self.bundle, base_dir=self.core, device_id="dev-a",
+            db_path=os.path.join(self.core, "soul.db"))
+        ok, reason, meta, _ = migration.verify_soul_bundle_payload(self.bundle)
+        self.assertTrue(ok, reason)
+        for rel, info in meta["files"].items():
+            target = os.path.join(self.core, rel)
+            self.assertTrue(os.path.isfile(target), rel)
+            with open(target, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()
+            self.assertEqual(digest, info["sha256"], f"{rel} 落盘内容与包不一致")
+
     def test_apply_db_backup_path(self):
         """.db 走 sqlite3 backup 整库覆盖（Windows 文件锁安全路径）：
         覆盖后目标库可开且内容来自包。核档 .db（relationship.db）才在包内。"""

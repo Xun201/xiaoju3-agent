@@ -654,6 +654,31 @@ def health():
 SOUL_WRITEBACK_MAX_BYTES = 20 * 1024 * 1024   # S5：core-only 正常 <2MB，防 ext 误入
 
 
+def parse_writeback_request(body, token_given, token_expected):
+    """writeback 薄壳共用解析（dashboard 端点与批 3 receiver 同源，
+    2026-10-16 用户拍板：防两份鉴权代码漂移）。
+
+    返回 (err_status, err_reason, zip_bytes, device_id)——err_status 非 None
+    时调用端直接返回该码。鉴权用 hmac.compare_digest 常量时间比较。
+    """
+    import base64
+    import hmac
+    if not token_expected or not token_given or not hmac.compare_digest(
+            token_given, token_expected):
+        return 401, "unauthorized", None, None
+    body = body or {}
+    b64 = body.get("bundle") or ""
+    if not b64 or len(b64) > int(SOUL_WRITEBACK_MAX_BYTES * 1.4):
+        return 413, "bundle missing or too large", None, None
+    try:
+        zip_bytes = base64.b64decode(b64)
+    except Exception:
+        return 409, "bundle 不是合法 base64", None, None
+    if len(zip_bytes) > SOUL_WRITEBACK_MAX_BYTES:
+        return 413, "bundle too large", None, None
+    return None, "", zip_bytes, str(body.get("device_id") or "")
+
+
 def verify_soul_bundle_payload(zip_bytes):
     """收包纯校验（dashboard 端点与批 3 Pi receiver 共用，防双实现漂移）。
 

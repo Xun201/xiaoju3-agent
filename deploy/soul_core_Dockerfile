@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+# #319 批 3：灵魂核心接收器（Pi/ARM 可跑；依赖闭包=四个纯 py 文件+flask+requests）
+WORKDIR /app
+COPY soul_core_receiver.py migration.py soul_manifest.py paths.py xiaoju3.py ./
+RUN pip install --no-cache-dir flask requests
+ENV XIAOJU3_SOUL_CORE_BASE=/data/agent_state
+VOLUME ["/data"]
+EXPOSE 9100
+CMD ["python", "soul_core_receiver.py"]
