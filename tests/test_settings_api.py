@@ -11,6 +11,7 @@ import sqlite3
 import time
 
 import pytest
+import unittest
 from unittest import mock  # noqa: E402  (#328 锚)
 
 import settings_api
@@ -331,3 +332,21 @@ class TestSettingsAuditPath:
         finally:
             db.close()
         assert n == 1
+
+
+class LateBindingDisciplineTests(unittest.TestCase):
+    """#331 专扫锚（2026-10-17）：register 内跨模块依赖晚绑定纪律防退回。"""
+
+    def test_no_register_time_import_from_xiaoju3(self):
+        """register 函数内禁止 `from xiaoju3 import fn` 注册期局部绑定
+        （坑库 #32 同款——语句形态锚，行首缩进 4 空格形态）。"""
+        import re
+        src = open("settings_api.py", encoding="utf-8").read()
+        self.assertIsNone(re.search(
+            r"^    from xiaoju3 import (save_env_file|_load_env_file)", src, re.M))
+
+    def test_late_binding_call_form_in_place(self):
+        """两个 POST 端点走 _xj3.save_env_file 晚绑定调用（属性运行时查）。"""
+        src = open("settings_api.py", encoding="utf-8").read()
+        self.assertIn("import xiaoju3 as _xj3", src)
+        self.assertEqual(src.count("_xj3.save_env_file("), 2)
