@@ -159,6 +159,7 @@ class CpuTempChainTests(unittest.TestCase):
         fake_psutil.sensors_temperatures.return_value = {
             "coretemp": [mock.Mock(current=52.3)]}
         with mock.patch.object(dashboard, "psutil", fake_psutil), \
+                mock.patch.object(dashboard, "_temp_from_nvml", return_value=None), \
                 mock.patch.object(dashboard, "_temp_from_wmi") as m_wmi, \
                 mock.patch.object(dashboard, "_temp_from_sys_thermal") as m_sys:
             self.assertAlmostEqual(dashboard.get_cpu_temp(), 52.3)
@@ -168,6 +169,7 @@ class CpuTempChainTests(unittest.TestCase):
     def test_windows_wmi_second_priority(self):
         """psutil 未实现（Windows 行为）→ wmi 读取摄氏值，/sys 不再探测。"""
         with mock.patch.object(dashboard, "psutil", _failing_psutil()), \
+                mock.patch.object(dashboard, "_temp_from_nvml", return_value=None), \
                 mock.patch.object(dashboard, "_temp_from_wmi",
                                   return_value=27.85) as m_wmi, \
                 mock.patch.object(dashboard, "_temp_from_sys_thermal") as m_sys:
@@ -183,6 +185,7 @@ class CpuTempChainTests(unittest.TestCase):
             with open(zone, "w", encoding="utf-8") as f:
                 f.write("45820")
             with mock.patch.object(dashboard, "psutil", _failing_psutil()), \
+                    mock.patch.object(dashboard, "_temp_from_nvml", return_value=None), \
                     mock.patch.dict(sys.modules, {"wmi": None}), \
                     mock.patch.object(dashboard.glob, "glob", return_value=[zone]):
                 self.assertAlmostEqual(dashboard.get_cpu_temp(), 45.82)
@@ -190,6 +193,7 @@ class CpuTempChainTests(unittest.TestCase):
     def test_all_fail_returns_placeholder(self):
         """全失败：返回字符串 "暂无温度"。"""
         with mock.patch.object(dashboard, "psutil", _failing_psutil()), \
+                mock.patch.object(dashboard, "_temp_from_nvml", return_value=None), \
                 mock.patch.dict(sys.modules, {"wmi": None}), \
                 mock.patch.object(dashboard.glob, "glob", return_value=[]):
             result = dashboard.get_cpu_temp()
@@ -208,8 +212,9 @@ class StatusApiTempContractTests(unittest.TestCase):
         self.client = dashboard.app.test_client()
 
     def test_temperature_placeholder_when_all_fail(self):
-        """三平台全失败：temperature == "暂无温度"，接口不 500。"""
+        """三平台全失败（含 nvml）：temperature == "暂无温度"，接口不 500。"""
         with mock.patch.object(dashboard, "psutil", _failing_psutil()), \
+                mock.patch.object(dashboard, "_temp_from_nvml", return_value=None), \
                 mock.patch.dict(sys.modules, {"wmi": None}), \
                 mock.patch.object(dashboard.glob, "glob", return_value=[]):
             resp = self.client.get("/api/status")
@@ -223,6 +228,7 @@ class StatusApiTempContractTests(unittest.TestCase):
         zone = mock.Mock(CurrentTemperature=3010)
         fake_wmi.WMI.return_value.MSAcpi_ThermalZoneTemperature.return_value = [zone]
         with mock.patch.object(dashboard, "psutil", _failing_psutil()), \
+                mock.patch.object(dashboard, "_temp_from_nvml", return_value=None), \
                 mock.patch.dict(sys.modules, {"wmi": fake_wmi}), \
                 mock.patch.object(dashboard.glob, "glob", return_value=[]):
             data = self.client.get("/api/status").get_json()["data"]
@@ -233,6 +239,7 @@ class StatusApiTempContractTests(unittest.TestCase):
         """/api/status 下发 tts_voice（env TTS_VOICE，组 B 前端契约）。"""
         with mock.patch.object(dashboard, "TTS_VOICE", "Google 普通话"), \
                 mock.patch.object(dashboard, "psutil", _failing_psutil()), \
+                mock.patch.object(dashboard, "_temp_from_nvml", return_value=None), \
                 mock.patch.dict(sys.modules, {"wmi": None}), \
                 mock.patch.object(dashboard.glob, "glob", return_value=[]):
             data = self.client.get("/api/status").get_json()["data"]
