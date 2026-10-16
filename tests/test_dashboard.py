@@ -2659,7 +2659,7 @@ class BarThresholdAnchorTests(unittest.TestCase):
 
 class TodoCommandInterceptTests(unittest.TestCase):
     """控制台待办指令拦截（2026-10-04 Bug 1 修复）：/api/chat 命中 todo 指令族
-    时不进模型（smart_ask 零调用），门禁与 QQ 路径同一份（main.handle_todo_command）；
+    时不进模型（smart_ask 零调用），门禁与 QQ 路径同一份（todo_handler.handle_todo_command）；
     非待办消息照常进模型（拦截透明）。尾巴 3：指令回复带 <think> 过程卡片。"""
 
 
@@ -2696,7 +2696,7 @@ class ThinkProgressiveAnchorTests(unittest.TestCase):
 
 class TodoCommandInterceptTests(unittest.TestCase):
     """控制台待办指令拦截（2026-10-04 Bug 1 修复）：/api/chat 命中 todo 指令族
-    时不进模型（smart_ask 零调用），门禁与 QQ 路径同一份（main.handle_todo_command）；
+    时不进模型（smart_ask 零调用），门禁与 QQ 路径同一份（todo_handler.handle_todo_command）；
     非待办消息照常进模型（拦截透明）。尾巴 3：指令回复带 <think> 过程卡片。"""
 
     URL = "https://chat.deepseek.com/share/abc123"
@@ -2710,9 +2710,12 @@ class TodoCommandInterceptTests(unittest.TestCase):
             mock.patch("xiaoju3_dashboard.smart_ask"),
             mock.patch("main.state_manager", self.sm),
             mock.patch("main.permission_manager", self.pm),
-            mock.patch("main.extract_todos_from_url_sync"),
-            mock.patch("main.check_recent_url", return_value=False),
-            mock.patch("main.mark_url"),
+            # 批 C.3：todo 本体 from-import 独立绑定，权限/库替身须注入两处
+            mock.patch("todo_handler.permission_manager", self.pm),
+            mock.patch("todo_handler.state_manager", self.sm),
+            mock.patch("todo_handler.extract_todos_from_url_sync"),
+            mock.patch("todo_handler.check_recent_url", return_value=False),
+            mock.patch("todo_handler.mark_url"),
         ]
         for p in self._patches:
             p.start()
@@ -2770,7 +2773,7 @@ class TodoCommandInterceptTests(unittest.TestCase):
         self.pm.current_level = "Lv.2"
         extract_mock = mock.MagicMock(return_value={"ok": True, "inserted": 1})
         with mock.patch("main.threading.Thread", _immediate_thread()), \
-                mock.patch("main.extract_todos_from_url_sync", extract_mock):
+                mock.patch("todo_handler.extract_todos_from_url_sync", extract_mock):
             reply, source = self._chat(f"/todo_from_link {self.URL}")
         body = self._body(reply)
         self.assertTrue(body.startswith("🔄"))
@@ -2790,7 +2793,7 @@ class TodoCommandInterceptTests(unittest.TestCase):
     def test_handle_todo_command_signature_has_steps_outparam(self):
         # 尾巴 3 锚：steps 出参在签名上（QQ 链路不传=行为不变，控制台传=收步骤）
         import inspect
-        params = inspect.signature(main.handle_todo_command).parameters
+        params = inspect.signature(main.todo_handler.handle_todo_command).parameters
         self.assertIn("steps", params)
         self.assertEqual(params["steps"].default, None)
 

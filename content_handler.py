@@ -6,7 +6,7 @@ v2 领域拆分版（design_227b_boundary_v2.md；v1 单 handler 思路已证伪
 干净（首批样板），send_image 首含实质分派逻辑（Lv.4 门+校验+CQ 拼装）。
 
 领域路线图（v2 §二，后续批逐个填入本文件）：
-- ✅ todo：/todo_from_link + /todos 全族（批 0 首批）
+- ✅ todo：/todo_from_link + /todos 全族（批 0 首批；批 C.3 本体迁 todo_handler 直调）
 - ✅ send_image：/send_image（Lv.4 门+存在性+workspace 校验+CQ 拼装）
 - ✅ soul：/soul_export /soul_import（纯转发，本体在 main）
 - 领域三件齐——v2 §二「content_handler」域内全部迁毕；剩余领域
@@ -18,15 +18,18 @@ main（dashboard/多终端可直接复用）。
 
 import os as _os
 
+import todo_handler
 
-def handle_todo(raw_message, message, user_id, group_id, todo_cb,
-                steps=None):
+
+def handle_todo(raw_message, message, user_id, group_id, steps=None):
     """待办指令族领域入口（/todo_from_link 与 /todos 共享分发）。
 
-    todo_cb=main.handle_todo_command（门禁与逻辑本体，QQ 与控制台两路
-    共用）；返回回复文本，非待办指令返回 None（调用方继续消息管线）。
+    本体在 todo_handler（#227 批 C.3 迁入，内聚直调 G2 同款；门禁与
+    逻辑 QQ 与控制台两路共用）；返回回复文本，非待办指令返回 None
+    （调用方继续消息管线）。
     """
-    return todo_cb(raw_message, message, user_id, group_id, steps=steps)
+    return todo_handler.handle_todo_command(raw_message, message, user_id,
+                                            group_id, steps=steps)
 
 
 def handle_soul(command_text, raw_message, soul_cb):

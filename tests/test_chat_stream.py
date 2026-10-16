@@ -208,7 +208,7 @@ class ChatStreamSseTests(unittest.TestCase):
                 side_effect=self._mock_stream(reply="LLM 回复")) as ms, \
                 mock.patch.object(dashboard.main, "state_manager", sm), \
                 mock.patch.object(dashboard, "state_manager", sm), \
-                mock.patch.object(dashboard.main, "permission_manager", pm), \
+                mock.patch.object(dashboard.main, "permission_manager", pm),                 mock.patch.object(dashboard.main.todo_handler, "permission_manager", pm),                 mock.patch.object(dashboard.main.todo_handler, "state_manager", sm), \
                 _quiet():
             resp = self.client.post("/api/chat/stream",
                                     json={"message": "/todos"})

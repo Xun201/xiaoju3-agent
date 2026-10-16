@@ -67,6 +67,7 @@ from datetime import datetime
 
 import main  # QQ 接入层业务逻辑模块（架构合并：webhook 业务体宿主于此进程）
 import system_handler  # 系统域 handler（批 C.1：creator 本体迁入，署名卡直调）
+import todo_handler  # 待办域 handler（批 C.3：todo 本体迁入，控制台两通道直调）
 import paths  # 双根路径锚（方案 §1）：资源根=静态托管基准，非 frozen 与项目根同值
 import vision_tools  # 仅用 preheat_openai_async（拍板①）；随 main→tools 链已加载，零额外开销
 import psutil
@@ -936,15 +937,15 @@ def api_chat():
             })
 
         # 📋 待办指令族拦截（2026-10-04 Bug 1 修复 + 尾巴 3 过程卡片）：控制台
-        # 与 QQ 同一指令链（main.handle_todo_command），命中即返回——不进模型、
+        # 与 QQ 同一指令链（todo_handler.handle_todo_command），命中即返回——不进模型、
         # 不落对话历史，与 /creator 特判同口径；user_id/group_id 传 None：门禁
         # 走全局等级，提取完成通知仅打印控制台日志（无 QQ 上下文）。
         # 尾巴 3：复用 <think> 协议出"指令处理"折叠卡——console.js 渲染入口
         # 对任何含 <think> 的回复出卡（THINK_BLOCK_RE 全局守卫），QQ 链路剥
         # <think> 故过程仅控制台可见，与模型消息同一渲染管线、零前端改动。
         todo_steps = []
-        todo_reply = main.handle_todo_command(user_msg, user_msg, None, None,
-                                              steps=todo_steps)
+        todo_reply = todo_handler.handle_todo_command(user_msg, user_msg, None, None,
+                                                      steps=todo_steps)
         if todo_reply is not None:
             process = "".join("\n· " + s for s in todo_steps)
             reply = "<think>[指令处理]" + process + "</think>" + todo_reply
@@ -1090,8 +1091,8 @@ def api_chat_stream():
                 "source": "⚙️ 系统"})
             return
         todo_steps = []
-        todo_reply = main.handle_todo_command(user_msg, user_msg, None, None,
-                                              steps=todo_steps)
+        todo_reply = todo_handler.handle_todo_command(user_msg, user_msg, None, None,
+                                                      steps=todo_steps)
         if todo_reply is not None:
             process = "".join("\n· " + s for s in todo_steps)
             reply = "<think>[指令处理]" + process + "</think>" + todo_reply
@@ -1383,7 +1384,7 @@ def _console_slash_intercept(user_msg):
                     "请先发送 /coder_auth <6位动态密码> 升级后再试。",
                     "⚙️ 系统")
         log_url = main._arg_after(user_msg, "/gen_log")
-        if not log_url.startswith(main.SHARE_PREFIX):
+        if not log_url.startswith(todo_handler.SHARE_PREFIX):
             return ("⚠️ 请提供正确的 DeepSeek 分享链接，格式："
                     "/gen_log https://chat.deepseek.com/share/...", "⚙️ 系统")
 

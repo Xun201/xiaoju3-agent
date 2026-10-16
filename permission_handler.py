@@ -28,8 +28,8 @@ def _arg_after(raw_message, command):
     数随迁（初批漏抄 re.sub 尾段被黄金门当场拦下，正是它的价值）。
 
     取清洗前原文：标点清洗会剥掉 URL 的 : . 、路径盘符与扩展名点，导致
-    密码参数失效。（main 仍留一份供 /gen_log 批 B 前使用；批 B 迁走后
-    main 副本可退役。）
+    密码参数失效。（批 C.3 后 main 副本仍剩 soul×2 调用方——
+    handle_soul_command 批 C 范围外（G4 单列），soul 搬家批时退役。）
     """
     if command not in raw_message:
         return ""
