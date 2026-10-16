@@ -68,3 +68,25 @@ class NvmlTempTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StripPollutionG1G2Tests(unittest.TestCase):
+    """#322 对齐 G1/G2（2026-10-17）：未闭合标签行首剥+正文引用不误伤+
+    空白变体剥+合法 CQ 码保留。"""
+
+    def test_g1_unclosed_leading_stripped(self):
+        """行首未闭合标签（无闭标签）→ 整段剥（半截污染形态）。"""
+        from chain_of_thought import strip_pollution
+        self.assertEqual(strip_pollution("[计划]先做A再做B"), "")
+        self.assertEqual(strip_pollution("[think]只吐开头"), "")
+
+    def test_g1_inline_reference_not_stripped(self):
+        """正文引用 [计划] 字样（非行首）→ 不误伤（G1 行首锚防误伤）。"""
+        from chain_of_thought import strip_pollution
+        self.assertIn("[计划]", strip_pollution("与[计划]正常段聊"))
+        self.assertIn("[CQ:image,x]", strip_pollution("看图[CQ:image,x]与[计划]段"))
+
+    def test_g2_whitespace_variant_stripped(self):
+        """标签内空白变体 [ think ]...[ /think ] → 剥（留正文）。"""
+        from chain_of_thought import strip_pollution
+        self.assertEqual(strip_pollution("好的[ think ]推理[ /think ]正文"), "好的正文")
