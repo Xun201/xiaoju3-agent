@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 
+import migration
 import soul_manifest
 import soul_sync
 
@@ -135,3 +136,173 @@ class MakeWritebackBundleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifyAndApplyTests(unittest.TestCase):
+    """2-b：verify_soul_bundle_payload + apply_soul_bundle_to_core（共用函数，
+    dashboard 端点与批 3 receiver 同源）。全 tmp 沙盒零碰生产。"""
+
+    def setUp(self):
+        import tempfile
+        self.src = tempfile.mkdtemp(prefix="xj3_b2src_")   # 分身侧
+        self.core = tempfile.mkdtemp(prefix="xj3_b2core_")  # 核心侧
+        for name in ("identity.json", "ui_pref.json"):
+            with open(os.path.join(self.src, name), "wb") as f:
+                f.write(b'{"v":1}')
+        con = sqlite3.connect(os.path.join(self.src, "relationship.db"))
+        con.execute("CREATE TABLE IF NOT EXISTS sample(id INTEGER PRIMARY KEY)")
+        con.commit()
+        con.close()
+        r = soul_sync.make_writeback_bundle(
+            path=os.path.join(self.src, "wb.zip"), base_dir=self.src)
+        self.bundle = open(r["path"], "rb").read()
+
+    @staticmethod
+    def _tampered(bundle):
+        """结构完好的篡改包：替换条目内容、保留原 soul_meta → sha 不相符。"""
+        import io as _io
+        import zipfile as _zf
+        src = _zf.ZipFile(_io.BytesIO(bundle))
+        buf = _io.BytesIO()
+        with _zf.ZipFile(buf, "w", _zf.ZIP_DEFLATED) as out:
+            for info in src.infolist():
+                data = src.read(info.filename)
+                if info.filename == "identity.json":
+                    data = b'{"v":999,"tampered":true}'
+                out.writestr(info, data)
+        return buf.getvalue()
+
+    def test_verify_ok_and_tamper_rejected(self):
+        ok, reason, meta, files_sha = migration.verify_soul_bundle_payload(self.bundle)
+        self.assertTrue(ok, reason)
+        self.assertIn("identity.json", meta["files"])
+        ok, reason, _, _ = migration.verify_soul_bundle_payload(self._tampered(self.bundle))
+        self.assertFalse(ok)
+        self.assertIn("sha256", reason)
+
+    def test_apply_accepted_then_idempotent(self):
+        r1 = migration.apply_soul_bundle_to_core(
+            self.bundle, base_dir=self.core, device_id="dev-a",
+            db_path=os.path.join(self.core, "soul.db"))
+        self.assertEqual(r1["status"], "accepted")
+        self.assertIn("identity.json", r1["applied"])
+        self.assertTrue(os.path.isfile(os.path.join(self.core, "identity.json")))
+        r2 = migration.apply_soul_bundle_to_core(
+            self.bundle, base_dir=self.core, device_id="dev-a",
+            db_path=os.path.join(self.core, "soul.db"))
+        self.assertEqual(r2["status"], "idempotent")
+        self.assertNotIn("identity.json", r2["applied"])
+        self.assertIn("identity.json", r2["skipped"])
+
+    def test_apply_db_backup_path(self):
+        """.db 走 sqlite3 backup 整库覆盖（Windows 文件锁安全路径）：
+        覆盖后目标库可开且内容来自包。核档 .db（relationship.db）才在包内。"""
+        target_db = os.path.join(self.core, "relationship.db")
+        con = sqlite3.connect(target_db)
+        con.execute("CREATE TABLE IF NOT EXISTS marker(x)")
+        con.execute("INSERT INTO marker VALUES ('old')")
+        con.commit()
+        con.close()
+        r = migration.apply_soul_bundle_to_core(
+            self.bundle, base_dir=self.core, device_id="dev-a",
+            db_path=os.path.join(self.core, "soul.db"))
+        self.assertIn("relationship.db", r["applied"])
+        con = sqlite3.connect(target_db)
+        tables = {x[0] for x in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        con.close()
+        self.assertNotIn("marker", tables)   # 整库覆盖=包内库形态
+        self.assertFalse(os.path.exists(
+            os.path.join(self.core, "staging_soul", "relationship.db.staging")))
+
+    def test_apply_dual_change_conflict_pending(self):
+        """双变场景：核心侧文件被改后再收新包 → 采纳+conflicts pending
+        （replica_trace 带时间戳=§十.8 剪辑素材预留）。"""
+        migration.apply_soul_bundle_to_core(
+            self.bundle, base_dir=self.core, device_id="dev-a",
+            db_path=os.path.join(self.core, "soul.db"))
+        with open(os.path.join(self.core, "ui_pref.json"), "w") as f:
+            f.write('{"v":2,"changed":"core-side"}')   # 核心侧变更
+        r = migration.apply_soul_bundle_to_core(
+            self.bundle, base_dir=self.core, device_id="dev-a",
+            db_path=os.path.join(self.core, "soul.db"))
+        self.assertTrue(any(c["path"] == "ui_pref.json" for c in r["conflicts"]))
+        con = sqlite3.connect(os.path.join(self.core, "soul.db"))
+        row = con.execute(
+            "SELECT path, status, replica_trace FROM soul_conflicts"
+            " WHERE path='ui_pref.json'").fetchone()
+        con.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "pending")
+        self.assertIn("sha", row[2])
+
+    def test_apply_rejects_tampered(self):
+        with self.assertRaises(ValueError):
+            migration.apply_soul_bundle_to_core(
+                self._tampered(self.bundle), base_dir=self.core, device_id="dev-a",
+                db_path=os.path.join(self.core, "soul.db"))
+
+
+class WritebackEndpointTests(unittest.TestCase):
+    """2-b：/api/soul/writeback HTTP 栈（Flask test_client，沙盒 base 注入）。"""
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        import xiaoju3_dashboard as dash
+        self.dash = dash
+        self.core = tempfile.mkdtemp(prefix="xj3_b2http_")
+        self.token = "test-token-123"
+        self._env = mock.patch.dict(os.environ, {
+            "XIAOJU3_SOUL_TOKEN": self.token,
+            "XIAOJU3_SOUL_CORE_BASE": self.core,
+        })
+        self._env.start()
+        self.addCleanup(self._env.stop)
+        self.client = dash.app.test_client()
+        # 沙盒分身出包（HTTP 全链用）
+        src = tempfile.mkdtemp(prefix="xj3_b2src2_")
+        for name in ("identity.json", "ui_pref.json"):
+            with open(os.path.join(src, name), "w") as f:
+                f.write('{"v":1}')
+        r = soul_sync.make_writeback_bundle(
+            path=os.path.join(src, "wb.zip"), base_dir=src)
+        with open(r["path"], "rb") as f:
+            self.bundle = f.read()
+
+    def _post(self, data=None, headers=None):
+        return self.client.post("/api/soul/writeback", json=data or {},
+                                headers=headers or {})
+
+    def test_401_without_or_wrong_token(self):
+        self.assertEqual(self._post({}).status_code, 401)
+        self.assertEqual(
+            self._post({"bundle": "x"}, headers={"X-Soul-Token": "wrong"}).status_code,
+            401)
+
+    def test_409_bad_base64_and_missing_meta(self):
+        h = {"X-Soul-Token": self.token}
+        r = self._post({"bundle": "!!!not-b64!!!"}, headers=h)
+        self.assertEqual(r.status_code, 409)
+        import base64
+        junk = base64.b64encode(b"not a zip at all").decode()
+        r = self._post({"bundle": junk}, headers=h)
+        self.assertEqual(r.status_code, 409)
+
+    def test_202_full_chain_via_http(self):
+        import base64
+        h = {"X-Soul-Token": self.token}
+        b64 = base64.b64encode(self.bundle).decode()
+        r = self._post({"device_id": "dev-http", "protocol_version": 1,
+                        "bundle": b64}, headers=h)
+        self.assertEqual(r.status_code, 202)
+        data = r.get_json()
+        self.assertTrue(data["ack"])
+        self.assertEqual(data["protocol_version"], 1)
+        # 审计行落沙盒 soul.db
+        import sqlite3
+        con = sqlite3.connect(os.path.join(self.core, "soul.db"))
+        rows = con.execute("SELECT device_id, direction, result FROM"
+                           " soul_writeback_log").fetchall()
+        con.close()
+        self.assertTrue(any(x == ("dev-http", "recv", "accepted") for x in rows))

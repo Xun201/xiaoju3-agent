@@ -640,6 +640,162 @@ def health():
     return jsonify({"status": "ok", "device": socket.gethostname(), "ts": time.time()})
 
 
+# ==================== #319 批 2：核心侧收包（dashboard 与批 3 receiver 共用） ====================
+
+SOUL_WRITEBACK_MAX_BYTES = 20 * 1024 * 1024   # S5：core-only 正常 <2MB，防 ext 误入
+
+
+def verify_soul_bundle_payload(zip_bytes):
+    """收包纯校验（dashboard 端点与批 3 Pi receiver 共用，防双实现漂移）。
+
+    返回 (ok, reason, meta, files_sha)：zip_bytes→soul_meta 结构/版本校验+
+    防穿越+逐文件 sha256 比对（防篡改拒收）。ok=False 时 reason 给原因。
+    """
+    import io as _io
+    try:
+        zf = zipfile.ZipFile(_io.BytesIO(zip_bytes))
+    except Exception as e:
+        return False, f"包不是合法 zip: {e}", None, {}
+    try:
+        meta = _read_soul_meta(zf)
+    except ValueError as e:
+        return False, str(e), None, {}
+    if meta is None:
+        return False, "缺少 soul_meta.json（仅接受 v2 回写包）", None, {}
+    files_sha = {}
+    for info in zf.infolist():
+        rel = info.filename
+        if rel.endswith("/"):
+            continue
+        if not _safe_member(rel):
+            return False, f"包内路径不合法（防穿越）: {rel}", None, {}
+        digest = _sha256_bytes(zf.read(info))
+        expect = (meta.get("files") or {}).get(rel, {}).get("sha256")
+        if expect and digest != expect:
+            return False, f"sha256 不符（篡改或损坏）: {rel}", None, {}
+        files_sha[rel] = digest
+    return True, "", meta, files_sha
+
+
+def _sha256_bytes(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def apply_soul_bundle_to_core(zip_bytes, base_dir, device_id="", db_path=None,
+                              staging_dir=None):
+    """核心侧收包落盘（校验→双变判定→staging 原子替换→审计+conflicts）。
+
+    返回 dict {"status": "accepted"/"idempotent", "applied": [...],
+               "skipped": [...], "conflicts": [...]}；
+    拒收 raise ValueError（调用端转 409）。
+    - .db 走 sqlite3 backup API 整库覆盖（核心进程可能持有连接，Windows 上
+      os.replace 撞锁——backup 语义等价且无锁）；非 .db 走 os.replace；
+    - 双变（核心侧 sha 存在且 ≠ 包 sha）→ 仍采纳 + soul_conflicts 记 pending
+      （判定留批 4，replica_trace 带时间戳=§十.8 剪辑素材）；
+    - base_dir=核心 agent_state；db_path=核心 soul.db（审计+conflicts）。
+    """
+    import sqlite3   # 模块级未引入（既有 integrity 检查为局部用法），局部 import 防环
+    ok, reason, meta, files_sha = verify_soul_bundle_payload(zip_bytes)
+    if not ok:
+        raise ValueError(reason)
+    base_dir = os.path.abspath(base_dir)
+    staging = staging_dir or os.path.join(base_dir, "staging_soul")
+    os.makedirs(staging, exist_ok=True)
+    import io as _io
+    import zipfile as _zf
+    applied, skipped, conflicts = [], [], []
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with _zf.ZipFile(_io.BytesIO(zip_bytes)) as zf:
+            for info in zf.infolist():
+                rel = info.filename
+                if rel.endswith("/") or rel == SOUL_META_NAME:
+                    continue
+                target = os.path.join(base_dir, *rel.split("/"))
+                core_sha = _sha256_file(target) if os.path.isfile(target) else None
+                pkg_sha = files_sha.get(rel)
+                if core_sha is not None and core_sha == pkg_sha:
+                    skipped.append(rel)   # 幂等：核心侧已是同版本
+                    continue
+                # 落 staging
+                tmp_path = os.path.join(staging, os.path.basename(rel) + ".staging")
+                with open(tmp_path, "wb") as f:
+                    f.write(zf.read(info))
+                if rel.endswith(".db"):
+                    if not _sqlite_integrity_ok(tmp_path):
+                        raise ValueError(f"包内 SQLite 损伤: {rel}")
+                if core_sha is not None and core_sha != pkg_sha:
+                    conflicts.append({
+                        "path": rel, "device_id": device_id,
+                        "core_sha": core_sha, "replica_sha": pkg_sha,
+                        "replica_trace": json.dumps(
+                            [{"ts": ts, "sha": pkg_sha}], ensure_ascii=False)})
+                # 原子落位
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if rel.endswith(".db") and os.path.isfile(target):
+                    src = sqlite3.connect(tmp_path)
+                    dst = sqlite3.connect(target)
+                    try:
+                        src.backup(dst)
+                    finally:
+                        src.close()
+                        dst.close()
+                    os.remove(tmp_path)
+                else:
+                    os.replace(tmp_path, target)
+                applied.append(rel)
+    finally:
+        for fn in os.listdir(staging):
+            try:
+                os.remove(os.path.join(staging, fn))
+            except OSError:
+                pass
+    # 审计+conflicts 落 soul.db（尽力而为，失败不影响已落盘数据）
+    try:
+        db_path = db_path or os.path.join(base_dir, "soul.db")
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        db = sqlite3.connect(db_path)
+        try:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS soul_writeback_log ("
+                " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " ts TEXT NOT NULL, device_id TEXT NOT NULL,"
+                " direction TEXT NOT NULL DEFAULT 'recv',"
+                " action TEXT NOT NULL, files_n INTEGER DEFAULT 0,"
+                " bytes INTEGER DEFAULT 0, result TEXT NOT NULL, detail TEXT)")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS soul_conflicts ("
+                " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " path TEXT NOT NULL, object_key TEXT,"
+                " device_id TEXT NOT NULL,"
+                " core_ts TEXT, replica_ts TEXT,"
+                " core_sha TEXT, replica_sha TEXT, replica_trace TEXT,"
+                " status TEXT NOT NULL DEFAULT 'pending',"
+                " resolved_by TEXT, created_at TEXT, resolved_at TEXT)")
+            db.execute(
+                "INSERT INTO soul_writeback_log"
+                " (ts, device_id, direction, action, files_n, bytes, result, detail)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (ts, device_id or "", "recv", "writeback", len(applied),
+                 len(zip_bytes), "accepted", json.dumps(applied, ensure_ascii=False)))
+            for c in conflicts:
+                db.execute(
+                    "INSERT INTO soul_conflicts"
+                    " (path, device_id, core_ts, replica_ts, core_sha,"
+                    " replica_sha, replica_trace, status, created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    (c["path"], c["device_id"], ts, ts, c["core_sha"],
+                     c["replica_sha"], c["replica_trace"], "pending", ts))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"⚠️ [灵魂同步] 审计落库失败（数据已落盘不受影响）: {e}")
+    return {"status": "accepted" if applied else "idempotent",
+            "applied": applied, "skipped": skipped, "conflicts": conflicts}
+
+
 if __name__ == "__main__":
     # 便捷 CLI：python migration.py export [路径] / python migration.py import <zip>
     import sys
