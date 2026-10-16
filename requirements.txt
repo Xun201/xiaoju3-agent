@@ -45,3 +45,6 @@ pywebview==6.2.1
 
 # Edge-TTS 人类少女音（免费无 Key；前端 /api/tts 后端合成）
 edge-tts==7.2.8
+
+# GPU 温度（#系统温度一期：pynvml 读 NVML 驱动接口，用户态无需提权）
+pynvml

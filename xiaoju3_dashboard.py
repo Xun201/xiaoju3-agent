@@ -224,6 +224,28 @@ def console_static(filename):
 NO_TEMP_TEXT = "暂无温度"
 
 
+def _temp_from_nvml():
+    """温度优先级⓪（Windows 有 N 卡时）：pynvml 读 GPU 温度（NVML 驱动
+    接口用户态可读、无需管理员——2026-10-16 用户拍板一期，实测 47°C 与
+    NVIDIA App 同源）。注意读的是 **GPU 温度**非 CPU。驱动缺席/未装
+    pynvml/任何异常返回 None 落回原三级链（Linux/香橙派不受影响，
+    核显机器亦不受影响）。"""
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        try:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            value = pynvml.nvmlDeviceGetTemperature(
+                handle, pynvml.NVML_TEMPERATURE_GPU)
+            if value:
+                return float(value)
+        finally:
+            pynvml.nvmlShutdown()
+    except Exception:
+        pass
+    return None
+
+
 def _temp_from_psutil():
     """温度优先级①：psutil.sensors_temperatures 跨平台首选（Linux/香橙派
     直接可用；Windows 上 psutil 未实现该方法，抛 NotImplementedError 后
@@ -277,10 +299,12 @@ def _temp_from_sys_thermal():
 
 def get_cpu_temp():
     """读取 CPU 温度（用户口径三平台优先级）：
-    ① psutil.sensors_temperatures → ② Windows wmi → ③ Linux /sys/class/thermal。
+    ⓪ pynvml GPU 温度（Windows 有 N 卡）→ ① psutil.sensors_temperatures →
+    ② Windows wmi → ③ Linux /sys/class/thermal。
     读取失败或平台不支持返回字符串 "暂无温度"（替换旧恒 0.0）；成功返回
     float 摄氏度。"""
-    for reader in (_temp_from_psutil, _temp_from_wmi, _temp_from_sys_thermal):
+    for reader in (_temp_from_nvml, _temp_from_psutil, _temp_from_wmi,
+                   _temp_from_sys_thermal):
         value = reader()
         if value is not None:
             return float(value)

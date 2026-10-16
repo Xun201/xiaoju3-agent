@@ -121,6 +121,7 @@ class StatusApiTests(unittest.TestCase):
         fake_time.time.return_value = 1727654321.6
 
         with mock.patch.object(dashboard, "psutil", fake_psutil), \
+            mock.patch.object(dashboard, "_temp_from_nvml", return_value=None), \
                 mock.patch.object(dashboard, "time", fake_time):
             resp = self.client.get("/api/status")
 
@@ -147,7 +148,7 @@ class StatusApiTests(unittest.TestCase):
         fake_psutil.sensors_temperatures.side_effect = NotImplementedError(
             "sensors not supported")
 
-        with mock.patch.dict(sys.modules, {"wmi": None}),              mock.patch.object(dashboard, "glob", glob),              mock.patch.object(dashboard, "psutil", fake_psutil), _quiet():
+        with mock.patch.dict(sys.modules, {"wmi": None}), mock.patch.object(dashboard, "_temp_from_nvml", return_value=None),              mock.patch.object(dashboard, "glob", glob),              mock.patch.object(dashboard, "psutil", fake_psutil), _quiet():
             resp = self.client.get("/api/status")
 
         self.assertEqual(resp.status_code, 200)
@@ -167,7 +168,7 @@ class StatusApiTests(unittest.TestCase):
         fake_psutil.virtual_memory.return_value = mock.Mock(percent=20.0)
         fake_psutil.sensors_temperatures.return_value = {}
 
-        with mock.patch.dict(sys.modules, {"wmi": None}),              mock.patch.object(dashboard, "glob", glob),              mock.patch.object(dashboard, "psutil", fake_psutil):
+        with mock.patch.dict(sys.modules, {"wmi": None}),              mock.patch.object(dashboard, "_temp_from_nvml", return_value=None),              mock.patch.object(dashboard, "glob", glob),              mock.patch.object(dashboard, "psutil", fake_psutil):
             data = self.client.get("/api/status").get_json()["data"]
 
         # 组 C 新口径：sensors 空且 wmi/sys 均无 → 字符串占位
