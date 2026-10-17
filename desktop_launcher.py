@@ -765,6 +765,16 @@ class QuitBridge:
             _save_ui_pref(cur, self._pref_path)
         self._state["quitting"] = mode
         self._out(f"🛑 退出受理：mode={mode} remember={bool(remember)}")
+        # 🌌 灵魂回写兜底 flush（#319 批 3-b 退出链，2026-10-17）：退出前
+        # 强制补投 outbox（sync=True 内带 10s 上限，超时放行退出不卡关机；
+        # 未配置 SOUL_CORE 时 outbox 空=零成本直过；异常全吞不阻塞退出）。
+        try:
+            import soul_sync
+            _flushed = soul_sync.process_outbox(sync=True, total_timeout=10)
+            if _flushed:
+                self._out(f"🌌 [灵魂回写] 退出前补投 {_flushed} 件")
+        except Exception as e:
+            self._out(f"⚠️ [灵魂回写] 退出 flush 异常（放行退出）: {e}")
         try:
             self._window_getter().destroy()
         except Exception as e:
