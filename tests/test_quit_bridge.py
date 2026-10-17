@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 import desktop_launcher as dl
+import soul_sync
 
 
 class _FakeWindow:
@@ -181,3 +182,40 @@ class KillNapCatAllTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuitFlushTests(unittest.TestCase):
+    """#319 批 3-b 退出链 flush（2026-10-17）：quit_app 触发
+    process_outbox(sync=True) 补投且 destroy 照常（不卡关机）；
+    flush 异常全吞放行退出。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xiaoju3_quitflush_")
+        self.win = _FakeWindow()
+        self.state = {"quitting": None}
+        self.bridge = dl.QuitBridge(
+            lambda: self.win, self.state, out=lambda m: None,
+            pref_path=os.path.join(self.tmp, "ui_pref.json"),
+            napcat_killer=lambda out=None: None)
+
+    def test_quit_app_flushes_outbox_before_destroy(self):
+        """退出受理→先 flush（sync=True）→再 destroy（顺序铁律）。"""
+        calls = []
+        with mock.patch.object(soul_sync, "process_outbox",
+                               side_effect=lambda sync, total_timeout:
+                               calls.append(("flush", sync)) and 2), \
+                mock.patch.object(self.bridge, "_window_getter",
+                                  lambda: self.win):
+            self.bridge.quit_app("full_exit")
+        self.assertIn(("flush", True), calls)
+        self.assertTrue(self.win.destroyed)
+
+    def test_quit_flush_exception_swallows_and_proceeds(self):
+        """flush 抛异常 → 全吞放行（destroy 照常，退出不被阻塞）。"""
+        with mock.patch.object(soul_sync, "process_outbox",
+                               side_effect=RuntimeError("boom")), \
+                mock.patch.object(self.bridge, "_window_getter",
+                                  lambda: self.win):
+            self.bridge.quit_app("backend_only")
+        self.assertEqual(self.state["quitting"], "backend_only")
+        self.assertTrue(self.win.destroyed)
