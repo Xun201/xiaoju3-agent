@@ -40,6 +40,12 @@ a = Analysis(
         ('settings_tiers.json', '.'),      # #264 B1 分档表（缺它面板 items 全空——20261010 晚真机实锤，与上述两文件同类教训）
     ] + pw_datas,
     hiddenimports=[
+        # ── 底层 C 扩展显式收集（2.0.0 构建实锤：pyi_rth_multiprocessing
+        #    运行时钩子需要 _socket，自动收集漏致启动崩 No module named
+        #    '_socket'——2026-10-17 用户拍板显式列 + 主入口兜底 import）──
+        '_socket',
+        'socket',
+        '_multiprocessing',
         # ── pywebview Windows 后端链（6.x 默认 WinForms + WebView2 via pythonnet）──
         'webview',
         'webview.platforms.winforms',
