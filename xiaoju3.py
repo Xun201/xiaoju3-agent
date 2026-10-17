@@ -616,4 +616,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()  # PyInstaller 打包多进程标准兜底（2026-10-17）
     raise SystemExit(main())
