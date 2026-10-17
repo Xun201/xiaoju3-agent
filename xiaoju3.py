@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import _socket  # noqa: E402  (#2.0 打包兜底：强制 PyInstaller 收集底层 C 扩展——spec hiddenimports 双保险)
 """小橘3号 · 终端 CLI 与统一配置源。
 
 按《架构设计文档》§3.6：本地/云端地址与模型、记忆上限、工作区等配置
