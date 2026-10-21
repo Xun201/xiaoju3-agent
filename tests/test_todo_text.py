@@ -188,3 +188,36 @@ class TodoTextStreamChannelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TodoTextTriggerExpansionTests(unittest.TestCase):
+    """触发词口语扩展（2026-10-17 答辩演示实锤："帮我记个事：xxx"不命中
+    落闲聊幻觉——扩展"记个事/记一下/记下"三形态，冒号/分隔符+内容为
+    必要条件防闲聊误触发）。intent_router 直测，8 例正反对照。"""
+
+    def _hit(self, text):
+        import re
+        from intent_router import INTENT_PATTERNS
+        entry = [e for e in INTENT_PATTERNS
+                 if e["name"] == "todo_text_add"][0]
+        neg = [re.compile(p) for p in entry.get("negative_patterns", [])]
+        if any(n.search(text) for n in neg):
+            return "NEG"
+        return "HIT" if any(re.search(p, text)
+                            for p in entry["patterns"]) else "no"
+
+    def test_positive_forms_hit(self):
+        for text in ("帮我记个事：明天买5V3A电源",
+                     "帮我记一下：下午三点开会",
+                     "记得记下：给花浇水",
+                     "帮我记待办：1.交周报",
+                     "记个事，明天买牛奶"):
+            self.assertEqual(self._hit(text), "HIT", text)
+
+    def test_negative_chitchat_not_hit(self):
+        for text in ("我记性不好",
+                     "帮我记录一下会议内容",
+                     "记一下英语单词怎么拼",
+                     "记性差真是麻烦",
+                     "怎么做待办清单"):
+            self.assertNotEqual(self._hit(text), "HIT", text)
