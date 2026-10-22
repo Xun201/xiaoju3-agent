@@ -28,8 +28,9 @@
             --radius-bubble: 10px;             /* 消息气泡圆角 */
             --radius-tool: 6px;                /* 工具按钮圆角 */
             --radius-card: 12px;               /* MAA 风格卡片圆角 */
+            --radius-inner: calc(var(--radius-card) - 6px);   /* UI 微操：同心圆角=外层圆角-内边距（徽章/工具按钮） */
             --shadow-sidebar: 2px 0 10px rgba(0,0,0,0.02);  /* 侧栏单向阴影（文档令牌） */
-            --shadow-card: 0 2px 8px rgba(0,0,0,0.06);      /* MAA 卡片轻阴影（克制） */
+            --shadow-card: 0 1px 2px rgba(31, 41, 55, 0.05), 0 2px 6px rgba(31, 41, 55, 0.04), 0 10px 28px rgba(31, 41, 55, 0.05);   /* UI 微操：三层柔和阴影（细锐定边界+中景+大模糊光感） */
         }
         /* 橘色主题（界面文档 §10.1 皮肤系统基础）：与狐狸娘形象同源暖橙色系，
            主色/悬停/底色/卡片/次级文字/进度/警示全套成体系；右上角按钮切换，
@@ -51,7 +52,7 @@
             --color-dislike: #b07a4a;          /* 点踩激活·棕橘（替代冷蓝） */
             --color-dislike-bg: #faf0e2;
             --shadow-sidebar: 2px 0 10px rgba(217, 111, 43, 0.08);
-            --shadow-card: 0 2px 8px rgba(217, 111, 43, 0.10);
+            --shadow-card: 0 1px 2px rgba(217, 111, 43, 0.08), 0 2px 6px rgba(217, 111, 43, 0.06), 0 10px 28px rgba(217, 111, 43, 0.08);
         }
 
         /* ==================== 基础重置 ==================== */
@@ -125,7 +126,7 @@
         .header-btn {
             background: none;
             border: 1px solid transparent;
-            border-radius: var(--radius-tool);
+            border-radius: var(--radius-inner);   /* UI 微操：同心圆角（外层卡片圆角-内边距） */
             font-size: 16px;
             line-height: 1;
             padding: 6px 8px;
@@ -374,7 +375,7 @@
             justify-content: center;
             width: 26px;
             height: 26px;
-            border-radius: var(--radius-tool);
+            border-radius: var(--radius-inner);   /* UI 微操：同心圆角（外层卡片圆角-内边距） */
             transition: all 0.2s;
             color: var(--color-text-secondary);
             border: 1px solid transparent;
@@ -395,36 +396,66 @@
             font-size: 12px;
             line-height: 1;
             padding: 3px 8px;
-            border-radius: var(--radius-tool);
+            border-radius: var(--radius-inner);   /* UI 微操：同心圆角（外层卡片圆角-内边距） */
             color: var(--color-text-secondary);
             background-color: var(--color-progress-track);
         }
 
-        /* ==================== 思维链卡片（工具调用 <think> 块展示） ==================== */
-        /* 浅灰底折叠卡片，位于消息气泡正文上方（气泡内首个子元素）。
-           静态折叠口径仍为 display 切换（.think-collapsed 只藏正文，最简
-           可靠，展开态正文高度不定、无需魔法数字上限）；2026-10-01 起
-           自动折叠先走 .think-anim 的 300ms max-height 过渡动画（见下方
-           折叠动画规则），动画完成后落回本静态口径；箭头方向用 transform
-           过渡补足动效。 */
-        .think-card {
-            display: block;                     /* 整卡永远可见：.think-collapsed 只藏正文，绝不藏整卡 */
-            background-color: rgba(31, 41, 55, 0.035);  /* UI 规范 2026-10-22：容器层级=背景 3.5% 中性微对比色阶（双主题自适应），替代实体边框 */
-            border: none;
-            border-radius: 10px;
-            font-size: 13px;
-            overflow: hidden;
-            box-shadow: 0 1px 3px rgba(31, 41, 55, 0.07);   /* 细微阴影分层（替代 1px 实体边框） */
+        /* ==================== 直出思维流（2026-10-22 二轮拍板，对标 DeepSeek） ==================== */
+        /* 废弃折叠卡：思考以灰色小号 🧠 标签行+小字行直接外冒（无箭头无折叠
+           无二次点击），正文黑色粗体续流。骨架屏=等待首帧的呼吸占位
+           （首字零等待，2026-10-22）；[思考]/[计划]/[行动] 前缀由 JS 剥除 */
+        .think-live {
+            font-size: 12px;
+            color: var(--color-text-secondary, #6b7280);
+            margin: 2px 0 4px;
         }
-        .think-card-header {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
-            cursor: pointer;
+        .think-live-label {
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;   /* UI 规范：动态数字等宽（用时 X 秒）防左右抖动 */
+            text-wrap: balance;                   /* UI 微操：标题平衡换行防末行单字 */
+            margin-bottom: 2px;
+        }
+        .think-live.think-live-waiting .think-live-label {
+            animation: thinkBreath 1.6s ease-in-out infinite;
+        }
+        @keyframes thinkBreath {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.45; }
+        }
+        .think-live-line {
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.55;
+        }
+        .think-skeleton-line {
+            height: 9px;
+            margin: 5px 0;
+            border-radius: 5px;
+            background: linear-gradient(90deg, rgba(31, 41, 55, 0.05) 25%, rgba(31, 41, 55, 0.13) 50%, rgba(31, 41, 55, 0.05) 75%);
+            background-size: 200% 100%;
+            animation: thinkSkeletonShimmer 1.4s ease-in-out infinite;
+        }
+        .think-skeleton-line.think-skeleton-short { width: 55%; }
+        @keyframes thinkSkeletonShimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        /* 正文黑色粗体（二轮拍板：answer 直接续流，正常黑色粗体字） */
+        .message.bot-message .bubble-content {
             font-weight: 600;
-            color: var(--color-text-secondary);
-            user-select: none;
+            text-wrap: pretty;   /* UI 微操：正文断行优化（防末行孤字，流式连续不断行错开） */
+        }
+        /* 内容错开淡入（UI 微操）：仅历史回放批渲染/系统消息挂 .msg-enter，
+           流式输出的思维链与正文绝不挂此类——保持连续 */
+        @keyframes msgEnter {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message.msg-enter { animation: msgEnter 0.32s ease-out both; }
+        @media (prefers-reduced-motion: reduce) {
+            .think-live.think-live-waiting .think-live-label,
+            .think-skeleton-line { animation: none; }
         }
         /* IM 式时间分隔条（2026-10-10 问题 3）：居中灰色小字 */
         .time-separator {
@@ -433,112 +464,6 @@
             font-size: 11px;
             padding: 6px 0 2px;
             user-select: none;
-        }
-        .think-card-header:hover { color: var(--color-primary); }
-        .think-card-title { flex: 1; font-variant-numeric: tabular-nums; }   /* UI 规范：动态数字等宽（用时 X 秒）防左右抖动 */
-        .think-card-arrow {
-            font-size: 11px;
-            transition: transform 0.2s ease;
-        }
-        .think-card.think-collapsed .think-card-arrow { transform: rotate(-90deg); }
-        .think-card-body {
-            padding: 2px 10px 8px;
-            line-height: 1.6;
-            color: var(--color-text-secondary);
-            white-space: pre-wrap;              /* 保留 [思考]/[计划] 的换行结构 */
-            word-break: break-word;
-            max-height: 260px;                  /* 展开态内容完整可见：超限滚动（任务 6） */
-            overflow-y: auto;
-            border-left: 3px solid rgba(32, 49, 112, 0.16);   /* 左侧竖线（任务 6）；UI 规范：半透明降对比水墨感 */
-        }
-        /* 折叠态：正文 display:none（console.js 切换类名即可，无需内联样式） */
-        .think-card.think-collapsed .think-card-body { display: none; }
-
-        /* 折叠动画（2026-10-01 用户口径，DeepSeek 节奏）：思考列表全部渲染完
-           等待 1.5s 后，由 console.js 挂 .think-anim 并把正文内联 max-height
-           从实测可视高度过渡到 0（300ms ease 收缩）；完成后摘除 .think-anim、
-           落回上方 .think-collapsed 静态折叠口径。max-height 选型：内容高度
-           不定，用 clientHeight/scrollHeight 实测值过渡，无魔法数字上限；
-           grid-rows 0fr/1fr 需额外包裹容器且旧引擎兼容差。 */
-        .think-card.think-anim .think-card-body { transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1); }   /* UI 规范：干脆顺滑 swift-out */
-
-        /* 思考展示期间正文气泡暂不显示（折叠完成后由 console.js 摘除
-           .think-pending 显示），形成"先完整思考、收起、后出正文"的节奏 */
-        .message.think-pending .bubble-content,
-        .message.think-pending .source-badge,
-        .message.think-pending .msg-tools { display: none; }
-
-        /* CoT 一次性列表展示（2026-10-01 用户口径，DeepSeek 风格）：[思考]/
-           [计划]/[行动] 每段单独成行，由 console.js 一次性全部插入（无逐行
-           定时器）；.think-line 淡入动画对全部行同时生效（整体浮现，
-           非逐行错峰闪动） */
-        .think-line {
-            display: flex;
-            align-items: flex-start;
-            gap: 6px;
-            margin: 3px 0;
-            opacity: 0;
-            animation: thinkLineFadeIn 0.45s ease-out forwards;   /* UI 规范：水墨晕染式淡入（含模糊消散） */
-            transition: opacity 0.45s ease;   /* 流式在写行摘类后渐进淡入归位 */
-        }
-        @keyframes thinkLineFadeIn {
-            from { opacity: 0; filter: blur(4px); transform: translateY(3px); }
-            to { opacity: 1; filter: blur(0); transform: translateY(0); }
-        }
-        /* 流式思维卡（2026-10-22 #349）：正在增长的末行保持半透明水墨态，
-           行完成/卡片转正后摘类渐进淡入归位（取消单字硬蹦的视觉跳感） */
-        .think-line-streaming { opacity: 0.66; }
-        /* 骨架屏（2026-10-22 首字零等待）：等待后端首帧的占位态——卡头呼吸
-           灯 + 两根水墨呼吸占位线；首段真文本到达时由 console.js 摘除 */
-        .think-card.think-card-waiting .think-card-header {
-            animation: thinkBreath 1.6s ease-in-out infinite;
-        }
-        @keyframes thinkBreath {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.45; }
-        }
-        .think-skeleton-line {
-            height: 10px;
-            margin: 6px 10px 0;
-            border-radius: 5px;
-            background: linear-gradient(90deg, rgba(31, 41, 55, 0.05) 25%, rgba(31, 41, 55, 0.13) 50%, rgba(31, 41, 55, 0.05) 75%);
-            background-size: 200% 100%;
-            animation: thinkSkeletonShimmer 1.4s ease-in-out infinite;
-        }
-        .think-skeleton-line.think-skeleton-short { width: 55%; }
-        .think-skeleton-line:last-of-type { margin-bottom: 8px; }
-        @keyframes thinkSkeletonShimmer {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-        }
-        @media (prefers-reduced-motion: reduce) {
-            .think-card.think-card-waiting .think-card-header,
-            .think-skeleton-line { animation: none; }
-        }
-        /* 阶段层级缩进（完整列表视觉）：[思考] 顶格 / [计划] 一级 / [行动] 二级 */
-        .think-line.think-indent-1 { margin-left: 0; }
-        .think-line.think-indent-2 { margin-left: 14px; }
-        .think-line.think-indent-3 { margin-left: 28px; }
-        /* 淡蓝色阶段标签小徽章（[思考]/[计划]/[行动]，基础样式） */
-        .think-line-tag {
-            flex-shrink: 0;
-            font-size: 11px;
-            line-height: 1;
-            padding: 2px 6px;
-            margin-top: 2px;
-            border-radius: var(--radius-tool);
-            color: #3b82f6;                     /* 淡蓝阶段标签 */
-            background-color: #eff6ff;          /* 淡蓝底 */
-            border: 1px solid #bfdbfe;
-            user-select: none;
-        }
-        /* 阶段分色（2026-10-01 用户口径）：[思考] 蓝 / [计划] 绿 / [行动] 橙 */
-        .think-line-tag.think-tag-think { color: #3b82f6; background-color: #eff6ff; border-color: #bfdbfe; }
-        .think-line-tag.think-tag-plan  { color: #2fa24c; background-color: #eefaf1; border-color: #bfe6cb; }
-        .think-line-tag.think-tag-action { color: #d96f2b; background-color: #fdf3ea; border-color: #f3d5ba; }
-        .think-line-text {
-            color: #6b7280;                     /* 灰色思考文字 */
-            min-width: 0;
         }
 
         /* ==================== 轻提示 toast（替代 alert 占位） ==================== */

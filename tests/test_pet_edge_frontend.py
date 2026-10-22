@@ -498,8 +498,8 @@ class FrontendNoRegressionSentinelTests(unittest.TestCase):
     def test_console_cot_and_diagnostic_sentinels(self):
         js = self.console_js
         for token in ("function splitThinkBlock", "RAW_REPLY:", "PARSED_THINK:",
-                      "RENDERING_THINK_CARD", "CoT Render Error",
-                      "think-card", "startThinkTypewriter",
+                      "RENDERING_THINK_LIVE", "CoT Render Error",
+                      "think-live", "buildThinkLiveBlock",
                       "BARE_ACTION_RE", "loadHistory", "showToast",
                       "escapeHtml", "active-like", "active-dislike",
                       "mountSystemToolbar", "source-badge"):

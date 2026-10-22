@@ -280,7 +280,7 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
 
     def test_progressive_render_anchors(self):
         js = self._js()
-        self.assertIn("think-card-header", js)     # 渐进思考卡
+        self.assertIn("think-live", js)            # 直出思维流（2026-10-22 二轮拍板）
         self.assertIn("handleEvent(etype, JSON.parse(payload))", js)
         self.assertIn("textCategory" if False else "answerAcc += (data.delta || '')",
                       js)                          # answer 增量追加
@@ -289,8 +289,8 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
                       js)                          # textContent 注入口径
         self.assertIn("appendBotMessage(data.reply, data.source, text,",
                       js)                          # done 走既有单渲染管线
-        self.assertIn("adopted ? { thinkCardEl: adopted } : null",
-                      js)                          # 流式卡收养通道（2026-10-22 #349）
+        self.assertIn("adopted ? { thinkLiveEl: adopted } : null",
+                      js)                          # 直出思维流块收养通道
 
     def test_stream_interrupt_cleanup_and_legacy_guard(self):
         """C3b：半途断流——sendMessageStream 内层闭包清过程件再 rethrow
@@ -298,7 +298,7 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
         contains 防御（流式回退时 loadingMsg 可能已被过程卡消费，
         裸 removeChild 会 DOMException → 误落红字、重答不发生）。"""
         js = self._js()
-        self.assertIn("return pump().catch", js)         # 内层清理挂钩
+        self.assertIn(".catch(function (err) {", js)     # 内层清理挂钩（then 链尾）
         self.assertIn("if (thinkCard && thinkCard.parentNode)", js)
         self.assertIn("if (toolEl && toolEl.parentNode)", js)
         self.assertIn("if (answerEl && answerEl.parentNode)", js)
@@ -310,7 +310,7 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
         # "实时卡"从未渲染、回退回复不显示，全靠轮询兜底掩盖）
         self.assertIn(
             "const history = document.getElementById('chat-history');\n"
-            "        // ⏱️ 问题 1 前端兜底", js)   # M1+ 守护注释夹在中间（问题 1）
+            "        // ⏱️ 总闸 190s AbortController", js)   # 作用域解耦自取+总闸守护
         self.assertIn("fetch('/api/chat/stream', {\n"
                       "            method: 'POST',\n"
                       "            headers: { 'Content-Type': 'application/json' },\n"
@@ -321,11 +321,10 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
             js)
 
     def test_think_append_mode_and_tool_gate(self):
-        """流式思维卡（2026-10-22 #349，原 C3b append 模式升级为分段复用）：
-        think 渐进渲染与最终卡同构——splitThinkStageLines 全量重切+行元素按
-        序号复用（文本变化才写 textContent、段标签长全整行重建 replaceChild）；
-        tool 事件无卡也建卡（不再静默丢）；textContent 安全口径不变；
-        C3b 末行整刷机制（renderedLines/lastRowEl）退役（反锚）。"""
+        """直出思维流（2026-10-22 二轮拍板）：think 渐进渲染为纯灰文本行
+        （splitThinkStageLines 仅剥 [思考]/[计划]/[行动] 前缀），行元素按序号
+        复用（文本变化才写 textContent）；tool 事件无卡也建卡（不再静默丢）；
+        textContent 安全口径不变；C3b 末行整刷机制退役（反锚）。"""
         js = self._js()
         self.assertNotIn("thinkBodyEl.textContent = thinkAcc",
                          js)                             # 整刷退役（反锚）
@@ -333,9 +332,7 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
         self.assertNotIn("lastRowEl", js)                # 末行整刷退役（反锚）
         self.assertIn("thinkBodyEl.appendChild(row)", js)
         self.assertIn("const segs = splitThinkStageLines(thinkAcc);", js)
-        self.assertIn("textEl.textContent !== seg.text", js)   # 文本变化才写
-        self.assertIn("row.parentNode.replaceChild(fresh, row)",
-                      js)                                # 段标签长全→整行重建
+        self.assertIn("segRows[i].textContent !== seg.text", js)   # 文本变化才写
         self.assertIn("ensureThinkCard();   // C3b：无卡也建", js)
 
 
