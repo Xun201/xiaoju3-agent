@@ -488,6 +488,33 @@
         /* 流式思维卡（2026-10-22 #349）：正在增长的末行保持半透明水墨态，
            行完成/卡片转正后摘类渐进淡入归位（取消单字硬蹦的视觉跳感） */
         .think-line-streaming { opacity: 0.66; }
+        /* 骨架屏（2026-10-22 首字零等待）：等待后端首帧的占位态——卡头呼吸
+           灯 + 两根水墨呼吸占位线；首段真文本到达时由 console.js 摘除 */
+        .think-card.think-card-waiting .think-card-header {
+            animation: thinkBreath 1.6s ease-in-out infinite;
+        }
+        @keyframes thinkBreath {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.45; }
+        }
+        .think-skeleton-line {
+            height: 10px;
+            margin: 6px 10px 0;
+            border-radius: 5px;
+            background: linear-gradient(90deg, rgba(31, 41, 55, 0.05) 25%, rgba(31, 41, 55, 0.13) 50%, rgba(31, 41, 55, 0.05) 75%);
+            background-size: 200% 100%;
+            animation: thinkSkeletonShimmer 1.4s ease-in-out infinite;
+        }
+        .think-skeleton-line.think-skeleton-short { width: 55%; }
+        .think-skeleton-line:last-of-type { margin-bottom: 8px; }
+        @keyframes thinkSkeletonShimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .think-card.think-card-waiting .think-card-header,
+            .think-skeleton-line { animation: none; }
+        }
         /* 阶段层级缩进（完整列表视觉）：[思考] 顶格 / [计划] 一级 / [行动] 二级 */
         .think-line.think-indent-1 { margin-left: 0; }
         .think-line.think-indent-2 { margin-left: 14px; }
