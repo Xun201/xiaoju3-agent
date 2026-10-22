@@ -75,6 +75,7 @@
             background-color: var(--color-bg-chat);   /* 答辩微调：底色让位卡片，卡片自身用 card 色 */
             border-right: 1px solid var(--color-border);
             padding: 14px;
+            padding-bottom: 20px;                      /* 紧急修复：底部留白，最后一张卡不顶窗沿 */
             display: flex;
             flex-direction: column;
             gap: 12px;                                 /* 答辩微调：卡片呼吸间距 */
@@ -83,7 +84,16 @@
             /* 卡片化：卡片圆角 + 轻阴影（令牌化，克制不过度重绘） */
             border-radius: var(--radius-card);
             margin: 12px;
+            /* 紧急修复（2026-10-22）：整栏顺滑滚动——body overflow:hidden 会
+               硬裁超高层内容（待办卡曾被底部截断无法滚达），overflow-y 收归
+               侧栏自身；细腻滚动条双引擎（webkit 伪元素 + thin） */
+            overflow-y: auto;
+            scrollbar-width: thin;
         }
+        .sidebar::-webkit-scrollbar { width: 6px; }
+        .sidebar::-webkit-scrollbar-track { background: transparent; }
+        .sidebar::-webkit-scrollbar-thumb { background: rgba(31, 41, 55, 0.15); border-radius: 3px; }
+        .sidebar::-webkit-scrollbar-thumb:hover { background: rgba(31, 41, 55, 0.25); }
         .panel-header {
             font-size: 18px;
             font-weight: 600;
@@ -100,6 +110,9 @@
             border-radius: var(--radius-card);
             box-shadow: var(--shadow-card);
             padding: 12px 14px;
+            flex-shrink: 0;   /* 紧急修复：禁 flex 压缩（todos-list 有 overflow-y
+                                 → min-height:auto 归零 → 待办卡被压瘪而非撑出滚动，
+                                 这才是底部截断的真正机制） */
         }
         .dash-note { font-size: 11px; color: var(--color-text-hint); margin-top: 6px; }
         .dash-quick { display: flex; gap: 8px; margin-top: 4px; }
@@ -184,7 +197,13 @@
         .header-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .header-btn:disabled:hover { background: none; }
         /* 待办卡片（2026-10-04 待办提取）：pending 可点击标完成，done 灰显划线 */
-        .todos-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 180px; overflow-y: auto; }
+        /* 紧急修复（2026-10-22）：内层独立滚动保留，上限改视口自适应
+           （180px 写死在长列表+卡片化布局下顶底互挤）；同款细腻滚动条 */
+        .todos-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 32vh; overflow-y: auto; scrollbar-width: thin; }
+        .todos-list::-webkit-scrollbar { width: 6px; }
+        .todos-list::-webkit-scrollbar-track { background: transparent; }
+        .todos-list::-webkit-scrollbar-thumb { background: rgba(31, 41, 55, 0.15); border-radius: 3px; }
+        .todos-list::-webkit-scrollbar-thumb:hover { background: rgba(31, 41, 55, 0.25); }
         /* 尾巴 1：复选框条目——完成态保留显示（划线灰显），取消钩即恢复；
            尾巴 C：P0/P1/P2 pill（active 高亮主色） */
         .todo-item { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; line-height: 1.5; padding: 3px 4px; border-radius: 6px; }
