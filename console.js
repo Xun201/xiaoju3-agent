@@ -1289,6 +1289,19 @@
         // legacy 重答。比后端超时略长，作为最终防线。
         const ac = new AbortController();
         const streamGuard = setTimeout(() => ac.abort(), 190000);
+        // ⚡ 首字零等待（2026-10-22 队长拍板）：流式状态变量提升到 fetch 之前
+        // ——骨架卡在点击发送的同一 tick 同步挂载，把后端 TTFT（实测闲聊首
+        // 帧 1.37s≈全部为模型首字延迟；指令链无模型仅 21ms）整个遮进呼吸态
+        let thinkCard = null;     // 流式思维卡（发送瞬间骨架挂载，首 think 增量接管）
+        let thinkBodyEl = null;
+        let thinkAcc = '';        // 累计思考原文（分段判定用）
+        let thinkStartTs = null;  // A1（#326 前置侦察）：首个 think 增量到达时刻→耗时显示
+        let answerEl = null;      // 正文气泡（首个 answer 块建）
+        let answerAcc = '';
+        let toolEl = null;
+        let segRows = [];         // 流式思维卡（2026-10-22 #349）：与最终卡
+                                  // 同构的分段行（徽章+缩进），按序号复用
+        ensureThinkCard();   // ⚡ 乐观挂载骨架卡（点击发送同一 tick，零等待）
         return fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1299,15 +1312,6 @@
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
             let buf = '';
-            let thinkCard = null;     // 渐进思考卡（首个 think 块建卡）
-            let thinkBodyEl = null;
-            let thinkAcc = '';        // 累计思考原文（分段判定用）
-            let thinkStartTs = null;  // A1（#326 前置侦察）：首个 think 增量到达时刻→耗时显示
-            let answerEl = null;      // 正文气泡（首个 answer 块建）
-            let answerAcc = '';
-            let toolEl = null;
-            let segRows = [];         // 流式思维卡（2026-10-22 #349）：与最终卡
-                                      // 同构的分段行（徽章+缩进），按序号复用
 
             function ensureThinkCard() {
                 if (thinkCard) return;
@@ -1325,7 +1329,7 @@
                 icon.textContent = '🧠';
                 const title = document.createElement('span');
                 title.className = 'think-card-title';
-                title.textContent = '思考过程（实时）';
+                title.textContent = '小橘正在思考…';
                 const arrow = document.createElement('span');
                 arrow.className = 'think-card-arrow';
                 arrow.textContent = '▼';
@@ -1334,6 +1338,14 @@
                 head.appendChild(arrow);
                 thinkBodyEl = document.createElement('div');
                 thinkBodyEl.className = 'think-card-body';
+                // 骨架屏（首字零等待）：卡头呼吸灯 + 两根水墨呼吸占位线，
+                // 首段真文本到达时由 renderThinkProgressive 摘除（无缝接管）
+                thinkCard.classList.add('think-card-waiting');
+                for (let sk = 0; sk < 2; sk++) {
+                    const line = document.createElement('div');
+                    line.className = 'think-skeleton-line' + (sk ? ' think-skeleton-short' : '');
+                    thinkBodyEl.appendChild(line);
+                }
                 thinkCard.appendChild(head);
                 thinkCard.appendChild(thinkBodyEl);
                 history.appendChild(thinkCard);
@@ -1341,6 +1353,14 @@
 
             function renderThinkProgressive() {
                 ensureThinkCard();
+                // 无缝接管（首字零等待配套）：首段真文本到达——摘呼吸态+清骨
+                // 架线，直接在原卡上填充文字（零二次挂载、零跳变）
+                if (thinkCard.classList.contains('think-card-waiting')) {
+                    thinkCard.classList.remove('think-card-waiting');
+                    thinkBodyEl.querySelectorAll('.think-skeleton-line').forEach(function (el) {
+                        el.remove();
+                    });
+                }
                 // 流式思维卡（2026-10-22 #349）：与最终卡同构的逐段渲染——
                 // splitThinkStageLines 全量重切（think 全文 KB 级×delta 百次
                 // 级，重切开销可忽略），行元素按序号对齐复用：已有行仅在文本
@@ -1446,7 +1466,7 @@
                                 secs = ((Date.now() - thinkStartTs) / 1000).toFixed(1);
                             }
                             finalizeThinkCard(parts.think,
-                                secs === null ? '' : '已思考（用时 ' + secs + ' 秒）');
+                                secs === null ? '思考过程' : '已思考（用时 ' + secs + ' 秒）');
                             adopted = thinkCard;
                         } else {
                             // 旧口径：最终回复无 <think>（理论边角）不保留过程卡

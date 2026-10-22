@@ -51,7 +51,7 @@ class StreamingCardStructureTests(unittest.TestCase):
         self.assertIn("head.setAttribute('onclick', 'toggleThinkCard(this)')", body)
         self.assertIn("title.className = 'think-card-title'", body)
         self.assertIn("arrow.className = 'think-card-arrow'", body)
-        self.assertIn("textContent = '思考过程（实时）'", body)
+        self.assertIn("textContent = '小橘正在思考…'", body)   # 骨架态标题（首字零等待）
 
     def test_progressive_render_reuses_final_builder(self):
         """渐进渲染复用最终卡构建器：buildThinkLineEl 建行（徽章+缩进同源）；
@@ -234,6 +234,68 @@ class UiSpecTests(unittest.TestCase):
         start = html.index(".think-card.think-anim .think-card-body")
         css = html[start:html.index("}", start)]
         self.assertIn("transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1)", css)
+
+
+class SkeletonInstantTests(unittest.TestCase):
+    """首字零等待骨架屏（2026-10-22 队长拍板，消灭 TTFT 干等）。
+
+    诊断定案：指令链（不走模型）TTFB 仅 21ms，闲聊首帧 1.37s≈全部为模型
+    首字延迟——旧前端在首个 think 帧才挂卡，把整个 TTFT 暴露成干等。
+    修法：发送同一 tick 同步挂骨架卡（呼吸灯+占位线），首帧真文本无缝接管。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = _read("console.js")
+        cls.html = _read("index.html")
+
+    def test_skeleton_mounted_synchronously_before_fetch(self):
+        """乐观挂载在 fetch 之前（点击发送同一 tick，零异步等待）；流式状态
+        变量一并提升到 fetch 之前（骨架卡挂载依赖这些闭包声明）。"""
+        js = self.js
+        mount_at = js.index("ensureThinkCard();   // ⚡ 乐观挂载骨架卡")
+        fetch_at = js.index("return fetch('/api/chat/stream'")
+        decl_at = js.index("let thinkCard = null;")
+        self.assertLess(decl_at, mount_at)
+        self.assertLess(mount_at, fetch_at)
+
+    def test_skeleton_anatomy_built_in_ensure_think_card(self):
+        """骨架解剖：呼吸态类 + 两根占位线（第二根短款）+ 骨架态标题。"""
+        block = _extract_span(self.js, "function ensureThinkCard",
+                              "function renderThinkProgressive")
+        self.assertIn("thinkCard.classList.add('think-card-waiting')", block)
+        self.assertIn("think-skeleton-line' + (sk ? ' think-skeleton-short' : '')", block)
+        self.assertIn("title.textContent = '小橘正在思考…';", block)
+        self.assertNotIn("思考过程（实时）", self.js)   # 旧实时标题退役（反锚）
+
+    def test_seamless_takeover_on_first_think(self):
+        """无缝接管：首段真文本到达——摘呼吸态+清骨架线后原卡填充
+        （renderThinkProgressive 开头，先于分段渲染）；零二次挂载。"""
+        block = _extract_span(self.js, "function renderThinkProgressive",
+                              "function finalizeThinkCard")
+        self.assertIn("if (thinkCard.classList.contains('think-card-waiting')) {", block)
+        self.assertLess(block.index("classList.remove('think-card-waiting')"),
+                        block.index("const segs = splitThinkStageLines(thinkAcc);"))
+        self.assertIn("querySelectorAll('.think-skeleton-line')", block)
+        self.assertIn("el.remove();", block)
+
+    def test_instant_done_title_fallback(self):
+        """指令单帧 done（骨架态直接转正、无耗时）：标题回落'思考过程'
+        （与最终卡默认标题同口径），不得残留'小橘正在思考…'。"""
+        block = _extract_span(self.js, "} else if (etype === 'done') {",
+                              "} else if (etype === 'error') {")
+        self.assertIn("secs === null ? '思考过程' : '已思考（用时 ' + secs + ' 秒）'", block)
+
+    def test_skeleton_css_breath_and_shimmer(self):
+        """CSS：卡头呼吸灯 thinkBreath + 占位线 shimmer + reduced-motion 降级；
+        呼吸态选择器与 JS 挂的类名成对。"""
+        html = self.html
+        self.assertIn(".think-card.think-card-waiting .think-card-header {", html)
+        self.assertIn("@keyframes thinkBreath", html)
+        self.assertIn(".think-skeleton-line {", html)
+        self.assertIn("@keyframes thinkSkeletonShimmer", html)
+        self.assertIn(".think-skeleton-line.think-skeleton-short { width: 55%; }", html)
+        self.assertIn("@media (prefers-reduced-motion: reduce) {", html)
 
 
 if __name__ == "__main__":
