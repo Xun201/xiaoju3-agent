@@ -50,207 +50,79 @@ def _extract_span(js, start_marker, end_marker, start=0):
 
 
 # ---------------------------------------------------------------------------
-# 任务 2：一次性渲染（无逐行 setTimeout 链）
+# 二轮拍板（2026-10-22）：直出思维流（对标 DeepSeek，折叠卡家族整体退役）
 # ---------------------------------------------------------------------------
 
-class CotOneShotRenderTests(unittest.TestCase):
+class ThinkLiveDirectTests(unittest.TestCase):
+    """直出思维流契约：🧠 标签行+灰色小号思考行直接外冒，无箭头无折叠无
+    二次点击；正文黑色粗体续流；流式与最终/历史/刷新共用同一 DOM 形态。"""
 
     @classmethod
     def setUpClass(cls):
         cls.console_js = _read("console.js")
         cls.index_html = _read("index.html")
 
-    def _typewriter_body(self):
-        return _extract_span(self.console_js,
-                             "function startThinkTypewriter",
-                             "window.toggleThinkCard")
-
-    def test_line_step_chain_removed(self):
-        """逐行淡入链已废止：THINK_LINE_STEP_MS 常量与 revealNextLine
-        setTimeout 链不再存在于 console.js（一次性渲染取代逐条闪动）。"""
+    def test_live_block_builder(self):
+        """buildThinkLiveBlock：🧠 标签行 + think-live-line 逐段行（splitThink
+        StageLines 剥前缀），全 textContent 注入免 XSS。"""
         js = self.console_js
-        self.assertNotIn("THINK_LINE_STEP_MS", js)
-        self.assertNotIn("revealNextLine", js)
-        self.assertNotIn("setTimeout(revealNextLine", js)
+        start = js.index("function buildThinkLiveBlock")
+        body = js[start:js.index("function buildThinkFallbackBlock", start)]
+        self.assertIn("className = 'think-live'", body)
+        self.assertIn("className = 'think-live-label'", body)
+        self.assertIn("textContent = '🧠 思考过程'", body)
+        self.assertIn("className = 'think-live-line'", body)
+        self.assertIn("splitThinkStageLines(thinkText)", body)
+        self.assertIn("row.textContent = seg.text", body)
 
-    def test_one_shot_render_all_lines(self):
-        """一次性渲染主链路：有阶段标记时 body 清空后 forEach 同帧插入全部
-        行（buildThinkLineEl），随后立即调度收起（无任何逐行定时器）。"""
-        body = self._typewriter_body()
-        self.assertIn(
-            "segs.forEach(function (seg) { body.appendChild(buildThinkLineEl(seg)); });",
-            body)
-        # 渲染完成后才调度折叠（先全量上屏、后收起）
-        self.assertLess(
-            body.index("body.appendChild(buildThinkLineEl(seg))"),
-            body.rindex("scheduleThinkCollapse(card, msgEl)"))
-        # 每行插入前先清空正文（强制兜底卡片可能已预填全文的场景）
-        self.assertIn("body.textContent = '';", body)
-
-    def test_stage_split_and_line_builder_kept(self):
-        """分段函数与单行构建器保留：[思考]/[计划]/[行动] 半角方括号阶段
-        标记起新段（与后端协议同口径），buildThinkLineEl 构建单行段元素。"""
+    def test_collapsed_family_fully_retired(self):
+        """折叠卡家族整体退役（反锚）：打字机/折叠链/开合/骨架构建器/
+        think-pending 全部不存在——绝不折叠、绝无二次点击。"""
         js = self.console_js
-        self.assertIn("function splitThinkStageLines", js)
-        self.assertIn("function buildThinkLineEl", js)
-        self.assertIn(r"/^\[(思考|计划|行动)\]/", js)
-        el_body = _extract_span(js, "function buildThinkLineEl",
-                                "function hideBubbleUntilThinkDone")
-        # 全部 textContent 注入免 XSS；类名基础标记保留
-        self.assertIn("tag.textContent = seg.tag", el_body)
-        self.assertIn("text.textContent = seg.text", el_body)
-        self.assertIn("className = 'think-line'", el_body)
-        self.assertIn("className = 'think-line-tag'", el_body)
-        self.assertIn("className = 'think-line-text'", el_body)
-        # 阶段分色 + 层级缩进类挂载（三阶段颜色/缩进区分，完整列表视觉）
-        self.assertIn("classList.add(THINK_TAG_CLASS[seg.tag]", el_body)
-        self.assertIn("classList.add(THINK_INDENT_CLASS[seg.tag]", el_body)
-        self.assertIn("'思考': 'think-tag-think'", js)
-        self.assertIn("'计划': 'think-tag-plan'", js)
-        self.assertIn("'行动': 'think-tag-action'", js)
-        self.assertIn("'思考': 'think-indent-1'", js)
-        self.assertIn("'计划': 'think-indent-2'", js)
-        self.assertIn("'行动': 'think-indent-3'", js)
-
-    def test_stage_styles_in_index_html(self):
-        """index.html 阶段样式：徽章三色（[思考] 蓝 #3b82f6 / [计划] 绿
-        #2fa24c / [行动] 橙 #d96f2b）+ 缩进三档；淡入动画保留。"""
+        for token in ("startThinkTypewriter", "scheduleThinkCollapse",
+                      "animateThinkCollapse", "toggleThinkCard",
+                      "buildThinkCardEl", "buildThinkLineEl",
+                      "hideBubbleUntilThinkDone", "showBubbleNow",
+                      "THINK_TYPE_MS", "THINK_COLLAPSE_DELAY_MS",
+                      "THINK_COLLAPSE_MS", "think-pending",
+                      "animateThink"):
+            self.assertNotIn(token, js)
         html = self.index_html
-        self.assertIn(".think-line-tag.think-tag-think", html)
-        self.assertIn(".think-line-tag.think-tag-plan", html)
-        self.assertIn(".think-line-tag.think-tag-action", html)
-        for color in ("#3b82f6", "#2fa24c", "#d96f2b"):
-            self.assertIn(color, html)
-        self.assertIn(".think-line.think-indent-2", html)
-        self.assertIn(".think-line.think-indent-3", html)
-        # 整体淡入动效保留（所有行同时浮现，非逐行错峰）
-        start = html.index(".think-line {")
-        line_css = html[start:html.index("}", start)]
-        self.assertIn("animation: thinkLineFadeIn", line_css)
-        self.assertIn("@keyframes thinkLineFadeIn", html)
+        for token in ("think-collapsed", "think-card", "think-pending",
+                      "thinkLineFadeIn"):
+            self.assertNotIn(token, html)
 
-    def test_no_marker_degradation_kept(self):
-        """降级链零回退：无阶段标记的思考文本沿用原逐字打字机
-        （THINK_TYPE_MS 口径、textContent 切片注入）。"""
+    def test_live_css_direct_out(self):
+        """直出样式：灰色小号思考行 + 🧠 标签呼吸 + 骨架占位线 + 正文粗体
+        （answer 正常黑字粗体续流）；错开淡入仅历史批渲染挂 .msg-enter。"""
+        html = self.index_html
+        self.assertIn(".think-live {", html)
+        self.assertIn(".think-live-label {", html)
+        self.assertIn(".think-live-line {", html)
+        self.assertIn(".message.bot-message .bubble-content {\n            font-weight: 600;", html)
+        self.assertIn(".message.msg-enter { animation: msgEnter 0.32s ease-out both; }", html)
+        # 平衡换行微操：标签 balance / 正文 pretty
+        self.assertIn("text-wrap: balance;", html)
+        self.assertIn("text-wrap: pretty;", html)
+
+    def test_adoption_channel_renamed_to_live(self):
+        """done 收养通道改 thinkLiveEl：最终消息收养直出块（不重建）；
+        done 无折叠调度（scheduleThinkCollapse 已退役）。"""
         js = self.console_js
-        self.assertIn("const THINK_TYPE_MS = 15;", js)
-        body = self._typewriter_body()
-        self.assertIn("body.textContent = text.slice(0, shown)", body)
+        self.assertIn("adopted ? { thinkLiveEl: adopted } : null", js)
+        self.assertIn("options.thinkLiveEl.classList.contains('think-live')", js)
+        self.assertNotIn("scheduleThinkCollapse", js)
+
+    def test_duration_label_on_live_block(self):
+        """A1 耗时显示落直出块标签：已思考（用时 X 秒）。"""
+        js = self.console_js
+        self.assertIn("已思考（用时 ' + secs + ' 秒）", js)
+        self.assertIn("const st = thinkCard && thinkCard.querySelector('.think-live-label');", js)
 
 
 # ---------------------------------------------------------------------------
-# 任务 2：1.5s 延迟折叠 + 300ms 过渡 + 点击再展开
+# 任务 2：1.5s 延迟折叠 + 300ms 过渡 + 点击再展开（2026-10-22 已随折叠卡退役）
 # ---------------------------------------------------------------------------
-
-class CotCollapseRhythmTests(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        cls.console_js = _read("console.js")
-        cls.index_html = _read("index.html")
-
-    def _collapse_helpers(self):
-        """console.js 折叠辅助区（气泡显隐 + 动画折叠 + 调度器）。"""
-        return _extract_span(self.console_js,
-                             "function hideBubbleUntilThinkDone",
-                             "function startThinkTypewriter")
-
-    def test_collapse_delay_constants(self):
-        """折叠节奏常量：渲染完等 1.5s（THINK_COLLAPSE_DELAY_MS = 1500）、
-        过渡约 300ms（THINK_COLLAPSE_MS = 300，兜底收尾定时器取值）。"""
-        js = self.console_js
-        self.assertIn("const THINK_COLLAPSE_DELAY_MS = 1500;", js)
-        self.assertIn("const THINK_COLLAPSE_MS = 300;", js)
-
-    def test_css_transition_300ms(self):
-        """index.html 折叠动画 CSS：.think-anim 态下正文 max-height 过渡
-        0.3s swift-out（cubic-bezier(0.4,0,0.2,1)，UI 规范 2026-10-22 干脆
-        顺滑口径，原 ease 随改），由 console.js 挂/摘类启用。"""
-        html = self.index_html
-        start = html.index(".think-card.think-anim .think-card-body")
-        css = html[start:html.index("}", start)]
-        self.assertIn("transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1)", css)
-
-    def test_js_collapse_sequence(self):
-        """JS 折叠序列：先写实测可视高度（clientHeight，避免超限滚动态
-        视觉跳动）→ 挂 .think-anim → 强制回流 → 归零触发过渡 → transitionend
-        /兜底定时器收尾（落回 .think-collapsed、清内联样式、放行正文）。"""
-        helpers = self._collapse_helpers()
-        self.assertIn("function animateThinkCollapse", helpers)
-        self.assertIn("body.style.maxHeight = body.clientHeight + 'px';", helpers)
-        self.assertIn("classList.add('think-anim')", helpers)
-        self.assertIn("void body.offsetHeight;", helpers)          # 强制回流
-        self.assertIn("body.style.maxHeight = '0px';", helpers)
-        self.assertIn("addEventListener('transitionend', finish)", helpers)
-        self.assertIn("setTimeout(finish, THINK_COLLAPSE_MS + 150)", helpers)
-        finish_at = helpers.index("const finish = function () {")
-        finish_body = helpers[finish_at:helpers.index("};", finish_at)]
-        self.assertIn("card.classList.add('think-collapsed')", finish_body)
-        self.assertIn("classList.remove('think-anim')", finish_body)
-        self.assertIn("body.style.maxHeight = '';", finish_body)
-        self.assertIn("showBubbleNow(msgEl)", finish_body)
-
-    def test_delay_then_collapse_scheduled(self):
-        """渲染完成 → 延迟调度：setTimeout(…, THINK_COLLAPSE_DELAY_MS)；
-        两条渲染路径（一次性列表 / 逐字打字机降级）完成后都走同一调度器。"""
-        js = self.console_js
-        self.assertIn("function scheduleThinkCollapse", js)
-        sched = _extract_span(js, "function scheduleThinkCollapse",
-                              "function startThinkTypewriter")
-        self.assertIn("THINK_COLLAPSE_DELAY_MS", sched)
-        body = _extract_span(js, "function startThinkTypewriter",
-                             "window.toggleThinkCard")
-        self.assertEqual(body.count("scheduleThinkCollapse(card, msgEl)"), 2)
-
-    def test_bubble_hidden_until_collapse_done(self):
-        """正文气泡放行节奏：展示开始即挂 .think-pending（index.html 隐藏
-        .bubble-content/.source-badge/.msg-tools），折叠完成（或任何提前
-        退出）才摘类放行；历史回放早退分支不隐藏。"""
-        js = self.console_js
-        html = self.index_html
-        self.assertIn("function hideBubbleUntilThinkDone", js)
-        self.assertIn("function showBubbleNow", js)
-        self.assertIn(".classList.add('think-pending')", js)
-        self.assertIn(".classList.remove('think-pending')", js)
-        for sel in (".message.think-pending .bubble-content",
-                    ".message.think-pending .source-badge",
-                    ".message.think-pending .msg-tools"):
-            self.assertIn(sel, html)
-        body = _extract_span(js, "function startThinkTypewriter",
-                             "window.toggleThinkCard")
-        # 历史回放早退在前、隐藏在后：animate=false 永不隐藏气泡
-        self.assertIn("if (!animate || !text) {", body)
-        self.assertLess(body.index("if (!animate || !text) {"),
-                        body.index("hideBubbleUntilThinkDone(msgEl)"))
-
-    def test_re_expand_on_click(self):
-        """点击折叠卡片标题可再展开：toggleThinkCard 类切换保留；展开态
-        .think-card-body 既有 max-height: 260px + overflow-y: auto 保留
-        （内容完整可见、超限滚动）。"""
-        js = self.console_js
-        html = self.index_html
-        self.assertIn("window.toggleThinkCard", js)
-        self.assertIn("classList.toggle('think-collapsed')", js)
-        self.assertIn(".think-card.think-collapsed .think-card-body", html)
-        start = html.index(".think-card-body {")
-        css = html[start:html.index("}", start)]
-        self.assertIn("max-height: 260px", css)
-        self.assertIn("overflow-y: auto", css)
-        self.assertIn("border-left: 3px solid", css)
-
-    def test_history_replay_direct_collapsed(self):
-        """历史回放直接折叠态：共用 appendBotMessage 入口 + animateThink:
-        false，不打字不动画、完整填充保持折叠、正文气泡立即可见。"""
-        js = self.console_js
-        self.assertIn(
-            "appendBotMessage(m.content, m.source || '', lastUser,\n"
-            "                                         { animateThink: false, ts: m.ts })",
-            js)   # M1+：历史回放携带 ts（IM 式时间分隔）
-        body = _extract_span(js, "function startThinkTypewriter",
-                             "window.toggleThinkCard")
-        self.assertIn("body.textContent = text;", body)
-        self.assertIn("return;", body)
-
 
 # ---------------------------------------------------------------------------
 # 任务 4：桌宠下线只留加速球
@@ -408,10 +280,8 @@ class ZeroRegressionSentinelTests(unittest.TestCase):
         纯文本降级块（buildThinkFallbackBlock）零回退。"""
         js = self.console_js
         self.assertIn("function buildThinkFallbackBlock", js)
-        self.assertIn("classList.add('think-card')", js)
-        self.assertIn("botMsg.prepend(", js)
         self.assertIn("#1f2937", js)                       # 深色兜底块背景
-        self.assertIn('console.log("RENDERING_THINK_CARD...")', js)
+        self.assertIn('console.log("RENDERING_THINK_LIVE...")', js)
         self.assertIn('console.log("RAW_REPLY:", res.data.reply)', js)
         self.assertIn('console.log("PARSED_THINK:"', js)
 
@@ -422,7 +292,6 @@ class ZeroRegressionSentinelTests(unittest.TestCase):
         self.assertIn("if (thinkParts.think !== null)", js)
         self.assertIn("syncThinkCard(msgEl, thinkParts.think)", js)
         self.assertIn("if (thinkText === null) return;", js)
-        self.assertIn("options.animateThink !== false", js)
 
     def test_no_new_external_dependency(self):
         """零新依赖、零外部 CDN：index.html 无外链 script；改动未引入新
@@ -457,18 +326,18 @@ class NodeSyntaxGateTests(unittest.TestCase):
 
 class ThinkDurationDisplayTests(unittest.TestCase):
     """A1（#326 前置侦察）锚：思考耗时显示——首个 think 增量记时刻，
-    done 收尾算差写入卡片标题"已思考（用时 X 秒）"。"""
+    done 收口算差写入直出思维流块标签"🧠 已思考（用时 X 秒）"。"""
 
     def test_think_start_ts_recorded_on_first_delta(self):
         src = _read("console.js")
         self.assertIn("let thinkStartTs = null;", src)
         self.assertIn("thinkStartTs = Date.now();", src)   # 首增量记时刻
-        self.assertIn("st.textContent = '思考中…';", src)   # 流式期卡片态
+        self.assertIn("st.textContent = '🧠 思考中…';", src)   # 流式期块态
 
-    def test_duration_display_in_final_card_title(self):
+    def test_duration_display_in_final_label(self):
         src = _read("console.js")
         self.assertIn("已思考（用时 ' + secs + ' 秒）", src)
-        self.assertIn("botMsg.querySelector('.think-card-title')", src)
+        self.assertIn("querySelector('.think-live-label')", src)
 
 
 if __name__ == "__main__":

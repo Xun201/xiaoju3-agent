@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
-"""流式思维卡静态锚（2026-10-22 #349，答辩演示加分项）。
+"""直出思维流静态锚（2026-10-22 二轮拍板，替代流式思维卡折叠契约）。
 
-契约（_dev/design_streaming_think_card.md）：
-- 流式态=最终态预览：ensureThinkCard 卡头解剖与 buildThinkCardEl 同构
-  （图标/标题 span/箭头/onclick 开合），徽章分色/缩进走同一 buildThinkLineEl；
-- 保留式收尾：done 后流式卡原地转正（finalizeThinkCard 按 done 净化全文重渲
-  一次），经 appendBotMessage thinkCardEl 通道收养进最终消息——不拆卡不重建
-  不重放打字机；收养路径跳过 startThinkTypewriter（防双卡双动画）；
-- 三状态：思考中（卡头"思考中…"）→ 已完成（"已思考（用时 X 秒）"标题+
-  scheduleThinkCollapse 自动收起，点击可再展开）→ error（既有 catch 清过程件
-  →legacy 红字，零改动锁存）；
-- 正文零干扰：answer 增量通道不动；done 先挂最终气泡再撤 answerEl（换屏零空白）；
-- 边界：无流式卡走原重建路径零变化；最终 reply 无 <think> 不保留过程卡。
-
-全部静态断言离线可跑（node 在位时 NodeSyntaxGateTests 另行语法门）。
+契约（对标 DeepSeek，队长口述）：
+- 废弃折叠卡：无箭头无折叠无二次点击；think 以灰色小号 🧠 标签+小字行直接
+  外冒；answer 换行以正常黑字粗体续流；
+- 严格分流：event: think 只进思维流块（renderThinkProgressive），event:
+  answer 只进正文气泡（ensureAnswerEl）——绝不互相沾；
+- 首字零等待：发送同一 tick 乐观挂骨架（呼吸标签+占位线），首帧无缝接管；
+- 看门狗：首帧前 30s / 帧间 90s 无帧 → 中断就地报错（不转 legacy），UI 永不
+  死锁；后端 180s 硬超时仍在内层；
+- done：思维流块按净化全文定稿后原地移动进最终消息（thinkLiveEl 收养），
+  标签换耗时；正文/工具栏/落盘走 appendBotMessage 单管线；
+- 运行时防线：本轮新增 node 运行时烟雾（test_streamcard_runtime_smoke）——
+  757f321 作用域雷（调用提出外层/声明留内层 → ReferenceError 假死）由
+  node --check 与静态锚均无法查出，真跑烟雾是本类事故的唯一可靠门。
 """
 import os
 import unittest
@@ -31,8 +31,8 @@ def _extract_span(js, start_marker, end_marker, start=0):
     return js[i:js.index(end_marker, i)]
 
 
-class StreamingCardStructureTests(unittest.TestCase):
-    """流式卡骨架与最终卡同构。"""
+class DirectOutStructureTests(unittest.TestCase):
+    """直出思维流骨架与构建器。"""
 
     @classmethod
     def setUpClass(cls):
@@ -42,66 +42,115 @@ class StreamingCardStructureTests(unittest.TestCase):
         return _extract_span(self.js, "function sendMessageStream",
                              "function sendMessageLegacy")
 
-    def test_header_anatomy_matches_final_card(self):
-        """ensureThinkCard 卡头：onclick 开合 + title span + 箭头（与
-        buildThinkCardEl 同构件，折叠/悬停/箭头过渡样式零新增复用）。"""
-        block = self._stream_block()
-        start = block.index("function ensureThinkCard")
-        body = block[start:block.index("function renderThinkProgressive", start)]
-        self.assertIn("head.setAttribute('onclick', 'toggleThinkCard(this)')", body)
-        self.assertIn("title.className = 'think-card-title'", body)
-        self.assertIn("arrow.className = 'think-card-arrow'", body)
-        self.assertIn("textContent = '小橘正在思考…'", body)   # 骨架态标题（首字零等待）
+    def test_live_block_builder(self):
+        """buildThinkLiveBlock：🧠 标签行 + 灰色思考行（前缀剥除），全
+        textContent 注入免 XSS。"""
+        js = self.js
+        start = js.index("function buildThinkLiveBlock")
+        body = js[start:js.index("function buildThinkFallbackBlock", start)]
+        self.assertIn("className = 'think-live'", body)
+        self.assertIn("className = 'think-live-label'", body)
+        self.assertIn("textContent = '🧠 思考过程'", body)
+        self.assertIn("className = 'think-live-line'", body)
+        self.assertIn("splitThinkStageLines(thinkText)", body)
 
-    def test_progressive_render_reuses_final_builder(self):
-        """渐进渲染复用最终卡构建器：buildThinkLineEl 建行（徽章+缩进同源）；
-        文本变化才写 textContent；段标签长全整行重建（半截 [思考] 逐字长全
-        场景）。"""
+    def test_stream_skeleton_mounted_same_scope_and_tick(self):
+        """首字零等待：ensureThinkCard 声明与乐观挂载调用同在 sendMessageStream
+        顶层（757f321 作用域雷静态代理锚；运行时由烟雾测试真锁）；挂载先于
+        fetch。"""
+        block = self._stream_block()
+        # 声明与调用同层（函数声明提升，顺序无关）——757f321 作用域雷的静态
+        # 代理锚；真锁由 test_streamcard_runtime_smoke 运行时烟雾承担
+        self.assertIn("function ensureThinkCard", block)
+        call_at = block.index("ensureThinkCard();   // ⚡ 乐观挂载骨架（点击发送同一 tick，零等待）")
+        fetch_at = block.index("return fetch('/api/chat/stream'")
+        self.assertLess(call_at, fetch_at)
+        self.assertIn("className = 'think-live'", block)
+        self.assertIn("classList.add('think-live-waiting')", block)
+        self.assertIn("think-skeleton-line' + (sk ? ' think-skeleton-short' : '')", block)
+        self.assertIn("textContent = '🧠 小橘正在思考…'", block)
+
+    def test_seamless_takeover(self):
+        """无缝接管：首段真文本到达——摘呼吸态+清骨架线后原块填充（零二次
+        挂载零跳变）。"""
         block = self._stream_block()
         start = block.index("function renderThinkProgressive")
         body = block[start:block.index("function finalizeThinkCard", start)]
-        self.assertIn("const segs = splitThinkStageLines(thinkAcc);", body)
-        self.assertIn("const row = buildThinkLineEl(segs[segRows.length]);", body)
-        self.assertIn("textEl.textContent !== seg.text", body)
-        self.assertIn("row.parentNode.replaceChild(fresh, row)", body)
-        self.assertIn("history.scrollTop = history.scrollHeight;", body)  # 跟随滚动
+        self.assertIn("if (thinkCard.classList.contains('think-live-waiting')) {", body)
+        self.assertLess(body.index("classList.remove('think-live-waiting')"),
+                        body.index("const segs = splitThinkStageLines(thinkAcc);"))
+        self.assertIn("querySelectorAll('.think-skeleton-line')", body)
+        self.assertIn("history.scrollTop = history.scrollHeight;", body)
 
-    def test_finalize_aligns_to_sanitized_fulltext(self):
-        """finalizeThinkCard：按 done 帧净化全文重渲一次（thinkAcc 换源），
-        卡头换完成态标题（A1 耗时口径）。"""
-        block = self._stream_block()
-        start = block.index("function finalizeThinkCard")
-        body = block[start:block.index("function ensureAnswerEl", start)]
-        self.assertIn("thinkAcc = finalThink;", body)
-        self.assertIn("renderThinkProgressive();", body)
-        self.assertIn("st.textContent = titleText;", body)
+    def test_retired_family_gone(self):
+        """折叠卡家族整体退役（反锚）：打字机/折叠链/开合/旧构建器/
+        think-pending/徽章行构建器全不存在。"""
+        js = self.js
+        for token in ("startThinkTypewriter", "scheduleThinkCollapse",
+                      "animateThinkCollapse", "toggleThinkCard",
+                      "buildThinkCardEl", "buildThinkLineEl",
+                      "hideBubbleUntilThinkDone", "showBubbleNow",
+                      "THINK_TYPE_MS", "THINK_COLLAPSE_DELAY_MS",
+                      "think-pending", "think-collapsed", "animateThink",
+                      "RENDERING_THINK_CARD"):
+            self.assertNotIn(token, js)
 
 
 class DoneAdoptionTests(unittest.TestCase):
-    """done 保留式收尾：收养进最终消息、跳过打字机、自动收起。"""
+    """done 直出收尾：收养进最终消息、标签换耗时、严格分流。"""
 
     @classmethod
     def setUpClass(cls):
         cls.js = _read("console.js")
 
-    def test_done_keeps_card_via_adoption(self):
-        """done 不再拆卡重放：finalizeThinkCard 转正 + appendBotMessage
-        thinkCardEl 通道收养；scheduleThinkCollapse 自动收起（点击可再展开）。"""
+    def test_done_keeps_live_block(self):
+        """done 不拆块：finalizeThinkCard 定稿 + appendBotMessage thinkLiveEl
+        通道收养；无任何折叠调度。"""
         block = _extract_span(self.js, "function sendMessageStream",
                               "function sendMessageLegacy")
         start = block.index("} else if (etype === 'done') {")
         done_body = block[start:block.index("} else if (etype === 'error') {", start)]
         self.assertIn("finalizeThinkCard(parts.think,", done_body)
         self.assertIn("appendBotMessage(data.reply, data.source, text,", done_body)
-        self.assertIn("adopted ? { thinkCardEl: adopted } : null", done_body)
-        self.assertIn("scheduleThinkCollapse(adopted, botMsg);", done_body)
-        # 旧拆卡重放已退役：done 分支不再无条件 removeChild 流式卡
-        self.assertNotIn(
-            "if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);\n"
-            "                    if (toolEl", done_body)
+        self.assertIn("adopted ? { thinkLiveEl: adopted } : null", done_body)
+        self.assertNotIn("scheduleThinkCollapse", done_body)
+        # 先挂最终气泡再撤 answerEl（换屏零空白）
+        self.assertLess(done_body.index("const botMsg = appendBotMessage("),
+                        done_body.rindex("if (answerEl && answerEl.parentNode)"))
 
-    def test_no_think_reply_drops_process_card(self):
-        """边界：最终 reply 无 <think>（理论边角）→旧口径不保留过程卡。"""
+    def test_finalize_sets_duration_label(self):
+        """finalizeThinkCard：按 done 净化全文重渲+标签换耗时（A1 口径）；
+        无耗时（指令单帧 done）回落'🧠 思考过程'。"""
+        block = _extract_span(self.js, "function sendMessageStream",
+                              "function sendMessageLegacy")
+        start = block.index("function finalizeThinkCard")
+        body = block[start:block.index("function ensureAnswerEl", start)]
+        self.assertIn("thinkAcc = finalThink;", body)
+        self.assertIn("renderThinkProgressive();", body)
+        self.assertIn("st.textContent = label;", body)
+        done_at = block.index("} else if (etype === 'done') {")
+        done_body = block[done_at:block.index("} else if (etype === 'error') {", done_at)]
+        self.assertIn("secs === null ? '🧠 思考过程' : '🧠 已思考（用时 ' + secs + ' 秒）'", done_body)
+        self.assertIn("已思考（用时 ' + secs + ' 秒）", self.js)
+
+    def test_append_bot_message_adopts_live_block(self):
+        """appendBotMessage 收养分支：thinkLiveEl 校验后原块移动（insertBefore
+        自动摘离旧父），非收养照旧 buildThinkLiveBlock 新建。"""
+        js = self.js
+        start = js.index("const thinkLive = (options.thinkLiveEl && options.thinkLiveEl.classList &&")
+        body = js[start:js.index("} catch (e) {", start)]
+        self.assertIn("options.thinkLiveEl.classList.contains('think-live')", body)
+        self.assertIn("? options.thinkLiveEl : buildThinkLiveBlock(thinkParts.think);", body)
+        self.assertIn("parentEl.insertBefore(thinkLive, bubbleEl);", body)
+
+    def test_thinking_state_label_kept(self):
+        """思考中状态标签（首增量置位，A1 锚原文形态）。"""
+        js = self.js
+        self.assertIn("const st = thinkCard && thinkCard.querySelector('.think-live-label');", js)
+        self.assertIn("st.textContent = '🧠 思考中…';", js)
+
+    def test_no_think_reply_drops_process_block(self):
+        """边界：最终 reply 无 <think>（理论边角）→旧口径不保留过程块。"""
         block = _extract_span(self.js, "function sendMessageStream",
                               "function sendMessageLegacy")
         start = block.index("} else if (etype === 'done') {")
@@ -109,58 +158,71 @@ class DoneAdoptionTests(unittest.TestCase):
         self.assertIn("if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);",
                       done_body)
 
-    def test_adoption_skips_typewriter(self):
-        """收养路径跳过打字机/折叠链（流式卡已定稿，防双卡双动画）；非收养
-        路径（含指令单帧 done/历史回放/legacy）打字机原样保留。"""
-        js = self.js
-        self.assertIn("if (!options.thinkCardEl) {", js)
-        guard_at = js.index("if (!options.thinkCardEl) {")
-        self.assertIn(
-            "startThinkTypewriter(botMsg, thinkParts.think, options.animateThink !== false)",
-            js[guard_at:guard_at + 300])
 
-    def test_append_bot_message_adopts_existing_card(self):
-        """appendBotMessage 收养分支：thinkCardEl 校验后原卡移动（insertBefore
-        自动摘离旧父），非收养照旧 buildThinkCardEl 新建。"""
-        js = self.js
-        start = js.index("const thinkCard = (options.thinkCardEl && options.thinkCardEl.classList &&")
-        body = js[start:js.index("} catch (e) {", start)]
-        self.assertIn("options.thinkCardEl.classList.contains('think-card')", body)
-        self.assertIn("? options.thinkCardEl : buildThinkCardEl();", body)
-        self.assertIn("parentEl.insertBefore(thinkCard, bubbleEl);", body)
+class StrictSeparationTests(unittest.TestCase):
+    """think/answer 严格分流（队长拍板红线）。"""
 
-    def test_answer_swap_without_blank_gap(self):
-        """正文零干扰：done 先挂最终气泡（appendBotMessage）再撤 answerEl——
-        换屏零空白；answer 增量通道原样。"""
-        block = _extract_span(self.js, "function sendMessageStream",
-                              "function sendMessageLegacy")
-        start = block.index("} else if (etype === 'done') {")
-        done_body = block[start:block.index("} else if (etype === 'error') {", start)]
-        self.assertLess(done_body.index("const botMsg = appendBotMessage("),
-                        done_body.rindex("if (answerEl && answerEl.parentNode)"))
-
-    def test_fallback_duration_title_kept(self):
-        """A1 耗时锚双保险：未走收养的兜底分支仍查 botMsg 卡头写耗时标题。"""
-        js = self.js
-        self.assertIn("已思考（用时 ' + secs + ' 秒）", js)
-        self.assertIn("botMsg.querySelector('.think-card-title')", js)
-
-
-class ErrorStateTests(unittest.TestCase):
-    """error 状态：既有清理链与 legacy 回退零改动锁存。"""
-
-    def test_error_cleans_process_elements_then_rethrow(self):
+    def test_think_never_touches_answer_and_vice_versa(self):
         js = _read("console.js")
-        self.assertIn("} else if (etype === 'error') {\n"
-                      "                    throw new Error(data.error || 'stream error');",
-                      js)
-        self.assertIn("return pump().catch", js)         # 内层清过程件再 rethrow
-        self.assertIn("if (thinkCard && thinkCard.parentNode)", js)
-        self.assertIn(".catch(() => sendMessageLegacy", js)   # 转红字提示重答
+        start = js.index("function handleEvent")
+        end = js.index("function pump", start)
+        body = js[start:end]
+        think_block = body[body.index("etype === 'think'"):body.index("etype === 'tool'")]
+        answer_block = body[body.index("etype === 'answer'"):body.index("} else if (etype === 'done')")]
+        # think 分支只进思维流块
+        self.assertIn("thinkAcc += (data.delta || '')", think_block)
+        self.assertIn("renderThinkProgressive()", think_block)
+        self.assertNotIn("answerAcc", think_block)
+        self.assertNotIn("ensureAnswerEl", think_block)
+        # answer 分支只进正文气泡
+        self.assertIn("answerAcc += (data.delta || '')", answer_block)
+        self.assertIn("ensureAnswerEl()", answer_block)
+        self.assertNotIn("thinkAcc", answer_block)
+        self.assertNotIn("renderThinkProgressive()", answer_block)
+
+    def test_answer_bold_black_streaming(self):
+        """answer 正常黑字粗体：流式气泡与最终消息同一 CSS 口径。"""
+        html = _read("index.html")
+        self.assertIn(".message.bot-message .bubble-content {", html)
+        self.assertIn("font-weight: 600;", html)
 
 
-class RegressionSentinelTests(unittest.TestCase):
-    """零回退哨兵：非流式路径与既有契约不受本轮改动影响。"""
+class WatchdogTests(unittest.TestCase):
+    """SSE 超时中断保护（救火拍板）：任何底层卡死 UI 都不死锁。"""
+
+    def test_first_frame_and_idle_watchdog(self):
+        """首帧前 30s / 帧间 90s 无帧 → fireWatchdog 中断；handleEvent 每帧
+        喂狗。"""
+        js = _read("console.js")
+        self.assertIn("let watchdog = setTimeout(fireWatchdog, 30000);", js)
+        self.assertIn("watchdog = setTimeout(fireWatchdog, 90000);", js)
+        self.assertIn("patWatchdog();   // 每帧喂狗", js)
+        block = _extract_span(js, "function sendMessageStream",
+                              "function sendMessageLegacy")
+        catch_at = block.index(".catch(function (err) {")
+        catch_body = block[catch_at:]
+        self.assertIn("clearTimeout(watchdog);", catch_body)
+
+    def test_watchdog_error_inline_no_legacy(self):
+        """看门狗中断就地报错（红字提示+统一工具栏），不转 legacy（同源后端
+        会同样卡死）；普通错误仍转 legacy 重答。"""
+        js = _read("console.js")
+        block = _extract_span(js, "function sendMessageStream",
+                              "function sendMessageLegacy")
+        catch_body = block[block.index(".catch(function (err) {"):]
+        self.assertIn("if (watchdogFired) {", catch_body)
+        self.assertIn("mountSystemToolbar(errMsg)", catch_body)
+        self.assertLess(catch_body.index("if (watchdogFired) {"),
+                        catch_body.rindex("throw err;"))
+
+    def test_backend_hard_timeout_untouched(self):
+        """后端 180s 硬超时防线不动（看门狗在其内层，双保险）。"""
+        py = _read("xiaoju3_dashboard.py")
+        self.assertIn("_STREAM_HARD_TIMEOUT = 180", py)
+
+
+class LegacyAndHistoryUntouchedTests(unittest.TestCase):
+    """零回退哨兵：非流式路径与既有契约不受本轮影响。"""
 
     @classmethod
     def setUpClass(cls):
@@ -173,129 +235,54 @@ class RegressionSentinelTests(unittest.TestCase):
         self.assertIn("appendBotMessage(m.content, m.source || '', lastUser,",
                       js)                                 # 历史回放入口未变
         self.assertIn("function syncThinkCard", js)       # 刷新重生成链未动
-        self.assertIn("const THINK_COLLAPSE_DELAY_MS = 1500;", js)
+        self.assertIn("function splitThinkBlock", js)     # 切分管线未动
+        self.assertIn("function buildThinkFallbackBlock", js)  # 深色兜底未动
 
-    def test_thinking_state_title_kept(self):
-        """思考中状态标题（首增量置位）保留——A1 锚原文形态。"""
+    def test_history_stagger_only_non_streaming(self):
+        """错开淡入仅历史批渲染（loadHistory 挂 .msg-enter+延时），流式路径
+        零此类。"""
         js = self.js
-        self.assertIn("const st = thinkCard && thinkCard.querySelector('.think-card-title');",
-                      js)
-        self.assertIn("st.textContent = '思考中…';", js)
-
-    def test_tool_line_removed_at_done(self):
-        """tool 行随 done 移除（与最终卡同形）；tool 事件建卡通道保留。"""
-        js = self.js
-        self.assertIn("ensureThinkCard();   // C3b：无卡也建", js)
-        self.assertIn("toolEl.textContent = '🔧 正在执行工具：' + (data.name || '');",
-                      js)
+        hist = js[js.index("function loadHistory"):js.index("// ==================== 4.")]
+        self.assertIn("msg-enter", hist)
+        self.assertIn("animationDelay = Math.min(idx * 45, 400) + 'ms';", hist)
+        block = _extract_span(js, "function sendMessageStream",
+                              "function sendMessageLegacy")
+        self.assertNotIn("msg-enter", block)
 
 
-class UiSpecTests(unittest.TestCase):
-    """AI 客户端高质感 UI 规范（2026-10-22 队长口述）四件锚。"""
+class UiMicroPolishTests(unittest.TestCase):
+    """UI 质感微操四件（2026-10-22 队长口述）。"""
 
     @classmethod
     def setUpClass(cls):
-        cls.js = _read("console.js")
         cls.html = _read("index.html")
 
-    def test_ink_wash_animation(self):
-        """水墨晕染：thinkLineFadeIn 关键帧含 blur 消散（取消单字硬蹦）；
-        时长 0.45s ease-out；流式在写行 .think-line-streaming 半透明水墨态。"""
+    def test_concentric_radius(self):
+        """同心圆角：内层（徽章/工具按钮）=外层卡片圆角-内边距（calc 派生）。"""
         html = self.html
-        self.assertIn("animation: thinkLineFadeIn 0.45s ease-out forwards", html)
-        kf = html[html.index("@keyframes thinkLineFadeIn"):]
-        kf = kf[:kf.index(".think-line.think-indent-1")]   # 取到下一规则为止（内含双花括号）
-        self.assertIn("filter: blur(4px)", kf)
-        self.assertIn("filter: blur(0)", kf)
-        self.assertIn(".think-line-streaming { opacity: 0.66; }", html)
-        # JS 侧挂/摘：渐进渲染给末行挂水墨态，转正后全行摘
-        self.assertIn("row.classList.add('think-line-streaming')", self.js)
-        self.assertIn("el.classList.remove('think-line-streaming')", self.js)
+        self.assertIn("--radius-inner: calc(var(--radius-card) - 6px);", html)
+        self.assertGreaterEqual(html.count("border-radius: var(--radius-inner);"), 2)  # 徽章+工具按钮+同族
 
-    def test_tabular_nums_for_dynamic_digits(self):
-        """动态数字等宽：卡头标题 tabular-nums（用时 X 秒）防左右抖动。"""
-        self.assertIn(".think-card-title { flex: 1; font-variant-numeric: tabular-nums; }",
-                      self.html)
-
-    def test_container_hierarchy_no_solid_border(self):
-        """容器层级：.think-card 无实体边框（border: none），3.5% 中性微对比
-        色阶 + 细微阴影分层；左侧竖线降半透明。"""
+    def test_layered_soft_shadow(self):
+        """多层柔和阴影：--shadow-card 三层叠加（细锐+中景+大模糊光感），
+        双主题各一份。"""
         html = self.html
-        start = html.index(".think-card {")
-        css = html[start:html.index("}", start)]
-        self.assertIn("border: none;", css)
-        self.assertIn("background-color: rgba(31, 41, 55, 0.035)", css)
-        self.assertIn("box-shadow: 0 1px 3px rgba(31, 41, 55, 0.07)", css)
-        self.assertIn("border-left: 3px solid rgba(32, 49, 112, 0.16)", html)
+        self.assertEqual(html.count("0 10px 28px rgba("), 2)
+        self.assertIn("0 1px 2px rgba(31, 41, 55, 0.05), 0 2px 6px rgba(31, 41, 55, 0.04)",
+                      html)
 
-    def test_swift_out_collapse_easing(self):
-        """交互动效干脆顺滑：折叠过渡 swift-out（cubic-bezier(0.4,0,0.2,1)）。"""
+    def test_balance_and_pretty_wrap(self):
+        """标题平衡换行 balance / 正文 pretty（防末行孤字）。"""
         html = self.html
-        start = html.index(".think-card.think-anim .think-card-body")
-        css = html[start:html.index("}", start)]
-        self.assertIn("transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1)", css)
+        self.assertIn("text-wrap: balance;", html)
+        self.assertIn("text-wrap: pretty;", html)
 
-
-class SkeletonInstantTests(unittest.TestCase):
-    """首字零等待骨架屏（2026-10-22 队长拍板，消灭 TTFT 干等）。
-
-    诊断定案：指令链（不走模型）TTFB 仅 21ms，闲聊首帧 1.37s≈全部为模型
-    首字延迟——旧前端在首个 think 帧才挂卡，把整个 TTFT 暴露成干等。
-    修法：发送同一 tick 同步挂骨架卡（呼吸灯+占位线），首帧真文本无缝接管。
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.js = _read("console.js")
-        cls.html = _read("index.html")
-
-    def test_skeleton_mounted_synchronously_before_fetch(self):
-        """乐观挂载在 fetch 之前（点击发送同一 tick，零异步等待）；流式状态
-        变量一并提升到 fetch 之前（骨架卡挂载依赖这些闭包声明）。"""
-        js = self.js
-        mount_at = js.index("ensureThinkCard();   // ⚡ 乐观挂载骨架卡")
-        fetch_at = js.index("return fetch('/api/chat/stream'")
-        decl_at = js.index("let thinkCard = null;")
-        self.assertLess(decl_at, mount_at)
-        self.assertLess(mount_at, fetch_at)
-
-    def test_skeleton_anatomy_built_in_ensure_think_card(self):
-        """骨架解剖：呼吸态类 + 两根占位线（第二根短款）+ 骨架态标题。"""
-        block = _extract_span(self.js, "function ensureThinkCard",
-                              "function renderThinkProgressive")
-        self.assertIn("thinkCard.classList.add('think-card-waiting')", block)
-        self.assertIn("think-skeleton-line' + (sk ? ' think-skeleton-short' : '')", block)
-        self.assertIn("title.textContent = '小橘正在思考…';", block)
-        self.assertNotIn("思考过程（实时）", self.js)   # 旧实时标题退役（反锚）
-
-    def test_seamless_takeover_on_first_think(self):
-        """无缝接管：首段真文本到达——摘呼吸态+清骨架线后原卡填充
-        （renderThinkProgressive 开头，先于分段渲染）；零二次挂载。"""
-        block = _extract_span(self.js, "function renderThinkProgressive",
-                              "function finalizeThinkCard")
-        self.assertIn("if (thinkCard.classList.contains('think-card-waiting')) {", block)
-        self.assertLess(block.index("classList.remove('think-card-waiting')"),
-                        block.index("const segs = splitThinkStageLines(thinkAcc);"))
-        self.assertIn("querySelectorAll('.think-skeleton-line')", block)
-        self.assertIn("el.remove();", block)
-
-    def test_instant_done_title_fallback(self):
-        """指令单帧 done（骨架态直接转正、无耗时）：标题回落'思考过程'
-        （与最终卡默认标题同口径），不得残留'小橘正在思考…'。"""
-        block = _extract_span(self.js, "} else if (etype === 'done') {",
-                              "} else if (etype === 'error') {")
-        self.assertIn("secs === null ? '思考过程' : '已思考（用时 ' + secs + ' 秒）'", block)
-
-    def test_skeleton_css_breath_and_shimmer(self):
-        """CSS：卡头呼吸灯 thinkBreath + 占位线 shimmer + reduced-motion 降级；
-        呼吸态选择器与 JS 挂的类名成对。"""
+    def test_reduced_motion_fallback(self):
+        """动效降级：prefers-reduced-motion 下呼吸/占位线动画全关。"""
         html = self.html
-        self.assertIn(".think-card.think-card-waiting .think-card-header {", html)
-        self.assertIn("@keyframes thinkBreath", html)
-        self.assertIn(".think-skeleton-line {", html)
-        self.assertIn("@keyframes thinkSkeletonShimmer", html)
-        self.assertIn(".think-skeleton-line.think-skeleton-short { width: 55%; }", html)
-        self.assertIn("@media (prefers-reduced-motion: reduce) {", html)
+        start = html.index("@media (prefers-reduced-motion: reduce) {")
+        block = html[start:html.index("}", start)]
+        self.assertIn("animation: none", block)
 
 
 if __name__ == "__main__":

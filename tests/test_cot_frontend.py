@@ -182,7 +182,7 @@ class SystemMessageToolbarTests(unittest.TestCase):
         #chat-history 既有 bot-message 气泡统一挂工具栏。"""
         js = self.console_js
         self.assertIn("querySelectorAll('#chat-history .message.bot-message')", js)
-        self.assertIn(".forEach(mountSystemToolbar)", js)
+        self.assertIn(".forEach(function (m) { mountSystemToolbar(m); m.classList.add('msg-enter'); });", js)
         # 欢迎语静态节点仍在 index.html（本任务未改 index.html）
         self.assertIn("你好！我是小橘3号，很高兴为你服务喵~", self.index_html)
 
@@ -347,7 +347,7 @@ class FrontendNoRegressionSentinelTests(unittest.TestCase):
     def test_cot_pipeline_untouched(self):
         js = self.console_js
         self.assertIn("function splitThinkBlock", js)
-        self.assertIn("startThinkTypewriter", js)
+        self.assertIn("buildThinkLiveBlock", js)
         self.assertIn("syncThinkCard", js)
         self.assertIn("if (thinkParts.think !== null)", js)
 
@@ -355,7 +355,7 @@ class FrontendNoRegressionSentinelTests(unittest.TestCase):
         js = self.console_js
         self.assertIn('console.log("RAW_REPLY:", res.data.reply)', js)
         self.assertIn('console.log("PARSED_THINK:"', js)
-        self.assertIn('console.log("RENDERING_THINK_CARD...")', js)
+        self.assertIn('console.log("RENDERING_THINK_LIVE...")', js)
 
     def test_cq_face_render_untouched(self):
         js = self.console_js

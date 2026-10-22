@@ -1347,29 +1347,27 @@ class ThinkCardFrontendTests(unittest.TestCase):
         self.assertIn("splitThinkBlock(rawReply)", body)       # 先在原始 reply 上切分
         self.assertIn("if (thinkParts.think !== null)", body)  # 渲染入口守卫
         guard = body.index("if (thinkParts.think !== null)")
-        self.assertLess(guard, body.index("buildThinkCardEl()"))  # 守卫先于插卡
-        self.assertIn("options.animateThink !== false", body)  # 历史回放可关打字
+        self.assertLess(guard, body.index("buildThinkLiveBlock("))  # 守卫先于插块
 
     def test_history_replay_no_typing(self):
-        """历史回放共用 appendBotMessage 入口，但不打字（animateThink=false）。"""
+        """历史回放共用 appendBotMessage 入口：直出思维流块静态展示（无动画）。"""
         self.assertIn(
-            "appendBotMessage(m.content, m.source || '', lastUser,\n"
-            "                                         { animateThink: false, ts: m.ts })",
-            self.console_js)   # M1+：ts 透传（时间分隔），animateThink=false 保留
+            "el = appendBotMessage(m.content, m.source || '', lastUser,\n"
+            "                                              { ts: m.ts });",
+            self.console_js)   # M1+：ts 透传（时间分隔）；错开淡入经 el 挂类
 
-    # ---------- console.js：打字机与折叠 ----------
+    # ---------- console.js：直出思维流（折叠卡家族 2026-10-22 退役） ----------
 
-    def test_typewriter_and_auto_collapse(self):
-        """思考正文逐字打字（textContent 注入防注入），打完自动折叠、
-        点击标题可再展开/收起。"""
+    def test_think_live_direct_out(self):
+        """思考直出（对标 DeepSeek）：🧠 标签行+灰色思考行直接外冒，无打字机
+        无折叠无开合——家族整体退役（反锚锁存，防回流）。"""
         js = self.console_js
-        self.assertIn("startThinkTypewriter", js)                     # 打字函数
-        self.assertIn("THINK_TYPE_MS", js)                            # 打字间隔常量
-        self.assertIn("body.textContent = text.slice(0, shown)", js)  # textContent 注入
-        self.assertIn("renderCQFace(thinkText)", js)                  # 思考正文同口径净化
-        self.assertIn("classList.add('think-collapsed')", js)         # 打完自动折叠
-        self.assertIn("window.toggleThinkCard", js)                   # 点击标题展开/收起
-        self.assertIn("classList.toggle('think-collapsed')", js)
+        self.assertIn("function buildThinkLiveBlock", js)             # 直出构建器
+        self.assertIn("textContent = '🧠 思考过程'", js)               # 标签行
+        for token in ("startThinkTypewriter", "THINK_TYPE_MS",
+                      "classList.add('think-collapsed')",
+                      "window.toggleThinkCard"):
+            self.assertNotIn(token, js)
 
     def test_refresh_regenerate_syncs_think_card(self):
         """刷新重生成同样先切分 <think>：卡片同步 + 正文剥离后再渲染。"""
@@ -1402,7 +1400,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         刷新重生成三条渲染路径共用）：思考段→计划段 replace 剥离并
         bareParts 并卡，[行动] 行剥离与剥空占位依次发生。"""
         start = self.console_js.index("function splitThinkBlock")
-        end = self.console_js.index("function buildThinkCardEl", start)
+        end = self.console_js.index("function buildThinkLiveBlock", start)
         body = self.console_js[start:end]
         self.assertIn("body.replace(BARE_THINK_RE", body)
         self.assertIn("body.replace(BARE_PLAN_RE", body)
@@ -1524,11 +1522,11 @@ class ThinkCardFrontendTests(unittest.TestCase):
 
     def _extract_split_chunk(self):
         """提取 console.js 中 THINK_BLOCK_RE 声明起、打字机常量前的整段源码
-        （含 THINK_BLOCK_RE 与裸标记正则、splitThinkBlock、buildThinkCardEl，
+        （含 THINK_BLOCK_RE 与裸标记正则、splitThinkBlock、buildThinkLiveBlock，
         剥离 IIFE 后可独立运行）。"""
         js = self.console_js
         start = js.index("const THINK_BLOCK_RE")
-        end = js.index("const THINK_TYPE_MS")
+        end = js.index("const THINK_STAGE_RE")
         return js[start:end]
 
     def _think_wrap_pipeline(self, raw_reply):
@@ -1563,7 +1561,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         body = js[start:end]
         self.assertIn("if (thinkParts.think !== null)", body)      # 唯一插卡守卫
         guard = body.index("if (thinkParts.think !== null)")
-        build = body.index("buildThinkCardEl()")
+        build = body.index("buildThinkLiveBlock(")
         self.assertLess(guard, build)                              # 守卫先于插卡
         # 占位正文不得拦卡：守卫与插卡之间不得出现"正文为占位符/为空"类条件
         between = body[guard:build]
@@ -1571,11 +1569,11 @@ class ThinkCardFrontendTests(unittest.TestCase):
         self.assertNotIn("!reply", between)
         # 先构建完整元素、再手工插入 DOM（F4 加固，不依赖 ChildNode.before()）：
         # 赋值给局部变量后用显式父引用 insertBefore 插到气泡正文上方；
-        # 2026-10-22 #349 流式思维卡收养：thinkCardEl 在位=原卡移动不重建，
-        # 三目 fallback 侧仍走 buildThinkCardEl() 新建（非流式路径零变化）
-        self.assertIn(": buildThinkCardEl();", body)
-        self.assertIn("options.thinkCardEl.classList.contains('think-card')", body)
-        self.assertIn("parentEl.insertBefore(thinkCard, bubbleEl)", body)
+        # 2026-10-22 二轮拍板：直出思维流块收养——thinkLiveEl 在位=原块移动
+        # 不重建；三目 fallback 侧仍走 buildThinkLiveBlock() 新建（非流式零变化）
+        self.assertIn(": buildThinkLiveBlock(thinkParts.think);", body)
+        self.assertIn("options.thinkLiveEl.classList.contains('think-live')", body)
+        self.assertIn("parentEl.insertBefore(thinkLive, bubbleEl)", body)
         self.assertNotIn(".before(", body)
         # ② Python 复跑："<think>块内容</think>（操作已执行）"→ think 非空 + 占位正文
         think, body_text = self._think_wrap_pipeline(
@@ -1590,39 +1588,49 @@ class ThinkCardFrontendTests(unittest.TestCase):
 
     def test_placeholder_body_node_live_run(self):
         """node 实跑验证元素结构（环境无 node 时跳过，上一测试的静态断言
-        仍全量生效）：提取 console.js 的 splitThinkBlock + buildThinkCardEl
-        源码经 stdin 喂给 node 真实运行——"<think>块内容</think>（操作已
-        执行）"切分结果 think 非空、body 为占位符；卡片节点存在、类名为
-        think-card think-collapsed、含"思考过程"标题与 .think-card-body
-        正文容器。纯计算子进程（stdin 管道、无网络、无临时文件）。"""
+        仍全量生效）：提取 console.js 的 splitThinkBlock + splitThinkStageLines
+        + buildThinkLiveBlock 源码经 stdin 喂给 node 真实运行——"<think>块内容
+        </think>（操作已执行）"切分结果 think 非空、body 为占位符；直出思维
+        流块节点存在、类名 think-live、含"思考过程"标签与思考行。纯计算子进程
+        （stdin 管道、无网络、无临时文件）。"""
         if not shutil.which("node"):
             self.skipTest("环境无 node，跳过 JS 实跑（静态断言已覆盖）")
+        js = self.console_js
+        split_chunk = js[js.index("const THINK_BLOCK_RE"):
+                         js.index("function buildThinkLiveBlock")]
+        build_chunk = js[js.index("function buildThinkLiveBlock"):
+                         js.index("function buildThinkFallbackBlock")]
+        stage_chunk = js[js.index("const THINK_STAGE_RE"):
+                         js.index("function syncThinkCard")]
         script = (
-            # 最小 DOM 桩：buildThinkCardEl 只用 createElement + 属性赋值
+            # 最小 DOM 桩：buildThinkLiveBlock 只用 createElement + appendChild
             "var document = { createElement: function (tag) "
-            "{ return { nodeName: tag, className: '', innerHTML: '' }; } };\n"
-            + self._extract_split_chunk() + "\n"
+            "{ return { nodeName: tag, className: '', children: [],"
+            " textContent: '', appendChild: function (c) { this.children.push(c); } }; } };\n"
+            + split_chunk + "\n" + build_chunk + "\n" + stage_chunk + "\n"
             "var r = splitThinkBlock('<think>块内容</think>（操作已执行）');\n"
             "var rEmpty = splitThinkBlock('<think>有思考内容</think>');\n"
-            "var card = buildThinkCardEl();\n"
+            "var block = buildThinkLiveBlock(r.think);\n"
             "console.log(JSON.stringify({\n"
             "  think: r.think, body: r.body,\n"
             "  emptyBody: rEmpty.body,\n"
-            "  cardClass: card.className,\n"
-            "  hasTitle: card.innerHTML.indexOf('思考过程') !== -1,\n"
-            "  hasBodyDiv: card.innerHTML.indexOf('think-card-body') !== -1\n"
+            "  blockClass: block.className,\n"
+            "  hasLabel: block.children[0].textContent.indexOf('思考过程') !== -1,\n"
+            "  lineCount: block.children.length - 1,\n"
+            "  lineText: (block.children[1] || {}).textContent || ''\n"
             "}));\n")
         proc = subprocess.run(["node"], input=script.encode("utf-8"),
                               capture_output=True, timeout=60)
         self.assertEqual(proc.returncode, 0,
                          proc.stderr.decode("utf-8", "replace"))
         out = json.loads(proc.stdout.decode("utf-8"))
-        self.assertEqual(out["think"], "块内容")            # 思考内容完整进卡
+        self.assertEqual(out["think"], "块内容")            # 思考内容完整进块
         self.assertEqual(out["body"], "（操作已执行）")      # 正文为占位符
         self.assertEqual(out["emptyBody"], "（操作已执行）")  # 剥空占位同样成立
-        self.assertEqual(out["cardClass"], "think-card think-collapsed")  # 卡片节点存在
-        self.assertTrue(out["hasTitle"])                    # 含"思考过程"标题
-        self.assertTrue(out["hasBodyDiv"])                  # 含 .think-card-body 正文容器
+        self.assertEqual(out["blockClass"], "think-live")   # 直出思维流块存在
+        self.assertTrue(out["hasLabel"])                    # 含"思考过程"标签行
+        self.assertEqual(out["lineCount"], 1)               # 一条思考行
+        self.assertEqual(out["lineText"], "块内容")          # 行文本=思考内容（前缀剥除）
 
     def test_card_guard_independent_of_body_form(self):
         """全对话强制包装契约（2026-10-01）：后端所有自然语言回复都带
@@ -1637,7 +1645,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         # 唯一插卡守卫：think !== null（appendBotMessage 内仅出现一次）
         self.assertEqual(body.count("think !== null"), 1, body)
         guard = body.index("if (thinkParts.think !== null)")
-        build = body.index("buildThinkCardEl()")
+        build = body.index("buildThinkLiveBlock(")
         between = body[guard:build]
         # 守卫与插卡之间不得出现"正文为占位符/为空"类拦截条件
         self.assertNotIn("（操作已执行）", between)
@@ -1747,7 +1755,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         不再限于串首 trimStart().startsWith 旧口径）：标签及其后截断思考
         整段并入思考卡、标签前正文保留，绝不作为正文上屏。"""
         start = self.console_js.index("function splitThinkBlock")
-        end = self.console_js.index("function buildThinkCardEl", start)
+        end = self.console_js.index("function buildThinkLiveBlock", start)
         body = self.console_js[start:end]
         self.assertIn("const openIdx = body.indexOf('<think>')", body)
         self.assertIn("body.slice(0, openIdx)", body)                # 标签前正文保留
@@ -1857,21 +1865,18 @@ class ThinkCardFrontendTests(unittest.TestCase):
 
     # ---------- index.html：思维链卡片样式 ----------
 
-    def test_index_think_card_styles(self):
-        """index.html 内联样式区含 .think-card / .think-card-header /
-        .think-card-body：背景随 UI 规范 2026-10-22 换 3.5% 中性微对比色阶
-        （原浅灰 #f3f4f6 实体色随改）、圆角 10px、13px 字号、折叠用
-        .think-collapsed 类 + display 切换。"""
+    def test_index_think_live_styles(self):
+        """index.html 内联样式区含 .think-live / .think-live-label /
+        .think-live-line（直出思维流，2026-10-22 二轮拍板）：灰色小号思考行
+        + 标签呼吸 + 骨架占位线 + 正文粗体续流；折叠样式零残留。"""
         html = self.index_html
-        for cls in (".think-card {", ".think-card-header {", ".think-card-body {"):
+        for cls in (".think-live {", ".think-live-label {", ".think-live-line {"):
             self.assertIn(cls, html)
-        start = html.index(".think-card {")
-        block = html[start:html.index("}", start)]
-        self.assertIn("background-color: rgba(31, 41, 55, 0.035)", block)  # 微对比色阶
-        self.assertIn("border-radius: 10px", block)  # 圆角 10px
-        self.assertIn("font-size: 13px", block)      # 13px 字号
-        # 折叠实现：.think-collapsed 类 + 正文 display:none
-        self.assertIn(".think-card.think-collapsed .think-card-body", html)
+        self.assertIn(".message.bot-message .bubble-content {", html)   # 正文粗体
+        self.assertIn("@keyframes thinkBreath", html)
+        self.assertIn("@keyframes thinkSkeletonShimmer", html)
+        for dead in (".think-card", ".think-collapsed", ".think-pending"):
+            self.assertNotIn(dead, html)
 
     # ---------- F4 渲染加固：异常捕获 + 手工 DOM 插入 + 深色降级兜底 + 容器 ID ----------
 
@@ -1881,7 +1886,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         安全降级值（think=已剥离出的部分或 null、body=原文）。"""
         js = self.console_js
         start = js.index("function splitThinkBlock")
-        end = js.index("function buildThinkCardEl", start)
+        end = js.index("function buildThinkLiveBlock", start)
         body = js[start:end]
         self.assertIn("try {", body)
         self.assertIn("} catch (e) {", body)
@@ -1902,7 +1907,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         start = js.index("function appendBotMessage")
         end = js.index("==================== 3.", start)
         bot_body = js[start:end]
-        self.assertIn("parentEl.insertBefore(thinkCard, bubbleEl)", bot_body)
+        self.assertIn("parentEl.insertBefore(thinkLive, bubbleEl)", bot_body)
         self.assertIn('console.error("CoT Render Error: ", e)', bot_body)
         self.assertIn("buildThinkFallbackBlock(thinkParts.think)", bot_body)
         # 降级块仍插在气泡上方（消息容器首子节点之前）
@@ -1911,7 +1916,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         start = js.index("function syncThinkCard")
         end = js.index("function appendUserMessage", start)
         sync_body = js[start:end]
-        self.assertIn("bubble.parentNode.insertBefore(card, bubble)", sync_body)
+        self.assertIn("bubble.parentNode.insertBefore(buildThinkLiveBlock(thinkText), bubble)", sync_body)
         self.assertIn("buildThinkFallbackBlock(thinkText)", sync_body)
 
     def test_think_fallback_dark_block(self):
@@ -1921,7 +1926,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         js = self.console_js
         self.assertIn("function buildThinkFallbackBlock", js)
         start = js.index("function buildThinkFallbackBlock")
-        end = js.index("const THINK_TYPE_MS", start)
+        end = js.index("const THINK_STAGE_RE", start)
         body = js[start:end]
         self.assertIn("document.createElement('div')", body)
         self.assertIn("#1f2937", body)               # 深色背景（任务规格色）
@@ -1954,21 +1959,12 @@ class ThinkCardFrontendTests(unittest.TestCase):
 # T4a：CoT 前端诊断日志（三处常驻埋点）+ 卡片强制渲染兜底
 # ---------------------------------------------------------------------------
 
-class CoTDiagnosticAndForcedFallbackTests(unittest.TestCase):
-    """T4a（2026-10-01 用户口径）：思维链卡片"渲染代码没被执行/执行了但
-    插入失败被静默吞掉"问题的前端诊断与强制渲染兜底。
-
-    ① 三处常驻诊断日志（用户指定文案，保留在代码中）：
-       sendMessage 收到后端响应处 RAW_REPLY、appendBotMessage 切分后
-       PARSED_THINK/PARSED_BODY、卡片渲染分支入口 RENDERING_THINK_CARD；
-    ② 强制卡片渲染兜底：插卡尝试后实测校验 botMsg.querySelector('.think-card')
-       真实存在，缺失且 think 非空时用 createElement + classList.add 手工
-       构建卡片（🧠 图标 + ▼ 折叠箭头 + 可展开思考文本 textContent 注入）
-       并 prepend 强制补插（不依赖 before()），兜底后再校验一次，仍失败
-       最终降级为深色纯文本块（F4 既有 buildThinkFallbackBlock）；
-    ③ index.html .think-card 显式 display: block（整卡永不被隐藏，
-       .think-collapsed 只藏正文）。
-    """
+class CoTDiagnosticAndLiveFallbackTests(unittest.TestCase):
+    """直出思维流诊断锚（2026-10-22 二轮拍板，替代 T4a 强制卡片兜底）：
+    ① 三处常驻诊断日志保留（RAW_REPLY/PARSED_THINK/RENDERING_THINK_LIVE）；
+    ② 折叠卡强制兜底链整体退役（反锚锁存，防回流）；深色纯文本降级块
+       （buildThinkFallbackBlock）仍为最终兜底；
+    ③ 思考/正文严格分流：think 事件只进思维流块，answer 只进正文气泡。"""
 
     @classmethod
     def setUpClass(cls):
@@ -1984,17 +1980,11 @@ class CoTDiagnosticAndForcedFallbackTests(unittest.TestCase):
         end = self.console_js.index("==================== 3.", start)
         return self.console_js[start:end]
 
-    def _forced_fallback_region(self, body):
-        """提取强制兜底区段（首次 .think-card 实测校验 → 打字机启动之前）。"""
-        start = body.index("botMsg.querySelector('.think-card')")
-        end = body.index("startThinkTypewriter(botMsg, thinkParts.think")
-        return body[start:end]
-
     # ---------- ① 三处常驻诊断日志 ----------
 
     def test_diagnostic_log_raw_reply_in_send_message(self):
         """诊断埋点①：sendMessage 收到后端响应处打印完整原始 reply，
-        位于成功分支内（res.data.reply 必存在）且先于卡片渲染入口。"""
+        位于成功分支内（res.data.reply 必存在）且先于渲染入口。"""
         start = self.console_js.index("window.sendMessage")
         end = self.console_js.index("==================== 5.", start)
         body = self.console_js[start:end]
@@ -2013,62 +2003,43 @@ class CoTDiagnosticAndForcedFallbackTests(unittest.TestCase):
                         body.index('console.log("PARSED_THINK:"'))
 
     def test_diagnostic_log_rendering_entry(self):
-        """诊断埋点③：卡片渲染分支入口打印 RENDERING_THINK_CARD——位于
-        think 守卫之后、插卡动作之前（分支入口处）。"""
+        """诊断埋点③：思维流渲染分支入口打印 RENDERING_THINK_LIVE——位于
+        think 守卫之后、插块动作之前（分支入口处）。"""
         body = self._bot_body()
         guard = body.index("if (thinkParts.think !== null)")
-        entry = body.index('console.log("RENDERING_THINK_CARD...")')
+        entry = body.index('console.log("RENDERING_THINK_LIVE...")')
         self.assertLess(guard, entry)
-        self.assertLess(entry, body.index("buildThinkCardEl()"))
+        self.assertLess(entry, body.index("buildThinkLiveBlock("))
 
-    # ---------- ② 强制卡片渲染兜底 ----------
+    # ---------- ② 强制兜底链退役 + 深色块兜底保留 ----------
 
-    def test_forced_card_fallback_after_insert(self):
-        """强制兜底：插卡尝试（F4 insertBefore 通道）之后实测校验
-        .think-card 真实存在；兜底区段含 createElement 手工构建 +
-        classList.add('think-card') + prepend 补插 + 二次校验。"""
+    def test_forced_card_chain_retired_dark_block_kept(self):
+        """强制卡片兜底链退役（反锚）；插入失败仍降级深色纯文本块
+        （buildThinkFallbackBlock），思考过程任何情况下可见。"""
         body = self._bot_body()
-        guard = body.index("if (thinkParts.think !== null)")
-        # 实测校验在渲染守卫之内、主插卡通道之后
-        forced_start = body.index("botMsg.querySelector('.think-card')")
-        self.assertLess(guard, forced_start)
-        self.assertLess(body.index("parentEl.insertBefore(thinkCard, bubbleEl)"),
-                        forced_start)
-        forced = self._forced_fallback_region(body)
-        # 校验 + 兜底插入后再校验一次：恰为两处实测
-        self.assertEqual(forced.count("botMsg.querySelector('.think-card')"), 2)
-        self.assertIn("document.createElement('div')", forced)   # 手工构建
-        self.assertIn("classList.add('think-card')", forced)     # 类名注入
-        self.assertIn("botMsg.prepend(", forced)                 # prepend 补插通道
-        # 兜底位于打字机启动之前（打字机按类名找到补插的卡片照常填充）
-        self.assertLess(body.index("botMsg.prepend("),
-                        body.index("startThinkTypewriter(botMsg, thinkParts.think"))
+        for token in ("classList.add('think-card')", "botMsg.prepend(",
+                      "startThinkTypewriter"):
+            self.assertNotIn(token, body)
+        self.assertIn("buildThinkFallbackBlock(thinkParts.think)", body)
+        self.assertIn("botMsg.insertBefore(", body)   # 降级块仍插在气泡上方
 
-    def test_forced_fallback_card_content_and_final_degrade(self):
-        """手工兜底卡片必含 🧠 图标、▼ 折叠箭头、思考文本 textContent 注入
-        （可展开）；二次校验仍失败最终降级复用 F4 深色纯文本块。"""
-        forced = self._forced_fallback_region(self._bot_body())
-        self.assertIn("🧠", forced)
-        self.assertIn("▼", forced)
-        self.assertIn("textContent =", forced)              # 思考文本纯文本注入
-        self.assertIn("classList.add('think-collapsed')", forced)  # 初始折叠态
-        self.assertIn("buildThinkFallbackBlock(thinkParts.think)", forced)  # 最终降级
-
-    # ---------- ③ index.html .think-card 显式 display: block ----------
-
-    def test_think_card_display_block_style(self):
-        """index.html .think-card 样式含显式 display: block——整卡永远可见，
-        .think-collapsed 只藏正文（display:none 只作用于 .think-card-body）。"""
-        html = self.index_html
-        start = html.index(".think-card {")
-        block = html[start:html.index("}", start)]
-        self.assertIn("display: block", block)
-        # 折叠只藏正文：display:none 不在 .think-card 本体块内
-        self.assertNotIn("display: none", block)
+    def test_think_answer_strict_separation(self):
+        """严格分流（队长拍板红线）：流式 handleEvent 内 think 分支只写
+        thinkAcc/思维流块；answer 分支只写 answerAcc/正文气泡——互不沾。"""
+        start = self.console_js.index("function handleEvent")
+        end = self.console_js.index("function pump", start)
+        body = self.console_js[start:end]
+        think_at = body.index("etype === 'think'")
+        answer_at = body.index("etype === 'answer'")
+        think_block = body[think_at:answer_at]
+        answer_block = body[answer_at:body.index("} else if (etype === 'done')")]
+        self.assertIn("renderThinkProgressive()", think_block)
+        self.assertNotIn("answerAcc", think_block)      # 思考分支不碰正文
+        self.assertIn("answerAcc += (data.delta || '')", answer_block)
+        self.assertNotIn("thinkAcc", answer_block)      # 正文分支不碰思考
+        self.assertNotIn("renderThinkProgressive()", answer_block)
 
 
-# ---------------------------------------------------------------------------
-# Web 出口 CQ 码净化（纵深防御：web_sanitize + /api/chat 接线）
 # ---------------------------------------------------------------------------
 
 class WebSanitizeTests(unittest.TestCase):
@@ -2679,13 +2650,14 @@ class ThinkProgressiveAnchorTests(unittest.TestCase):
 
     def test_progressive_pipeline_intact(self):
         js = self._js()
-        # 进行中展开：新消息默认走打字机动画（animateThink !== false）
-        self.assertIn("startThinkTypewriter(botMsg, thinkParts.think, options.animateThink !== false)", js)
-        # 完成后自动折叠：打完 → 延时 → 动画折叠 → think-collapsed
-        self.assertIn("scheduleThinkCollapse(card, msgEl)", js)
-        self.assertIn("think-collapsed", js)
-        # 手动可重开：折叠态点击标题可再展开（toggle 处理在位）
-        self.assertIn("think-card-header", js)
+        # 进行中直出：发送同一 tick 挂骨架（首字零等待），首帧无缝接管
+        self.assertIn("ensureThinkCard();   // ⚡ 乐观挂载骨架（点击发送同一 tick，零等待）", js)
+        self.assertIn("function ensureThinkCard", js)
+        # 完成后直出不折叠：无任何 scheduleThinkCollapse/think-collapsed 回流
+        self.assertNotIn("scheduleThinkCollapse", js)
+        self.assertNotIn("think-collapsed", js)
+        # 思考/正文严格分流：think 走 renderThinkProgressive，answer 独立气泡
+        self.assertIn("answerEl.querySelector('.bubble-content').textContent = answerAcc", js)
 
     def test_command_reply_shares_same_pipeline(self):
         # 指令/模型回复同一渲染单点：sendMessage 对 /api/chat 的返回无差别
@@ -2693,10 +2665,10 @@ class ThinkProgressiveAnchorTests(unittest.TestCase):
         js = self._js()
         self.assertIn("appendBotMessage(res.data.reply, res.data.source, text)", js)
 
-    def test_history_replay_stays_collapsed(self):
-        # 历史回放 animateThink:false 直接折叠全文——正确的非渐进特例，防误改
+    def test_history_replay_static_live(self):
+        # 历史回放静态直出（无动画无折叠）——正确的非渐进特例，防误改
         js = self._js()
-        self.assertIn("animateThink: false", js)
+        self.assertNotIn("animateThink", js)
 
 
 class TodoCommandInterceptTests(unittest.TestCase):

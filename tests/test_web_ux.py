@@ -162,123 +162,56 @@ class AutoTTSFrontendTests(unittest.TestCase):
 # 任务 6：CoT 逐行展示（DeepSeek 风格：单独成行、逐个淡入、约 200ms）
 # ---------------------------------------------------------------------------
 
-class ThinkLineRevealTests(unittest.TestCase):
-    """思维链逐行淡入静态断言：分段、节奏、折叠保留、降级零回退。"""
+class ThinkLiveStyleTests(unittest.TestCase):
+    """直出思维流样式静态断言（2026-10-22 二轮拍板，替代逐行淡入/折叠契约）：
+    灰色小号思考行直接外冒、无折叠；[思考]/[计划]/[行动] 前缀剥除；
+    流式连续不错开，错开淡入仅历史批渲染。"""
 
     @classmethod
     def setUpClass(cls):
         cls.console_js = _read("console.js")
         cls.index_html = _read("index.html")
 
-    def _typewriter_body(self):
-        js = self.console_js
-        start = js.index("function startThinkTypewriter")
-        return js[start:js.index("window.toggleThinkCard", start)]
-
-    def test_all_lines_render_at_once_then_collapsed(self):
-        """2026-10-01 用户口径升级：一次性渲染全部行（同帧插入，非逐行
-        setTimeout 错峰）；渲染完延迟折叠、正文延迟显示（DeepSeek 节奏）。"""
-        body = self._typewriter_body()
-        # 一次性渲染：全部行同帧插入（函数式回调形态），无逐行 setTimeout 链
-        self.assertIn("segs.forEach(function (seg) { body.appendChild(buildThinkLineEl(seg)); });", body)
-        self.assertNotIn("THINK_LINE_STEP_MS", body)   # 逐行链已废止
-        # 折叠节奏：调度调用在打字函数内；延迟常量与 300ms 过渡 CSS 在
-        # console.js 调度函数与 index.html 样式（_typewriter_body 切片之外）
-        self.assertIn("scheduleThinkCollapse(card, msgEl);", body)
-        self.assertIn("const THINK_COLLAPSE_DELAY_MS = 1500;", self.console_js)
-        self.assertIn("maxHeight = body.clientHeight", self.console_js)
-        self.assertIn("cubic-bezier(0.4, 0, 0.2, 1)", self.index_html)   # UI 规范 2026-10-22：干脆顺滑缓动（原 0.3s ease 随改）
+    def test_live_css_family(self):
+        """.think-live 家样：标签+行+骨架；正文粗体续流。"""
+        html = self.index_html
+        self.assertIn(".think-live {", html)
+        self.assertIn(".think-live-label {", html)
+        self.assertIn(".think-live-line {", html)
+        self.assertIn("font-weight: 600;", html)   # 正文黑色粗体
+        self.assertIn("text-wrap: balance;", html)
+        self.assertIn("text-wrap: pretty;", html)
 
     def test_stage_split_function_present(self):
-        """分段函数：[思考]/[计划]/[行动] 半角方括号阶段标记起新段（与后端
-        协议同口径），buildThinkLineEl 构建单行段元素。"""
+        """分段函数保留：[思考]/[计划]/[行动] 半角方括号阶段标记（剥前缀用）。"""
         js = self.console_js
         self.assertIn("function splitThinkStageLines", js)
-        self.assertIn("function buildThinkLineEl", js)
         self.assertIn(r"/^\[(思考|计划|行动)\]/", js)
 
-    def test_lines_rendered_at_once_textcontent_only(self):
-        """一次性渲染主链路：先清空正文（强制兜底卡片预填场景），全部段同帧
-        插入（淡入动画由 CSS 承担）；阶段标签与正文全部 textContent 注入免
-        XSS；渲染完延迟折叠（点击标题可再展开，折叠零回退）。"""
-        body = self._typewriter_body()
-        self.assertIn("body.textContent = '';", body)              # 清空后一次性插入
-        self.assertIn("body.appendChild(buildThinkLineEl(seg))", body)
-        # 折叠调度存在即可（渲染为同步同帧完成，1.5s 定时器随后触发折叠动画）
-        self.assertIn("scheduleThinkCollapse(card, msgEl);", body)
-        self.assertIn("segs.forEach(function (seg)", body)
-        # 阶段标签/正文构建位于 buildThinkLineEl：textContent 注入免 XSS
-        el_start = js_index_of(self.console_js, "function buildThinkLineEl")
-        el_body = self.console_js[el_start:
-                                  js_index_of(self.console_js, "function startThinkTypewriter",
-                                              el_start)]
-        self.assertIn("tag.textContent = seg.tag", el_body)
-        self.assertIn("text.textContent = seg.text", el_body)
-        self.assertIn("className = 'think-line'", el_body)
-        self.assertIn("className = 'think-line-tag'", el_body)
-        self.assertIn("className = 'think-line-text'", el_body)
-        # 卡片被移除即停（清空历史等场景不悬挂计时器；R2 改造后为
-        # clearInterval + return 复合形态）
-        self.assertIn("if (!card.isConnected)", body)
-
-    def test_collapse_and_history_replay_zero_regression(self):
-        """零回退哨兵：历史回放不打字（完整填充+保持折叠）、无阶段标记降级
-        沿用原逐字打字机（THINK_TYPE_MS 口径）、点击标题展开/收起保留。"""
+    def test_streaming_never_staggered(self):
+        """流式连续性：思维流行元素不挂任何 CSS 动画类（.msg-enter 仅历史
+        批渲染路径挂载）；renderThinkProgressive 无定时器。"""
         js = self.console_js
-        body = self._typewriter_body()
-        self.assertIn("if (!animate || !text) {", body)
-        self.assertIn("body.textContent = text;", body)              # 历史回放整段填充
-        self.assertIn("const THINK_TYPE_MS = 15;", js)               # 逐字打字间隔保留
-        self.assertIn("body.textContent = text.slice(0, shown)", body)  # 打字机降级
-        self.assertIn("window.toggleThinkCard", js)                  # 点击展开/收起
-        self.assertIn("classList.toggle('think-collapsed')", js)
+        start = js.index("function renderThinkProgressive")
+        body = js[start:js.index("function finalizeThinkCard", start)]
+        self.assertNotIn("msg-enter", body)
+        self.assertNotIn("setInterval", body)
+        self.assertNotIn("setTimeout", body)
+        # 错开淡入只在历史回放 loadHistory 路径
+        hist = js[js.index("function loadHistory"):js.index("// ==================== 4.")]
+        self.assertIn("msg-enter", hist)
 
-    # ---------- index.html 样式：竖线 / 灰字 / 淡蓝徽章 / 可滚动 ----------
-
-    def _think_body_css(self):
+    def test_skeleton_and_watchdog(self):
+        """骨架呼吸/占位线与看门狗（首帧 30s/帧间 90s）在位。"""
         html = self.index_html
-        start = html.index(".think-card-body {")
-        return html[start:html.index("}", start)]
-
-    def test_body_scrollable_with_left_border(self):
-        """展开态内容完整可见、可滚动：.think-card-body max-height +
-        overflow-y: auto；左侧竖线 border-left。"""
-        css = self._think_body_css()
-        self.assertIn("max-height: 260px", css)
-        self.assertIn("overflow-y: auto", css)
-        self.assertIn("border-left: 3px solid", css)
-
-    def test_line_styles_fade_and_badge(self):
-        """逐行样式：.think-line 淡入动画（thinkLineFadeIn keyframes）、
-        淡蓝色阶段标签小徽章（#3b82f6 on #eff6ff）、灰色正文（#6b7280）。"""
-        html = self.index_html
-        start = html.index(".think-line {")
-        line_css = html[start:html.index("}", start)]
-        self.assertIn("animation: thinkLineFadeIn", line_css)
-        self.assertIn("@keyframes thinkLineFadeIn", html)
-        tag_start = html.index(".think-line-tag {")
-        tag_css = html[tag_start:html.index("}", tag_start)]
-        self.assertIn("#3b82f6", tag_css)          # 淡蓝阶段标签
-        self.assertIn("#eff6ff", tag_css)          # 淡蓝底
-        text_start = html.index(".think-line-text {")
-        text_css = html[text_start:html.index("}", text_start)]
-        self.assertIn("#6b7280", text_css)         # 灰色思考文字
-
-    def test_think_card_style_zero_regression(self):
-        """思维链卡片既有样式零回退：.think-card 显式 display: block（整卡
-        永远可见，折叠只藏正文）、圆角保留；背景随 UI 规范 2026-10-22 换
-        3.5% 中性微对比色阶（原 #f3f4f6 实体色随改）。"""
-        html = self.index_html
-        start = html.index(".think-card {")
-        block = html[start:html.index("}", start)]
-        self.assertIn("display: block", block)
-        self.assertNotIn("display: none", block)
-        self.assertIn("background-color: rgba(31, 41, 55, 0.035)", block)
-        self.assertIn("border-radius: 10px", block)
+        self.assertIn("@keyframes thinkBreath", html)
+        self.assertIn("@keyframes thinkSkeletonShimmer", html)
+        js = self.console_js
+        self.assertIn("setTimeout(fireWatchdog, 30000)", js)
+        self.assertIn("setTimeout(fireWatchdog, 90000)", js)
+        self.assertIn("watchdogFired", js)
 
 
-# ---------------------------------------------------------------------------
-# 任务 7：缩成加速球（60px 圆形、橘色边框、头像、拖拽、位置记忆、互切幂等）
 # ---------------------------------------------------------------------------
 
 class BallWidgetTests(unittest.TestCase):
@@ -488,14 +421,13 @@ class TerminalTabTests(unittest.TestCase):
         self.assertIn("const TERMINAL_REFRESH_MS = 15000", section)
 
     def test_think_card_readonly_render(self):
-        """终端 AI 消息：沿用 splitThinkBlock 切分 + 折叠卡片（不打字、直接
-        折叠展示）；正文 renderRich 转义、思考文本 renderCQFace 净化后
-        textContent 注入——与聊天视图同口径免 XSS。"""
+        """终端 AI 消息：沿用 splitThinkBlock 切分 + 直出思维流块（不打字、
+        不折叠）；正文 renderRich 转义、思考行 textContent 注入——与聊天
+        视图同口径免 XSS。"""
         section = self._tab_section()
         self.assertIn("splitThinkBlock(msg.content)", section)
-        self.assertIn("buildThinkCardEl()", section)
+        self.assertIn("buildThinkLiveBlock(parts.think)", section)
         self.assertIn("renderRich(parts.body)", section)
-        self.assertIn("renderCQFace(parts.think)", section)
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +459,7 @@ class WebUxNodeLiveRunTests(unittest.TestCase):
         逐字打字机）；空串安全。"""
         js = _read("console.js")
         chunk = js[js.index("const THINK_STAGE_RE"):
-                   js.index("function buildThinkLineEl")]
+                   js.index("function syncThinkCard")]
         script = (chunk + "\n"
                   "var r = splitThinkStageLines("
                   "'[思考] 需要点WLAN，先定位控件。\\n"
