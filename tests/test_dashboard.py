@@ -2484,7 +2484,7 @@ class TodosFrontendAnchorTests(unittest.TestCase):
         # 尾巴 C 扩展：锁定=只读徽标（不可改），编辑态=六档下拉选择器
         self.assertIn("const prControl = todoEditing", js)
         self.assertIn('select class="todo-pr-select"', js)
-        self.assertIn('span class="todo-pr-badge"', js)
+        self.assertIn('''span class="todo-pr-badge${pr === 'P0' ? ' todo-pr-p0' : ''}"''', js)   # P0 低饱和红徽标修饰类（2026-10-22 答辩微调）
         self.assertIn("todoEditing = !todoEditing;", js)
         self.assertIn("gearEl.classList.toggle('editing', todoEditing)", js)   # F2：状态类
         self.assertNotIn("'🔓'", js)                                            # F2：单图标

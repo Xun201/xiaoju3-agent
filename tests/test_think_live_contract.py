@@ -156,5 +156,56 @@ class RuntimeSmokePresenceTests(unittest.TestCase):
         self.assertNotIn("buildThinkCardEl()", js)
 
 
+class DashCardTests(unittest.TestCase):
+    """侧栏仪表盘卡片化锚（2026-10-22 答辩微调：小米负一屏风，纯样式零逻辑）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = _read("index.html")
+        cls.js = _read("console.js")
+
+    def test_card_family_and_breathing_gap(self):
+        """卡片家族：多层柔影+卡片圆角令牌；侧栏呼吸间距 12px；底色让位。"""
+        html = self.html
+        start = html.index(".dash-card {")
+        block = html[start:html.index("}", start)]
+        self.assertIn("box-shadow: var(--shadow-card)", block)
+        self.assertIn("border-radius: var(--radius-card)", block)
+        sb = html[html.index(".sidebar {"):]
+        sb = sb[:sb.index("}", 0) + 1] if False else html[html.index(".sidebar {"):html.index(".panel-header")]
+        self.assertIn("gap: 12px", sb)
+        self.assertEqual(html.count('class="stat-item dash-card"'), 5)  # CPU/内存/温度/天气/待办
+
+    def test_gradient_progress_bars(self):
+        """暖橘渐变默认档 + 三档阈值各自渐变（尾巴 H 阈值口径不变）。"""
+        html = self.html
+        self.assertIn("background-image: linear-gradient(90deg, #f6b26b, #e8833a)", html)
+        for pair in (("#7bc98a, #2fa24c"), ("#f5d06f, #eab308"), ("#ef8b87, #e0433f")):
+            self.assertIn(f"linear-gradient(90deg, {pair})", html)
+        self.assertIn("阈值在 console.js 常量", html)   # 阈值注释保留（口径未动）
+
+    def test_p0_badge_low_sat_red(self):
+        """P0 低饱和红徽标：CSS 类 + 渲染侧修饰类成对。"""
+        html = self.html
+        start = html.index(".todo-pr-badge.todo-pr-p0 {")
+        block = html[start:html.index("}", start)]
+        self.assertIn("background: #fdecea", block)
+        self.assertIn("color: #b3423e", block)
+        self.assertIn('todo-pr-badge${pr === \'P0\' ? \' todo-pr-p0\' : \'\'}', self.js)
+
+    def test_quick_cards_static_and_wiring(self):
+        """占位卡：天气静态卡带「示例数据」标注（真实性红线）；快捷按钮接线
+        =预填待办话术+/api/health 既有端点消费，零新增后端。"""
+        html = self.html
+        self.assertIn("示例数据 · 聚合面板见路线图 #351", html)
+        self.assertIn('id="quick-todo"', html)
+        self.assertIn('id="quick-check"', html)
+        js = self.js
+        self.assertIn("function initQuickActions", js)
+        self.assertIn("input.value = '帮我记待办：';", js)
+        self.assertIn("fetch('/api/health')", js)
+        self.assertIn("🩺 系统自检通过：服务健康", js)
+
+
 if __name__ == "__main__":
     unittest.main()

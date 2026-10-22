@@ -468,7 +468,7 @@
                 `<option value="${p}"${p === pr ? ' selected' : ''}>${p}</option>`).join('');
             const prControl = todoEditing
                 ? `<select class="todo-pr-select" title="优先级">${prOptions}</select>`
-                : `<span class="todo-pr-badge" title="点 ⚙️ 进入编辑模式后可改">${pr}</span>`;
+                : `<span class="todo-pr-badge${pr === 'P0' ? ' todo-pr-p0' : ''}" title="点 ⚙️ 进入编辑模式后可改">${pr}</span>`;
             // #238：垃圾桶仅对已完成项渲染（pending 无删除入口）
             const delBtn = t.status === 'done'
                 ? `<button class="todo-del" data-id="${t.id}" title="删除这条已完成待办">🗑️</button>`
@@ -923,6 +923,35 @@
     // 生成的消息自带 .msg-tools，经上方 guard 自动跳过
     document.querySelectorAll('#chat-history .message.bot-message')
         .forEach(function (m) { mountSystemToolbar(m); m.classList.add('msg-enter'); });
+
+    // ==================== 快捷指令卡（2026-10-22 答辩微调） ====================
+    // [记待办] 预填输入框并聚焦（话术已过触发词扩展全链验证，用户补内容即发）；
+    // [系统自检] 消费既有 /api/health 端点 + toast 播报——零新增后端、
+    // 零流式通信逻辑改动（纯前端既有接口消费）
+    (function initQuickActions() {
+        const quickTodo = document.getElementById('quick-todo');
+        if (quickTodo) {
+            quickTodo.addEventListener('click', function () {
+                const input = document.getElementById('chat-input');
+                if (!input) return;
+                input.value = '帮我记待办：';
+                input.focus();
+            });
+        }
+        const quickCheck = document.getElementById('quick-check');
+        if (quickCheck) {
+            quickCheck.addEventListener('click', function () {
+                fetch('/api/health')
+                    .then(res => res.json())
+                    .then(d => {
+                        showToast(d && d.status === 'ok'
+                            ? '🩺 系统自检通过：服务健康'
+                            : '⚠️ 自检异常：服务状态 ' + (d && d.status || '未知'));
+                    })
+                    .catch(() => showToast('❌ 自检失败：服务不可达'));
+            });
+        }
+    })();
 
     // 大脑来源徽标（§4.3：消费 /api/chat 返回的 source 字段）
     // dataset.prompt 记录触发本回复的原消息，供"刷新"按钮重新生成
