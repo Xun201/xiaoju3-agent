@@ -187,7 +187,7 @@ class ThinkLineRevealTests(unittest.TestCase):
         self.assertIn("scheduleThinkCollapse(card, msgEl);", body)
         self.assertIn("const THINK_COLLAPSE_DELAY_MS = 1500;", self.console_js)
         self.assertIn("maxHeight = body.clientHeight", self.console_js)
-        self.assertIn("0.3s ease", self.index_html)
+        self.assertIn("cubic-bezier(0.4, 0, 0.2, 1)", self.index_html)   # UI 规范 2026-10-22：干脆顺滑缓动（原 0.3s ease 随改）
 
     def test_stage_split_function_present(self):
         """分段函数：[思考]/[计划]/[行动] 半角方括号阶段标记起新段（与后端
@@ -266,13 +266,14 @@ class ThinkLineRevealTests(unittest.TestCase):
 
     def test_think_card_style_zero_regression(self):
         """思维链卡片既有样式零回退：.think-card 显式 display: block（整卡
-        永远可见，折叠只藏正文）、浅灰背景等既有规格保留。"""
+        永远可见，折叠只藏正文）、圆角保留；背景随 UI 规范 2026-10-22 换
+        3.5% 中性微对比色阶（原 #f3f4f6 实体色随改）。"""
         html = self.index_html
         start = html.index(".think-card {")
         block = html[start:html.index("}", start)]
         self.assertIn("display: block", block)
         self.assertNotIn("display: none", block)
-        self.assertIn("#f3f4f6", block)
+        self.assertIn("background-color: rgba(31, 41, 55, 0.035)", block)
         self.assertIn("border-radius: 10px", block)
 
 
