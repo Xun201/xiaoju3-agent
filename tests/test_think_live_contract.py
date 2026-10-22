@@ -206,6 +206,23 @@ class DashCardTests(unittest.TestCase):
         self.assertIn("fetch('/api/health')", js)
         self.assertIn("🩺 系统自检通过：服务健康", js)
 
+    def test_sidebar_scroll_fix(self):
+        """紧急修复（2026-10-22）：侧栏整栏滚动+底部留白+细腻滚动条；待办
+        列表内层滚动上限改视口自适应（180px 写死退役）；卡片禁 flex 压缩
+        （todos-list 有 overflow→min-height 归零→待办卡被压瘪才是截断真因）。"""
+        html = self.html
+        sb = html[html.index(".sidebar {"):html.index(".panel-header")]
+        self.assertIn("overflow-y: auto", sb)
+        self.assertIn("padding-bottom: 20px", sb)
+        self.assertIn(".sidebar::-webkit-scrollbar-thumb", html)
+        tl_at = html.index(".todos-list {")
+        tl = html[tl_at:html.index("}", tl_at)]
+        self.assertIn("max-height: 32vh", tl)
+        self.assertNotIn("max-height: 180px", html)
+        dc_at = html.index(".dash-card {")
+        dc = html[dc_at:html.index("}", dc_at)]
+        self.assertIn("flex-shrink: 0", dc)
+
 
 if __name__ == "__main__":
     unittest.main()
