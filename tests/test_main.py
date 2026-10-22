@@ -2151,10 +2151,17 @@ class MemoryDisclosureHookTests(unittest.TestCase):
         self.disclosure = disclosure
 
     def _base_domain(self):
+        # 时间炸弹修复（2026-10-22 实锤：写死 2026-10-15 12:00，7 天窗恰在
+        # 10-22 12:00 整点到期→mute/positive/negative 三测齐炸）。按坑库
+        # "测试时间脆弱"先例改动态 now 相对值（提及=2h 前，基线=3h 前）。
         import autonomy
-        d = autonomy.default_domain(now="2026-10-15 12:00:00")
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        self.mentioned_ep = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+        base_now = (now - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+        d = autonomy.default_domain(now=base_now)
         (d.setdefault("data", {}))["last_mentioned"] = {
-            "2026-10-15 10:00:00": "2026-10-15 12:00:00"}
+            self.mentioned_ep: base_now}
         return d
 
     def _run(self, message, d=None, pending=None, contents=None):
@@ -2179,17 +2186,17 @@ class MemoryDisclosureHookTests(unittest.TestCase):
             reply = main.try_memory_disclosure_hook("这个别提！")
         self.assertEqual(reply, "好，这段我先不提了。")
         self.assertEqual(rec["kind"], "mute")
-        self.assertEqual(rec["ep"], "2026-10-15 10:00:00")
+        self.assertEqual(rec["ep"], self.mentioned_ep)   # 动态桩：随 _base_domain
 
     def test_hook_accept_expands_positive_and_clears_pending(self):
         import disclosure
         from unittest.mock import patch
         from datetime import datetime
-        pending = {"episodes": [{"start_ts": "2026-10-15 10:00:00",
+        d = self._base_domain()   # 先建桩（mentioned_ep 时钟起点）
+        pending = {"episodes": [{"start_ts": self.mentioned_ep,
                                  "polarity": "positive",
                                  "memory_ids": [5]}],
-                   "ts": "2026-10-15 12:00:00"}
-        d = self._base_domain()
+                   "ts": self.mentioned_ep}
         mentions = []
         with patch.object(disclosure, "load", return_value=d),                 patch.object(disclosure, "get_pending_ask",
                              return_value=pending),                 patch.object(disclosure, "pending_contents",
@@ -2198,17 +2205,17 @@ class MemoryDisclosureHookTests(unittest.TestCase):
                              (mentions.append(ep), dd)[1]) as mm,                 patch.object(disclosure, "save", return_value=True):
             reply = main.try_memory_disclosure_hook("想听")
         self.assertEqual(reply, "好，我想起的是：我难忘的旅行")
-        self.assertEqual(mentions, ["2026-10-15 10:00:00"])   # 想听=一次提及
+        self.assertEqual(mentions, [self.mentioned_ep])   # 想听=一次提及
         saved = disclosure.load()   # save 已被 patch——此处只验 hook 无异常
 
     def test_hook_negative_accept_result_only(self):
         import disclosure
         from unittest.mock import patch
-        pending = {"episodes": [{"start_ts": "2026-10-13 10:00:00",
+        d = self._base_domain()   # 先建桩（mentioned_ep 时钟起点）
+        pending = {"episodes": [{"start_ts": self.mentioned_ep,
                                  "polarity": "negative",
                                  "memory_ids": [8]}],
-                   "ts": "2026-10-15 12:00:00"}
-        d = self._base_domain()
+                   "ts": self.mentioned_ep}
         with patch.object(disclosure, "load", return_value=d),                 patch.object(disclosure, "get_pending_ask",
                              return_value=pending),                 patch.object(disclosure, "pending_contents",
                              return_value=[("被骂了一顿的细节全文", "negative")]),                 patch.object(disclosure, "save", return_value=True):

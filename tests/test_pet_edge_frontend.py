@@ -189,7 +189,7 @@ class MemoryProgressBarTests(unittest.TestCase):
         """提取含指定 id 的 stat-item 块（进度条结构所在）。"""
         html = self.html
         start = html.index('id="%s"' % text_id)
-        start = html.rindex("<div class=\"stat-item\">", 0, start)
+        start = html.rindex("<div class=\"stat-item dash-card\">", 0, start)
         return html[start:html.index("</div>\n        </div>", start)]
 
     def test_mem_bar_structure_matches_cpu(self):
