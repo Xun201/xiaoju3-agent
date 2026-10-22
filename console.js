@@ -1133,7 +1133,14 @@
             // 缺失时降级为消息容器直插，插入环节任何异常都不吞掉整条回复
             // ——卡片插不上时再降级为深色纯文本块，思考过程必可见
             try {
-                const thinkCard = buildThinkCardEl();
+                // 流式思维卡收养（2026-10-22 #349）：thinkCardEl 在位=流式卡
+                // 已原地转正——原卡移动进本消息（insertBefore 自动摘离旧父），
+                // 不重建不重放；否则照旧 buildThinkCardEl 新建。显式父引用 +
+                // insertBefore，卡片位于消息气泡正文上方；.bubble-content 意外
+                // 缺失时降级为消息容器直插，插入环节任何异常都不吞掉整条回复
+                const thinkCard = (options.thinkCardEl && options.thinkCardEl.classList &&
+                                   options.thinkCardEl.classList.contains('think-card'))
+                    ? options.thinkCardEl : buildThinkCardEl();
                 const bubbleEl = botMsg.querySelector('.bubble-content');
                 const parentEl = bubbleEl ? bubbleEl.parentNode : botMsg;
                 parentEl.insertBefore(thinkCard, bubbleEl);
@@ -1192,7 +1199,10 @@
                     }
                 }
             }
-            startThinkTypewriter(botMsg, thinkParts.think, options.animateThink !== false);
+            // 收养路径跳过打字机/折叠链（流式卡已定稿，收起由流式 done 调度）
+            if (!options.thinkCardEl) {
+                startThinkTypewriter(botMsg, thinkParts.think, options.animateThink !== false);
+            }
         }
         history.appendChild(botMsg);
         history.scrollTop = history.scrollHeight;
@@ -1296,8 +1306,8 @@
             let answerEl = null;      // 正文气泡（首个 answer 块建）
             let answerAcc = '';
             let toolEl = null;
-            let renderedLines = 0;    // C3b:append 模式已渲染行数
-            let lastRowEl = null;     // C3b:末行行元素（chunk 增长中，整刷）
+            let segRows = [];         // 流式思维卡（2026-10-22 #349）：与最终卡
+                                      // 同构的分段行（徽章+缩进），按序号复用
 
             function ensureThinkCard() {
                 if (thinkCard) return;
@@ -1305,9 +1315,23 @@
                 if (loadingMsg.parentNode) loadingMsg.parentNode.removeChild(loadingMsg);
                 thinkCard = document.createElement('div');
                 thinkCard.className = 'think-card';
+                // 卡头解剖与最终卡 buildThinkCardEl 同构（图标/标题/箭头 +
+                // onclick 开合）——流式态即最终态预览，done 后不换骨架
                 const head = document.createElement('div');
                 head.className = 'think-card-header';
-                head.textContent = '🧠 思考过程（实时）';
+                head.setAttribute('onclick', 'toggleThinkCard(this)');
+                head.setAttribute('title', '展开/收起思考过程');
+                const icon = document.createElement('span');
+                icon.textContent = '🧠';
+                const title = document.createElement('span');
+                title.className = 'think-card-title';
+                title.textContent = '思考过程（实时）';
+                const arrow = document.createElement('span');
+                arrow.className = 'think-card-arrow';
+                arrow.textContent = '▼';
+                head.appendChild(icon);
+                head.appendChild(title);
+                head.appendChild(arrow);
                 thinkBodyEl = document.createElement('div');
                 thinkBodyEl.className = 'think-card-body';
                 thinkCard.appendChild(head);
@@ -1317,21 +1341,55 @@
 
             function renderThinkProgressive() {
                 ensureThinkCard();
-                // C3b append 模式：完整行 append，末行整刷——chunk 边收边长，
-                // 末行必须随增量同步更新，否则最后一行文字卡住
-                const lines = thinkAcc.split('\n');
-                while (renderedLines < lines.length - 1) {
-                    const row = document.createElement('div');
-                    row.textContent = lines[renderedLines];
+                // 流式思维卡（2026-10-22 #349）：与最终卡同构的逐段渲染——
+                // splitThinkStageLines 全量重切（think 全文 KB 级×delta 百次
+                // 级，重切开销可忽略），行元素按序号对齐复用：已有行仅在文本
+                // 变化时更新 textContent；段标签变化（半截 [思考] 逐字长全）
+                // 整行重建（replaceChild）——徽章分色/缩进与最终卡走同一
+                // buildThinkLineEl，零分叉
+                const segs = splitThinkStageLines(thinkAcc);
+                while (segRows.length < segs.length) {
+                    const row = buildThinkLineEl(segs[segRows.length]);
+                    row.__stageTag = segs[segRows.length].tag;
                     thinkBodyEl.appendChild(row);
-                    renderedLines++;
+                    segRows.push(row);
                 }
-                if (!lastRowEl) {
-                    lastRowEl = document.createElement('div');
-                    thinkBodyEl.appendChild(lastRowEl);
-                }
-                lastRowEl.textContent = lines[lines.length - 1] || '';
+                segs.forEach(function (seg, i) {
+                    const row = segRows[i];
+                    if (row.__stageTag !== seg.tag) {
+                        const fresh = buildThinkLineEl(seg);
+                        fresh.__stageTag = seg.tag;
+                        row.parentNode.replaceChild(fresh, row);
+                        segRows[i] = fresh;
+                        return;
+                    }
+                    const textEl = row.querySelector('.think-line-text');
+                    if (textEl && textEl.textContent !== seg.text) {
+                        textEl.textContent = seg.text;
+                    }
+                });
+                // UI 规范（2026-10-22）：正在增长的末行挂 .think-line-streaming
+                // （半透明水墨态），其余行摘类渐进淡入归位——取消单字硬蹦感
+                segRows.forEach(function (row, i) {
+                    if (i === segs.length - 1) row.classList.add('think-line-streaming');
+                    else row.classList.remove('think-line-streaming');
+                });
                 history.scrollTop = history.scrollHeight;
+            }
+
+            // done 转正：按净化全文重渲一次对齐口径，卡头换完成态标题
+            //（耗时 A1 口径）；卡片随后经 appendBotMessage thinkCardEl 通道收养
+            function finalizeThinkCard(finalThink, titleText) {
+                thinkAcc = finalThink;
+                renderThinkProgressive();
+                const st = thinkCard && thinkCard.querySelector('.think-card-title');
+                if (st && titleText) st.textContent = titleText;
+                // UI 规范：转正后全行归位（摘水墨态，渐进淡入至全不透明）
+                if (thinkBodyEl) {
+                    thinkBodyEl.querySelectorAll('.think-line-streaming').forEach(function (el) {
+                        el.classList.remove('think-line-streaming');
+                    });
+                }
             }
 
             function ensureAnswerEl() {
@@ -1371,20 +1429,47 @@
                     answerEl.querySelector('.bubble-content').textContent = answerAcc;
                     history.scrollTop = history.scrollHeight;
                 } else if (etype === 'done') {
-                    // 收尾：移除流式过程件，最终态走既有 appendBotMessage
-                    // 管线（同形最终串：净化/表情/工具栏/落盘口径一致）
+                    // 收尾（2026-10-22 #349 流式思维卡保留式）：流式卡不再拆卡
+                    // 重放——按 done 净化全文原地转正，经 appendBotMessage
+                    // thinkCardEl 通道收养进最终消息（正文/工具栏/落盘口径零
+                    // 分叉）；无流式卡（指令单帧 done）走原重建路径零变化。
+                    // 顺序：先挂最终气泡再撤 answerEl（换屏零空白）。
                     clearTimeout(streamGuard);
                     maybeTimeSeparator(new Date().toISOString());
-                    if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);
-                    if (toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
+                    let adopted = null;
+                    if (thinkCard) {
+                        const parts = splitThinkBlock(String(data.reply == null ? '' : data.reply));
+                        if (parts.think !== null && parts.think !== '') {
+                            if (toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
+                            let secs = null;
+                            if (thinkStartTs !== null) {
+                                secs = ((Date.now() - thinkStartTs) / 1000).toFixed(1);
+                            }
+                            finalizeThinkCard(parts.think,
+                                secs === null ? '' : '已思考（用时 ' + secs + ' 秒）');
+                            adopted = thinkCard;
+                        } else {
+                            // 旧口径：最终回复无 <think>（理论边角）不保留过程卡
+                            if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);
+                        }
+                    }
+                    if (!adopted && toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
+                    const botMsg = appendBotMessage(data.reply, data.source, text,
+                        adopted ? { thinkCardEl: adopted } : null);
                     if (answerEl && answerEl.parentNode) answerEl.parentNode.removeChild(answerEl);
-                    const botMsg = appendBotMessage(data.reply, data.source, text);
-                    // A1（#326 前置侦察）：耗时显示——卡片标题追加"已思考（用时 X 秒）"
-                    if (thinkStartTs !== null) {
+                    if (adopted) {
+                        scheduleThinkCollapse(adopted, botMsg);   // 思考完成 → 1.5s 后动画收起（点击可再展开）
+                    } else if (thinkStartTs !== null) {
+                        // A1（#326 前置侦察）：耗时显示（未走收养路径的兜底）
                         const secs = ((Date.now() - thinkStartTs) / 1000).toFixed(1);
                         const fc = botMsg.querySelector('.think-card-title');
                         if (fc) fc.textContent = '已思考（用时 ' + secs + ' 秒）';
                     }
+                    thinkCard = null;
+                    thinkBodyEl = null;
+                    toolEl = null;
+                    answerEl = null;
+                    segRows = [];
                     if (window.xiaoju3Sound) window.xiaoju3Sound.ding();
                     if (autoTTSEnabled()) speakMessageEl(botMsg);
                 } else if (etype === 'error') {

@@ -1570,8 +1570,11 @@ class ThinkCardFrontendTests(unittest.TestCase):
         self.assertNotIn("（操作已执行）", between)
         self.assertNotIn("!reply", between)
         # 先构建完整元素、再手工插入 DOM（F4 加固，不依赖 ChildNode.before()）：
-        # 赋值给局部变量后用显式父引用 insertBefore 插到气泡正文上方
-        self.assertIn("= buildThinkCardEl()", body)
+        # 赋值给局部变量后用显式父引用 insertBefore 插到气泡正文上方；
+        # 2026-10-22 #349 流式思维卡收养：thinkCardEl 在位=原卡移动不重建，
+        # 三目 fallback 侧仍走 buildThinkCardEl() 新建（非流式路径零变化）
+        self.assertIn(": buildThinkCardEl();", body)
+        self.assertIn("options.thinkCardEl.classList.contains('think-card')", body)
         self.assertIn("parentEl.insertBefore(thinkCard, bubbleEl)", body)
         self.assertNotIn(".before(", body)
         # ② Python 复跑："<think>块内容</think>（操作已执行）"→ think 非空 + 占位正文
@@ -1856,14 +1859,15 @@ class ThinkCardFrontendTests(unittest.TestCase):
 
     def test_index_think_card_styles(self):
         """index.html 内联样式区含 .think-card / .think-card-header /
-        .think-card-body：浅灰背景 #f3f4f6、圆角 10px、13px 字号、
-        折叠用 .think-collapsed 类 + display 切换。"""
+        .think-card-body：背景随 UI 规范 2026-10-22 换 3.5% 中性微对比色阶
+        （原浅灰 #f3f4f6 实体色随改）、圆角 10px、13px 字号、折叠用
+        .think-collapsed 类 + display 切换。"""
         html = self.index_html
         for cls in (".think-card {", ".think-card-header {", ".think-card-body {"):
             self.assertIn(cls, html)
         start = html.index(".think-card {")
         block = html[start:html.index("}", start)]
-        self.assertIn("#f3f4f6", block)             # 浅灰背景
+        self.assertIn("background-color: rgba(31, 41, 55, 0.035)", block)  # 微对比色阶
         self.assertIn("border-radius: 10px", block)  # 圆角 10px
         self.assertIn("font-size: 13px", block)      # 13px 字号
         # 折叠实现：.think-collapsed 类 + 正文 display:none

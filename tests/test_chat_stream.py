@@ -287,8 +287,10 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
         self.assertIn("escapeHtml(note)" if False else
                       "answerEl.querySelector('.bubble-content').textContent = answerAcc",
                       js)                          # textContent 注入口径
-        self.assertIn("appendBotMessage(data.reply, data.source, text)",
+        self.assertIn("appendBotMessage(data.reply, data.source, text,",
                       js)                          # done 走既有单渲染管线
+        self.assertIn("adopted ? { thinkCardEl: adopted } : null",
+                      js)                          # 流式卡收养通道（2026-10-22 #349）
 
     def test_stream_interrupt_cleanup_and_legacy_guard(self):
         """C3b：半途断流——sendMessageStream 内层闭包清过程件再 rethrow
@@ -319,16 +321,21 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
             js)
 
     def test_think_append_mode_and_tool_gate(self):
-        """C3b：think 渐进 append 模式——完整行 append、末行整刷（chunk
-        边收边长，末行必须随增量同步更新）；tool 事件无卡也建卡
-        （不再静默丢）。textContent 安全口径不变。"""
+        """流式思维卡（2026-10-22 #349，原 C3b append 模式升级为分段复用）：
+        think 渐进渲染与最终卡同构——splitThinkStageLines 全量重切+行元素按
+        序号复用（文本变化才写 textContent、段标签长全整行重建 replaceChild）；
+        tool 事件无卡也建卡（不再静默丢）；textContent 安全口径不变；
+        C3b 末行整刷机制（renderedLines/lastRowEl）退役（反锚）。"""
         js = self._js()
         self.assertNotIn("thinkBodyEl.textContent = thinkAcc",
                          js)                             # 整刷退役（反锚）
+        self.assertNotIn("renderedLines", js)            # 末行整刷退役（反锚）
+        self.assertNotIn("lastRowEl", js)                # 末行整刷退役（反锚）
         self.assertIn("thinkBodyEl.appendChild(row)", js)
-        self.assertIn("renderedLines", js)
-        self.assertIn("lastRowEl.textContent = lines[lines.length - 1] || ''",
-                      js)                                # 末行整刷随 chunk 更新
+        self.assertIn("const segs = splitThinkStageLines(thinkAcc);", js)
+        self.assertIn("textEl.textContent !== seg.text", js)   # 文本变化才写
+        self.assertIn("row.parentNode.replaceChild(fresh, row)",
+                      js)                                # 段标签长全→整行重建
         self.assertIn("ensureThinkCard();   // C3b：无卡也建", js)
 
 

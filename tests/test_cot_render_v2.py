@@ -164,11 +164,12 @@ class CotCollapseRhythmTests(unittest.TestCase):
 
     def test_css_transition_300ms(self):
         """index.html 折叠动画 CSS：.think-anim 态下正文 max-height 过渡
-        0.3s ease（300ms），由 console.js 挂/摘类启用。"""
+        0.3s swift-out（cubic-bezier(0.4,0,0.2,1)，UI 规范 2026-10-22 干脆
+        顺滑口径，原 ease 随改），由 console.js 挂/摘类启用。"""
         html = self.index_html
         start = html.index(".think-card.think-anim .think-card-body")
         css = html[start:html.index("}", start)]
-        self.assertIn("transition: max-height 0.3s ease", css)
+        self.assertIn("transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1)", css)
 
     def test_js_collapse_sequence(self):
         """JS 折叠序列：先写实测可视高度（clientHeight，避免超限滚动态

@@ -409,11 +409,12 @@
            过渡补足动效。 */
         .think-card {
             display: block;                     /* 整卡永远可见：.think-collapsed 只藏正文，绝不藏整卡 */
-            background-color: #f3f4f6;          /* 浅灰背景（任务规格色） */
-            border: 1px solid var(--color-border);
+            background-color: rgba(31, 41, 55, 0.035);  /* UI 规范 2026-10-22：容器层级=背景 3.5% 中性微对比色阶（双主题自适应），替代实体边框 */
+            border: none;
             border-radius: 10px;
             font-size: 13px;
             overflow: hidden;
+            box-shadow: 0 1px 3px rgba(31, 41, 55, 0.07);   /* 细微阴影分层（替代 1px 实体边框） */
         }
         .think-card-header {
             display: flex;
@@ -434,7 +435,7 @@
             user-select: none;
         }
         .think-card-header:hover { color: var(--color-primary); }
-        .think-card-title { flex: 1; }
+        .think-card-title { flex: 1; font-variant-numeric: tabular-nums; }   /* UI 规范：动态数字等宽（用时 X 秒）防左右抖动 */
         .think-card-arrow {
             font-size: 11px;
             transition: transform 0.2s ease;
@@ -448,7 +449,7 @@
             word-break: break-word;
             max-height: 260px;                  /* 展开态内容完整可见：超限滚动（任务 6） */
             overflow-y: auto;
-            border-left: 3px solid #c9d6f2;     /* 左侧竖线（任务 6） */
+            border-left: 3px solid rgba(32, 49, 112, 0.16);   /* 左侧竖线（任务 6）；UI 规范：半透明降对比水墨感 */
         }
         /* 折叠态：正文 display:none（console.js 切换类名即可，无需内联样式） */
         .think-card.think-collapsed .think-card-body { display: none; }
@@ -459,7 +460,7 @@
            落回上方 .think-collapsed 静态折叠口径。max-height 选型：内容高度
            不定，用 clientHeight/scrollHeight 实测值过渡，无魔法数字上限；
            grid-rows 0fr/1fr 需额外包裹容器且旧引擎兼容差。 */
-        .think-card.think-anim .think-card-body { transition: max-height 0.3s ease; }
+        .think-card.think-anim .think-card-body { transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1); }   /* UI 规范：干脆顺滑 swift-out */
 
         /* 思考展示期间正文气泡暂不显示（折叠完成后由 console.js 摘除
            .think-pending 显示），形成"先完整思考、收起、后出正文"的节奏 */
@@ -477,12 +478,16 @@
             gap: 6px;
             margin: 3px 0;
             opacity: 0;
-            animation: thinkLineFadeIn 0.3s ease forwards;   /* 整体淡入 */
+            animation: thinkLineFadeIn 0.45s ease-out forwards;   /* UI 规范：水墨晕染式淡入（含模糊消散） */
+            transition: opacity 0.45s ease;   /* 流式在写行摘类后渐进淡入归位 */
         }
         @keyframes thinkLineFadeIn {
-            from { opacity: 0; transform: translateY(3px); }
-            to { opacity: 1; transform: translateY(0); }
+            from { opacity: 0; filter: blur(4px); transform: translateY(3px); }
+            to { opacity: 1; filter: blur(0); transform: translateY(0); }
         }
+        /* 流式思维卡（2026-10-22 #349）：正在增长的末行保持半透明水墨态，
+           行完成/卡片转正后摘类渐进淡入归位（取消单字硬蹦的视觉跳感） */
+        .think-line-streaming { opacity: 0.66; }
         /* 阶段层级缩进（完整列表视觉）：[思考] 顶格 / [计划] 一级 / [行动] 二级 */
         .think-line.think-indent-1 { margin-left: 0; }
         .think-line.think-indent-2 { margin-left: 14px; }
