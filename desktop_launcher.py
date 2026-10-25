@@ -857,10 +857,38 @@ def main(argv=None):
     # 变闪灰，肉眼接近无感。--disable-gpu/transparent 不采用：前者全局降
     # 渲染性能，后者是 #311-b 评估的闪烁风险位。
 
+    def _apply_composited_style():
+        """窗口原生双缓冲（2026-10-25 白屏终极方案 A）：给 HWND 加
+        WS_EX_COMPOSITED 扩展样式——窗口尺寸突变时原生层自底向上双缓冲
+        绘制，消除撕裂/露底。与 background_color/CSS 方案正交叠加。
+
+        hwnd 获取：FindWindowW 按标题直找——window.native.Handle 跨线程
+        （回调线程≠GUI 线程）隐性失败实锤（COMPOSITED=False 直查），
+        WinForms Invoke 依赖 pythonnet 线程封送，FindWindow 零依赖最稳。
+        注入态可复核：GetWindowLongW(hwnd,-20) & 0x02000000。"""
+        import ctypes
+        import time as _time
+        user32 = ctypes.windll.user32
+        GWL_EXSTYLE = -20
+        WS_EX_COMPOSITED = 0x02000000
+        for _ in range(10):   # 窗口创建竞态重试（最多 10s）
+            hwnd = user32.FindWindowW(None, WINDOW_TITLE)
+            if hwnd:
+                break
+            _time.sleep(1)
+        if not hwnd:
+            _print("[白屏终极方案A] FindWindow 未找到主窗口（方案B兜底）")
+            return
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                              style | WS_EX_COMPOSITED)
+        _print(f"[白屏终极方案A] WS_EX_COMPOSITED 已注入 (hwnd={hwnd})", flush=True)
+
     def _navigate_when_ready():
         """后台导航（webview.start 回调）：等 :5003 就绪 → load_url 控制台。
         超时/缺位也仍导航（WebView2 自显示连接失败页，稍后服务起来刷新即
         恢复）——窗口是唯一 UI 出口，不能没有内容；同时标题追加提示。"""
+        _apply_composited_style()   # GUI 就绪即注入（先于导航）
         timed_out = False
         if need_wait:
             timed_out = not wait_for_dashboard_ready()

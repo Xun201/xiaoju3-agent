@@ -395,6 +395,7 @@ class WhiteFlashFixTests(unittest.TestCase):
         src = self.launcher
         self.assertIn("WS_EX_COMPOSITED = 0x02000000", src)
         self.assertIn("SetWindowLongW", src)
+        self.assertIn("FindWindowW(None, WINDOW_TITLE)", src)   # 跨线程 Handle 失败后改标题直找
         self.assertIn("_apply_composited_style()   # GUI 就绪即注入", src)
 
     def test_resize_mask_debounce(self):
