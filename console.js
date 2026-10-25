@@ -973,6 +973,30 @@
         }
     })();
 
+    // ==================== UI 事件总线（#348 三期推模式） ====================
+    // 页面级 EventSource 长连接（/api/events）——后台任务（插件转写等）
+    // 完成时收到 video_note_done 事件，渲染为新 AI 气泡（带思考折叠+正常
+    // 渲染管线）。与请求级 SSE 正交；断线自动重连（EventSource 原生）；
+    // 事件丢失兜底=「查转写状态」（既有，保留）。
+    (function initUiEvents() {
+        if (typeof EventSource === "undefined") return;   // 老引擎降级（status 兜底）
+        const es = new EventSource('/api/events');
+        es.addEventListener('video_note_done', function (ev) {
+            try {
+                const d = JSON.parse(ev.data);
+                if (d.reply) {
+                    const history = document.getElementById('chat-history');
+                    if (!history) return;
+                    appendBotMessage(d.reply, '📺 视频转写', d.title || '');
+                    history.scrollTop = history.scrollHeight;
+                }
+            } catch (e) {
+                console.error('UI 事件渲染失败', e);   // 单事件失败不拆连接
+            }
+        });
+        es.onerror = function () { /* EventSource 原生自动重连，无需处理 */ };
+    })();
+
     // ==================== 天气卡真实化（#351 聚合面板一期） ====================
     // GET /api/weather（后端 15 分钟缓存）+ 前端 20 分钟轮询+载入即拉；
     // 异常/超时一律降级为"暂无数据"——绝不因网络卡顿崩面板（纪律红线）。

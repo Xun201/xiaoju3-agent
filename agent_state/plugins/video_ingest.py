@@ -282,9 +282,28 @@ def _pipeline(url):
                     f"{digest}\n\n## 转写全文\n\n{text}\n")
         _set("done", result_path=note)
         _audit(f"转写完成 {title}（{time.time()-t0:.0f}s）→ {note}")
+        # 推模式（#348 三期）：完成即广播——前端 EventSource 实时渲染新气泡
+        #（reply 构造与 status_reply 同形：<think> 包装走既有思考折叠管线）
+        try:
+            import ui_events
+            with open(note, encoding="utf-8") as f:
+                reply = f.read()
+            ui_events.publish(
+                "video_note_done", title=title,
+                reply="<think>[思考] 视频转写完成，已整理核心观点。</think>"
+                      + "📺 《" + title + "》转写完成，以下是核心观点：\n\n" + reply)
+        except Exception as push_err:
+            _audit(f"推送失败（结果已落盘可查）: {push_err}")
     except Exception as e:
         _set("error", error=str(e))
         _audit(f"转写失败: {e}")
+        try:
+            import ui_events
+            ui_events.publish("video_note_done", title=_JOB.get("title") or url,
+                              reply="<think>[思考] 转写失败。</think>"
+                                    f"❌ 视频《{_JOB.get('title') or url}》转写失败：{e}")
+        except Exception:
+            pass
     finally:
         if audio and os.path.isdir(tmp_dir):   # 音频临时件清理（磁盘卫生）
             for f in os.listdir(tmp_dir):

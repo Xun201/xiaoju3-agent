@@ -904,6 +904,38 @@ def api_memory_list():
                                           "total": len(items)}})
 
 
+@app.route("/api/events")
+def api_events():
+    """页面级 UI 事件 SSE 长连接（#348 三期推模式）：后台任务（插件转写等）
+    完成时经 ui_events.publish 广播，前端 EventSource 实时渲染新气泡。
+
+    与请求级 /api/chat/stream 正交（独立连接独立生命周期，零冲突）；
+    15s 无事件发 SSE 注释行心跳防代理/浏览器超时断连；断开 finally 注销。"""
+    import queue as _queue
+    import ui_events
+
+    def generate():
+        q = ui_events.subscribe()
+        try:
+            yield ": connected\n\n"   # SSE 注释行：连接建立确认
+            while True:
+                try:
+                    ev = q.get(timeout=15)
+                    import json as _json
+                    yield "event: {}\n".format(ev.get("type", "ui"))
+                    yield "data: {}\n\n".format(
+                        _json.dumps(ev, ensure_ascii=False))
+                except _queue.Empty:
+                    yield ": ping\n\n"   # 心跳（15s）
+        finally:
+            ui_events.unsubscribe(q)
+
+    from flask import Response
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache",
+                             "X-Accel-Buffering": "no"})
+
+
 @app.route("/api/plugin_debug")
 def api_plugin_debug():
     """插件总线 frozen 诊断（#348 三期侦察，只读零副作用）。
