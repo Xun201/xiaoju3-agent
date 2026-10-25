@@ -2535,6 +2535,17 @@ def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
             except Exception as e:
                 print(f"⚠️ [R1守门] 重请求失败（维持原回复）: {e}")
                 body = ""
+        # R1 双源泄漏修复（2026-10-25 真机实锤）：R1 类模型 content 自带
+        # <think>…</think> 残留对/孤儿标签——不清洗则前端非贪婪正则把
+        # "思考尾巴"留在正文（真机：加粗 markdown 执行摘要混入 answer）。
+        # 成对内容并入思考（信息不丢），孤儿标签剥除。
+        import re as _re
+        _pairs = _re.findall(r'<think>([\s\S]*?)</think>', body, _re.IGNORECASE)
+        if _pairs:
+            think_text += "\n" + "\n".join(_pairs)
+            body = _re.sub(r'<think>[\s\S]*?</think>', '', body,
+                           flags=_re.IGNORECASE)
+        body = _strip_think_tags(body)
         return '<think>' + think_text + '</think>' + body
     return body
 

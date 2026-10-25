@@ -1224,6 +1224,9 @@
             labelEl.className = 'think-live-label';
             labelEl.textContent = '🧠 小橘正在思考…';
             thinkBodyEl = document.createElement('div');
+            labelEl.addEventListener('click', function () {
+                thinkCard.classList.toggle('think-live-collapsed');
+            });
             thinkCard.appendChild(labelEl);
             thinkCard.appendChild(thinkBodyEl);
             // 骨架屏：标签呼吸 + 两根占位线，首段真文本接管时摘除
@@ -1324,6 +1327,14 @@
                         finalizeThinkCard(parts.think,
                             secs === null ? '🧠 思考过程' : '🧠 已思考（用时 ' + secs + ' 秒）');
                         adopted = thinkCard;
+                        // 完成后自动收起（2026-10-25 队长验收拍板）：直出流式全程
+                        // 可见，done 定稿后 1.5s 收起为折叠行（标签保留+点击可展开），
+                        // 长思考不再霸屏
+                        setTimeout(function () {
+                            if (adopted && adopted.isConnected) {
+                                adopted.classList.add('think-live-collapsed');
+                            }
+                        }, 1500);
                     } else {
                         // 旧口径：最终回复无 <think>（理论边角）不保留过程块
                         if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);

@@ -83,8 +83,10 @@ class DirectOutStructureTests(unittest.TestCase):
         self.assertIn("history.scrollTop = history.scrollHeight;", body)
 
     def test_retired_family_gone(self):
-        """折叠卡家族整体退役（反锚）：打字机/折叠链/开合/旧构建器/
-        think-pending/徽章行构建器全不存在。"""
+        """折叠**卡**家族退役（反锚）：旧构建器/打字机/徽章全不存在；
+        2026-10-25 队长验收拍板新增 think-live-collapsed 折叠保留态
+        （直出流式+完成后收起为可展开折叠行）——旧类名 think-collapsed
+        仍禁（新折叠走 think-live-collapsed 独立类）。"""
         js = self.js
         for token in ("startThinkTypewriter", "scheduleThinkCollapse",
                       "animateThinkCollapse", "toggleThinkCard",
@@ -94,6 +96,21 @@ class DirectOutStructureTests(unittest.TestCase):
                       "think-pending", "think-collapsed", "animateThink",
                       "RENDERING_THINK_CARD"):
             self.assertNotIn(token, js)
+
+    def test_collapse_keeps_toggle_row(self):
+        """折叠保留态（2026-10-25 验收拍板）：done 后 1.5s 收起为折叠行——
+        只藏思考行、标签行保留（已思考用时秒），点击标签行可再展开。"""
+        js = self.js
+        html = _read("index.html")
+        self.assertIn("adopted.classList.add('think-live-collapsed');", js)
+        self.assertIn("thinkCard.classList.toggle('think-live-collapsed');", js)
+        self.assertIn(
+            ".think-live.think-live-collapsed .think-live-line { display: none; }",
+            html)
+        self.assertIn(
+            ".think-live.think-live-collapsed .think-live-label { cursor: pointer; }",
+            html)
+        self.assertIn('content: " ▸ 点击展开";', html)
 
 
 class DoneAdoptionTests(unittest.TestCase):

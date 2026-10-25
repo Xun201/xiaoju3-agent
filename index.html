@@ -474,6 +474,17 @@
             word-break: break-word;
             line-height: 1.55;
         }
+        /* 完成后收起保留折叠行（2026-10-25 队长验收反馈）：直出流式全程可见，
+           done 后挂 .think-live-collapsed 只藏思考行、标签行保留——点击标签
+           行可再展开（恢复旧折叠卡的"可回看"能力，同时保住直出流式体验） */
+        .think-live.think-live-collapsed .think-live-line { display: none; }
+        .think-live.think-live-collapsed .think-live-label { cursor: pointer; }
+        .think-live.think-live-collapsed .think-live-label::after {
+            content: " ▸ 点击展开";
+            font-size: 11px;
+            font-weight: 400;
+            color: var(--color-text-hint, #9aa4b2);
+        }
         .think-skeleton-line {
             height: 9px;
             margin: 5px 0;
