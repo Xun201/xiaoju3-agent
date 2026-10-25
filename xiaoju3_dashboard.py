@@ -904,6 +904,72 @@ def api_memory_list():
                                           "total": len(items)}})
 
 
+@app.route("/api/plugin_debug")
+def api_plugin_debug():
+    """插件总线 frozen 诊断（#348 三期侦察，只读零副作用）。
+
+    实抓：frozen 标志/sys.path 头部/meta_path 类型/外部目录+扫描/已载清单/
+    faster_whisper 试导入（含完整 traceback）——一期侦察临时端点，根因
+    定案后保留作运维诊断位。"""
+    import sys as _sys
+    info = {"frozen": bool(getattr(_sys, "frozen", False)),
+            "executable": _sys.executable,
+            "sys_path_head": _sys.path[:8],
+            "meta_path_types": [type(m).__name__
+                                for m in __import__("importlib").machinery.path_hooks
+                                ] if False else [type(m).__name__ for m in _sys.meta_path]}
+    try:
+        import plugin_loader
+        ed = plugin_loader.external_dir()
+        info["external_dir"] = ed
+        info["external_dir_exists"] = os.path.isdir(ed)
+        info["scan"] = [n for n, _, _ in plugin_loader.scan()]
+        info["loaded"] = list(plugin_loader.loaded_plugins())
+        deps = os.path.join(ed, "_deps")
+        info["deps_exists"] = os.path.isdir(deps)
+        info["deps_has_fw"] = os.path.isdir(os.path.join(deps, "faster_whisper"))
+        if deps not in _sys.path:
+            _sys.path.insert(0, deps)
+        try:
+            import faster_whisper
+            info["faster_whisper_import"] = faster_whisper.__version__
+        except Exception:
+            import traceback
+            info["faster_whisper_error"] = traceback.format_exc()[-900:]
+        # 现场重放 video_ingest 装载（validate+setup 逐步 traceback）
+        replay = {}
+        try:
+            for name, path, origin in plugin_loader.scan():
+                if name != "video_ingest":
+                    continue
+                module = plugin_loader._import_plugin(name, path, origin)
+                raw = getattr(module, "PLUGIN", None)
+                plugin = raw() if callable(raw) and not isinstance(raw, dict) else raw
+                replay["plugin_keys"] = sorted(plugin.keys())
+                replay["level"] = plugin.get("level")
+                replay["tools_names"] = [t.get("name") for t in plugin.get("tools") or []]
+                replay["intents_names"] = [t.get("name") for t in plugin.get("intents") or []]
+                errs = plugin_loader._validate(plugin, path, set())
+                replay["validate_errors"] = errs
+                setup_fn = plugin.get("setup")
+                if callable(setup_fn):
+                    logs = []
+                    try:
+                        setup_fn({"data_dir": os.path.join(ed, name),
+                                  "log": lambda m: logs.append(str(m))})
+                        replay["setup_ok"] = True
+                    except Exception:
+                        replay["setup_error"] = traceback.format_exc()[-700:]
+                    replay["setup_log"] = logs
+        except Exception:
+            replay["replay_error"] = traceback.format_exc()[-700:]
+        info["replay"] = replay
+    except Exception as e:
+        import traceback
+        info["probe_error"] = traceback.format_exc()[-900:]
+    return jsonify({"code": 200, "data": info})
+
+
 @app.route("/api/ha/devices")
 def api_ha_devices():
     """HA 实体清单（小工具面板「家电列表」卡，只读文本形态）。

@@ -103,6 +103,11 @@ def teardown():
     _audit("teardown 调用（转写线程 daemon 随主程序退出，状态表随实例废弃）")
 
 
+def _extract_noargs(_message=None, _match=None):
+    """状态查询意图无参数抽取（ext_video_status 引用）。"""
+    return {}
+
+
 def extract_video_url(message, _match=None):
     """意图参数抽取：从消息抽第一个 http(s) 链接（URL 传递免疫清洗）。"""
     import re
