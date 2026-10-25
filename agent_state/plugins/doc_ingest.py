@@ -73,7 +73,7 @@ def PLUGIN():
         ],
         "intents": [
             {"name": "ext_doc_ingest", "desc": "摄取文档进知识库",
-             "patterns": [r"(摄取|学一下|学进|存进|收录).{0,10}(知识库|文档|这?本?书|pdf)",
+             "patterns": [r"(摄取|学一下|学进|存进|收录).{0,45}(知识库|文档|这?本?书|pdf)",   # 45 字窗：路径常夹在动词与宾语之间（真机实测 10 字窗漏）
                           r"(这?本?书|pdf|文档).{0,8}(学|摄取|入库)"],
              "extractor": _extract_path,
              "handler_name": "agent_state_plugins_doc_ingest:ingest_reply"},

@@ -40,6 +40,8 @@ _TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # 已载插件登记：name -> {"plugin": PLUGIN dict, "module": module,
 # "source": 文件路径, "origin": "file"|"package"}
 _loaded = {}
+# 拒载详情（#348 三期诊断）：[{name, source, reason}]，plugin_debug 消费
+_rejected = []
 
 
 def external_dir():
@@ -49,14 +51,20 @@ def external_dir():
     return os.path.join(xiaoju3.AGENT_STATE_DIR, "plugins")
 
 
+def rejected_plugins():
+    """拒载详情只读视图（plugin_debug 消费）。"""
+    return list(_rejected)
+
+
 def loaded_plugins():
     """已载插件登记的只读视图（/plugin_list 消费）。"""
     return dict(_loaded)
 
 
 def _audit(msg):
-    """总线审计行（[插件] 前缀，运维一眼可辨；print 与后端日志同惯例）。"""
-    print(f"[插件] {msg}")
+    """总线审计行（[插件] 前缀，运维一眼可辨；flush=True——frozen 车的
+    stdout 全缓冲曾吞审计行致排障盲区，2026-10-25 实锤）。"""
+    print(f"[插件] {msg}", flush=True)
 
 
 def scan():
@@ -174,6 +182,10 @@ def load_all():
         try:
             module = _import_plugin(name, path, origin)
         except Exception as e:
+            import traceback
+            _rejected.append({"name": name, "source": path,
+                              "reason": f"导入失败: {e}",
+                              "tb": traceback.format_exc()[-600:]})
             _audit(f"{name} 导入失败，跳过: {e}")
             fail += 1
             continue
@@ -191,11 +203,15 @@ def load_all():
         else:
             plugin = raw
         if plugin is None:
+            _rejected.append({"name": name, "source": path,
+                              "reason": "无 PLUGIN 声明"})
             _audit(f"{name} 无 PLUGIN 声明，跳过")
             fail += 1
             continue
         errs = _validate(plugin, path, seen)
         if errs:
+            _rejected.append({"name": name, "source": path,
+                              "reason": "契约校验: " + "; ".join(errs)})
             _audit(f"{name} 契约校验未过，跳过: {'; '.join(errs)}")
             fail += 1
             continue
@@ -203,6 +219,10 @@ def load_all():
         if callable(setup):
             ctx = {"data_dir": os.path.join(external_dir(), name), "log": _audit}
             if not _run_hook(setup, (ctx,), _SETUP_TIMEOUT, f"{name}.setup"):
+                import traceback as _tb
+                _rejected.append({"name": name, "source": path,
+                                  "reason": "setup 失败/超时",
+                                  "tb": _tb.format_exc()[-600:]})
                 _audit(f"{name} setup 失败/超时，跳过")
                 fail += 1
                 continue
@@ -214,7 +234,8 @@ def load_all():
         _audit(f"{name} v{plugin['version']} 已载入"
                f"（工具 {len(plugin.get('tools') or [])}，意图 {len(plugin.get('intents') or [])}）")
     _apply(tools_acc, intents_acc)
-    _audit(f"装载完成：{ok} 成功 / {fail} 跳过")
+    _audit(f"装载完成：{ok} 成功 / {fail} 跳过"
+           + (f"（拒载: {[r['name'] for r in _rejected]}）" if _rejected else ""))
     return ok, fail
 
 

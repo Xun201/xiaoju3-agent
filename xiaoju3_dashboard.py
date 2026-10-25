@@ -925,6 +925,7 @@ def api_plugin_debug():
         info["external_dir_exists"] = os.path.isdir(ed)
         info["scan"] = [n for n, _, _ in plugin_loader.scan()]
         info["loaded"] = list(plugin_loader.loaded_plugins())
+        info["rejected"] = plugin_loader.rejected_plugins()
         deps = os.path.join(ed, "_deps")
         info["deps_exists"] = os.path.isdir(deps)
         info["deps_has_fw"] = os.path.isdir(os.path.join(deps, "faster_whisper"))
@@ -936,12 +937,13 @@ def api_plugin_debug():
         except Exception:
             import traceback
             info["faster_whisper_error"] = traceback.format_exc()[-900:]
-        # 现场重放 video_ingest 装载（validate+setup 逐步 traceback）
+        # 现场重放全部扫描插件（validate+setup 逐步 traceback）——失败者
+        # 现形于 replay[name]，成功者记 setup_ok
         replay = {}
         try:
             for name, path, origin in plugin_loader.scan():
-                if name != "video_ingest":
-                    continue
+                if name in plugin_loader.loaded_plugins():
+                    continue   # 已载入的重放会重复 setup，跳过
                 module = plugin_loader._import_plugin(name, path, origin)
                 raw = getattr(module, "PLUGIN", None)
                 plugin = raw() if callable(raw) and not isinstance(raw, dict) else raw
