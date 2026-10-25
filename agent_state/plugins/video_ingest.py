@@ -114,10 +114,14 @@ def _extract_noargs(_message=None, _match=None):
 
 
 def extract_video_url(message, _match=None):
-    """意图参数抽取：从消息抽第一个 http(s) 链接（URL 传递免疫清洗）。"""
+    """意图参数抽取：从消息抽第一个 http(s) 链接（URL 传递免疫清洗）。
+
+    message=原始消息全文一并透传（link_guard_reply 需要检动作词分流：
+    带动作词=转写、纯链接=引导——缺原文会把"总结这个视频+链接"误拦）。"""
     import re
     m = re.search(r"https?://\S+", str(message or ""))
-    return {"url": m.group(0).rstrip('，。！？》】")')} if m else {}
+    return {"url": m.group(0).rstrip('，。！？》】")'),
+            "message": str(message or "")} if m else {}
 
 
 def reply(url="", **_):
