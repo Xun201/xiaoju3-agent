@@ -360,8 +360,8 @@ class MonochromeUiTests(unittest.TestCase):
                       html)
         self.assertIn("background-color: #2563eb; color: #ffffff;", html)
         self.assertIn("background: rgba(31, 41, 55, 0.22);", html)
-        self.assertIn("background-color: #2563eb;          /* 核心点缀蓝（2026-10-25 队长拍板：Notion/Linear 式黑白灰+核心焦点）：发送=核心操作 */",
-                      html)
+        self.assertIn("background-color: #2563eb;          /* 核心点缀蓝：发送=核心操作 */",
+                      html)   # 2026-10-25 composer 重构：类名迁 .send-btn，注释精简
         self.assertIn("color: #1f2937;                     /* 黑白灰极简：面板标题深灰 */",
                       html)
         self.assertIn("background-color: #1d4ed8", html)   # hover 加深
@@ -424,14 +424,46 @@ class InputDockTests(unittest.TestCase):
         for token in ('id="dock-plus"', 'id="dock-skills"', 'id="dock-plugins"',
                       'id="input-dock-menu"', 'id="context-tags-bar"',
                       'data-action="upload"', 'data-action="screenshot"',
-                      'data-action="link"'):
+                      'data-action="link"',
+                      # UI 二期 composer 重构（2026-10-25 豆包式）
+                      'id="composer"', 'id="mic-btn"', 'class="send-btn"',
+                      '发消息或创建任务...'):
             self.assertIn(token, self.html)
 
+    def test_composer_visual_family(self):
+        """composer 豆包式：大圆角悬浮+无边框+多层柔影+聚焦蓝影+底部工具栏。"""
+        h = self.html
+        self.assertIn("border-radius: 24px;", h)
+        self.assertIn(".composer:focus-within {", h)
+        self.assertIn("@keyframes micPulse", h)       # 🎤 呼吸态
+        self.assertIn(".composer-toolbar {", h)
+        self.assertIn(".tb-btn {", h)
+        self.assertNotIn(".input-dock {", h)           # 旧 dock 容器退役
+        self.assertNotIn("chat-input-area button {", h)  # 旧按钮族退役
+
+    def test_voice_input_js(self):
+        """语音两段式：start（红色呼吸态）/stop（文字填入不自动发送）。"""
+        self.assertIn("function initVoiceInput", self.js)
+        self.assertIn("fetch('/api/stt/start'", self.js)
+        self.assertIn("fetch('/api/stt/stop'", self.js)
+        self.assertIn("mic.classList.add('recording')", self.js)
+        self.assertIn("input.value = (input.value ? input.value + ' ' : '')", self.js)
+
+    def test_stt_endpoints(self):
+        """后端 /api/stt 两端点+状态机（sounddevice 后端录音+faster-whisper
+        本地转写复用 _deps——比 MediaRecorder 稳：WebView2 getUserMedia
+        权限事件 pywebview 不代理）。"""
+        self.assertIn('@app.route("/api/stt/start"', self.dash)
+        self.assertIn('@app.route("/api/stt/stop"', self.dash)
+        seg = self.dash[self.dash.index("def api_stt_start"):]
+        self.assertIn("sd.InputStream(samplerate=16000", seg)
+        self.assertIn('language="zh"', seg)   # 中文优先转写
+
     def test_dock_css_family(self):
-        for token in (".input-dock {", ".dock-btn {", ".input-dock-menu {",
+        for token in (".dock-btn {", ".input-dock-menu {",
                       ".dock-popover {", ".context-tags-bar {", ".context-tag {"):
             self.assertIn(token, self.html)
-        self.assertIn("position: relative;   /* 扩展栏浮层锚定（UI 一期） */",
+        self.assertIn("position: relative;   /* 浮层锚定 */",
                       self.html)
 
     def test_dock_js_logic(self):

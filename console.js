@@ -1073,6 +1073,56 @@
         setInterval(refreshContextTags, 30000);   // 30s 低频（任务态非实时）
     })();
 
+    // ==================== 语音输入（2026-10-25 UI 二期：🎤 两段式录音+本地转写） ====================
+    // 方案：Python sounddevice 后端录音（/api/stt/start|stop 两段式）+
+    // faster-whisper 本地转写（复用 video_ingest 的 _deps 底座）——比
+    // MediaRecorder 稳（WebView2 getUserMedia 权限事件 pywebview 不代理）。
+    // 交互：点击开始（红色波纹呼吸态）→ 再点停止 → 文字自动填入输入框
+    //（不自动发送——用户可改后再发，队长口径）。
+    (function initVoiceInput() {
+        const mic = document.getElementById('mic-btn');
+        const input = document.getElementById('chat-input');
+        if (!mic || !input) return;
+        let recording = false;
+        mic.addEventListener('click', function () {
+            if (!recording) {
+                fetch('/api/stt/start', { method: 'POST' })
+                    .then(res => res.json())
+                    .then(d => {
+                        if (d.code === 200) {
+                            recording = true;
+                            mic.classList.add('recording');
+                            mic.title = '录音中…点击停止';
+                            showToast('🎤 录音中，再点一次结束');
+                        } else {
+                            showToast('❌ ' + (d.error || '录音启动失败'));
+                        }
+                    })
+                    .catch(() => showToast('❌ 录音服务不可达'));
+            } else {
+                mic.classList.remove('recording');
+                mic.title = '语音输入（点击开始/停止）';
+                recording = false;
+                showToast('⏳ 正在识别语音…');
+                fetch('/api/stt/stop', { method: 'POST' })
+                    .then(res => res.json())
+                    .then(d => {
+                        if (d.code === 200 && (d.data || {}).text) {
+                            input.value = (input.value ? input.value + ' ' : '')
+                                          + d.data.text;
+                            input.focus();
+                            showToast('✅ 已识别填入，可修改后发送');
+                        } else if (d.code === 200) {
+                            showToast('（没听清内容——' + ((d.data || {}).note || '空结果') + '）');
+                        } else {
+                            showToast('❌ ' + (d.error || '识别失败'));
+                        }
+                    })
+                    .catch(() => showToast('❌ 识别请求失败'));
+            }
+        });
+    })();
+
     // ==================== resize 视觉遮罩（白屏终极方案 B，2026-10-25） ====================
     // 窗口尺寸突变（拖拽放大/最大化）时 WebView2 GPU 重排的百毫秒级白屏/
     // 撕裂，用"视觉欺骗"遮住：resize 瞬间给 body 挂 .resizing（全屏主题灰

@@ -937,6 +937,98 @@ def api_events():
                              "X-Accel-Buffering": "no"})
 
 
+# ==================== 语音输入（2026-10-25 UI 二期：录音状态机+本地转写） ====================
+# 方案选型（队长"最稳"要求）：Python sounddevice 后端录音（_deps 依赖自足），
+# 非 MediaRecorder——WebView2 getUserMedia 需权限事件代理而 pywebview 不处理，
+# 高风险弃用。faster-whisper 复用 video_ingest 的 _deps 底座（16kHz int16 采集
+# 直转 np.float32 数组，免临时文件）。状态机单例（start/stop 两段式）。
+_STT = {"recording": False, "stream": None, "frames": [], "error": ""}
+
+
+def _stt_deps_path():
+    """_deps 绝对路径（video_ingest 同源——依赖自足模式复用）。"""
+    import os as _os
+    return _os.path.join(main.AGENT_STATE_DIR, "plugins", "_deps")
+
+
+def _stt_whisper():
+    """faster-whisper 模型（懒加载+进程内复用；_deps 在 sys.path 由本函数保证）。"""
+    import sys as _sys
+    deps = _stt_deps_path()
+    if deps not in _sys.path:
+        _sys.path.insert(0, deps)
+    import os as _os
+    _os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    _os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    from faster_whisper import WhisperModel
+    global _STT_MODEL
+    try:
+        return _STT_MODEL
+    except NameError:
+        _STT_MODEL = WhisperModel("base", device="cpu", compute_type="int8",
+                                  download_root=_os.path.join(deps, "_models"))
+        return _STT_MODEL
+
+
+@app.route("/api/stt/start", methods=["POST"])
+def api_stt_start():
+    """开始录音（16kHz 单声道 int16；sounddevice InputStream 后台回调采集）。
+    已在录/无麦克风/依赖缺失 → 人话错误不 500。"""
+    if _STT["recording"]:
+        return jsonify({"code": 409, "error": "已在录音中"})
+    try:
+        import sys as _sys
+        deps = _stt_deps_path()
+        if deps not in _sys.path:
+            _sys.path.insert(0, deps)
+        import sounddevice as sd
+        _STT["frames"] = []
+        _STT["error"] = ""
+
+        def _cb(indata, frames, time_info, status):
+            _STT["frames"].append(indata.copy())
+
+        _STT["stream"] = sd.InputStream(samplerate=16000, channels=1,
+                                        dtype="int16", callback=_cb)
+        _STT["stream"].start()
+        _STT["recording"] = True
+        return jsonify({"code": 200, "data": {"ok": True}})
+    except Exception as e:
+        _STT["recording"] = False
+        return jsonify({"code": 503, "error": f"录音启动失败: {e}"}), 503
+
+
+@app.route("/api/stt/stop", methods=["POST"])
+def api_stt_stop():
+    """停止录音+本地转写：frames→np.float32/32768→Whisper（语言中文优先）
+    →文字。空音频/静音 → 空串文案（不报错——用户可能误触）。"""
+    if not _STT["recording"]:
+        return jsonify({"code": 409, "error": "没有进行中的录音"})
+    _STT["recording"] = False
+    try:
+        _STT["stream"].stop()
+        _STT["stream"].close()
+    except Exception:
+        pass
+    _STT["stream"] = None
+    frames = _STT["frames"]
+    _STT["frames"] = []
+    try:
+        import numpy as np
+        audio = np.concatenate(frames, axis=0).flatten().astype(np.float32) / 32768.0
+    except Exception as e:
+        return jsonify({"code": 200, "data": {"text": "", "note": f"无音频数据: {e}"}})
+    if audio.size < 1600:   # <0.1s 视为误触
+        return jsonify({"code": 200, "data": {"text": "", "note": "录音太短"}})
+    try:
+        model = _stt_whisper()
+        segments, info = model.transcribe(audio, language="zh", beam_size=1)
+        text = "".join(s.text.strip() for s in segments if s.text.strip())
+        return jsonify({"code": 200, "data": {"text": text}})
+    except Exception as e:
+        return jsonify({"code": 503, "error": f"转写失败: {e}"}), 503
+
+
 @app.route("/api/plugins")
 def api_plugins():
     """插件/技能清单+上下文标签聚合（UI 一期输入扩展栏消费，2026-10-25）。

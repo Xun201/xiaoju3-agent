@@ -392,45 +392,81 @@
         }
 
         /* ==================== 输入框区域 ==================== */
+        /* 输入区容器（UI 二期豆包式）：让 composer 悬浮 */
         .chat-input-area {
-            padding: 15px 20px;
+            padding: 12px 20px 10px;
             background-color: var(--color-card);
             border-top: 1px solid var(--color-border);
-            display: flex;
-            gap: 10px;
-            position: relative;   /* 扩展栏浮层锚定（UI 一期） */
+            position: relative;   /* 浮层锚定 */
         }
-        .chat-input-area input {
-            flex: 1;
-            min-width: 0;
-            padding: 10px 15px;
-            border: 1px solid var(--color-border);
-            border-radius: var(--radius-control);
-            outline: none;
-            font-size: 14px;
-        }
-        .chat-input-area button {
-            padding: 10px 20px;
-            background-color: #2563eb;          /* 核心点缀蓝（2026-10-25 队长拍板：Notion/Linear 式黑白灰+核心焦点）：发送=核心操作 */
-            color: #ffffff;
+        /* 悬浮大圆角输入器：无边框+多层柔影（豆包质感）；聚焦蓝色柔影 */
+        .composer {
+            background: #ffffff;
             border: none;
-            border-radius: var(--radius-control);
-            cursor: pointer;
-            font-weight: 600;
-            transition: background 0.2s;
-            flex-shrink: 0;
+            border-radius: 24px;
+            box-shadow: 0 1px 2px rgba(31, 41, 55, 0.04),
+                        0 4px 12px rgba(31, 41, 55, 0.06),
+                        0 12px 32px rgba(31, 41, 55, 0.08);
+            padding: 10px 12px 6px;
+            position: relative;
         }
-        .chat-input-area button:hover { background-color: #1d4ed8; }
+        .composer:focus-within {
+            box-shadow: 0 1px 2px rgba(37, 99, 235, 0.08),
+                        0 4px 14px rgba(37, 99, 235, 0.12),
+                        0 12px 36px rgba(31, 41, 55, 0.10);
+        }
+        .composer-row { display: flex; align-items: center; gap: 8px; }
+        .composer input {
+            flex: 1; min-width: 0;
+            padding: 8px 10px; border: none; outline: none;
+            font-size: 14px; background: transparent; color: #1f2937;
+        }
+        .send-btn {
+            padding: 9px 18px;
+            background-color: #2563eb;          /* 核心点缀蓝：发送=核心操作 */
+            color: #ffffff; border: none; border-radius: 999px;
+            cursor: pointer; font-weight: 600; font-size: 13px;
+            transition: background 0.2s; flex-shrink: 0;
+        }
+        .send-btn:hover { background-color: #1d4ed8; }
+        /* 底部工具栏（技能/插件/上下文标签——豆包式轻量排布） */
+        .composer-toolbar {
+            display: flex; align-items: center; gap: 12px;
+            padding: 4px 6px 2px;
+        }
+        .tb-btn {
+            border: none; background: transparent; color: #6b7280;
+            font-size: 12px; cursor: pointer; padding: 2px 4px;
+            border-radius: 4px;
+        }
+        .tb-btn:hover { color: #1f2937; background: rgba(31, 41, 55, 0.05); }
+        .context-tags-bar {
+            display: flex; gap: 6px; margin-left: auto;
+            overflow: hidden;
+        }
+        .context-tag {
+            font-size: 11px; color: #6b7280; background: #f3f4f6;
+            border: none; border-radius: 999px; padding: 2px 9px;
+            white-space: nowrap; flex-shrink: 0;
+        }
 
         /* ==================== 输入扩展栏（UI 一期 2026-10-25，豆包式） ==================== */
-        .input-dock { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
         .dock-btn {
-            width: 34px; height: 34px; border: none; border-radius: var(--radius-inner);
+            width: 34px; height: 34px; border: none; border-radius: 999px;
             background: transparent; color: #6b7280; font-size: 15px; cursor: pointer;
             display: flex; align-items: center; justify-content: center;
-            transition: background 0.15s ease;
+            transition: background 0.15s ease; flex-shrink: 0;
         }
         .dock-btn:hover { background: rgba(31, 41, 55, 0.08); color: #1f2937; }
+        /* 🎤 录音呼吸态（红色波纹脉冲） */
+        .mic.recording {
+            color: #dc2626;
+            animation: micPulse 1.2s ease-in-out infinite;
+        }
+        @keyframes micPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.35); }
+            50% { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0.08); }
+        }
         .input-dock-menu {
             position: absolute; bottom: 100%; left: 20px; margin-bottom: 6px;
             background: #ffffff; border-radius: 10px; padding: 4px;
@@ -451,15 +487,7 @@
         .dock-popover .dp-row { padding: 5px 6px; border-radius: 6px; }
         .dock-popover .dp-row:hover { background: rgba(31, 41, 55, 0.05); }
         .dock-popover .dp-sub { color: #9ca3af; font-size: 11px; }
-        /* 上下文标签条（输入区上方，任务/文档动态标签） */
-        .context-tags-bar {
-            display: flex; gap: 6px; padding: 6px 20px 0;
-            background-color: var(--color-card);
-        }
-        .context-tag {
-            font-size: 11px; color: #374151; background: #f3f4f6;
-            border: 1px solid #e5e7eb; border-radius: 999px; padding: 3px 10px;
-        }
+
 
         /* ==================== AI 消息工具栏按钮样式 ==================== */
         .msg-tools {
@@ -851,23 +879,28 @@
             </div>
             <div class="settings-list" id="keys-list"></div>
         </div>
-        <!-- 上下文标签条（UI 一期占位：当前任务/已摄取文档动态标签，console.js 渲染） -->
-        <div class="context-tags-bar" id="context-tags-bar" hidden></div>
+        <!-- 输入区（2026-10-25 UI 二期豆包式重构）：大圆角悬浮容器
+             （上：圆形＋ / 输入 / 🎤 / 发送；下：技能·插件·上下文标签工具栏） -->
         <div class="chat-input-area">
-            <!-- 输入扩展栏（UI 一期 2026-10-25：豆包式 + 菜单 + 技能/插件双入口） -->
-            <div class="input-dock">
-                <button id="dock-plus" class="dock-btn" title="更多能力">＋</button>
-                <button id="dock-skills" class="dock-btn" title="技能清单（内置原子能力）">⚡</button>
-                <button id="dock-plugins" class="dock-btn" title="插件清单（外部扩展）">🧩</button>
+            <div class="composer" id="composer">
+                <div class="composer-row">
+                    <button id="dock-plus" class="dock-btn round" title="更多能力">＋</button>
+                    <input type="text" id="chat-input" placeholder="发消息或创建任务..." onkeypress="if(event.key === 'Enter') sendMessage()">
+                    <button id="mic-btn" class="dock-btn round mic" title="语音输入（点击开始/停止）">🎤</button>
+                    <button class="send-btn" onclick="sendMessage()">发送</button>
+                </div>
+                <div class="composer-toolbar">
+                    <button id="dock-skills" class="tb-btn" title="技能清单（内置原子能力）">⚡ 技能</button>
+                    <button id="dock-plugins" class="tb-btn" title="插件清单（外部扩展）">🧩 插件</button>
+                    <div class="context-tags-bar" id="context-tags-bar"></div>
+                </div>
+                <div class="input-dock-menu" id="input-dock-menu" hidden>
+                    <div class="dock-menu-item" data-action="upload">📄 上传文件</div>
+                    <div class="dock-menu-item" data-action="screenshot">📸 截图提问</div>
+                    <div class="dock-menu-item" data-action="link">🔗 解析链接</div>
+                </div>
+                <div class="dock-popover" id="dock-popover" hidden></div>
             </div>
-            <div class="input-dock-menu" id="input-dock-menu" hidden>
-                <div class="dock-menu-item" data-action="upload">📄 上传文件</div>
-                <div class="dock-menu-item" data-action="screenshot">📸 截图提问</div>
-                <div class="dock-menu-item" data-action="link">🔗 解析链接</div>
-            </div>
-            <div class="dock-popover" id="dock-popover" hidden></div>
-            <input type="text" id="chat-input" placeholder="输入消息，按回车发送..." onkeypress="if(event.key === 'Enter') sendMessage()">
-            <button onclick="sendMessage()">发送</button>
         </div>
     </div>
 
