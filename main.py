@@ -808,6 +808,24 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     if log_reply is not None:
         return log_reply
 
+    # 2.6 DeepSeek 分享链接预分流（方案 A，2026-10-06；#303 根因修复
+    # 2026-10-25：本块原位于待办族点之后——#227 批 C.3 迁移+触发词口语
+    # 扩展（"记下来"命中纯文字待办）后，含链接消息在待办族点被当纯文字
+    # 待办受理劫走，预分流沦为死代码、链接提取链永不触发（spy 实锤
+    # content_handler.handle_todo 抢答）。上移到待办族点之前：链接消息
+    # 必须优先走链接提取链，其余门（权限/熔断/gen_log/sticker）语义不变。
+    # 标点清洗会剥掉 URL 的 : . ，brain.todo_link_mode 的 https:// 匹配
+    # 因此失效——清洗前检测原文，命中直接转 /todo_from_link 指令形态走
+    # 既有提取链（handle_todo_command 从原文取链接，免疫清洗）：受理即回、
+    # 零 token、不进模型。
+    if raw_message and "chat.deepseek.com/share/" in raw_message:
+        link_match = re.search(r'https://chat\.deepseek\.com/share/\S+', raw_message)
+        if link_match:
+            todo_cmd = "/todo_from_link " + link_match.group(0)
+            pre_reply = todo_handler.handle_todo_command(todo_cmd, todo_cmd, user_id, group_id)
+            if pre_reply is not None:
+                return pre_reply
+
     # === 📋 待办指令族（共享分发：QQ 与控制台同一门禁） ===
     # #227 批 C.3：本体迁 todo_handler，content_handler 内聚直调（G2 同款）
     todo_reply = content_handler.handle_todo(
@@ -882,13 +900,8 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             w in text_nc for w in _STICKER_REF_WORDS):
         return "要收藏表情的话，引用图片或直接发图给我哦～"
 
-    if raw_message and "chat.deepseek.com/share/" in raw_message:
-        link_match = re.search(r'https://chat\.deepseek\.com/share/\S+', raw_message)
-        if link_match:
-            todo_cmd = "/todo_from_link " + link_match.group(0)
-            pre_reply = todo_handler.handle_todo_command(todo_cmd, todo_cmd, user_id, group_id)
-            if pre_reply is not None:
-                return pre_reply
+    # （原 2.5 分享链接预分流块已上移至待办族点之前——#303 根因修复
+    # 2026-10-25，见上方 2.6 段注释）
 
     # 3. 长期记忆"记住"触发词（#227 批 B：正则匹配迁 memory_handler，
     # 打标+落库本体留 main 回调——handle_remember_command）

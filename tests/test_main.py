@@ -732,8 +732,8 @@ class TestHandleMessageRouting(_MainCase):
     # ---------- DeepSeek 分享链接预分流（方案 A，2026-10-06） ----------
     def _todo_cmd_mock(self, accept_reply="🔄 收到链接啦！小橘3号正在后台阅读和总结"):
         """handle_todo_command 分形态替身：指令形态（/todo_from_link 开头）
-        返回受理文案；其他形态（既有 L879 待办族调用点先于预分流执行）
-        返回 None 放行——ht.call_args_list 的最后一次即预分流调用。"""
+        返回受理文案；其他形态（纯文字待办族点）返回 None 放行——
+        #303 修复后预分流先于待办族点且命中即收口，唯一调用=改写形态。"""
         ht = MagicMock(side_effect=lambda raw_m, *a, **k: (
             accept_reply if raw_m.startswith("/todo_from_link ") else None))
         return ht
@@ -751,7 +751,7 @@ class TestHandleMessageRouting(_MainCase):
             reply = main.handle_message(
                 'qq', 123, 456, raw, self_qq=999)
         self.assertIn("后台", reply)
-        self.assertGreaterEqual(ht.call_count, 2)   # 既有待办族点 + 预分流
+        self.assertEqual(ht.call_count, 1)   # 预分流命中即收口（#303 修复：不再落到待办族点）
         last = ht.call_args_list[-1]
         cmd_raw = last[0][0]
         self.assertTrue(cmd_raw.startswith("/todo_from_link "))
@@ -772,6 +772,20 @@ class TestHandleMessageRouting(_MainCase):
         self.assertTrue(last[0][0].startswith("/todo_from_link "))
         self.assertIn("https://chat.deepseek.com/share/xyz789", last[0][0])
         self.smart_ask.assert_not_called()
+
+    def test_share_link_prefilter_precedes_todo_family(self):
+        """#303 根因修复锚（2026-10-25）：预分流必须位于待办族点之前——
+        否则触发词口语扩展（"记下来"）命中纯文字待办路由，含链接消息在
+        content_handler.handle_todo 被受理劫走、链接提取链永不触发（spy
+        实锤的顺序倒挂回归）。静态锁：预分流块行号 < 待办族点行号；
+        且"记下来+链接"形态不得被当纯文字待办受理（唯一调用=改写形态）。"""
+        src = open(os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "main.py"), encoding="utf-8").read()
+        self.assertLess(src.index('"chat.deepseek.com/share/" in raw_message'),
+                        src.index("content_handler.handle_todo("),
+                        "预分流块必须先于待办族点（顺序倒挂回归哨兵）")
+        self.assertEqual(src.count('"/todo_from_link " + link_match.group(0)'), 1,
+                         "预分流改写点应唯一（不得双份漂移）")
 
     def test_cleaning_mangles_url_regression_anchor(self):
         """回归锚：标点清洗确实毁 URL（: . 被剥）——预分流存在的必要性
