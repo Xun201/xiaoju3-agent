@@ -937,6 +937,58 @@ def api_events():
                              "X-Accel-Buffering": "no"})
 
 
+@app.route("/api/plugins")
+def api_plugins():
+    """插件/技能清单+上下文标签聚合（UI 一期输入扩展栏消费，2026-10-25）。
+
+    skills=内置工具名（tool_registry 派生）；plugins=外部插件元数据；
+    context=上下文标签（doc_ingest 计数+video_ingest 任务态）。全 try/except
+    降级——插件缺席字段给空，绝不 500。"""
+    data = {"skills": [], "plugins": [], "context": {}}
+    try:
+        import tool_registry
+        data["skills"] = [t["name"] for t in tool_registry.TOOL_MANIFEST
+                          if t.get("in_protocol", True)]
+        data["skills"] += tool_registry.plugin_tool_names()
+    except Exception:
+        pass
+    try:
+        import plugin_loader
+        data["plugins"] = [
+            {"name": p["plugin"].get("name"),
+             "version": str(p["plugin"].get("version", "")),
+             "desc": str(p["plugin"].get("desc", "")),
+             "tools": len(p["plugin"].get("tools") or [])}
+            for p in plugin_loader.loaded_plugins().values()]
+    except Exception:
+        pass
+    try:
+        import sqlite3 as _sq
+        import os as _os
+        import xiaoju3 as _x3
+        dbp = _os.path.join(_x3.AGENT_STATE_DIR, "plugins",
+                            "doc_ingest", "knowledge.db")
+        if _os.path.isfile(dbp):
+            db = _sq.connect(dbp)
+            data["context"]["doc_count"] = db.execute(
+                "SELECT COUNT(DISTINCT doc_path) FROM chunks").fetchone()[0]
+            db.close()
+    except Exception:
+        pass
+    try:
+        import plugin_loader as _pl2
+        rec = _pl2.loaded_plugins().get("video_ingest")
+        if rec:
+            m = rec["module"]
+            job = getattr(m, "_JOB", {}) or {}
+            data["context"]["video_job"] = job.get("state", "")
+            if job.get("title"):
+                data["context"]["video_last"] = str(job["title"])[:24]
+    except Exception:
+        pass
+    return jsonify({"code": 200, "data": data})
+
+
 @app.route("/api/plugin_debug")
 def api_plugin_debug():
     """插件总线 frozen 诊断（#348 三期侦察，只读零副作用）。

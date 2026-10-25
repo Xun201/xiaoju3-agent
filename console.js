@@ -973,6 +973,123 @@
         }
     })();
 
+    // ==================== 输入扩展栏（UI 一期 2026-10-25，豆包式） ====================
+    // ＋ 轻量菜单（上传/截图/链接——二三期能力入口，一期占位 toast）+
+    // ⚡技能/🧩插件双入口（浮层清单）+ 上下文标签条（动态渲染当前任务）。
+    // 消费 GET /api/plugins（dashboard 新端点）与插件 _JOB 状态。
+    (function initInputDock() {
+        const menu = document.getElementById('input-dock-menu');
+        const popover = document.getElementById('dock-popover');
+        const plus = document.getElementById('dock-plus');
+        if (!menu || !popover || !plus) return;
+
+        function closeAll() {
+            menu.hidden = true;
+            popover.hidden = true;
+        }
+        function toggleMenu() {
+            const was = menu.hidden;
+            closeAll();
+            menu.hidden = !was;
+        }
+        plus.addEventListener('click', toggleMenu);
+        document.addEventListener('click', function (ev) {
+            if (!ev.target.closest('.input-dock') && !ev.target.closest('.input-dock-menu')
+                && !ev.target.closest('.dock-popover')) closeAll();
+        });
+        menu.addEventListener('click', function (ev) {
+            const item = ev.target.closest('.dock-menu-item');
+            if (!item) return;
+            closeAll();
+            const act = item.dataset.action;
+            if (act === 'upload') {
+                showToast('📄 文件上传三期上线（将接入 doc_ingest 摄取）');
+            } else if (act === 'screenshot') {
+                showToast('📸 截图提问三期上线（待视觉模型接入）');
+            } else if (act === 'link') {
+                const input = document.getElementById('chat-input');
+                if (input) { input.value = '总结这个视频 '; input.focus(); }
+            }
+        });
+
+        // ⚡技能 / 🧩插件 浮层（消费 /api/plugins）
+        function showPopover(title, rowsHtml) {
+            popover.innerHTML = '<h4>' + title + '</h4>' + rowsHtml;
+            closeAll();
+            popover.hidden = false;
+        }
+        function fetchPlugins(kind) {
+            fetch('/api/plugins')
+                .then(res => res.json())
+                .then(res => {
+                    const d = (res.data || {});
+                    const rows = [];
+                    if (kind === 'plugins') {
+                        (d.plugins || []).forEach(function (p) {
+                            rows.push('<div class="dp-row">🧩 ' + escapeHtml(p.name)
+                                + ' <span class="dp-sub">v' + escapeHtml(p.version)
+                                + ' · ' + escapeHtml(p.desc || '') + '</span></div>');
+                        });
+                        showPopover('外部插件（' + (d.plugins || []).length + '）',
+                                    rows.join('') || '<div class="dp-sub">暂无外部插件</div>');
+                    } else {
+                        (d.skills || []).forEach(function (s) {
+                            rows.push('<div class="dp-row">⚡ ' + escapeHtml(s)
+                                + '</div>');
+                        });
+                        showPopover('内置技能（' + (d.skills || []).length + '）',
+                                    rows.join(''));
+                    }
+                })
+                .catch(() => showToast('清单获取失败'));
+        }
+        document.getElementById('dock-skills').addEventListener('click', function () { fetchPlugins('skills'); });
+        document.getElementById('dock-plugins').addEventListener('click', function () { fetchPlugins('plugins'); });
+
+        // 上下文标签条：动态渲染（摄取文档计数+转写/扫描任务态）
+        function refreshContextTags() {
+            const bar = document.getElementById('context-tags-bar');
+            if (!bar) return;
+            fetch('/api/plugins')
+                .then(res => res.json())
+                .then(res => {
+                    const ctx = (res.data || {}).context || {};
+                    const tags = [];
+                    if (ctx.doc_count) tags.push('📚 已摄取文档 ' + ctx.doc_count);
+                    if (ctx.video_job === 'running') tags.push('⏳ 转写中');
+                    if (ctx.video_last) tags.push('📺 ' + ctx.video_last);
+                    if (tags.length) {
+                        bar.innerHTML = tags.map(function (t) {
+                            return '<span class="context-tag">' + escapeHtml(t) + '</span>';
+                        }).join('');
+                        bar.hidden = false;
+                    } else {
+                        bar.hidden = true;
+                    }
+                })
+                .catch(() => {});
+        }
+        refreshContextTags();
+        setInterval(refreshContextTags, 30000);   // 30s 低频（任务态非实时）
+    })();
+
+    // ==================== resize 视觉遮罩（白屏终极方案 B，2026-10-25） ====================
+    // 窗口尺寸突变（拖拽放大/最大化）时 WebView2 GPU 重排的百毫秒级白屏/
+    // 撕裂，用"视觉欺骗"遮住：resize 瞬间给 body 挂 .resizing（全屏主题灰
+    // 遮罩+transition none 立即生效），150ms 防抖后移除——肉眼看到的是
+    // 平滑的灰-内容过渡而非闪白。与方案 A（WS_EX_COMPOSITED 原生双缓冲）
+    // 正交叠加双保险。
+    (function initResizeMask() {
+        let timer = null;
+        window.addEventListener('resize', function () {
+            document.body.classList.add('resizing');
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(function () {
+                document.body.classList.remove('resizing');
+            }, 150);
+        }, { passive: true });
+    })();
+
     // ==================== UI 事件总线（#348 三期推模式） ====================
     // 页面级 EventSource 长连接（/api/events）——后台任务（插件转写等）
     // 完成时收到 video_note_done 事件，渲染为新 AI 气泡（带思考折叠+正常

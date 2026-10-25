@@ -410,5 +410,44 @@ class WhiteFlashFixTests(unittest.TestCase):
         self.assertIn("background: #f4f6f9;", self.html)
 
 
+class InputDockTests(unittest.TestCase):
+    """输入扩展栏一期（2026-10-25 UI 一期：豆包式 + 菜单/双入口/标签条）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = _read("index.html")
+        cls.js = _read("console.js")
+        cls.dash = open(os.path.join(PROJECT_ROOT, "xiaoju3_dashboard.py"),
+                        encoding="utf-8").read()
+
+    def test_dock_markup(self):
+        for token in ('id="dock-plus"', 'id="dock-skills"', 'id="dock-plugins"',
+                      'id="input-dock-menu"', 'id="context-tags-bar"',
+                      'data-action="upload"', 'data-action="screenshot"',
+                      'data-action="link"'):
+            self.assertIn(token, self.html)
+
+    def test_dock_css_family(self):
+        for token in (".input-dock {", ".dock-btn {", ".input-dock-menu {",
+                      ".dock-popover {", ".context-tags-bar {", ".context-tag {"):
+            self.assertIn(token, self.html)
+        self.assertIn("position: relative;   /* 扩展栏浮层锚定（UI 一期） */",
+                      self.html)
+
+    def test_dock_js_logic(self):
+        self.assertIn("function initInputDock", self.js)
+        self.assertIn("fetch('/api/plugins')", self.js)
+        self.assertIn("refreshContextTags()", self.js)
+        self.assertIn("setInterval(refreshContextTags, 30000);", self.js)
+
+    def test_plugins_endpoint(self):
+        self.assertIn('@app.route("/api/plugins")', self.dash)
+        body = self.dash[self.dash.index('def api_plugins():'):]
+        body = body[:body.index("@app.route")]
+        for token in ("tool_registry.TOOL_MANIFEST", "plugin_loader.loaded_plugins()",
+                      "video_job", "doc_count"):
+            self.assertIn(token, body)
+
+
 if __name__ == "__main__":
     unittest.main()

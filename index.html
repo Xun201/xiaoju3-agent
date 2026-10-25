@@ -63,6 +63,17 @@
         /* html 硬编码底色（2026-10-25 白屏闪烁兜底）：CSS 变量解析间隙/
            合成层重排瞬间以字面色先行渲染，与窗体 BackColor #f4f6f9 同值 */
         html { background-color: #f4f6f9; }
+        /* resize 视觉遮罩（白屏终极方案 B）：拖拽/最大化期间全屏主题灰盖住
+           重排白屏，150ms 防抖移除——灰-内容平滑过渡 */
+        body.resizing::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background: #f4f6f9;
+            z-index: 99999;
+            pointer-events: none;
+            transition: none;
+        }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
@@ -387,6 +398,7 @@
             border-top: 1px solid var(--color-border);
             display: flex;
             gap: 10px;
+            position: relative;   /* 扩展栏浮层锚定（UI 一期） */
         }
         .chat-input-area input {
             flex: 1;
@@ -409,6 +421,45 @@
             flex-shrink: 0;
         }
         .chat-input-area button:hover { background-color: #1d4ed8; }
+
+        /* ==================== 输入扩展栏（UI 一期 2026-10-25，豆包式） ==================== */
+        .input-dock { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+        .dock-btn {
+            width: 34px; height: 34px; border: none; border-radius: var(--radius-inner);
+            background: transparent; color: #6b7280; font-size: 15px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: background 0.15s ease;
+        }
+        .dock-btn:hover { background: rgba(31, 41, 55, 0.08); color: #1f2937; }
+        .input-dock-menu {
+            position: absolute; bottom: 100%; left: 20px; margin-bottom: 6px;
+            background: #ffffff; border-radius: 10px; padding: 4px;
+            box-shadow: var(--shadow-card); z-index: 900; min-width: 148px;
+        }
+        .dock-menu-item {
+            padding: 8px 12px; font-size: 13px; color: #374151;
+            border-radius: 6px; cursor: pointer;
+        }
+        .dock-menu-item:hover { background: rgba(31, 41, 55, 0.06); }
+        .dock-popover {
+            position: absolute; bottom: 100%; left: 20px; margin-bottom: 6px;
+            background: #ffffff; border-radius: 10px; padding: 10px 12px;
+            box-shadow: var(--shadow-card); z-index: 900; min-width: 240px; max-width: 300px;
+            font-size: 13px; color: #374151;
+        }
+        .dock-popover h4 { margin: 0 0 6px; font-size: 12px; color: #6b7280; font-weight: 600; }
+        .dock-popover .dp-row { padding: 5px 6px; border-radius: 6px; }
+        .dock-popover .dp-row:hover { background: rgba(31, 41, 55, 0.05); }
+        .dock-popover .dp-sub { color: #9ca3af; font-size: 11px; }
+        /* 上下文标签条（输入区上方，任务/文档动态标签） */
+        .context-tags-bar {
+            display: flex; gap: 6px; padding: 6px 20px 0;
+            background-color: var(--color-card);
+        }
+        .context-tag {
+            font-size: 11px; color: #374151; background: #f3f4f6;
+            border: 1px solid #e5e7eb; border-radius: 999px; padding: 3px 10px;
+        }
 
         /* ==================== AI 消息工具栏按钮样式 ==================== */
         .msg-tools {
@@ -800,7 +851,21 @@
             </div>
             <div class="settings-list" id="keys-list"></div>
         </div>
+        <!-- 上下文标签条（UI 一期占位：当前任务/已摄取文档动态标签，console.js 渲染） -->
+        <div class="context-tags-bar" id="context-tags-bar" hidden></div>
         <div class="chat-input-area">
+            <!-- 输入扩展栏（UI 一期 2026-10-25：豆包式 + 菜单 + 技能/插件双入口） -->
+            <div class="input-dock">
+                <button id="dock-plus" class="dock-btn" title="更多能力">＋</button>
+                <button id="dock-skills" class="dock-btn" title="技能清单（内置原子能力）">⚡</button>
+                <button id="dock-plugins" class="dock-btn" title="插件清单（外部扩展）">🧩</button>
+            </div>
+            <div class="input-dock-menu" id="input-dock-menu" hidden>
+                <div class="dock-menu-item" data-action="upload">📄 上传文件</div>
+                <div class="dock-menu-item" data-action="screenshot">📸 截图提问</div>
+                <div class="dock-menu-item" data-action="link">🔗 解析链接</div>
+            </div>
+            <div class="dock-popover" id="dock-popover" hidden></div>
             <input type="text" id="chat-input" placeholder="输入消息，按回车发送..." onkeypress="if(event.key === 'Enter') sendMessage()">
             <button onclick="sendMessage()">发送</button>
         </div>
