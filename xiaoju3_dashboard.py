@@ -1000,7 +1000,13 @@ def api_stt_start():
             if d["max_input_channels"] > 0 and d.get("hostapi") in wasapi_hosts:
                 dev = d["index"]
                 break
-        _STT["stream"] = sd.InputStream(samplerate=16000, channels=1,
+        # WASAPI -9997 修复（2026-10-26 三轮实锤）：WASAPI 不接受 16kHz 直采
+        #（MME 自动重采样而 WASAPI 按混音器率）——按设备默认采样率采集，
+        # stop 时统一重采样到 Whisper 的 16kHz。
+        _STT["samplerate"] = 16000
+        if dev is not None:
+            _STT["samplerate"] = int(sd.query_devices(dev)["default_samplerate"])
+        _STT["stream"] = sd.InputStream(samplerate=_STT["samplerate"], channels=1,
                                         dtype="int16", device=dev,
                                         callback=_cb)   # device=None=默认（无 WASAPI 时）
         _STT["stream"].start()
@@ -1029,6 +1035,12 @@ def api_stt_stop():
     try:
         import numpy as np
         audio = np.concatenate(frames, axis=0).flatten().astype(np.float32) / 32768.0
+        sr = _STT.get("samplerate") or 16000
+        if sr != 16000:   # WASAPI 按设备默认率采集——统一重采样到 Whisper 16kHz
+            n_out = int(len(audio) * 16000 / sr)
+            audio = np.interp(
+                np.linspace(0, len(audio) - 1, n_out),
+                np.arange(len(audio)), audio).astype(np.float32)
     except Exception as e:
         return jsonify({"code": 200, "data": {"text": "", "note": f"无音频数据: {e}"}})
     if audio.size < 1600:   # <0.1s 视为误触
