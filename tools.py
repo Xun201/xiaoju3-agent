@@ -154,6 +154,24 @@ RECENT_ACTIONS_LIMIT = 5
 ACTION_TOOLS = tool_registry.action_set()   # 登记表 is_action 字段派生（2026-10-04）
 
 
+def refresh_derived():
+    """插件总线（#312）派生刷新：重绑六个模块级派生常量（合并视图生效）。
+
+    插件 load/unload 后由 plugin_loader 统一调用——TOOL_WHITELIST/
+    DANGER_TOOLS/_LV2/_LV3/_LV4/ACTION_TOOLS 全部按 tool_registry 现算
+    重绑（内置基线不变，插件条目进出反映到门禁集合）。消费方注意：
+    from-import 快照（brain 旧形态）不会自动更新——消费口必须属性访问
+    tools.X 或直调 tool_registry 派生函数。"""
+    global TOOL_WHITELIST, DANGER_TOOLS, _LV2_TOOLS, _LV3_TOOLS, _LV4_TOOLS
+    global ACTION_TOOLS
+    TOOL_WHITELIST = tool_registry.whitelist_names()
+    DANGER_TOOLS = tool_registry.danger_set()
+    _LV2_TOOLS = tool_registry.level_set(2)
+    _LV3_TOOLS = tool_registry.level_set(3)
+    _LV4_TOOLS = tool_registry.level_set(4)
+    ACTION_TOOLS = tool_registry.action_set()
+
+
 def _summarize_action(tool_name, args):
     """紧凑中文摘要，如 "control_ha_device: light.living → turn_on"。"""
     args = args or {}

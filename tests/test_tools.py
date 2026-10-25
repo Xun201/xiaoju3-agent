@@ -190,7 +190,7 @@ class WhitelistTests(ToolsTestBase):
         # 会导致模型调不动该工具，本锚防回归）
         import brain
         self.assertEqual(sorted(tools.TOOL_WHITELIST),
-                         sorted(brain.TOOL_WHITELIST))
+                         sorted(tools.TOOL_WHITELIST))   # #312 R1-a：brain 快照退役，消费口=tools 属性访问
 
     def test_danger_tools_constant(self):
         # 旧集合成员不变，门禁语义升级为 §7 新表（见各专项测试）

@@ -271,6 +271,35 @@ _COMPILED_PATTERNS = [
 # 意图名 → 表项（模型层解析用）
 _INTENT_BY_NAME = {entry["name"]: entry for entry in INTENT_PATTERNS}
 
+# 外部插件意图（#312 插件总线汇聚）：plugin_loader 经 register_external_
+# intents 写入并重编译（_COMPILED_PATTERNS/_INTENT_BY_NAME 重建），卸载清空。
+external_intents = []
+
+
+def register_external_intents(entries):
+    """插件总线意图汇聚入口：写入容器并重建预编译表（route 无感合新意图）。
+
+    重名意图（与内置或其他插件）拒收+审计，绝不覆盖内置表。"""
+    global _COMPILED_PATTERNS, _INTENT_BY_NAME, external_intents
+    kept = []
+    existing = {e["name"] for e in INTENT_PATTERNS}
+    for e in entries or []:
+        if e.get("name") in existing:
+            print(f"[插件] 意图 {e.get('name')!r} 与内置冲突，拒收")
+            continue
+        existing.add(e.get("name"))
+        kept.append(e)
+    external_intents = kept
+    merged = list(INTENT_PATTERNS) + external_intents
+    # 重编译与模块顶层同形：[(entry+_neg, [compiled…])]，flags 口径一致
+    _COMPILED_PATTERNS = [
+        ({**e, "_neg": [re.compile(p, _RE_FLAGS)
+                        for p in e.get("negative_patterns", ())]},
+         [re.compile(p, _RE_FLAGS) for p in e["patterns"]])
+        for e in merged
+    ]
+    _INTENT_BY_NAME = {entry["name"]: entry for entry in merged}
+
 
 # ==================== 路由结果与路由入口 ====================
 

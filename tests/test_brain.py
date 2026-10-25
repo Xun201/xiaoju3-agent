@@ -129,6 +129,7 @@ def _install_mock_modules():
 _SAVED_MODULES = _install_mock_modules()
 
 import brain  # noqa: E402
+import tools  # noqa: E402
 import prompts  # noqa: E402
 import xiaoju3  # noqa: E402
 
@@ -655,7 +656,7 @@ class SmartAskToolTests(unittest.TestCase):
     def test_whitelist_matches_fifteen_tools(self):
         # 2026-10-02 权限重构：+restart_service（14 项）；2026-10-04：+extract_todos（15 项）
         self.assertEqual(
-            sorted(brain.TOOL_WHITELIST),
+            sorted(tools.TOOL_WHITELIST),   # #312 R1-a：brain 快照退役，消费口=tools 属性访问
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
                     "vision_tap_element", "ui_tap_element", "web_search",
@@ -3385,7 +3386,7 @@ class HistoryCollapseTests(unittest.TestCase):
         # 2026-10-02 时间上下文：[sys, 时间块, 收敛后的 1 条]（当前消息
         # 与末条相同不重复追加）
         self.assertEqual(len(msgs), 3)
-        self.assertEqual(msgs[0], brain.SYSTEM_PROMPT)
+        self.assertEqual(msgs[0], prompts.SYSTEM_PROMPT)
         self.assertTrue(str(msgs[1].get("content", "")).startswith("【当前时间】"))
         self.assertEqual(msgs[2], {"role": "user", "content": "在吗"})
 
@@ -3522,7 +3523,7 @@ class LocationInjectTests(unittest.TestCase):
 
     def test_prompts_search_rule_contains_location_constraint(self):
         """提示词约束（2026-10-02 用户口径）：联网搜索规则含地点条款。"""
-        content = brain.SYSTEM_PROMPT["content"]
+        content = prompts.SYSTEM_PROMPT["content"]
         self.assertIn("query 必须包含具体地点", content)
         self.assertIn("必须先问", content)
         self.assertIn("以主人新说的为准", content)
@@ -3672,7 +3673,7 @@ class LocationAskTests(unittest.TestCase):
 
     def test_prompt_contains_ask_and_marker_protocol(self):
         """提示词（2026-10-02 隐私口径）：包含"必须先问"与 [LOCATION:] 协议。"""
-        content = brain.SYSTEM_PROMPT["content"]
+        content = prompts.SYSTEM_PROMPT["content"]
         self.assertIn("必须先问", content)
         self.assertIn("你现在在哪个城市和区", content)
         self.assertIn("[LOCATION:城市-区县]", content)
@@ -4230,7 +4231,7 @@ class TimeContextTests(unittest.TestCase):
     def test_build_messages_contains_time_block(self):
         """_build_messages 输出包含【当前时间】system 消息（index 1）。"""
         msgs = brain._build_messages("你好", [])
-        self.assertEqual(msgs[0], brain.SYSTEM_PROMPT)
+        self.assertEqual(msgs[0], prompts.SYSTEM_PROMPT)
         self.assertTrue(str(msgs[1].get("content", "")).startswith("【当前时间】"))
         self.assertEqual(msgs[-1], {"role": "user", "content": "你好"})
 
@@ -4324,7 +4325,7 @@ class AntiRepeatPromptTests(unittest.TestCase):
     """prompts.py 防复读约束（2026-10-02 用户口径：系统提示词末尾加一句）。"""
 
     def test_system_prompt_contains_anti_repeat_rule(self):
-        content = brain.SYSTEM_PROMPT["content"]
+        content = prompts.SYSTEM_PROMPT["content"]
         self.assertIn("【防复读规则】", content)
         self.assertIn("严禁重复同一句话或同一段话", content)
         self.assertIn("我刚才已经回复过了", content)

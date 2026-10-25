@@ -104,8 +104,9 @@ from xiaoju3 import (AGENT_STATE_DIR, CLOUD_KEY, CLOUD_URL, CLOUD_MODEL,
                      MAX_MESSAGES, LOCAL_URL, LOCAL_MODEL, LOCAL_MODEL_SMALL,
                      LOCAL_PROBE_URL, LOCAL_TIMEOUT, USER_CITY, USER_DISTRICT)
 from permission import permission_manager
-from prompts import SYSTEM_PROMPT
-from tools import execute_tool, TOOL_WHITELIST
+import prompts
+import tools
+from tools import execute_tool
 
 # Turn/Step 可观测性（#282 M1）：模块缺席（文件被删）时置 None 全旁路，
 # 静态 import 对 PyInstaller 可见，无需 hiddenimports
@@ -154,10 +155,10 @@ try:
 except (TypeError, ValueError):
     LLM_TEMPERATURE = DEFAULT_TEMPERATURE
 
-# 工具白名单：经 tools 引用 tool_registry.TOOL_MANIFEST 派生值（2026-10-04
-# model_tool 合并钩子，docs/ARCHITECTURE_BOUNDARY.md §3.3）——双清单手工同步
-# 退役，本名即 tools.TOOL_WHITELIST 同一对象；锚：tests/test_tools.py 一致性
-# （sorted 相等）与 tests/test_brain.py 数量（15 项不变）。
+# 工具白名单（#312 R1-a 消费口动态化）：from-import 快照退役——插件总线
+# 装载/卸载后 tools.refresh_derived() 重绑派生常量，消费口必须属性访问
+# tools.TOOL_WHITELIST（每次现取 globals）才拿得到最新集合；prompts 同理
+# 属性访问 prompts.SYSTEM_PROMPT（refresh=importlib.reload 重建）。
 
 
 # ==================== CoT 思考提取（<think> 包装，前端推理卡片契约） ====================
@@ -2084,11 +2085,11 @@ def _build_messages(message, history, user_id=None):
     if _rel or _persona or _tone:
         # 三段注入（#271 批 3 扩）：关系段主位 + 模式段次位 + 情绪段末位
         # （新 dict，不污染 prompts 共享常量）；任一空串则该段缺席
-        messages = [{"role": SYSTEM_PROMPT.get("role", "system"),
-                     "content": SYSTEM_PROMPT.get("content", "")
+        messages = [{"role": prompts.SYSTEM_PROMPT.get("role", "system"),
+                     "content": prompts.SYSTEM_PROMPT.get("content", "")
                      + _rel + _persona + _tone}]
     else:
-        messages = [SYSTEM_PROMPT]  # 空串路径：逐字节现状
+        messages = [prompts.SYSTEM_PROMPT]  # 空串路径：逐字节现状
     history_msgs = _collapse_repeated_user_history(history)
     # 🛑 静默期防位置泄漏截断（2026-10-02 任务 2）：清除后 5 分钟内且位置
     # 未知 → 历史只保留最近 5 条，模型无法从久远对话推断位置（配合聊天
@@ -2351,7 +2352,7 @@ def _smart_ask_impl(message, history=None, session_key="default",
             if turn_trace is not None:
                 turn_trace.record_tool(tool_name)
 
-            if tool_name in TOOL_WHITELIST:
+            if tool_name in tools.TOOL_WHITELIST:
                 # 🧠 思维链捕获：本轮有工具调用，最终 reply 统一在最前面包装
                 # <think>推理文本</think>；模型没输出思考时按实际工具名动态
                 # 生成占位符（解析不出工具名回退固定占位符）。
@@ -2737,7 +2738,7 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
             tool_args = tool_call.get("args", {})
             if turn_trace is not None:
                 turn_trace.record_tool(tool_name)
-            if tool_name in TOOL_WHITELIST:
+            if tool_name in tools.TOOL_WHITELIST:
                 thinking = _capture_thinking(raw_reply) or \
                     _tool_thinking_placeholder(tool_name)
                 _emit({"type": "tool", "name": tool_name})

@@ -14,6 +14,7 @@ import pytest
 from unittest import mock
 
 import mood
+import prompts
 
 
 DAY = datetime(2026, 10, 9, 14, 0, 0)      # 白天基准（避开深夜规则）
@@ -266,7 +267,7 @@ def test_build_messages_byte_identical_when_off(monkeypatch):
     import brain
     monkeypatch.delenv("XIAOJU3_MOOD_TONE", raising=False)
     msgs = brain._build_messages("在吗", [])
-    assert msgs[0] == brain.SYSTEM_PROMPT  # 空串路径：逐字节现状
+    assert msgs[0] == prompts.SYSTEM_PROMPT  # 空串路径：逐字节现状
 
 
 # 24 开关开+真实情绪数据：_build_messages 的 system content 含后缀
@@ -282,7 +283,7 @@ def test_build_messages_with_tone(monkeypatch):
     assert "当前情绪参数" in msgs[0]["content"]
     assert "以性格设定为准" in msgs[0]["content"]
     # prompts 共享常量不被污染
-    assert "当前情绪参数" not in brain.SYSTEM_PROMPT["content"]
+    assert "当前情绪参数" not in prompts.SYSTEM_PROMPT["content"]
 
 
 # 25 frozen 路径优先级：xiaoju3.AGENT_STATE_DIR 优先于 __file__ fallback

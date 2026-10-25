@@ -116,10 +116,13 @@ class ThreeSitesDeriveFromRegistryTests(unittest.TestCase):
         self.assertEqual(tools.ACTION_TOOLS, tool_registry.action_set())
 
     def test_brain_whitelist_is_tools_object(self):
-        # 同一对象（from tools import 绑定）——双清单手工同步彻底退役：
-        # 未来两侧不可能再漂移
-        self.assertIs(brain.TOOL_WHITELIST, tools.TOOL_WHITELIST)
-
+        # #312 R1-a（2026-10-25）：brain from-import 快照退役（消费口=tools
+        # 属性访问+直调），assertIs 同一对象锚随退役——相等性语义由上方
+        # tools 派生锚与 test_brain 的 tools.TOOL_WHITELIST 引用共同覆盖。
+        brain_src = open(os.path.join(PROJECT_ROOT, "brain.py"),
+                         encoding="utf-8").read()
+        self.assertNotIn("from tools import execute_tool, TOOL_WHITELIST",
+                         brain_src)   # 快照形态禁回流
     def test_prompts_embeds_generated_block(self):
         content = prompts.SYSTEM_PROMPT["content"]
         self.assertIn("\n".join(tool_registry.prompt_tool_lines()), content)

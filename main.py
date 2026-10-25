@@ -73,7 +73,8 @@ from intent_router import dispatch, route
 from migration import PeerWatch, export_soul_bundle, import_soul_bundle
 from permission import permission_manager
 from plugins.context_manager import compress_context
-from prompts import SYSTEM_PROMPT
+import prompts   # 属性访问（#312 R1-a：插件 reload 后 prompts.SYSTEM_PROMPT 需现取）
+SYSTEM_PROMPT = prompts.SYSTEM_PROMPT   # 兼容导出（测试夹具 patch main.SYSTEM_PROMPT 依赖；refresh 同步重绑）
 from tools import execute_tool, get_recent_actions
 
 from xiaoju3 import (AGENT_STATE_DIR, CHILD_LOCK_ENABLED,
@@ -99,8 +100,20 @@ _pending_child_requests = {}   # 单队列：同一时刻最多一个待确认�
 MEMORY_FILE_WEB = os.path.join(AGENT_STATE_DIR, "history_web.json")
 MEMORY_FILE_QQ = os.path.join(AGENT_STATE_DIR, "history_qq.json")
 
-messages_web = [SYSTEM_PROMPT] + load_memory(MEMORY_FILE_WEB)
-messages_qq = [SYSTEM_PROMPT] + load_memory(MEMORY_FILE_QQ)
+messages_web = [prompts.SYSTEM_PROMPT] + load_memory(MEMORY_FILE_WEB)
+messages_qq = [prompts.SYSTEM_PROMPT] + load_memory(MEMORY_FILE_QQ)
+
+def refresh_system_messages():
+    """插件总线（#312）refresh 钩子：工具集变更后重建会话容器头部。
+
+    prompts reload 产生新 SYSTEM_PROMPT 对象，messages_web/qq 头部还持有
+    旧对象（旧工具协议）——/clear 同款切片置回（历史清空=旧上下文里的
+    工具协议已过时，保留反而误导模型）。仅插件 refresh 路径调用。"""
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = prompts.SYSTEM_PROMPT
+    messages_web[:] = [SYSTEM_PROMPT]
+    messages_qq[:] = [SYSTEM_PROMPT]
+
 # ============================================
 
 
@@ -615,15 +628,15 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
 
 def handle_clear_command(source):
     """清空记忆本体（#227 批 B：四变体匹配已迁 memory_handler.handle_clear；
-    **全局 messages 不出 main 红线**——切片赋值置回 [SYSTEM_PROMPT]（不
+    **全局 messages 不出 main 红线**——切片赋值置回 [prompts.SYSTEM_PROMPT]（不
     重绑定，管线 append 依赖同一列表对象）+磁盘文件置空数组，双清缺一不可
     ——只清文件不清内存，下一轮 _compress_and_save 会把旧历史写回）。"""
     global messages_web, messages_qq
     if source == 'web':
-        messages_web[:] = [SYSTEM_PROMPT]
+        messages_web[:] = [prompts.SYSTEM_PROMPT]
         save_memory([], MEMORY_FILE_WEB)          # 文件内容置空数组 []
     else:
-        messages_qq[:] = [SYSTEM_PROMPT]
+        messages_qq[:] = [prompts.SYSTEM_PROMPT]
         save_memory([], MEMORY_FILE_QQ)
 
 
@@ -800,6 +813,23 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         reset_fuse_cb=reset_tool_fuse)
     if fuse_reply is not None:
         return fuse_reply
+
+    # === 🧩 插件总线指令（#312 一期 D3：/plugin_list Lv.2 查看清单；
+    # === /plugin_reload Lv.4 原子换装（主程序不重启）——运维动作，
+    # === 一期手动触发，文件监听二期 ===）
+    if command_text == "/plugin_list" or command_text.startswith("/plugin_list"):
+        if permission_manager.level_value() < 2:
+            return "⚠️ 查看插件清单需要 Lv.2 权限。"
+        import plugin_loader
+        return plugin_loader.list_reply()
+    if command_text == "/plugin_reload":
+        if permission_manager.level_value() < 4:
+            return "⚠️ 插件重载是 Lv.4 主人级运维动作（会重建会话上下文）。"
+        import plugin_loader
+        ok, fail = plugin_loader.reload_all()
+        refresh_system_messages()
+        return (f"🧩 插件重载完成：{ok} 成功 / {fail} 跳过。"
+                f"已启用工具经派生刷新对模型即时生效。")
 
     # === 📝 全自动日志提取（#227 批 B：分派+线程随迁 memory_handler.gen_log，
     # === 受理路径需 Lv.3 态=真机验证项 DB5） ===
@@ -1309,6 +1339,18 @@ def start_background_services():
                              on_peer_recover=_on_peer_recover).watch_loop,
             daemon=True, name="xiaoju3-peer-watch").start()
         print(f"👀 [守望] 多设备互相守望已启动（对端：{'、'.join(peers)}）")
+
+
+# === 🧩 插件总线启动装载（#312 一期 D3）：main 完整初始化后扫描
+# agent_state/plugins/（延迟 import 防循环；坏插件跳过不阻断启动）。===
+try:
+    if os.environ.get("XIAOJU3_PLUGIN_AUTOLOAD", "1") != "0":
+        import plugin_loader as _plugin_loader
+        _plugin_loader.load_all()
+    else:
+        print("[插件] 自动装载已禁用（XIAOJU3_PLUGIN_AUTOLOAD=0）")
+except Exception as _e:   # 总线自身故障绝不阻断主程序启动
+    print(f"[插件] 总线启动装载失败（主程序照常）: {_e}")
 
 
 if __name__ == '__main__':
