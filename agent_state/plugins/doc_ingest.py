@@ -97,16 +97,35 @@ def _db():
     return db
 
 
+_MAX_DOC_BYTES = 20 * 1024 * 1024   # 20MB 上限：超大文档同步提取阻塞请求线程（二期异步化前先挡）
+
+
 def _extract_text(path):
-    """按扩展名提取文本（PDF=pypdf 逐页；TXT/MD 直读+编码降级）。"""
+    """按扩展名提取文本（PDF=pypdf 逐页；TXT/MD 直读+编码降级）。
+
+    异常口径（验收纪律 2 补漏 2026-10-25）：加密 PDF/损坏 PDF/图片扫描件/
+    超大文件——全部转 RuntimeError 带人话原因，由 ingest_document 统一兜
+    ❌ 串，绝不卡死主链。"""
+    if os.path.getsize(path) > _MAX_DOC_BYTES:
+        raise RuntimeError(
+            f"文档过大（{os.path.getsize(path) // 1024 // 1024}MB > 20MB 上限）——"
+            "超大文档二期异步化前暂不支持")
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
         try:
             import pypdf
         except ImportError:
             raise RuntimeError("PDF 解析依赖 pypdf 未安装（运行环境 pip install pypdf）")
-        reader = pypdf.PdfReader(path)
-        return "\n".join((p.extract_text() or "") for p in reader.pages)
+        try:
+            reader = pypdf.PdfReader(path)
+        except Exception as e:
+            raise RuntimeError(f"PDF 文件损坏或格式异常：{e}")
+        if reader.is_encrypted:
+            raise RuntimeError("PDF 已加密（带密码文档暂不支持，请先另存为未加密版本）")
+        try:
+            return "\n".join((p.extract_text() or "") for p in reader.pages)
+        except Exception as e:
+            raise RuntimeError(f"PDF 页面解析失败：{e}")
     if ext in (".txt", ".md"):
         for enc in ("utf-8", "gbk"):
             try:
