@@ -244,20 +244,39 @@ def _pipeline(url):
     try:
         # ① 元数据（标题）
         import yt_dlp
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
-                               "socket_timeout": 15, "noplaylist": True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get("title") or url
-            _set("running", title=title)
-            # ② 下载音频（bestaudio 低码率，纯音频远小于视频）
-            audio = os.path.join(tmp_dir, "audio.%(ext)s")
-            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
-                                   "socket_timeout": 30, "noplaylist": True,
-                                   "format": "bestaudio[abr<=64]/bestaudio",
-                                   "outtmpl": audio}) as y2:
-                y2.download([url])
+        # latin-1 编码修复（2026-10-25 真机实锤：中文标题 B 站视频转写炸
+        # 'latin-1' codec can't encode——yt-dlp 输出层在非 UTF-8 控制台/
+        # frozen 环境回落 latin-1）。三件套：PYTHONIOENCODING 显式 utf-8+
+        # yt-dlp encoding 配置+outtmpl 纯 ASCII（标题不入文件名）。
+        import sys as _sys
+        _prev_pio = os.environ.get("PYTHONIOENCODING")
+        os.environ["PYTHONIOENCODING"] = "utf-8"
+        try:
+            ydl_opts_common = {"quiet": True, "no_warnings": True,
+                               "socket_timeout": 15, "noplaylist": True,
+                               "encoding": "utf-8",
+                               "outtmpl": {"default": "%(id)s.%(ext)s"}}
+            with yt_dlp.YoutubeDL(ydl_opts_common) as ydl:
+                info = ydl.extract_info(url, download=False)
+                title = info.get("title") or url
+                _set("running", title=title)
+                # ② 下载音频（bestaudio 低码率；outtmpl=视频 ID 纯 ASCII——
+                #    中文标题路径曾致底层编码崩溃，临时文件用 ID 命名免疫）
+                audio = os.path.join(tmp_dir, "%(id)s.%(ext)s")
+                with yt_dlp.YoutubeDL({**ydl_opts_common,
+                                       "socket_timeout": 30,
+                                       "format": "bestaudio[abr<=64]/bestaudio",
+                                       "outtmpl": audio}) as y2:
+                    y2.download([url])
+        finally:
+            if _prev_pio is None:
+                os.environ.pop("PYTHONIOENCODING", None)
+            else:
+                os.environ["PYTHONIOENCODING"] = _prev_pio
         audio_file = next((os.path.join(tmp_dir, f) for f in os.listdir(tmp_dir)
-                           if f.startswith("audio.")), None)
+                           if not f.startswith(".")
+                           and os.path.splitext(f)[1].lstrip(".").isalnum()
+                           and len(os.path.splitext(f)[0]) > 0), None)
         if not audio_file:
             raise RuntimeError("音频下载产物缺失")
         # ③ 转写（faster-whisper base int8 CPU；HF 镜像走环境变量）
