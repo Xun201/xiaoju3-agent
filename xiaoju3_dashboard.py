@@ -992,24 +992,39 @@ def api_stt_start():
         # 反复开关流出 Unanticipated host error——**直接优先 WASAPI 输入设备**
         #（Windows 现代音频 API 稳定；query_hostapis() 无参返全部列表，
         #  -1 非法索引曾炸 Error querying host API -1）；无 WASAPI 回退默认。
-        apis = sd.query_hostapis()   # list[dict]
+        # PortAudio 四坑链终修（2026-10-26：MME -9999/-1 非法/-9997 采样率/
+        # -9996 虚拟设备不可开）——**候选设备枚举逐个重试**：WASAPI 真实输入
+        # 设备优先（跳过名称含 virtual/remote 的疑似虚拟设备），失败轮空，
+        # 最后兜底 device=None（MME 默认，自动重采样）；每个设备按自身默认
+        # 采样率开流（WASAPI 不吃 16k 直采），stop 时统一重采样 16k。
+        apis = sd.query_hostapis()
         wasapi_hosts = [i for i, a in enumerate(apis)
                         if "wasapi" in str(a.get("name", "")).lower()]
-        dev = None
+        cands = []
         for d in sd.query_devices():
             if d["max_input_channels"] > 0 and d.get("hostapi") in wasapi_hosts:
-                dev = d["index"]
-                break
-        # WASAPI -9997 修复（2026-10-26 三轮实锤）：WASAPI 不接受 16kHz 直采
-        #（MME 自动重采样而 WASAPI 按混音器率）——按设备默认采样率采集，
-        # stop 时统一重采样到 Whisper 的 16kHz。
-        _STT["samplerate"] = 16000
-        if dev is not None:
-            _STT["samplerate"] = int(sd.query_devices(dev)["default_samplerate"])
-        _STT["stream"] = sd.InputStream(samplerate=_STT["samplerate"], channels=1,
+                name = str(d.get("name", "")).lower()
+                if "virtual" in name or "remote" in name:
+                    continue   # 虚拟/远程显示适配器类设备不可开输入流（-9996 实锤）
+                cands.append(d["index"])
+        cands.append(None)   # 兜底默认设备（MME，自动重采样）
+        last_err = None
+        for dev in cands:
+            try:
+                sr = 16000 if dev is None else int(
+                    sd.query_devices(dev)["default_samplerate"])
+                stream = sd.InputStream(samplerate=sr, channels=1,
                                         dtype="int16", device=dev,
-                                        callback=_cb)   # device=None=默认（无 WASAPI 时）
-        _STT["stream"].start()
+                                        callback=_cb)
+                stream.start()
+                _STT["stream"] = stream
+                _STT["samplerate"] = sr
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        else:
+            raise RuntimeError(f"全部 {len(cands)} 个候选设备均无法打开: {last_err}")
         _STT["recording"] = True
         return jsonify({"code": 200, "data": {"ok": True}})
     except Exception as e:
