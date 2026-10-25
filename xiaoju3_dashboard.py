@@ -970,29 +970,6 @@ def _stt_whisper():
         return _STT_MODEL
 
 
-def _stt_prewarm():
-    """启动预热（后台 daemon）：sounddevice import+whisper 模型加载
-    ——两首次各 15-25s（生产实测 27s），预热后用户首点即热。"""
-    try:
-        import threading as _th
-        def _warm():
-            try:
-                _stt_whisper()
-                import sys as _s2
-                if _stt_deps_path() not in _s2.path:
-                    _s2.path.insert(0, _stt_deps_path())
-                import sounddevice as _sd2   # noqa: F401（PortAudio DLL 预载）
-                print("[语音] 预热完成（sounddevice+whisper 就绪）", flush=True)
-            except Exception as e:
-                print(f"[语音] 预热失败（首点将冷启动）: {e}", flush=True)
-        _th.Thread(target=_warm, daemon=True).start()
-    except Exception:
-        pass
-
-
-_stt_prewarm()
-
-
 @app.route("/api/stt/start", methods=["POST"])
 def api_stt_start():
     """开始录音（16kHz 单声道 int16；sounddevice InputStream 后台回调采集）。
