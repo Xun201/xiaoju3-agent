@@ -456,7 +456,8 @@ class InputDockTests(unittest.TestCase):
         self.assertIn('@app.route("/api/stt/start"', self.dash)
         self.assertIn('@app.route("/api/stt/stop"', self.dash)
         seg = self.dash[self.dash.index("def api_stt_start"):]
-        self.assertIn("sd.InputStream(samplerate=16000", seg)
+        self.assertIn('sd.InputStream(samplerate=_STT["samplerate"]', seg)   # 设备默认率采集（WASAPI -9997 后改）
+        self.assertIn("np.interp(", self.dash)   # stop 重采样到 16k 锚
         self.assertIn('language="zh"', seg)   # 中文优先转写
 
     def test_dock_css_family(self):
