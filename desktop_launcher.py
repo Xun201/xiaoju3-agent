@@ -882,7 +882,8 @@ def main(argv=None):
         style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
                               style | WS_EX_COMPOSITED)
-        _print(f"[白屏终极方案A] WS_EX_COMPOSITED 已注入 (hwnd={hwnd})", flush=True)
+        print(f"[白屏终极方案A] WS_EX_COMPOSITED 已注入 (hwnd={hwnd})",
+              flush=True)   # 直接 print（_print 封装无 flush 形参）
 
     def _navigate_when_ready():
         """后台导航（webview.start 回调）：等 :5003 就绪 → load_url 控制台。
