@@ -352,16 +352,19 @@ class MonochromeUiTests(unittest.TestCase):
                       self.html)
 
     def test_body_and_bubble_monochrome(self):
-        """AI 正文/用户气泡/面板标题/发送按钮深灰（蓝调扫除 2026-10-25）。"""
+        """主体黑白灰（AI 正文/面板标题深灰）+核心点缀蓝（发送按钮/用户气泡
+        #2563eb——2026-10-25 队长拍板：Notion/Linear 式克制+交互焦点）。"""
         html = self.html
         self.assertIn("color: #1f2937;                     /* 黑白灰极简（2026-10-25 队长拍板）：AI 正文深灰近黑，加粗/标题随容器继承，绝无蓝调 */",
                       html)
-        self.assertIn("background-color: #1f2937; color: #ffffff;", html)
+        self.assertIn("background-color: #2563eb; color: #ffffff;", html)
         self.assertIn("background: rgba(31, 41, 55, 0.22);", html)
-        self.assertIn("background-color: #1f2937;          /* 黑白灰极简：发送按钮深灰（与用户气泡同族） */",
+        self.assertIn("background-color: #2563eb;          /* 核心点缀蓝（2026-10-25 队长拍板：Notion/Linear 式黑白灰+核心焦点）：发送=核心操作 */",
                       html)
         self.assertIn("color: #1f2937;                     /* 黑白灰极简：面板标题深灰 */",
                       html)
+        self.assertIn("background-color: #1d4ed8", html)   # hover 加深
+        self.assertIn("rgba(37, 99, 235, 0.08)", html)      # 快捷按钮极淡蓝 hover
 
 
 if __name__ == "__main__":

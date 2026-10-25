@@ -123,7 +123,7 @@
             color: #374151; font-size: 13px; cursor: pointer;
             transition: background 0.2s ease;
         }
-        .dash-quick-btn:hover { background: rgba(31, 41, 55, 0.12); }
+        .dash-quick-btn:hover { background: rgba(37, 99, 235, 0.08); }   /* 核心点缀蓝：极淡 hover */
         .stat-label { font-size: 14px; color: var(--color-text-secondary); display: flex; justify-content: space-between; }
         .stat-bar-bg { width: 100%; height: 8px; background-color: var(--color-progress-track); border-radius: 4px; overflow: hidden; }
         /* 状态可视化（答辩微调）：暖橘渐变进度条（默认档）；三档阈值变色
@@ -357,7 +357,7 @@
             border: 1px solid var(--color-border);
             box-shadow: var(--shadow-card);
         }
-        .user-message { align-self: flex-end; background-color: #1f2937; color: #ffffff; }   /* 黑白灰极简：深灰底纯白字 */
+        .user-message { align-self: flex-end; background-color: #2563eb; color: #ffffff; }   /* 核心点缀蓝：用户气泡与发送按钮呼应 */
 
         /* 消息气泡文本可选中复制（2026-10-04 尾巴 2）：显式启用 + 深浅两底
            各配高可见选区——深蓝底上默认选区高亮对比度低，体感"选不中" */
@@ -394,7 +394,7 @@
         }
         .chat-input-area button {
             padding: 10px 20px;
-            background-color: #1f2937;          /* 黑白灰极简：发送按钮深灰（与用户气泡同族） */
+            background-color: #2563eb;          /* 核心点缀蓝（2026-10-25 队长拍板：Notion/Linear 式黑白灰+核心焦点）：发送=核心操作 */
             color: #ffffff;
             border: none;
             border-radius: var(--radius-control);
@@ -403,7 +403,7 @@
             transition: background 0.2s;
             flex-shrink: 0;
         }
-        .chat-input-area button:hover { background-color: #111827; }
+        .chat-input-area button:hover { background-color: #1d4ed8; }
 
         /* ==================== AI 消息工具栏按钮样式 ==================== */
         .msg-tools {
