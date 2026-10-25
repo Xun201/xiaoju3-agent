@@ -351,6 +351,18 @@ class MonochromeUiTests(unittest.TestCase):
         self.assertIn("background: rgba(31, 41, 55, 0.05);       /* UI 极简：中性灰 */",
                       self.html)
 
+    def test_body_and_bubble_monochrome(self):
+        """AI 正文/用户气泡/面板标题/发送按钮深灰（蓝调扫除 2026-10-25）。"""
+        html = self.html
+        self.assertIn("color: #1f2937;                     /* 黑白灰极简（2026-10-25 队长拍板）：AI 正文深灰近黑，加粗/标题随容器继承，绝无蓝调 */",
+                      html)
+        self.assertIn("background-color: #1f2937; color: #ffffff;", html)
+        self.assertIn("background: rgba(31, 41, 55, 0.22);", html)
+        self.assertIn("background-color: #1f2937;          /* 黑白灰极简：发送按钮深灰（与用户气泡同族） */",
+                      html)
+        self.assertIn("color: #1f2937;                     /* 黑白灰极简：面板标题深灰 */",
+                      html)
+
 
 if __name__ == "__main__":
     unittest.main()
