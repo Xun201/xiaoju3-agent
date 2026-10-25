@@ -1225,7 +1225,10 @@
             labelEl.textContent = '🧠 小橘正在思考…';
             thinkBodyEl = document.createElement('div');
             labelEl.addEventListener('click', function () {
-                thinkCard.classList.toggle('think-live-collapsed');
+                // DOM 自锚定（closest）——闭包 thinkCard 在 done 收尾被置 null，
+                // 收起 1.5s 后点击读到 null 曾致 toggle 静默炸（真机无响应实锤）
+                const card = labelEl.closest('.think-live');
+                if (card) card.classList.toggle('think-live-collapsed');
             });
             thinkCard.appendChild(labelEl);
             thinkCard.appendChild(thinkBodyEl);

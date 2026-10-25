@@ -103,7 +103,10 @@ class DirectOutStructureTests(unittest.TestCase):
         js = self.js
         html = _read("index.html")
         self.assertIn("adopted.classList.add('think-live-collapsed');", js)
-        self.assertIn("thinkCard.classList.toggle('think-live-collapsed');", js)
+        # 点击修复（2026-10-25）：DOM 自锚定 closest——闭包 thinkCard 在 done
+        # 收尾置 null 曾致回调读到 null 静默炸（真机点击无响应实锤）
+        self.assertIn("const card = labelEl.closest('.think-live');", js)
+        self.assertIn("card.classList.toggle('think-live-collapsed');", js)
         self.assertIn(
             ".think-live.think-live-collapsed .think-live-line { display: none; }",
             html)

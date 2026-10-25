@@ -119,11 +119,11 @@
         .dash-quick-btn {
             flex: 1; padding: 8px 0; border: none;
             border-radius: var(--radius-inner);       /* 同心圆角 */
-            background: rgba(32, 49, 112, 0.06);
-            color: var(--color-primary); font-size: 13px; cursor: pointer;
+            background: rgba(31, 41, 55, 0.05);       /* UI 极简：中性灰 */
+            color: #374151; font-size: 13px; cursor: pointer;
             transition: background 0.2s ease;
         }
-        .dash-quick-btn:hover { background: rgba(32, 49, 112, 0.12); }
+        .dash-quick-btn:hover { background: rgba(31, 41, 55, 0.12); }
         .stat-label { font-size: 14px; color: var(--color-text-secondary); display: flex; justify-content: space-between; }
         .stat-bar-bg { width: 100%; height: 8px; background-color: var(--color-progress-track); border-radius: 4px; overflow: hidden; }
         /* 状态可视化（答辩微调）：暖橘渐变进度条（默认档）；三档阈值变色
@@ -427,9 +427,9 @@
             border: 1px solid transparent;
         }
         .tool-btn:hover {
-            background: rgba(0, 0, 0, 0.05);
-            color: var(--color-primary);
-            border-color: rgba(0, 0, 0, 0.05);
+            background: rgba(31, 41, 55, 0.08);   /* UI 极简 2026-10-25：中性灰 hover（去彩色） */
+            color: #374151;
+            border-color: transparent;
         }
         /* 点赞、踩的激活状态颜色 */
         .tool-btn.active-like { color: var(--color-like); background: var(--color-like-bg); }
@@ -443,8 +443,9 @@
             line-height: 1;
             padding: 3px 8px;
             border-radius: var(--radius-inner);   /* UI 微操：同心圆角（外层卡片圆角-内边距） */
-            color: var(--color-text-secondary);
-            background-color: var(--color-progress-track);
+            color: #6b7280;                       /* 黑白灰极简（2026-10-25）：中性灰字+浅灰底 */
+            background-color: #f3f4f6;
+            border: 1px solid #e5e7eb;
         }
 
         /* ==================== 直出思维流（2026-10-22 二轮拍板，对标 DeepSeek） ==================== */
@@ -453,11 +454,12 @@
            （首字零等待，2026-10-22）；[思考]/[计划]/[行动] 前缀由 JS 剥除 */
         .think-live {
             font-size: 12px;
-            color: var(--color-text-secondary, #6b7280);
+            color: #9ca3af;                     /* UI 极简 2026-10-25：思考浅灰 */
+            font-weight: 400;
             margin: 2px 0 4px;
         }
         .think-live-label {
-            font-weight: 500;
+            font-weight: 400;                     /* UI 极简：标签也调细（hover 加深） */
             font-variant-numeric: tabular-nums;   /* UI 规范：动态数字等宽（用时 X 秒）防左右抖动 */
             text-wrap: balance;                   /* UI 微操：标题平衡换行防末行单字 */
             margin-bottom: 2px;
@@ -473,6 +475,8 @@
             white-space: pre-wrap;
             word-break: break-word;
             line-height: 1.55;
+            color: #6b7280;                     /* UI 极简：思考正文中灰 */
+            font-weight: 400;
         }
         /* 完成后收起保留折叠行（2026-10-25 队长验收反馈）：直出流式全程可见，
            done 后挂 .think-live-collapsed 只藏思考行、标签行保留——点击标签

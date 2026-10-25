@@ -324,5 +324,33 @@ class AggregatorPanelTests(unittest.TestCase):
         self.assertIn("flex-shrink: 0", dc)
 
 
+class MonochromeUiTests(unittest.TestCase):
+    """黑白灰极简 UI（2026-10-25 队长验收反馈）：徽标/思考/hover 去彩色。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = _read("index.html")
+
+    def test_source_badge_neutral(self):
+        self.assertIn("color: #6b7280;", self.html)
+        self.assertIn("background-color: #f3f4f6;", self.html)
+
+    def test_think_live_gray(self):
+        self.assertIn("color: #9ca3af;", self.html)      # 思考浅灰
+        self.assertIn("color: #6b7280;                     /* UI 极简：思考正文中灰 */",
+                      self.html)
+        self.assertIn("font-weight: 400;                     /* UI 极简：标签也调细（hover 加深） */",
+                      self.html)
+
+    def test_tool_btn_hover_neutral(self):
+        self.assertIn("background: rgba(31, 41, 55, 0.08);   /* UI 极简 2026-10-25：中性灰 hover（去彩色） */",
+                      self.html)
+        self.assertIn("color: #374151;", self.html)
+
+    def test_quick_btn_neutral(self):
+        self.assertIn("background: rgba(31, 41, 55, 0.05);       /* UI 极简：中性灰 */",
+                      self.html)
+
+
 if __name__ == "__main__":
     unittest.main()
