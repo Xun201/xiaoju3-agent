@@ -60,6 +60,9 @@
         /* 标签页切换显隐：.chat-history / .chat-input-area 等设了 display:flex，
            会盖掉 hidden 属性，这里统一兜底（终端记录标签页依赖） */
         [hidden] { display: none !important; }
+        /* html 硬编码底色（2026-10-25 白屏闪烁兜底）：CSS 变量解析间隙/
+           合成层重排瞬间以字面色先行渲染，与窗体 BackColor #f4f6f9 同值 */
+        html { background-color: #f4f6f9; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
@@ -90,6 +93,7 @@
             overflow-y: auto;
             scrollbar-width: thin;
         }
+        .sidebar { will-change: transform; }   /* GPU 图层同 chat-area（2026-10-25 白屏闪烁） */
         .sidebar::-webkit-scrollbar { width: 6px; }
         .sidebar::-webkit-scrollbar-track { background: transparent; }
         .sidebar::-webkit-scrollbar-thumb { background: rgba(31, 41, 55, 0.15); border-radius: 3px; }
@@ -143,6 +147,7 @@
             background-color: var(--color-bg-chat);
             position: relative;
             min-width: 0;
+            will-change: transform;   /* GPU 独立图层（2026-10-25）：放大重绘不再整区闪白 */
         }
         .chat-header {
             padding: 10px 20px;

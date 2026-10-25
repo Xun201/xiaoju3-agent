@@ -367,5 +367,28 @@ class MonochromeUiTests(unittest.TestCase):
         self.assertIn("rgba(37, 99, 235, 0.08)", html)      # 快捷按钮极淡蓝 hover
 
 
+class WhiteFlashFixTests(unittest.TestCase):
+    """窗口放大白屏闪烁修复（2026-10-25 队长真机反馈）三件锚。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = _read("index.html")
+        cls.launcher = open(os.path.join(PROJECT_ROOT, "desktop_launcher.py"),
+                            encoding="utf-8").read()
+
+    def test_window_background_color(self):
+        """窗体原生底色=主题灰（放大时合成层露 BackColor 非 CSS——主修）。"""
+        self.assertIn('background_color="#f4f6f9")', self.launcher)
+
+    def test_html_hardcoded_fallback(self):
+        """html 硬编码底色兜底（CSS 变量解析间隙以字面色先行）。"""
+        self.assertIn("html { background-color: #f4f6f9; }", self.html)
+
+    def test_gpu_layers_on_main_containers(self):
+        """主容器 GPU 图层：chat-area/sidebar will-change（重绘不整区闪白）。"""
+        self.assertIn("will-change: transform;   /* GPU 独立图层", self.html)
+        self.assertIn(".sidebar { will-change: transform; }", self.html)
+
+
 if __name__ == "__main__":
     unittest.main()

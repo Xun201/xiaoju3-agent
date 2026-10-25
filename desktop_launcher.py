@@ -849,7 +849,13 @@ def main(argv=None):
     bridge = QuitBridge(lambda: window, quit_state, out=_print)
     window = webview.create_window(WINDOW_TITLE, html=PLACEHOLDER_HTML,
                                    width=WINDOW_WIDTH, height=WINDOW_HEIGHT,
-                                   js_api=bridge)
+                                   js_api=bridge,
+                                   background_color="#f4f6f9")
+    # background_color（2026-10-25 放大白屏闪烁）：窗口放大/最大化时 WebView2
+    # 合成层重排的瞬间露出**窗体原生 BackColor**（pywebview 缺省纯白——CSS
+    # body 底色管不到这层），设为主题灰 #f4f6f9（--color-bg 同值）后闪白
+    # 变闪灰，肉眼接近无感。--disable-gpu/transparent 不采用：前者全局降
+    # 渲染性能，后者是 #311-b 评估的闪烁风险位。
 
     def _navigate_when_ready():
         """后台导航（webview.start 回调）：等 :5003 就绪 → load_url 控制台。
