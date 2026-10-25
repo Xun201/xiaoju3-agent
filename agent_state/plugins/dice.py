@@ -11,27 +11,28 @@ def extract_noargs(_message=None, _match=None):
     return {}
 
 
-PLUGIN = {
-    "name": "dice",
-    "version": "1.0.0",
-    "desc": "掷骰子（插件总线一期验收样例）",
-    "author": "xun",
-    "level": 2,
-    "tools": [
-        {"name": "ext_roll_dice", "desc": "掷一个骰子并报点数",
-         "params": "sides (可选，骰子面数，默认 6)",
-         "handler": "agent_state_plugins_dice:roll"},
-        {"name": "ext_boom", "desc": "异常隔离演示工具（调用必失败）",
-         "params": "无",
-         "handler": "agent_state_plugins_dice:boom"},
-    ],
-    "intents": [
-        {"name": "ext_dice_roll", "desc": "掷骰子",
-         "patterns": [r"掷骰子", r"掷一个骰子", r"骰子"],
-         "extractor": extract_noargs,   # 函数对象直引（内置表同款；handler_name 才是延迟字符串）
-         "handler_name": "agent_state_plugins_dice:roll_reply"},
-    ],
-}
+def PLUGIN():
+        return {
+        "name": "dice",
+        "version": "1.0.0",
+        "desc": "掷骰子（插件总线一期验收样例）",
+        "author": "xun",
+        "level": 2,
+        "tools": [
+            {"name": "ext_roll_dice", "desc": "掷一个骰子并报点数",
+             "params": "sides (可选，骰子面数，默认 6)",
+             "handler": "agent_state_plugins_dice:roll"},
+            {"name": "ext_boom", "desc": "异常隔离演示工具（调用必失败）",
+             "params": "无",
+             "handler": "agent_state_plugins_dice:boom"},
+        ],
+        "intents": [
+            {"name": "ext_dice_roll", "desc": "掷骰子",
+             "patterns": [r"掷骰子", r"掷一个骰子", r"骰子"],
+             "extractor": extract_noargs,   # 函数对象直引（内置表同款；handler_name 才是延迟字符串）
+             "handler_name": "agent_state_plugins_dice:roll_reply"},
+        ],
+    }
 
 _SETUP_STATE = {"started": False}
 

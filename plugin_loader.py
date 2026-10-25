@@ -177,7 +177,19 @@ def load_all():
             _audit(f"{name} 导入失败，跳过: {e}")
             fail += 1
             continue
-        plugin = getattr(module, "PLUGIN", None)
+        raw = getattr(module, "PLUGIN", None)
+        # 契约 v1.1（2026-10-25）：PLUGIN 支持工厂函数 def PLUGIN(): return {...}
+        # ——常量 dict 引用模块内后定义的函数会在 import 期 NameError（dice/
+        # video_ingest 三次踩同坑），工厂延迟求值结构性根治；dict 形态兼容。
+        if callable(raw) and not isinstance(raw, dict):
+            try:
+                plugin = raw()
+            except Exception as e:
+                _audit(f"{name} PLUGIN() 求值失败，跳过: {e}")
+                fail += 1
+                continue
+        else:
+            plugin = raw
         if plugin is None:
             _audit(f"{name} 无 PLUGIN 声明，跳过")
             fail += 1
@@ -187,7 +199,7 @@ def load_all():
             _audit(f"{name} 契约校验未过，跳过: {'; '.join(errs)}")
             fail += 1
             continue
-        setup = getattr(module, "PLUGIN", {}).get("setup")
+        setup = (plugin or {}).get("setup")
         if callable(setup):
             ctx = {"data_dir": os.path.join(external_dir(), name), "log": _audit}
             if not _run_hook(setup, (ctx,), _SETUP_TIMEOUT, f"{name}.setup"):
