@@ -916,9 +916,10 @@ def api_events():
 
     def generate():
         q = ui_events.subscribe()
+        deadline = __import__("time").time() + 1800   # 30 分钟上限：防极端泄漏（前端 EventSource 原生重连续上）
         try:
             yield ": connected\n\n"   # SSE 注释行：连接建立确认
-            while True:
+            while __import__("time").time() < deadline:
                 try:
                     ev = q.get(timeout=15)
                     import json as _json
@@ -1631,7 +1632,11 @@ def serve():
     # 场景由 vision_tap_element 入口 _ensure_openai 同步导入兜底
     vision_tools.preheat_openai_async()
 
-    app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False)
+    # threaded=True（2026-10-25 救火实锤）：/api/events 页面级 SSE 长连接
+    # 占死 werkzeug dev server 的唯一工作线程（threaded 缺省 False）——
+    # health/面板/聊天流全阻塞、前端全面假死（看门狗触发+面板"连接中"）。
+    # 每连接一线程后 events 常驻连接 daemon 化无害。
+    app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

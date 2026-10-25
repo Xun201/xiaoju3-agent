@@ -110,6 +110,12 @@ class EventsEndpointTests(unittest.TestCase):
         # 注册/注销调用在位（连接生命周期管理）
         self.assertIn("ui_events.subscribe()", src)
         self.assertIn("ui_events.unsubscribe(q)", src)
+        # 并发阻塞根因修复锚（2026-10-25 救火）：threaded=True 根因修+30 分钟
+        # 连接上限兜底（EventSource 原生重连续上）
+        app_src = open(os.path.join(PROJECT_ROOT, "xiaoju3_dashboard.py"),
+                       encoding="utf-8").read()
+        self.assertIn("debug=False, threaded=True", app_src)
+        self.assertIn("+ 1800", app_src)
 
 
 if __name__ == "__main__":
