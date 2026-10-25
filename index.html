@@ -269,6 +269,8 @@
         .todo-group-title:hover { color: var(--color-primary); }
         .todo-group-title:first-child { border-top: none; margin-top: 0; }
         .todos-list li.todos-empty { color: var(--color-text-hint); cursor: default; font-size: 12px; padding: 3px 4px; }
+        /* #351 一期：紧凑视图尾行（"还有 X 项待办…"），灰色居中小字 */
+        .todos-list li.todo-more { color: var(--color-text-hint); cursor: default; font-size: 11px; padding: 4px 4px 2px; text-align: center; }
         .todos-job { font-size: 12px; color: var(--color-text-hint); margin-top: 4px; }
         /* 终端记录面板（只读）：工具行 + 复用聊天气泡样式的记录列表 */
         .terminal-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -671,12 +673,12 @@
             <div class="stat-label">系统温度</div>
             <div class="stat-value" id="temp-text">-- °C</div>
         </div>
-        <!-- 天气静态占位卡（答辩微调：纯静态硬编码零后端；「示例数据」标注
-             防误读——聚合面板真数据在路线图 #351） -->
+        <!-- 天气卡（#351 一期真实化）：GET /api/weather（15 分钟缓存后端+
+             20 分钟前端轮询），失败显示"暂无数据"绝不崩面板 -->
         <div class="stat-item dash-card">
-            <div class="stat-label">🌤️ 长沙 · 今日</div>
-            <div class="stat-value">22°C 多云</div>
-            <div class="dash-note">示例数据 · 聚合面板见路线图 #351</div>
+            <div class="stat-label">🌤️ <span id="weather-city">天气</span></div>
+            <div class="stat-value"><span id="weather-temp">--</span></div>
+            <div class="dash-note" id="weather-desc">加载中…</div>
         </div>
         <!-- 快捷指令卡（答辩微调）：[记待办] 预填输入框；[系统自检] 消费
              既有 /api/health + toast——零新增后端、零流式逻辑改动 -->

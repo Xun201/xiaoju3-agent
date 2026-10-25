@@ -239,6 +239,63 @@ def _search_open_meteo(query, max_results):
 _ENGINES["open_meteo"] = _search_open_meteo
 
 
+# 天气图标映射（#351 聚合面板一期：WMO 大类 → emoji，前端免再映射）
+_WMO_ICONS = (
+    ((0, 0), "☀️"), ((1, 2), "🌤️"), ((3, 3), "☁️"),
+    ((45, 48), "🌫️"), ((51, 67), "🌧️"),
+    ((71, 77), "🌨️"), ((80, 82), "🌧️"),
+    ((85, 86), "🌨️"), ((95, 99), "⛈️"),
+)
+
+
+def weather_icon(code):
+    """WMO weathercode → emoji 图标（未知码回退 🌍）。"""
+    try:
+        c = int(code)
+    except (TypeError, ValueError):
+        return "🌍"
+    for lo, hi in ((lo, hi) for (lo, hi), _ in _WMO_ICONS):
+        if lo <= c <= hi:
+            return dict(_WMO_ICONS)[(lo, hi)]
+    return "🌍"
+
+
+def weather_now():
+    """结构化当前天气（#351 聚合面板一期，dashboard /api/weather 消费）。
+
+    复用 open-meteo 链（城市定位+forecast，8s 超时）；失败抛异常由调用方
+    降级（前端显示"暂无数据"，绝不崩面板）。返回：
+    {"city", "temp", "desc", "code", "wind", "icon"} 或抛异常。"""
+    city = _weather_city()
+    if not city:
+        raise RuntimeError("无位置信息（user_location.json 缺失）")
+    geo = requests.get(_OPEN_METEO_GEO_URL, params={
+        "name": city, "count": 5, "language": "zh", "format": "json"},
+        timeout=8).json()
+    candidates = geo.get("results") or []
+    pick = next((c for c in candidates if c.get("name") == city),
+                candidates[0] if candidates else None)
+    if not pick:
+        raise RuntimeError(f"geocoding 无结果: {city}")
+    lat, lon = pick["latitude"], pick["longitude"]
+    fc = requests.get(_OPEN_METEO_FCST_URL, params={
+        "latitude": lat, "longitude": lon, "current_weather": True,
+        "timezone": "auto"}, timeout=8).json()
+    cw = fc.get("current_weather") or {}
+    temp = cw.get("temperature")
+    code = cw.get("weathercode")
+    if temp is None:
+        raise RuntimeError("forecast 无 current_weather 数据")
+    return {
+        "city": city,
+        "temp": temp,
+        "desc": _WMO_CODES.get(code, "天气"),
+        "code": code,
+        "wind": cw.get("windspeed"),
+        "icon": weather_icon(code),
+    }
+
+
 def _engine_chain():
     """自动降级链：配了 Key 的 API 引擎优先，其次必应 → 百度兜底。"""
     chain = []

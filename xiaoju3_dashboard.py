@@ -917,6 +917,37 @@ def api_ha_devices():
     return jsonify({"code": 200, "data": {"text": text}})
 
 
+# 天气端点内存缓存（#351 聚合面板一期：15 分钟 TTL——open-meteo 免费源
+# 礼貌节流；进程内单例，无需持久化）
+_WEATHER_CACHE = {"ts": 0.0, "payload": None}
+_WEATHER_CACHE_TTL = 900   # 秒
+
+
+@app.route("/api/weather")
+def api_weather():
+    """当前天气（左侧聚合面板天气卡，#351 一期只读端点）。
+
+    search_tools.weather_now（open-meteo 链，8s 超时）+ 15 分钟内存缓存；
+    任何异常降级为 code=503 + error 文案——前端显示"暂无数据"，绝不崩面板。"""
+    import time as _time
+    now = _time.time()
+    if _WEATHER_CACHE["payload"] is not None and now - _WEATHER_CACHE["ts"] < _WEATHER_CACHE_TTL:
+        return jsonify({"code": 200, "data": _WEATHER_CACHE["payload"]})
+    try:
+        from search_tools import weather_now
+        data = weather_now()
+        _WEATHER_CACHE["ts"] = now
+        _WEATHER_CACHE["payload"] = data
+        return jsonify({"code": 200, "data": data})
+    except Exception as e:
+        # 缓存过期且刷新失败：回退旧数据（标注 stale）优于硬报错
+        if _WEATHER_CACHE["payload"] is not None:
+            stale = dict(_WEATHER_CACHE["payload"])
+            stale["stale"] = True
+            return jsonify({"code": 200, "data": stale})
+        return jsonify({"code": 503, "error": f"天气服务暂不可用: {e}"}), 503
+
+
 @app.route("/api/balance")
 def api_balance():
     """DeepSeek 余额查询 API：{code, data:{balance, currency, today_usage, is_peak}}。"""

@@ -448,6 +448,13 @@
             (byPriority[eff] || byPriority.P1).push(t);
         });
         let html = '';
+        // #351 一期（2026-10-25）：侧栏紧凑视图——非编辑模式跨组只显示
+        // 未完成前 5 条（P0 置顶天然成立：组序即优先级序），超出收进
+        // "还有 X 项"尾行，防把左栏撑爆；编辑模式全量（改档需看全）。
+        const pendingTotal = items.filter(t => t.status !== 'done').length;
+        const compact = !todoEditing && pendingTotal > 5;
+        let compactQuota = 5;
+        let compactHidden = 0;
         for (const pr of ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']) {
             const group = byPriority[pr] || [];   // 防御兜底：未知档位不崩
             if (!group.length) continue;   // 空分区不显示
@@ -457,7 +464,16 @@
             html += `<li class="todo-group-title" data-pr="${pr}" title="点击折叠/展开">` +
                 `${arrow} ── ${pr} ── (${group.length})</li>`;
             if (collapsed) continue;
-            html += group.map(t => {
+            // 紧凑视图：本组只取未完成条目按剩余配额截取
+            let groupRows = group;
+            if (compact) {
+                const pendingRows = group.filter(t => t.status !== 'done');
+                const take = pendingRows.slice(0, Math.max(0, compactQuota));
+                compactHidden += pendingRows.length - take.length;
+                compactQuota -= take.length;
+                groupRows = take;
+            }
+            html += groupRows.map(t => {
                 const doneCls = t.status === 'done' ? ' done' : '';
                 const checked = t.status === 'done' ? ' checked' : '';
                 // 尾巴 F 改（用户精确要求）：锁定时 pills 完全不渲染（隐藏而非灰显）
@@ -502,6 +518,10 @@
                     `${agedBadge}<span class="todo-text">${escapeHtml(t.content)}</span>` +
                     `${prControl}${delBtn}</li>` + noteHtml;
             }).join('');
+        }
+        // 紧凑视图尾行：被收起的未完成条目计数（点击 ⚙️ 进编辑模式查看全部）
+        if (compact && compactHidden > 0) {
+            html += `<li class="todo-more" title="点 ⚙️ 进入编辑模式查看全部">还有 ${compactHidden} 项待办…</li>`;
         }
         listEl.innerHTML = html;
     }
@@ -951,6 +971,39 @@
                     .catch(() => showToast('❌ 自检失败：服务不可达'));
             });
         }
+    })();
+
+    // ==================== 天气卡真实化（#351 聚合面板一期） ====================
+    // GET /api/weather（后端 15 分钟缓存）+ 前端 20 分钟轮询+载入即拉；
+    // 异常/超时一律降级为"暂无数据"——绝不因网络卡顿崩面板（纪律红线）。
+    // 图标后端已映射（weather_icon），前端只渲染。
+    (function initWeatherCard() {
+        const elTemp = document.getElementById('weather-temp');
+        if (!elTemp) return;   // 节点缺失静默退出（面板降级不报错）
+        const elCity = document.getElementById('weather-city');
+        const elDesc = document.getElementById('weather-desc');
+        const WEATHER_POLL_MS = 20 * 60 * 1000;   // 20 分钟（后端缓存 15 分钟，前端略长）
+        function renderWeather(d) {
+            if (elCity) elCity.textContent = (d.city || '天气') + ' · 今日';
+            if (elTemp) elTemp.textContent = Math.round(d.temp) + '°C ' + (d.icon || '');
+            if (elDesc) elDesc.textContent = (d.desc || '') +
+                (d.stale ? '（缓存·稍后自动刷新）' : '');
+        }
+        function showUnavailable() {
+            if (elTemp) elTemp.textContent = '--';
+            if (elDesc) elDesc.textContent = '暂无数据（服务暂不可用）';
+        }
+        function loadWeather() {
+            fetch('/api/weather')
+                .then(res => res.json().then(body => ({ ok: res.ok, body: body })))
+                .then(({ ok, body }) => {
+                    if (ok && body.code === 200 && body.data) renderWeather(body.data);
+                    else showUnavailable();
+                })
+                .catch(() => showUnavailable());   // 网络卡顿/断连：降级不崩
+        }
+        loadWeather();
+        setInterval(loadWeather, WEATHER_POLL_MS);
     })();
 
     // 大脑来源徽标（§4.3：消费 /api/chat 返回的 source 字段）
