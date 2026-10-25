@@ -24,10 +24,14 @@ from PyInstaller.utils.hooks import collect_all
 # collect_all 覆盖包数据 + driver 二进制 + 全部子模块）
 pw_datas, pw_binaries, pw_hiddenimports = collect_all('playwright')
 
+# yt-dlp 收录（#351 一期 video_ingest 外部插件依赖；官方配方 collect_all——
+# yt_dlp 内部 extractor 惰性动态 import，静态分析漏致 frozen import 崩）
+ytdlp_datas, ytdlp_binaries, ytdlp_hiddenimports = collect_all('yt_dlp')
+
 a = Analysis(
     ['desktop_launcher.py'],
     pathex=[],
-    binaries=pw_binaries,
+    binaries=pw_binaries + ytdlp_binaries,
     datas=[
         ('assets', 'assets'),              # 桌宠素材（pet/normal_half|full）+ ASSETS.md
         ('index.html', '.'),               # 前端三件套（dashboard 从资源根直读）
@@ -38,8 +42,10 @@ a = Analysis(
         ('mood_tone.json', '.'),           # #271① M2 语气映射表（缺它 M2 静默失效）
         ('persona_expressions.json', '.'), # #271 批3 模式表现表（缺它 mode_suffix 空串路径=静默失效，mood_tone 同类教训）
         ('settings_tiers.json', '.'),      # #264 B1 分档表（缺它面板 items 全空——20261010 晚真机实锤，与上述两文件同类教训）
-    ] + pw_datas,
+    ] + pw_datas + ytdlp_datas,
     hiddenimports=[
+        # ── yt-dlp（#351 video_ingest 插件依赖，collect_all 全子模块）──
+        'yt_dlp',
         # ── 底层 C 扩展显式收集（2.0.0 构建实锤：pyi_rth_multiprocessing
         #    运行时钩子需要 _socket，自动收集漏致启动崩 No module named
         #    '_socket'——2026-10-17 用户拍板显式列 + 主入口兜底 import）──
@@ -102,7 +108,7 @@ a = Analysis(
         'plugins.todo_aging',    # heartbeat 函数内 lazy import（modulegraph 可扫，显式列保险）
         'plugins.todo_text',     # #261：intent_router 字符串动态引用（importlib 对静态分析不可见，必须显式列）
         'plugins.todo_query',    # todo_query 意图（查待办直达）：intent_router 字符串动态引用，同上铁律
-    ] + pw_hiddenimports,
+    ] + pw_hiddenimports + ytdlp_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
