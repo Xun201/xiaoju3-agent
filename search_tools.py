@@ -189,16 +189,43 @@ _WMO_CODES = {
 }
 
 
-def _weather_city():
-    """天气查询的城市名：user_location.json（brain 位置链落盘）优先；
-    无位置返回 None（引擎返回空列表，链继续走通用引擎）。"""
+# 兜底坐标（2026-10-25 天气定位修复）：geocoding 全灭/重名干扰时的最后防线
+# ——先保证数据是湖南的（队长拍板：天心区坐标）。新城市按需补行。
+_FALLBACK_COORDS = {"长沙": (28.11, 112.98, "长沙·天心区")}
+
+
+def _weather_loc():
+    """天气查询定位（2026-10-25 修复：曾把"长沙"定位到重庆长沙镇 300km 外）。
+
+    返回 (city, district, lat, lon) 或 None：user_location.json（brain 位置链
+    落盘）优先——有精确经纬度直接用（本地坐标优先，不再让 API 瞎猜）；
+    无经纬度返回文字（city+district），由 weather_now 走 geocoding+过滤。"""
     try:
         from agent_state.state_manager import get_user_location
-        loc = get_user_location()
-        city = (loc or {}).get("city", "").strip()
-        return city or None
+        loc = get_user_location() or {}
+        city = str(loc.get("city") or "").strip()
+        district = str(loc.get("district") or "").strip()
+        lat, lon = loc.get("lat"), loc.get("lon")
+        if lat and lon:
+            return city, district, float(lat), float(lon)
+        if city:
+            return city, district, None, None
+        return None
     except Exception:
         return None
+
+
+def _pick_geo_candidate(candidates, city):
+    """geocoding 候选过滤（2026-10-25 修复核心）：只认中国（country_code=CN）
+    且 name 与城市全等，取 population 最大者——重庆长沙镇（pop 4.7 万）这类
+    同名乡镇从此无法截胡湖南长沙（pop 数百万）。全灭返回 None。"""
+    import re
+    cn = [c for c in candidates
+          if str(c.get("country_code", "")).upper() == "CN"
+          and str(c.get("name", "")) == city]
+    if not cn:
+        return None
+    return max(cn, key=lambda c: c.get("population") or 0)
 
 
 def _search_open_meteo(query, max_results):
@@ -207,19 +234,23 @@ def _search_open_meteo(query, max_results):
     失败（网络/无位置/解析空）一律抛异常 → 引擎链统一 except 静默
     试下一引擎。max_results 参数对齐引擎签名（本源恒返回 ≤1 条）。
     """
-    city = _weather_city()
-    if not city:
+    loc = _weather_loc()
+    if not loc:
         raise RuntimeError("无位置信息（user_location.json 缺失），"
                            "Open-Meteo 无法定位")
-    geo = requests.get(_OPEN_METEO_GEO_URL, params={
-        "name": city, "count": 5, "language": "zh", "format": "json"},
-        timeout=8).json()
-    candidates = geo.get("results") or []
-    pick = next((c for c in candidates if c.get("name") == city),
-                candidates[0] if candidates else None)
-    if not pick:
-        raise RuntimeError(f"geocoding 无结果: {city}")
-    lat, lon = pick["latitude"], pick["longitude"]
+    city, district, lat, lon = loc
+    if lat is None:
+        if city in _FALLBACK_COORDS:
+            lat, lon, city = _FALLBACK_COORDS[city]
+        else:
+            geo = requests.get(_OPEN_METEO_GEO_URL, params={
+                "name": city, "count": 20, "language": "zh", "format": "json",
+                "countryCode": "CN"}, timeout=8).json()
+            pick = _pick_geo_candidate(geo.get("results") or [], city)
+            if not pick:
+                raise RuntimeError(f"geocoding 无中国结果: {city}")
+            lat, lon = pick["latitude"], pick["longitude"]
+    title_city = f"{city}·{district}" if district and district not in city else city
     fc = requests.get(_OPEN_METEO_FCST_URL, params={
         "latitude": lat, "longitude": lon, "current_weather": True,
         "timezone": "auto"}, timeout=8).json()
@@ -230,8 +261,8 @@ def _search_open_meteo(query, max_results):
     if temp is None:
         raise RuntimeError("forecast 无 current_weather 数据")
     desc = _WMO_CODES.get(code, "天气")
-    return [{"title": f"{city}当前天气（Open-Meteo）",
-             "snippet": f"{city} 当前{desc}，温度 {temp}°C，"
+    return [{"title": f"{title_city}当前天气（Open-Meteo）",
+             "snippet": f"{title_city} 当前{desc}，温度 {temp}°C，"
                         f"风速 {wind}km/h",
              "url": _OPEN_METEO_FCST_URL}]
 
@@ -266,18 +297,26 @@ def weather_now():
     复用 open-meteo 链（城市定位+forecast，8s 超时）；失败抛异常由调用方
     降级（前端显示"暂无数据"，绝不崩面板）。返回：
     {"city", "temp", "desc", "code", "wind", "icon"} 或抛异常。"""
-    city = _weather_city()
-    if not city:
+    loc = _weather_loc()
+    if not loc:
         raise RuntimeError("无位置信息（user_location.json 缺失）")
-    geo = requests.get(_OPEN_METEO_GEO_URL, params={
-        "name": city, "count": 5, "language": "zh", "format": "json"},
-        timeout=8).json()
-    candidates = geo.get("results") or []
-    pick = next((c for c in candidates if c.get("name") == city),
-                candidates[0] if candidates else None)
-    if not pick:
-        raise RuntimeError(f"geocoding 无结果: {city}")
-    lat, lon = pick["latitude"], pick["longitude"]
+    city, district, lat, lon = loc
+    if lat is None:
+        # 无精确经纬度的取坐标优先级（2026-10-25 修复，截胡防线）：
+        # ① 兜底坐标表直用（表内城市绝不猜——中文"长沙"全等命中的是
+        #    重庆长沙镇这类同名乡镇，pop 过滤挡不住英文 Changsha 不同名）
+        # ② 表外城市走 geocoding（count 加大+countryCode=CN+全等+population
+        #    过滤），全灭报错
+        if city in _FALLBACK_COORDS:
+            lat, lon, city = _FALLBACK_COORDS[city]
+        else:
+            geo = requests.get(_OPEN_METEO_GEO_URL, params={
+                "name": city, "count": 20, "language": "zh", "format": "json",
+                "countryCode": "CN"}, timeout=8).json()
+            pick = _pick_geo_candidate(geo.get("results") or [], city)
+            if not pick:
+                raise RuntimeError(f"geocoding 无中国结果: {city}")
+            lat, lon = pick["latitude"], pick["longitude"]
     fc = requests.get(_OPEN_METEO_FCST_URL, params={
         "latitude": lat, "longitude": lon, "current_weather": True,
         "timezone": "auto"}, timeout=8).json()
@@ -286,8 +325,9 @@ def weather_now():
     code = cw.get("weathercode")
     if temp is None:
         raise RuntimeError("forecast 无 current_weather 数据")
+    disp = f"{city}·{district}" if district and district not in city else city
     return {
-        "city": city,
+        "city": disp,
         "temp": temp,
         "desc": _WMO_CODES.get(code, "天气"),
         "code": code,
