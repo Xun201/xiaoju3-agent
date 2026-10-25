@@ -567,6 +567,30 @@ def _compress_and_save(messages, filepath):
     save_memory(persist, filepath)
 
 
+_VIDEO_LINK_RE = re.compile(
+    r"https?://(?:[\w-]+\.)?(?:bilibili\.com|b23\.tv|douyin\.com|iesdouyin\.com)/\S+",
+    re.IGNORECASE)   # 子域通配（www/m/v——v.douyin.com 短链实锤漏网后修）
+_VIDEO_ACTION_WORDS = ("总结", "转写", "解析", "提取", "看", "学习", "观点")
+
+
+def video_link_guard(message):
+    """视频链接路由层硬拦截（#348 三期幻觉防线，2026-10-25 队长拍板）。
+
+    真机实锤：本地模型对含视频平台链接的消息凭预训练知识"脑补"剧情总结
+    （链接标题关键词→幻觉游戏知识）——绝不把带视频链接的请求直接丢给
+    本地模型。返回值：None=放行（无链接或已有动作词命中插件意图）；
+    文案=拦截（含链接但无动作词 → 引导话术）。三通道共用（本函数为
+    handle_intent_command 入口前置，web/QQ/控制台全覆盖）。"""
+    text = str(message or "")
+    if not _VIDEO_LINK_RE.search(text):
+        return None
+    if any(w in text for w in _VIDEO_ACTION_WORDS):
+        return None   # 有动作词：交插件意图（转写/解析）正常处理
+    return ("⚠️ 发现视频链接！请说「总结这个视频 " +
+            _VIDEO_LINK_RE.search(text).group(0) + "」以启动后台转写，"
+            "或「解析这个视频」提取元数据。直接丢链接我可能会胡说八道哦～")
+
+
 def handle_intent_command(message, history=None):
     """意图路由直达（QQ/网页/控制台三通道共用，2026-10-05 自 _brain_reply
     抽出——控制台 #247 接线复用同一实现，防双份清单漂移）。
@@ -577,6 +601,9 @@ def handle_intent_command(message, history=None):
     控制台客户端超大 payload）；未命中、路由异常或 dispatch 返回 ❌
     一律返回 None（调用方透传原 smart_ask 链路，绝不吞消息）。
     """
+    guard = video_link_guard(message)
+    if guard is not None:
+        return guard   # 视频链接拦截（幻觉防线）：绝不落本地模型
     intent = None
     try:
         intent = route(_strip_cq(message))

@@ -50,10 +50,15 @@ def PLUGIN():
         ],
         "intents": [
             {"name": "ext_video_ingest", "desc": "解析视频链接信息",
-             "patterns": [r"(解析|提取|看看?|读一?下).{0,12}(这个?|这个?)视频",
+             "patterns": [r"(解析|提取|看看?|读一?下|了解).{0,12}(这个?|这个?)视频",
+                          r"(提取|解析)视频内容",
                           r"视频.{0,8}(讲了?什么|什么内容|什么信息|信息|简介)"],
              "extractor": extract_video_url,
              "handler_name": "agent_state_plugins_video_ingest:reply"},
+            {"name": "ext_video_link_guard", "desc": "视频链接直达拦截",
+             "patterns": [r"https?://(?:[\w-]+\.)?(?:bilibili\.com|b23\.tv|douyin\.com|iesdouyin\.com)/\S+"],
+             "extractor": extract_video_url,
+             "handler_name": "agent_state_plugins_video_ingest:link_guard_reply"},
             {"name": "ext_video_transcribe", "desc": "深度解析视频（转写+观点）",
              "patterns": [r"(看完|听完|总结|提炼|深度解析).{0,10}(这个?|这个?)视频",
                           r"(总结|提炼).{0,8}观点"],
@@ -125,6 +130,17 @@ def reply(url="", **_):
 def transcribe_reply(url="", **_):
     """意图路由处理器（深度解析）：受理即回+后台转写。"""
     return start_transcribe(url)
+
+
+def link_guard_reply(url="", message="", **_):
+    """URL 直达拦截处理器：消息含动作词=转写；否则引导话术（防本地模型
+    凭链接标题脑补剧情——幻觉防线 2026-10-25 真机实锤）。"""
+    text = str(message or "")
+    if any(w in text for w in ("总结", "转写", "解析", "提取", "看", "观点")):
+        return start_transcribe(url)
+    return ("⚠️ 发现视频链接！请说「总结这个视频 " + url +
+            "」以启动后台转写，或「解析这个视频」提取元数据。"
+            "直接丢链接我可能会胡说八道哦～")
 
 
 def fetch_video_info(url=""):

@@ -32,7 +32,7 @@ import sys
 import threading
 import traceback
 
-_SETUP_TIMEOUT = 5      # setup 钩子超时（秒），超时=载入失败回滚
+_SETUP_TIMEOUT = 30     # setup 钩子超时（秒）——重依赖插件（faster-whisper 链）冷 import 可超 5s（pytest 实锤），30s 覆盖
 _TEARDOWN_TIMEOUT = 3   # teardown 钩子超时（秒），异常吞掉照走
 _MAX_LEVEL = 3          # D1：外部插件权限上限（Lv.4 主人级能力保留内置）
 _TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
