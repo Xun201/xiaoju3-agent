@@ -448,8 +448,11 @@ class OpenMeteoWeatherSourceTests(unittest.TestCase):
                              "换个关键词试试吧。")
 
     def test_open_meteo_success_returns_weather(self):
-        with mock.patch.object(search_tools, "_weather_city",
-                               return_value="长沙"), \
+        # 2026-10-25 截胡修复后：长沙在兜底坐标表内直用（零 geocoding），
+        # 仅有一次 forecast 请求
+        with mock.patch.object(
+                search_tools, "_weather_loc",
+                return_value=("长沙", "天心区", None, None)), \
                 mock.patch.object(search_tools, "requests") as mr:
             self._mock_requests(mr)
             out = search_tools._search_open_meteo("长沙今天天气", 5)
@@ -457,16 +460,26 @@ class OpenMeteoWeatherSourceTests(unittest.TestCase):
         self.assertIn("长沙", out[0]["title"])
         self.assertIn("25.3", out[0]["snippet"])
         self.assertIn("晴", out[0]["snippet"])
+        self.assertEqual(len(mr.get.call_args_list), 1)   # 表内直用：不发 geocoding
 
     def test_open_meteo_geocoding_prefers_exact_city(self):
-        # geocoding 第一个结果是「长沙县」——须精确挑中「长沙」
-        with mock.patch.object(search_tools, "_weather_city",
-                               return_value="长沙"), \
+        # 表外城市（武汉）走 geocoding：同名小地干扰+countryCode=CN+
+        # population 过滤（2026-10-25 截胡修复链）——须挑中湖北武汉
+        geo = {"results": [
+            {"name": "武汉", "admin1": "山东", "country_code": "CN",
+             "latitude": 36.0, "longitude": 118.0, "population": 5000},
+            {"name": "武汉", "admin1": "湖北", "country_code": "CN",
+             "latitude": 30.59, "longitude": 114.31, "population": 11000000}]}
+        with mock.patch.object(
+                search_tools, "_weather_loc",
+                return_value=("武汉", "洪山区", None, None)), \
                 mock.patch.object(search_tools, "requests") as mr:
-            self._mock_requests(mr)
+            resp_geo = mock.Mock(); resp_geo.json.return_value = geo
+            resp_fc = mock.Mock(); resp_fc.json.return_value = self.FCST
+            mr.get.side_effect = [resp_geo, resp_fc]
             search_tools._search_open_meteo("天气", 5)
             fc_call = mr.get.call_args_list[1]
-            self.assertEqual(fc_call.kwargs["params"]["latitude"], 28.23)
+            self.assertEqual(fc_call.kwargs["params"]["latitude"], 30.59)  # 湖北武汉（pop 最大）
 
     def test_non_weather_query_never_touches_open_meteo(self):
         # 非天气查询零影响：链不含 open_meteo（占位哨兵抛异常即暴露）

@@ -223,7 +223,8 @@ class AggregatorPanelTests(unittest.TestCase):
         st = self.st
         self.assertIn("def weather_now():", st)
         body = st[st.index("def weather_now():"):]
-        for token in ('"city": city', '"temp": temp', '"desc": _WMO_CODES.get(code, "天气")',
+        for token in ('"city": disp',   # 2026-10-25 截胡修复：区县展示形态
+                      '"temp": temp', '"desc": _WMO_CODES.get(code, "天气")',
                       '"icon": weather_icon(code)', "timeout=8"):
             self.assertIn(token, body)
         self.assertIn("def weather_icon(code):", st)
@@ -388,6 +389,24 @@ class WhiteFlashFixTests(unittest.TestCase):
         """主容器 GPU 图层：chat-area/sidebar will-change（重绘不整区闪白）。"""
         self.assertIn("will-change: transform;   /* GPU 独立图层", self.html)
         self.assertIn(".sidebar { will-change: transform; }", self.html)
+
+    def test_win32_composited_injection(self):
+        """终极方案 A：WS_EX_COMPOSITED 原生双缓冲注入（GUI 回调先于导航）。"""
+        src = self.launcher
+        self.assertIn("WS_EX_COMPOSITED = 0x02000000", src)
+        self.assertIn("SetWindowLongW", src)
+        self.assertIn("_apply_composited_style()   # GUI 就绪即注入", src)
+
+    def test_resize_mask_debounce(self):
+        """终极方案 B：resize 遮罩防抖（150ms，body.resizing 全屏主题灰）。"""
+        js = open(os.path.join(PROJECT_ROOT, "console.js"),
+                  encoding="utf-8").read()
+        self.assertIn("function initResizeMask", js)
+        self.assertIn("document.body.classList.add('resizing');", js)
+        self.assertIn("}, 150);", js)
+        self.assertIn("body.resizing::after", self.html)
+        self.assertIn("z-index: 99999;", self.html)
+        self.assertIn("background: #f4f6f9;", self.html)
 
 
 if __name__ == "__main__":
