@@ -1385,6 +1385,24 @@ def _console_slash_intercept(user_msg):
         return (get_help_menu(main.permission_manager.current_level),
                 "⚙️ 系统")
 
+    # 🧩 插件总线（#312 一期）：/plugin_list Lv.2 / /plugin_reload Lv.4——
+    # web 通道与 QQ 通道（main.handle_message）同口径；控制台单一用户
+    # user_id='console'，权限执行收口 permission_manager 既有单例
+    if text == "/plugin_list":
+        if main.permission_manager.level_value() < 2:
+            return ("⚠️ 查看插件清单需要 Lv.2 权限。", "⚙️ 系统")
+        import plugin_loader
+        return (plugin_loader.list_reply(), "🧩 插件")
+    if text == "/plugin_reload":
+        if main.permission_manager.level_value() < 4:
+            return ("⚠️ 插件重载是 Lv.4 主人级运维动作（会重建会话上下文）。",
+                    "⚙️ 系统")
+        import plugin_loader
+        ok, fail = plugin_loader.reload_all()
+        main.refresh_system_messages()
+        return (f"🧩 插件重载完成：{ok} 成功 / {fail} 跳过。"
+                f"已启用工具经派生刷新对模型即时生效。", "🧩 插件")
+
     # ⚙️ 清空会话记忆（/clear | /reset | 清空记忆 | 重置记忆）——控制台
     # 口径：只清控制台历史，QQ 双通道记忆文件不动（与 main.py:739 分叉）
     if text in ("/clear", "/reset", "清空记忆", "重置记忆"):
