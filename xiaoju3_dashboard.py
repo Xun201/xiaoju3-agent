@@ -988,9 +988,32 @@ def api_stt_start():
         def _cb(indata, frames, time_info, status):
             _STT["frames"].append(indata.copy())
 
-        _STT["stream"] = sd.InputStream(samplerate=16000, channels=1,
-                                        dtype="int16", callback=_cb)
-        _STT["stream"].start()
+        # MME -9999 修复（2026-10-26 生产实锤）：PortAudio 默认 MME 后端
+        # 反复开关流出 Unanticipated host error——默认流失败时显式选
+        # WASAPI 输入设备重试（Windows 现代音频 API，稳定）。
+        try:
+            _STT["stream"] = sd.InputStream(samplerate=16000, channels=1,
+                                            dtype="int16", callback=_cb)
+            _STT["stream"].start()
+        except Exception:
+            wasapi = [d["index"] for d in sd.query_devices()
+                      if d["max_input_channels"] > 0
+                      and "wasapi" in str(d.get("hostapi", "")).lower()]
+            if not wasapi:
+                # query_devices 的 hostapi 是编号——经 get_hostapi_info 映射
+                apis = {i: sd.query_hostapis(i)["name"].lower()
+                        for i in range(sd.query_hostapis(-1)["count"] if
+                                       isinstance(sd.query_hostapis(-1), dict)
+                                       else len(sd.query_hostapis(-1)))}
+                wasapi = [d["index"] for d in sd.query_devices()
+                          if d["max_input_channels"] > 0
+                          and "wasapi" in apis.get(d.get("hostapi", -1), "")]
+            if not wasapi:
+                raise
+            _STT["stream"] = sd.InputStream(samplerate=16000, channels=1,
+                                            dtype="int16", device=wasapi[0],
+                                            callback=_cb)
+            _STT["stream"].start()
         _STT["recording"] = True
         return jsonify({"code": 200, "data": {"ok": True}})
     except Exception as e:
