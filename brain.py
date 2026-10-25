@@ -2513,7 +2513,29 @@ def _ask_local_stream(msgs, on_event, model=None, event_type="think"):
                                eval_count=_eval_count)
     body = "".join(chunks)
     if th_chunks:  # D1：思考统一 <think> 包装（下游原生透传）
-        return '<think>' + ''.join(th_chunks) + '</think>' + body
+        think_text = "".join(th_chunks)
+        # R1 守门（2026-10-25 队长拍板）：1.5b 偶发"正文写进思考尾部"
+        # （think 帧流完 answer 0 帧，content 空）——think=false 短答
+        # 重请求一次（Ollama 0.40.9 实证 content 有正文）；重请求失败/
+        # 仍空则维持原状（前端剥空占位兜底），绝不抛异常断流。
+        if not body.strip():
+            try:
+                retry = {"model": model or LOCAL_MODEL, "messages": msgs,
+                         "stream": False, "keep_alive": -1, "think": False,
+                         "options": {"temperature": LLM_TEMPERATURE,
+                                     "num_predict": 400}}
+                r2 = requests.post(LOCAL_URL, json=retry,
+                                   timeout=LOCAL_GENERATE_TIMEOUT).json()
+                body = ((r2.get("message") or {}).get("content") or "").strip()
+                if body and on_event is not None:
+                    on_event({"type": "answer", "delta": body})
+                if turn_trace is not None:
+                    turn_trace.record_step("local_r1_guard", model or LOCAL_MODEL,
+                                           0, eval_count=r2.get("eval_count"))
+            except Exception as e:
+                print(f"⚠️ [R1守门] 重请求失败（维持原回复）: {e}")
+                body = ""
+        return '<think>' + think_text + '</think>' + body
     return body
 
 
