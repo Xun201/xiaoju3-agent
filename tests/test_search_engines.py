@@ -454,7 +454,9 @@ class OpenMeteoWeatherSourceTests(unittest.TestCase):
                 search_tools, "_weather_loc",
                 return_value=("长沙", "天心区", None, None)), \
                 mock.patch.object(search_tools, "requests") as mr:
-            self._mock_requests(mr)
+            resp_fc = mock.Mock()
+            resp_fc.json.return_value = self.FCST
+            mr.get.side_effect = [resp_fc]   # 表内直用：唯一请求=forecast
             out = search_tools._search_open_meteo("长沙今天天气", 5)
         self.assertEqual(len(out), 1)
         self.assertIn("长沙", out[0]["title"])
