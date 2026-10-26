@@ -174,10 +174,11 @@ class DashCardTests(unittest.TestCase):
         sb = html[html.index(".sidebar {"):]
         sb = sb[:sb.index("}", 0) + 1] if False else html[html.index(".sidebar {"):html.index(".panel-header")]
         self.assertIn("gap: 12px", sb)
-        # UI 三期 v0 SystemCard 合体（2026-10-26）：卡片家族=天气/快捷/温度
-        # （独立大数字）+系统状态合体卡（CPU/内存/磁盘/电池 sys-card-v0）+
-        # 待办（todos-card 变体）
-        self.assertEqual(html.count('class="stat-item dash-card"'), 3)
+        # UI 三期 v0 SystemCard 合体二版（2026-10-26 队长蓝圈：温度孤儿卡
+        # 并入系统状态卡第 5 行）：dash-card 精确类=天气/快捷 2 张+系统状态
+        # 合体卡（sys-card-v0：CPU/内存/磁盘/电池/温度五行）+待办（变体）
+        self.assertEqual(html.count('class="stat-item dash-card"'), 2)
+        self.assertIn('id="temp-text"', html)   # 温度以第 5 行存活于合体卡
         self.assertIn('class="stat-item dash-card sys-card-v0"', html)
         self.assertIn('id="disk-bar"', html)
         self.assertIn('id="battery-row"', html)
@@ -444,8 +445,12 @@ class InputDockTests(unittest.TestCase):
         self.assertIn("border-radius: 24px;", h)
         self.assertIn(".composer:focus-within {", h)
         self.assertIn("@keyframes micPulse", h)       # 🎤 呼吸态
-        self.assertIn(".composer-toolbar {", h)
-        self.assertIn(".tb-btn {", h)
+        self.assertIn(".attach-add {", h)             # 回形针「添加附件」钮
+        self.assertIn(".dock-menu-sep {", h)          # 技能/插件收进菜单分隔线
+        self.assertIn(".tb-btn {", h)                 # 旧样式保留（新 DOM 不再用）
+        # 上下文标签上移：composer-row 之前（2026-10-26 右下角战争区退役）
+        self.assertLess(h.index('id="context-tags-bar"'),
+                        h.index('class="composer-row"'))
         self.assertNotIn(".input-dock {", h)           # 旧 dock 容器退役
         self.assertNotIn("chat-input-area button {", h)  # 旧按钮族退役
 

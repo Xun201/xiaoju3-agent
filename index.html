@@ -415,7 +415,7 @@
                         0 4px 14px rgba(37, 99, 235, 0.12),
                         0 12px 36px rgba(31, 41, 55, 0.10);
         }
-        .composer-row { display: flex; align-items: center; gap: 8px; }
+        .composer-row { display: flex; align-items: center; gap: 12px; }
         /* 附件就绪标签（UI 三期：上传→附件直读上下文，2026-10-26） */
         .attach-bar {
             display: flex; align-items: center; gap: 6px;
@@ -448,11 +448,7 @@
             transition: background 0.2s; flex-shrink: 0;
         }
         .send-btn:hover { background-color: #1d4ed8; }
-        /* 底部工具栏（技能/插件/上下文标签——豆包式轻量排布） */
-        .composer-toolbar {
-            display: flex; align-items: center; gap: 12px;
-            padding: 4px 6px 2px;
-        }
+
         .tb-btn {
             border: none; background: transparent; color: #6b7280;
             font-size: 12px; cursor: pointer; padding: 2px 4px;
@@ -460,8 +456,8 @@
         }
         .tb-btn:hover { color: #1f2937; background: rgba(31, 41, 55, 0.05); }
         .context-tags-bar {
-            display: flex; gap: 6px; margin-left: auto;
-            overflow: hidden;
+            display: flex; gap: 6px; align-items: center;
+            overflow: hidden; margin: 0 6px 6px;   /* 输入行上方左位（2026-10-26 移出右下角战争区） */
         }
         .context-tag {
             font-size: 11px; color: #6b7280; background: #f3f4f6;
@@ -1192,10 +1188,10 @@
                 <div class="stat-bar-bg"><div class="stat-bar-fill" id="battery-bar" style="width: 0%;"></div></div>
             </div>
         </div>
-        <div class="stat-item dash-card">
-            <div class="stat-label">系统温度</div>
-            <div class="stat-value" id="temp-text">-- °C</div>
-        </div>
+            <div class="v0-metric">
+                <div class="v0-metric-row"><span class="stat-label">温度</span><span class="v0-metric-val" id="temp-text">-- °C</span></div>
+            </div>
+
         <div class="stat-item" style="margin-top: auto; font-size: 12px; color: var(--color-text-hint); text-align: center;">
             © 2026 小橘3号 Agent · <span id="footer-version" style="cursor:pointer;" title="v?" >V?.?.?</span>
         </div>
@@ -1284,6 +1280,7 @@
         <div class="chat-input-area">
             <div class="composer" id="composer">
                 <div class="attach-bar" id="attach-bar" hidden></div>
+                <div class="context-tags-bar" id="context-tags-bar"></div>
                 <div class="composer-row">
                     <button id="dock-plus" class="attach-add" title="添加附件 / 更多能力">
                         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -1293,9 +1290,7 @@
                     <button id="mic-btn" class="dock-btn round mic" title="语音输入（点击开始/停止）">🎤</button>
                     <button class="send-btn" onclick="sendMessage()" title="发送" aria-label="发送">↑</button>
                 </div>
-                <div class="composer-toolbar">
-                    <div class="context-tags-bar" id="context-tags-bar"></div>
-                </div>
+
                 <div class="input-dock-menu" id="input-dock-menu" hidden>
                     <div class="dock-menu-item" data-action="upload">📄 上传文件</div>
                     <div class="dock-menu-item" data-action="screenshot">📸 截图提问</div>
