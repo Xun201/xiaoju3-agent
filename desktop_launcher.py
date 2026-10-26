@@ -776,6 +776,35 @@ class QuitBridge:
             self._out(f"⚠️ pick_docs 失败: {e}")
             return {"ok": False, "error": str(e)[:200]}
 
+    def snip_now(self):
+        """UI 三期截图提问（切片 b，2026-10-26）：隐藏主窗→冻结帧划选→
+        恢复主窗，返回 PNG 路径（取消 path=None）。阻塞至划选完成（前端
+        await 本方法=用户处于截图态）。生产接线钩子按队长拍板：隐藏 200ms
+        后抓屏（screenshot_ask._HIDE_DELAY_MS）。"""
+        try:
+            import screenshot_ask
+        except Exception as e:
+            return {"ok": False, "error": f"screenshot_ask 不可用: {e}"}
+        win = self._window_getter()
+
+        def _hide():
+            if win:
+                win.hide()
+
+        def _show():
+            if win:
+                win.show()
+
+        try:
+            path = screenshot_ask.snip(pre_hide=_hide, post_show=_show)
+            self._out(f"📷 截图：{path or '已取消'}")
+            return {"ok": True, "path": path}
+        except Exception as e:
+            _show()   # 异常也必须把主窗还回来
+            import traceback
+            traceback.print_exc()
+            return {"ok": False, "error": str(e)[:200]}
+
     def quit_app(self, mode="backend_only", remember=False):
         if mode not in ("backend_only", "full_exit"):
             return {"ok": False, "error": "invalid_mode"}

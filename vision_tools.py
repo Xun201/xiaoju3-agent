@@ -928,3 +928,54 @@ def vision_tap_element(element_name):
         return f"{result}（已执行二次确认点击）{top_note}"
     _discard_snapshot(before_snapshot)   # 无二次点击：跳过变化检测
     return f"{result}{top_note}"
+
+
+def vision_ask_image(image_path, question):
+    """UI 三期截图提问（切片 b，2026-10-26）：本地截图（PNG）+ 用户问题
+    → 视觉模型文字回答。复用视觉链全家桶（client/端点/模型候选/网络重试
+    /404 自动回退），纯文本应答（无坐标解析）——与 vision_tap_element 的
+    手机截图链互不相干。"""
+    _ensure_openai()
+    if not _OpenAIClient:
+        return "❌ 未安装 openai SDK（pip install openai），无法识图。"
+    if not VISION_KEY:
+        return "❌ 未配置视觉 API Key，无法识图。"
+    if not os.path.isfile(image_path):
+        return f"❌ 截图文件不存在：{image_path}"
+    with open(image_path, "rb") as f:
+        img_base64 = base64.b64encode(f.read()).decode("utf-8")
+    messages = [{"role": "user", "content": [
+        {"type": "text",
+         "text": str(question or "请描述这张截图的内容。")},
+        {"type": "image_url",
+         "image_url": {"url": f"data:image/png;base64,{img_base64}"}},
+    ]}]
+    client = _OpenAIClient(api_key=VISION_KEY, base_url=_client_base_url(),
+                           timeout=VISION_TIMEOUT)
+    response, last_error = None, None
+    candidates = _model_candidates()
+    for index, model in enumerate(candidates):
+        response, last_error = _create_with_network_retry(
+            client, model, messages)
+        if last_error is None:
+            break
+        if _http_status_of(last_error) != 404 or index + 1 >= len(candidates):
+            break
+        print(f"⚠️ 视觉模型 {model} 不存在（404），自动切换备用: "
+              f"{candidates[index + 1]}")
+        response = None
+    if last_error is not None:
+        status = _http_status_of(last_error)
+        if status == 404:
+            tried = "/".join(candidates)
+            return (f"❌ 视觉模型调用失败: HTTP 404（已尝试模型: {tried}）")
+        if status is not None:
+            _print_request_failure(_vision_endpoint(), status,
+                                   _error_body_of(last_error))
+            return f"❌ 视觉模型调用失败: HTTP {status}。"
+        return "❌ 视觉模型调用失败（网络异常），请稍后再试。"
+    try:
+        return (response.choices[0].message.content or "").strip() or \
+            "（视觉模型返回了空回答）"
+    except Exception as e:
+        return f"❌ 视觉模型回答解析失败：{e}"

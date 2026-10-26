@@ -1044,7 +1044,35 @@
                         .catch(() => showToast('❌ 上传服务不可达'));
                 }).catch(function (e) { showToast('❌ ' + e); });
             } else if (act === 'screenshot') {
-                showToast('📸 截图提问三期上线（待视觉模型接入）');
+                // UI 三期切片 b（2026-10-26）：js_api 隐藏主窗→冻结帧划选→
+                // PNG 暂存→📷 条就绪→发送时 GLM-4V-Flash 看图回答
+                if (!window.pywebview || !window.pywebview.api) {
+                    showToast('📷 截图请在桌面窗口中使用（浏览器预览不支持）');
+                    return;
+                }
+                showToast('📷 划选截图：主窗暂隐，拖红框，Esc 取消');
+                window.pywebview.api.snip_now().then(function (r) {
+                    if (!r || !r.ok) {
+                        showToast('❌ ' + ((r && r.error) || '截图失败'));
+                        return;
+                    }
+                    if (!r.path) return;   // 用户取消：静默
+                    fetch('/api/screenshot/stage', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: r.path })
+                    })
+                        .then(res => res.json())
+                        .then(d => {
+                            if (d.code === 200) {
+                                showShotBar();
+                                showToast('📷 截图已就绪，输入问题后发送');
+                            } else {
+                                showToast('❌ ' + (d.error || '截图暂存失败'));
+                            }
+                        })
+                        .catch(() => showToast('❌ 截图服务不可达'));
+                }).catch(function (e) { showToast('❌ ' + e); });
             } else if (act === 'link') {
                 const input = document.getElementById('chat-input');
                 if (input) { input.value = '总结这个视频 '; input.focus(); }
@@ -1078,7 +1106,26 @@
         function hideAttachBar() {
             if (attachBar) attachBar.setAttribute('hidden', '');
         }
-        window.__xj3HideAttach = hideAttachBar;   // 发送流钩子（Stream/Legacy 首行调用）
+        window.__xj3HideAttach = function () {
+            hideAttachBar();
+            if (window.__xj3HideShot) window.__xj3HideShot();
+        };   // 发送流钩子（Stream/Legacy 首行调用）：文本附件+截图都随发送消费
+        // 📷 截图就绪标签（复用附件条位；发送时 GLM-4V 看图回答）
+        function showShotBar() {
+            if (!attachBar) return;
+            attachBar.innerHTML = '<span>📷 截图已就绪（发送时 AI 直接看图回答）</span>'
+                + '<button class="attach-clear" title="移除截图">✕ 移除</button>';
+            attachBar.removeAttribute('hidden');
+            attachBar.querySelector('.attach-clear').addEventListener(
+                'click', function () {
+                    fetch('/api/screenshot/clear', { method: 'POST' })
+                        .catch(() => {});
+                    attachBar.setAttribute('hidden', '');
+                });
+        }
+        window.__xj3HideShot = function () {
+            if (attachBar) attachBar.setAttribute('hidden', '');
+        };
         function fetchPlugins(kind) {
             fetch('/api/plugins')
                 .then(res => res.json())

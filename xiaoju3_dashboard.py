@@ -1304,6 +1304,58 @@ def api_doc_attach_clear():
     return jsonify({"code": 200, "data": {"ok": True}})
 
 
+# ==================== UI 三期截图提问（切片 b，2026-10-26） ====================
+# 📷 截图就绪仓：划选 PNG 路径暂存于此，下一次对话走 GLM-4V-Flash 视觉链
+# （vision_tools.vision_ask_image，图片+问题→文字回答）——本地小模型不看图，
+# 截图提问天然强制云端（与 #278 高危词强制云端同构）。一次性消费。
+_SHOT_ATTACH = {"path": None}
+_SHOT_LOCK = threading.Lock()
+
+
+def _take_screenshot():
+    """消费就绪截图（一次性）。"""
+    with _SHOT_LOCK:
+        path = _SHOT_ATTACH["path"]
+        _SHOT_ATTACH["path"] = None
+    if path:
+        print(f"[shot] injected into chat: {path}", flush=True)
+    return path
+
+
+@app.route("/api/screenshot/stage", methods=["POST"])
+def api_screenshot_stage():
+    """暂存划选 PNG（前端 js_api snip_now 拿到路径后调用）。"""
+    data = request.get_json(silent=True) or {}
+    path = str(data.get("path") or "").strip()
+    if not path or not os.path.isfile(path):
+        return jsonify({"code": 400, "error": "截图文件不存在"}), 400
+    with _SHOT_LOCK:
+        _SHOT_ATTACH["path"] = path
+        with _DOC_ATTACH_LOCK:
+            if _DOC_ATTACH["items"]:
+                _DOC_ATTACH["items"] = []   # 截图与文本附件互斥：后到为准
+    print(f"[shot] staged: {path}", flush=True)
+    return jsonify({"code": 200, "data": {"ok": True}})
+
+
+@app.route("/api/screenshot/clear", methods=["POST"])
+def api_screenshot_clear():
+    """手动撤销就绪截图（前端 📷 标签 ✕）。"""
+    with _SHOT_LOCK:
+        _SHOT_ATTACH["path"] = None
+    print("[shot] cleared", flush=True)
+    return jsonify({"code": 200, "data": {"ok": True}})
+
+
+def _vision_reply_for(shot_path, question):
+    """视觉链应答（同步；GLM-4V-Flash 看图回答）。异常兜底人话不 500。"""
+    try:
+        from vision_tools import vision_ask_image
+        return vision_ask_image(shot_path, question)
+    except Exception as e:
+        return f"❌ 视觉链异常：{e}"
+
+
 @app.route("/api/doc_upload", methods=["POST"])
 def api_doc_upload():
     """UI 三期上传入口（2026-10-26 队长纠偏：附件直读≠建知识库）——前端
@@ -1596,6 +1648,15 @@ def api_chat():
         print(f"[香橙派收到消息] {user_msg}")
         # 控制台=owner 本机语境（与 relationship.tone_prefix 同源兜底）：
         # 不传 user_id 时 persona 段 uid 空串→控制台人格永不生效（冒烟实锤）
+        # 📷 截图就绪 → 视觉链分流（2026-10-26 切片 b）：图片走 GLM-4V-Flash
+        # （本地小模型不看图），一次性消费；无截图维持原链
+        shot = _take_screenshot()
+        if shot:
+            reply = _vision_reply_for(shot, user_msg)
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(reply), "source": "📷 视觉"}
+            })
         reply, source = smart_ask(_take_doc_attachments(user_msg),
                                   history, user_id="owner")
         print(f"[香橙派生成回复] 来源: {source}")
@@ -1657,6 +1718,14 @@ def api_chat_stream():
     print(f"[香橙派收到消息][流式] {user_msg}")
 
     def generate():
+        # 📷 截图就绪 → 视觉链分流（2026-10-26 切片 b，最高优先）：同步
+        # 视觉应答走单帧 done（与下方斜杠拦截同款短路形态）——本地小模型
+        # 不看图，截图提问天然强制云端
+        shot = _take_screenshot()
+        if shot:
+            reply = sanitize_for_web(_vision_reply_for(shot, user_msg))
+            yield _sse_frame("done", {"reply": reply, "source": "📷 视觉"})
+            return
         # 🛡️ 前置系统指令拦截（2026-10-07 A'，修 C3a 拦截缺口）：api_chat
         # 779-823 的四类前置块（位置/儿童锁/creator/待办族）此前只在同步
         # 通道存在——_console_slash_intercept 设计上不含这四类（"防重复

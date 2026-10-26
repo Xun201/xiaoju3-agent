@@ -617,5 +617,76 @@ class Ui3UploadTests(unittest.TestCase):
                                  "F:/x/b.txt"])   # exe 被白名单拦在插件外
 
 
+class Ui3ShotTests(unittest.TestCase):
+    """UI 三期切片 b（2026-10-26）：划选 PNG→stage→chat 走 GLM-4V 视觉链
+    （本地小模型不看图→截图提问强制云端，#278 同构）。视觉链异常/配置缺失
+    兜底属 vision_tools.vision_ask_image 自身职责，本层只测编排与消费。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dash = _read("xiaoju3_dashboard.py")
+        cls.js = _read("console.js")
+        cls.launcher = _read("desktop_launcher.py")
+
+    def test_shot_static_anchors(self):
+        self.assertIn("def snip_now", self.launcher)
+        self.assertIn("screenshot_ask.snip(pre_hide=_hide, post_show=_show)",
+                      self.launcher)
+        self.assertIn("@app.route(\"/api/screenshot/stage\"", self.dash)
+        self.assertIn("@app.route(\"/api/screenshot/clear\"", self.dash)
+        self.assertIn("def _take_screenshot", self.dash)
+        self.assertIn("def _vision_reply_for", self.dash)
+        # 注入点=双 chat 端点 generate/调用位最高优先（截图盖过斜杠指令）
+        self.assertIn("shot = _take_screenshot()", self.dash)
+        self.assertIn('yield _sse_frame("done", {"reply": reply, '
+                      '"source": "📷 视觉"})', self.dash)
+        self.assertIn('"source": "📷 视觉"', self.dash)
+        self.assertIn("vision_ask_image", self.dash)
+        # 前端：📷 条+互斥清文本附件
+        self.assertIn("window.pywebview.api.snip_now()", self.js)
+        self.assertIn("'/api/screenshot/stage'", self.js)
+        self.assertIn("'/api/screenshot/clear'", self.js)
+        self.assertIn("📷 截图已就绪（发送时 AI 直接看图回答）", self.js)
+
+    def test_shot_behavior(self):
+        """stub vision 走真 /api/chat：📷 分流（本地 brain 不沾边）+一次性
+        消费+clear。"""
+        import sys
+        from unittest import mock
+        sys.path.insert(0, PROJECT_ROOT)
+        import vision_tools
+        import xiaoju3_dashboard as D
+        marker_png = os.path.join(PROJECT_ROOT, "_dev", "_u3_shot_marker.png")
+        from PIL import Image
+        Image.new("RGB", (40, 40), "#ffffff").save(marker_png, "PNG")
+        try:
+            client = D.app.test_client()
+            self.assertEqual(client.post("/api/screenshot/stage",
+                                         json={}).get_json()["code"], 400)
+            with mock.patch.object(vision_tools, "vision_ask_image",
+                                   lambda p, q: "看图回答：这是测试截图"):
+                r = client.post("/api/screenshot/stage",
+                                json={"path": marker_png}).get_json()
+                self.assertEqual(r["code"], 200)
+                resp = client.post("/api/chat",
+                                   json={"message": "这是什么"}).get_json()
+            self.assertEqual(resp["data"]["source"], "📷 视觉")
+            self.assertIn("看图回答", resp["data"]["reply"])
+            # 一次性消费：第二条消息不再走视觉（stub 未挂时若被调用会真请求
+            # ——改为断言仓已空，用 clear 幂等性兜底）
+            with mock.patch.object(
+                    vision_tools, "vision_ask_image",
+                    lambda p, q: (_ for _ in ()).throw(
+                        AssertionError("不应再调用视觉链"))):
+                client.post("/api/screenshot/stage",
+                            json={"path": marker_png}).get_json()
+                client.post("/api/screenshot/clear").get_json()
+                resp2 = client.post("/api/chat",
+                                    json={"message": "普通聊天"}).get_json()
+            self.assertNotEqual(resp2["data"].get("source"), "📷 视觉")
+        finally:
+            os.remove(marker_png)
+
+
 if __name__ == "__main__":
     unittest.main()
