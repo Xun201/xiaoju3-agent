@@ -911,6 +911,26 @@
         }
         .system-card .stat-bar-fill.bar-mid { background-color: #4b5563; }
         .system-card .stat-bar-fill.bar-high { background-color: #111827; }
+
+        /* 磁盘 ▼ 切换（UI 三期多磁盘，2026-10-26 队长方案：单行+浮层） */
+        .v0-disk-metric { position: relative; }
+        .v0-disk-trigger { cursor: pointer; }
+        .v0-disk-trigger:hover { color: var(--v0-n900); }
+        .v0-disk-menu {
+            position: absolute; top: calc(100% + 2px); left: -8px; z-index: 60;
+            background: #ffffff; border-radius: 10px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.10);
+            padding: 4px; min-width: 150px;
+        }
+        .v0-disk-menu[hidden] { display: none; }
+        .v0-disk-item {
+            display: flex; justify-content: space-between; gap: 12px;
+            padding: 6px 10px; border-radius: 8px;
+            font-size: 12px; color: var(--v0-n900); cursor: pointer;
+            font-variant-numeric: tabular-nums;
+        }
+        .v0-disk-item:hover { background: var(--v0-n50); }
+        .v0-disk-item.on { background: var(--v0-n100); font-weight: 600; }
         .todo-time {
             float: right; margin-left: 6px;
             font-family: "Cascadia Mono", Consolas, monospace;
@@ -1228,9 +1248,13 @@
                 <div class="stat-header"><span>内存占用</span><span id="mem-text">--%</span></div>
                 <div class="stat-bar-bg"><div class="stat-bar-fill" id="mem-bar" style="width: 0%;"></div></div>
             </div>
-            <div class="stat-row">
-                <div class="stat-header"><span>磁盘</span><span id="disk-text">--%</span></div>
+            <div class="stat-row v0-disk-metric" style="position: relative;">
+                <div class="stat-header">
+                    <span class="v0-disk-trigger" id="disk-trigger" title="点击切换磁盘">磁盘 <span id="disk-letter">(C:)</span> ▼</span>
+                    <span class="v0-metric-val" id="disk-text">--</span>
+                </div>
                 <div class="stat-bar-bg"><div class="stat-bar-fill" id="disk-bar" style="width: 0%;"></div></div>
+                <div class="v0-disk-menu" id="disk-menu" hidden></div>
             </div>
             <div class="stat-row" id="battery-row" hidden>
                 <div class="stat-header"><span>电池</span><span id="battery-text">--%</span></div>

@@ -334,15 +334,17 @@
                         applyBar(memBar, d.memory);   // 尾巴 H：内存独立三档变色
                     }
 
-                    const diskText = document.getElementById('disk-text');
-                    const diskBar = document.getElementById('disk-bar');
-                    if (diskText && diskBar && typeof d.disk === 'number') {
-                        diskText.textContent = (d.disk_used != null
-                            ? d.disk_used + 'GB / ' + d.disk_total + 'GB ('
-                              + d.disk + '%)'
-                            : d.disk + '%');
-                        diskBar.style.width = d.disk + '%';
+                    // 多磁盘（UI 三期队长方案）：disks[] 驱动单行+▼切换
+                    window.__disks = Array.isArray(d.disks) ? d.disks : [];
+                    if (window.__diskSel == null
+                        || window.__diskSel >= window.__disks.length) {
+                        window.__diskSel = 0;   // 默认首盘（C:）
                     }
+                    window.__updateDiskRow();
+                    // 菜单仅在「用户开着」时刷新内容——每 2s 无条件重渲染
+                    // 会把用户刚关掉的菜单又顶开（2026-10-26 真浏览器实测抓到）
+                    var __dm = document.getElementById('disk-menu');
+                    if (__dm && !__dm.hidden) window.__renderDiskMenu();
                     const batRow = document.getElementById('battery-row');
                     if (batRow) {
                         if (d.battery) {
@@ -1272,6 +1274,52 @@
         refreshContextTags();
         setInterval(refreshContextTags, 30000);   // 30s 低频（任务态非实时）
     })();
+
+
+    // ==================== 多磁盘 ▼ 切换（UI 三期 2026-10-26） ====================
+    window.__updateDiskRow = function () {
+        var dsk = (window.__disks || [])[window.__diskSel || 0];
+        var letter = document.getElementById('disk-letter');
+        var text = document.getElementById('disk-text');
+        var bar = document.getElementById('disk-bar');
+        if (!dsk || !text) return;
+        if (letter) letter.textContent = '(' + dsk.name + ')';
+        if (text) text.textContent = dsk.used + 'GB / ' + dsk.total
+            + 'GB (' + dsk.percent + '%)';
+        if (bar) bar.style.width = dsk.percent + '%';
+    };
+    window.__renderDiskMenu = function () {
+        var menu = document.getElementById('disk-menu');
+        if (!menu) return;
+        menu.innerHTML = (window.__disks || []).map(function (d, i) {
+            return '<div class="v0-disk-item' + (i === window.__diskSel
+                ? ' on' : '') + '" data-i="' + i + '">'
+                + '<span>' + d.name + '</span>'
+                + '<span>' + d.percent + '%</span></div>';
+        }).join('');
+        menu.hidden = false;
+    };
+    var diskTrigger = document.getElementById('disk-trigger');
+    var diskMenu = document.getElementById('disk-menu');
+    if (diskTrigger && diskMenu) {
+        diskTrigger.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            if (!window.__disks || !window.__disks.length) return;
+            if (diskMenu.hidden) window.__renderDiskMenu();
+            else diskMenu.hidden = true;
+        });
+        diskMenu.addEventListener('click', function (ev) {
+            var item = ev.target.closest('.v0-disk-item');
+            if (!item) return;
+            window.__diskSel = parseInt(item.dataset.i, 10) || 0;
+            diskMenu.hidden = true;
+            window.__updateDiskRow();
+            ev.stopPropagation();
+        });
+        document.addEventListener('click', function () {
+            if (diskMenu && !diskMenu.hidden) diskMenu.hidden = true;
+        });   // 外点关闭（触发器/菜单项已 stopPropagation 不受影响）
+    }
 
     // ==================== 语音输入（2026-10-25 UI 二期：🎤 两段式录音+本地转写） ====================
     // 方案：Python sounddevice 后端录音（/api/stt/start|stop 两段式）+

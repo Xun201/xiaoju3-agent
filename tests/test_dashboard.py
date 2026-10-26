@@ -133,8 +133,8 @@ class StatusApiTests(unittest.TestCase):
         data = payload["data"]
         self.assertEqual(set(data.keys()),
                          {"cpu", "memory", "mem_used", "mem_total", "disk", "disk_used",
-                         "disk_total", "battery", "temperature", "timestamp",
-                         "tts_voice", "creator", "version"})
+                         "disk_total", "disks", "battery", "temperature",
+                         "timestamp", "tts_voice", "creator", "version"})
         self.assertEqual(data["cpu"], 32.5)
         self.assertEqual(data["memory"], 61.2)
         self.assertEqual(data["temperature"], 52.3)  # 取首个可用温度
@@ -159,8 +159,8 @@ class StatusApiTests(unittest.TestCase):
         data = resp.get_json()["data"]
         self.assertEqual(set(data.keys()),
                          {"cpu", "memory", "mem_used", "mem_total", "disk", "disk_used",
-                         "disk_total", "battery", "temperature", "timestamp",
-                         "tts_voice", "creator", "version"})
+                         "disk_total", "disks", "battery", "temperature",
+                         "timestamp", "tts_voice", "creator", "version"})
         self.assertEqual(data["cpu"], 0.0)
         self.assertEqual(data["memory"], 0.0)
         # 组 C 新口径：温度读取链全失败返回字符串占位（替换旧恒 0.0）

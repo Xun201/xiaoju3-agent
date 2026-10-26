@@ -603,15 +603,31 @@ def api_status():
     except Exception:
         memory = 0.0
         mem_used_gb = mem_total_gb = None
-    # 磁盘/电池（UI 三期 v0 SystemCard 真数据，2026-10-26）：系统盘占用+
-    # 容量（GB）+电池（台式机/无电池=None，前端隐藏该行）
+    # 磁盘/电池（UI 三期 v0 SystemCard 真数据，2026-10-26）：遍历本地固定
+    # 磁盘（滤光驱/不可访问盘）返回 disks 数组（多盘 ▼ 切换消费）；旧单盘
+    # 字段（disk/disk_used/disk_total）保留=首盘口径，兼容既有消费方
+    disks = []
     try:
-        du = psutil.disk_usage(
-            os.path.splitdrive(os.getcwd())[0] or "C:\\")
-        disk = float(du.percent)
-        disk_used_gb = round(du.used / 1024 ** 3, 1)
-        disk_total_gb = round(du.total / 1024 ** 3, 1)
+        for part in psutil.disk_partitions():
+            if "cdrom" in (part.opts or "").lower():
+                continue   # 光驱跳过
+            try:
+                du_p = psutil.disk_usage(part.mountpoint)
+            except Exception:
+                continue   # 无介质/权限拒绝：跳过（读卡器空槽等）
+            disks.append({
+                "name": (part.device or part.mountpoint).replace("\\", ""),
+                "used": round(du_p.used / 1024 ** 3, 1),
+                "total": round(du_p.total / 1024 ** 3, 1),
+                "percent": float(du_p.percent),
+            })
     except Exception:
+        disks = []
+    if disks:
+        disk = disks[0]["percent"]
+        disk_used_gb = disks[0]["used"]
+        disk_total_gb = disks[0]["total"]
+    else:
         disk = None
         disk_used_gb = disk_total_gb = None
     battery = None
@@ -632,6 +648,7 @@ def api_status():
             "disk": disk,
             "disk_used": disk_used_gb,
             "disk_total": disk_total_gb,
+            "disks": disks,
             "battery": battery,
             "temperature": get_cpu_temp(),   # 三平台读取链，失败 "暂无温度"
             "timestamp": int(time.time()),
