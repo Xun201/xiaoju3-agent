@@ -898,13 +898,24 @@
             padding: 24px 32px;
         }
         .chat-history > * { max-width: 768px; margin-left: auto; margin-right: auto; }
+        /* 用户气泡严格贴右（2026-10-26 队长口径）：居中容器内右对齐豁免——
+           flex 交叉轴 auto margin 会压过 align-self，必须显式钉死 */
+        .chat-history > .message.user-message {
+            margin-left: auto;
+            margin-right: 0;
+        }
 
         /* ---- 气泡（v0 MessageBubble：思考链浮在气泡上方，不嵌套）---- */
+        /* 用户气泡：科技蓝回归（2026-10-26 队长口径——纯黑太沉闷），严格贴右 */
         .message.user-message {
-            background: var(--v0-n950); color: #ffffff;
+            background: #2563eb; color: #ffffff;
             border-radius: 18px 18px 4px 18px;
             padding: 10px 16px; font-size: 14px; line-height: 1.6;
-            box-shadow: none; border: none;
+            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.22);
+            border: none;
+            align-self: flex-end;
+            margin-left: auto;
+            margin-right: 0;
         }
         .message.bot-message {
             /* 容器透明化：思考链/来源徽标在气泡外裸排（v0 形态），只有
@@ -964,11 +975,11 @@
         .composer input::placeholder { color: var(--v0-n400); }
         .send-btn {
             width: 36px; height: 36px; padding: 0;
-            background: var(--v0-n900); border-radius: 999px;
+            background: #2563eb; border-radius: 999px;   /* 科技蓝回归（同用户气泡） */
             font-size: 15px; line-height: 1;
             display: inline-flex; align-items: center; justify-content: center;
         }
-        .send-btn:hover { background: #3f3f3f; }
+        .send-btn:hover { background: #1d4ed8; }
         .dock-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
         .tb-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
         .context-tag { background: var(--v0-n100); color: var(--v0-n500); }
