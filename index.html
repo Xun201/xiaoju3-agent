@@ -870,6 +870,36 @@
                   background: #10b981; display: inline-block; }
         .v0-metric { margin-bottom: 14px; }
         .v0-metric:last-child { margin-bottom: 2px; }
+
+        /* ---- 系统状态卡终版（2026-10-26 队长标准模板：system-card/
+               stat-row/stat-header；8px 粗圆角条、深灰纯色无渐变）---- */
+        .v0-side-gap { height: 16px; flex-shrink: 0; }
+        .system-card {
+            background: #ffffff; border: none; border-radius: 16px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); padding: 24px;
+        }
+        .stat-row { margin-bottom: 12px; }
+        .stat-row[hidden] { display: none; }
+        .stat-row:last-child { margin-bottom: 0; }
+        .stat-header {
+            display: flex; justify-content: space-between; align-items: baseline;
+            font-size: 13px; color: var(--v0-n900); margin-bottom: 6px;
+        }
+        .stat-header span:last-child {
+            font-variant-numeric: tabular-nums; font-weight: 600;
+        }
+        .system-card .stat-bar-bg {
+            height: 8px; background: #e5e7eb; border-radius: 4px;
+            width: 100%; overflow: hidden;
+        }
+        /* 深灰纯色填充：压过旧三档渐变（bar-low/mid/high 类仍由 console.js
+           附加，视觉统一为深灰阶梯） */
+        .system-card .stat-bar-fill {
+            height: 100%; border-radius: 4px;
+            background-image: none; background-color: #6b7280;
+        }
+        .system-card .stat-bar-fill.bar-mid { background-color: #4b5563; }
+        .system-card .stat-bar-fill.bar-high { background-color: #111827; }
         .todo-time {
             float: right; margin-left: 6px;
             font-family: "Cascadia Mono", Consolas, monospace;
@@ -1127,8 +1157,9 @@
     <!-- 左侧监控面板（移动端收为可展开抽屉）；2026-10-22 答辩微调：
          模块卡片化（小米负一屏风，多层柔影+同心圆角令牌，纯样式零逻辑） -->
     <div class="sidebar">
-        <div class="panel-header">小橘3号 · 系统状态</div>
-        <!-- 天气卡（#351 一期真实化 + UI 三期 v0 WeatherCard 形态）：超大温度
+<div class="panel-header">小橘3号 · 系统状态</div>
+        <div class="v0-side-gap"></div>
+<!-- 天气卡（#351 一期真实化 + UI 三期 v0 WeatherCard 形态）：超大温度
              数字+放大图标+胶囊描述；GET /api/weather（15 分钟缓存后端+20 分钟
              前端轮询），失败显示"暂无数据"绝不崩面板 -->
         <div class="stat-item dash-card">
@@ -1147,7 +1178,8 @@
             </div>
             <ul class="v0-forecast" id="weather-forecast" hidden></ul>
         </div>
-        <!-- 快捷指令卡（答辩微调）：[记待办] 预填输入框；[系统自检] 消费
+        <div class="v0-side-gap"></div>
+<!-- 快捷指令卡（答辩微调）：[记待办] 预填输入框；[系统自检] 消费
              既有 /api/health + toast——零新增后端、零流式逻辑改动 -->
         <div class="stat-item dash-card">
             <div class="stat-label">快捷指令</div>
@@ -1156,7 +1188,8 @@
                 <button id="quick-check" class="dash-quick-btn" title="检查后端服务健康状态">🩺 系统自检</button>
             </div>
         </div>
-        <!-- 待办卡片（2026-10-04 待办提取）：数据=GET /api/todos（console.js
+        <div class="v0-side-gap"></div>
+<!-- 待办卡片（2026-10-04 待办提取）：数据=GET /api/todos（console.js
              30 秒轮询），pending 点击标完成（POST /api/todos/<id>/done） -->
         <div class="stat-item dash-card todos-card">
             <div class="stat-label">📋 待办 <span id="todos-count-text"></span>
@@ -1164,40 +1197,41 @@
             <div class="todos-job" id="todos-job-line" hidden></div>
             <ul class="todos-list" id="todos-list"></ul>
         </div>
-        <!-- 系统状态合体卡（UI 三期 v0 SystemCard 形态）：CPU/内存/磁盘/电池
-             粗圆角条+右对齐数值；电池行台式机/无电池时隐藏 -->
-        <div class="stat-item dash-card sys-card-v0">
-            <div class="v0-card-head">
-                <span class="stat-label">系统状态</span>
-                <span class="v0-status-ok"><span class="v0-dot"></span>运行正常</span>
-            </div>
-            <div class="v0-metric">
-                <div class="v0-metric-row"><span class="stat-label">CPU</span><span class="v0-metric-val" id="cpu-text">--%</span></div>
+        <div class="v0-side-gap"></div>
+        <!-- 系统状态（UI 三期 v0 SystemCard 终版，2026-10-26 队长标准模板）：
+             stat-row=标签/数值两端对齐行+8px 粗圆角条；温度行收在卡内；
+             电池行台式机/无电池时整行隐藏（console.js 按 /api/status 驱动） -->
+        <div class="system-card">
+            <div class="stat-row">
+                <div class="stat-header"><span>CPU 占用</span><span id="cpu-text">--%</span></div>
                 <div class="stat-bar-bg"><div class="stat-bar-fill" id="cpu-bar" style="width: 0%;"></div></div>
             </div>
-            <div class="v0-metric">
-                <div class="v0-metric-row"><span class="stat-label">内存</span><span class="v0-metric-val" id="mem-text">--%</span></div>
+            <div class="stat-row">
+                <div class="stat-header"><span>内存占用</span><span id="mem-text">--%</span></div>
                 <div class="stat-bar-bg"><div class="stat-bar-fill" id="mem-bar" style="width: 0%;"></div></div>
             </div>
-            <div class="v0-metric">
-                <div class="v0-metric-row"><span class="stat-label">磁盘</span><span class="v0-metric-val" id="disk-text">--%</span></div>
+            <div class="stat-row">
+                <div class="stat-header"><span>磁盘</span><span id="disk-text">--%</span></div>
                 <div class="stat-bar-bg"><div class="stat-bar-fill" id="disk-bar" style="width: 0%;"></div></div>
             </div>
-            <div class="v0-metric" id="battery-row" hidden>
-                <div class="v0-metric-row"><span class="stat-label">电池</span><span class="v0-metric-val" id="battery-text">--%</span></div>
+            <div class="stat-row" id="battery-row" hidden>
+                <div class="stat-header"><span>电池</span><span id="battery-text">--%</span></div>
                 <div class="stat-bar-bg"><div class="stat-bar-fill" id="battery-bar" style="width: 0%;"></div></div>
             </div>
-        </div>
-            <div class="v0-metric">
-                <div class="v0-metric-row"><span class="stat-label">温度</span><span class="v0-metric-val" id="temp-text">-- °C</span></div>
+            <div class="stat-row" style="margin-bottom: 0;">
+                <div class="stat-header"><span>系统温度</span><span id="temp-text">-- °C</span></div>
             </div>
+        </div>
 
-        <div class="stat-item" style="margin-top: auto; font-size: 12px; color: var(--color-text-hint); text-align: center;">
+<div class="v0-side-gap"></div>
+<div class="stat-item" style="margin-top: auto; font-size: 12px; color: var(--color-text-hint); text-align: center;">
             © 2026 小橘3号 Agent · <span id="footer-version" style="cursor:pointer;" title="v?" >V?.?.?</span>
         </div>
     </div>
 
-    <!-- 右侧聊天窗口 -->
+    </div>
+
+<!-- 右侧聊天窗口 -->
     <div class="chat-area">
         <div class="chat-header">
             <!-- 移动端抽屉开关（≤768px 显示） -->

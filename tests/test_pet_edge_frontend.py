@@ -191,7 +191,8 @@ class MemoryProgressBarTests(unittest.TestCase):
         合体卡（class 带变体后缀），助手改按 id 反查最近的卡片开 div。"""
         html = self.html
         idx = html.index('id="%s"' % text_id)
-        start = html.rindex('<div class="stat-item', 0, idx)
+        start = max(html.rindex('<div class="stat-item', 0, idx),
+                    html.rindex('<div class="system-card', 0, idx))
         return html[start:html.index("</div>\n        </div>", start)]
 
     def test_mem_bar_structure_matches_cpu(self):
@@ -202,7 +203,9 @@ class MemoryProgressBarTests(unittest.TestCase):
             self.assertIn(token, self.html)
         cpu_item = self._stat_item("cpu-text")
         mem_item = self._stat_item("mem-text")
-        for structural in ('class="stat-label"', 'class="stat-bar-bg"',
+        # v0 SystemCard 终版（2026-10-26）：头部行改 stat-header，结构
+        # 令牌同步（stat-label 移除，label 为纯文本 span）
+        for structural in ('class="stat-header"', 'class="stat-bar-bg"',
                            'class="stat-bar-fill"', 'style="width: 0%;"'):
             self.assertIn(structural, cpu_item, structural)
             self.assertIn(structural, mem_item, structural)

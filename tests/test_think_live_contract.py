@@ -179,7 +179,7 @@ class DashCardTests(unittest.TestCase):
         # 合体卡（sys-card-v0：CPU/内存/磁盘/电池/温度五行）+待办（变体）
         self.assertEqual(html.count('class="stat-item dash-card"'), 2)
         self.assertIn('id="temp-text"', html)   # 温度以第 5 行存活于合体卡
-        self.assertIn('class="stat-item dash-card sys-card-v0"', html)
+        self.assertIn('class="system-card"', html)   # v0 SystemCard 终版类名
         self.assertIn('id="disk-bar"', html)
         self.assertIn('id="battery-row"', html)
         self.assertIn('id="weather-forecast"', html)
