@@ -186,10 +186,12 @@ class MemoryProgressBarTests(unittest.TestCase):
         cls.js = _read("console.js")
 
     def _stat_item(self, text_id):
-        """提取含指定 id 的 stat-item 块（进度条结构所在）。"""
+        """提取含指定 id 的 stat-item 块（进度条结构所在）。
+        2026-10-26 v0 SystemCard 合体：CPU/内存/磁盘/电池迁入 sys-card-v0
+        合体卡（class 带变体后缀），助手改按 id 反查最近的卡片开 div。"""
         html = self.html
-        start = html.index('id="%s"' % text_id)
-        start = html.rindex("<div class=\"stat-item dash-card\">", 0, start)
+        idx = html.index('id="%s"' % text_id)
+        start = html.rindex('<div class="stat-item', 0, idx)
         return html[start:html.index("</div>\n        </div>", start)]
 
     def test_mem_bar_structure_matches_cpu(self):

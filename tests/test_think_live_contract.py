@@ -174,7 +174,15 @@ class DashCardTests(unittest.TestCase):
         sb = html[html.index(".sidebar {"):]
         sb = sb[:sb.index("}", 0) + 1] if False else html[html.index(".sidebar {"):html.index(".panel-header")]
         self.assertIn("gap: 12px", sb)
-        self.assertEqual(html.count('class="stat-item dash-card"'), 5)  # CPU/内存/温度/天气/待办
+        # UI 三期 v0 SystemCard 合体（2026-10-26）：卡片家族=天气/快捷/温度
+        # （独立大数字）+系统状态合体卡（CPU/内存/磁盘/电池 sys-card-v0）+
+        # 待办（todos-card 变体）
+        self.assertEqual(html.count('class="stat-item dash-card"'), 3)
+        self.assertIn('class="stat-item dash-card sys-card-v0"', html)
+        self.assertIn('id="disk-bar"', html)
+        self.assertIn('id="battery-row"', html)
+        self.assertIn('id="weather-forecast"', html)
+        self.assertIn('id="weather-meta"', html)
 
     def test_gradient_progress_bars(self):
         """暖橘渐变默认档 + 三档阈值各自渐变（尾巴 H 阈值口径不变）。"""

@@ -848,6 +848,38 @@
         .v0-weather-icon {
             display: flex; align-items: flex-end;
         }
+        .v0-wx-meta {
+            display: flex; gap: 14px; margin-top: 12px;
+            font-size: 12px; color: var(--v0-n500);
+        }
+        .v0-forecast {
+            list-style: none; margin: 14px 0 0; padding: 14px 0 0;
+            border-top: 1px solid var(--v0-n100);
+            display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px;
+        }
+        .v0-forecast li {
+            display: flex; flex-direction: column; align-items: center; gap: 3px;
+            font-size: 11px; color: var(--v0-n500);
+        }
+        .v0-forecast .v0-fc-icon { filter: grayscale(1); opacity: 0.75; font-size: 14px; }
+        .v0-forecast .v0-fc-temp {
+            font-variant-numeric: tabular-nums; color: var(--v0-n900);
+        }
+        .v0-forecast .v0-fc-temp i { font-style: normal; color: var(--v0-n400); }
+        .v0-status-ok {
+            display: inline-flex; align-items: center; gap: 5px;
+            font-size: 12px; color: var(--v0-n500);
+        }
+        .v0-dot { width: 6px; height: 6px; border-radius: 999px;
+                  background: #10b981; display: inline-block; }
+        .v0-metric { margin-bottom: 14px; }
+        .v0-metric:last-child { margin-bottom: 2px; }
+        .todo-time {
+            float: right; margin-left: 6px;
+            font-family: "Cascadia Mono", Consolas, monospace;
+            font-size: 11px; color: var(--v0-n400);
+            font-variant-numeric: tabular-nums;
+        }
         .stat-value {
             font-size: 30px; font-weight: 600; color: var(--v0-n900);
             letter-spacing: -0.02em;
@@ -972,6 +1004,15 @@
         .composer input {
             font-size: 14px; color: var(--v0-n900);
         }
+        .attach-add {
+            display: inline-flex; align-items: center; gap: 6px;
+            border: none; background: transparent;
+            color: var(--v0-n500); font-size: 13px; cursor: pointer;
+            padding: 6px 10px; border-radius: 10px; flex-shrink: 0;
+            transition: background 0.15s, color 0.15s;
+        }
+        .attach-add:hover { background: var(--v0-n100); color: var(--v0-n900); }
+        .dock-menu-sep { height: 1px; background: var(--v0-n100); margin: 4px 6px; }
         .composer input::placeholder { color: var(--v0-n400); }
         .send-btn {
             width: 36px; height: 36px; padding: 0;
@@ -1091,30 +1132,12 @@
          模块卡片化（小米负一屏风，多层柔影+同心圆角令牌，纯样式零逻辑） -->
     <div class="sidebar">
         <div class="panel-header">小橘3号 · 系统状态</div>
-        <div class="stat-item dash-card">
-            <div class="v0-card-head">
-                <span class="stat-label">CPU 占用</span>
-                <span class="v0-metric-val" id="cpu-text">--%</span>
-            </div>
-            <div class="stat-bar-bg"><div class="stat-bar-fill" id="cpu-bar" style="width: 0%;"></div></div>
-        </div>
-        <div class="stat-item dash-card">
-            <div class="v0-card-head">
-                <span class="stat-label">内存占用</span>
-                <span class="v0-metric-val" id="mem-text">--%</span>
-            </div>
-            <div class="stat-bar-bg"><div class="stat-bar-fill" id="mem-bar" style="width: 0%;"></div></div>
-        </div>
-        <div class="stat-item dash-card">
-            <div class="stat-label">系统温度</div>
-            <div class="stat-value" id="temp-text">-- °C</div>
-        </div>
         <!-- 天气卡（#351 一期真实化 + UI 三期 v0 WeatherCard 形态）：超大温度
              数字+放大图标+胶囊描述；GET /api/weather（15 分钟缓存后端+20 分钟
              前端轮询），失败显示"暂无数据"绝不崩面板 -->
         <div class="stat-item dash-card">
             <div class="v0-card-head">
-                <span class="stat-label v0-head-label">天气</span>
+                <span class="stat-label">天气</span>
                 <span class="v0-chip" id="weather-city">天气</span>
             </div>
             <div class="v0-weather-row">
@@ -1122,6 +1145,11 @@
                 <div class="v0-weather-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="#404040" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/></svg></div>
             </div>
             <div class="v0-chip v0-chip-soft" id="weather-desc">加载中…</div>
+            <div class="v0-wx-meta" id="weather-meta" hidden>
+                <span id="weather-hum">💧 --%</span>
+                <span id="weather-wind">🌬 --</span>
+            </div>
+            <ul class="v0-forecast" id="weather-forecast" hidden></ul>
         </div>
         <!-- 快捷指令卡（答辩微调）：[记待办] 预填输入框；[系统自检] 消费
              既有 /api/health + toast——零新增后端、零流式逻辑改动 -->
@@ -1139,6 +1167,34 @@
                 <span id="todos-edit-gear" class="todos-gear" title="编辑优先级（点切换锁定/解锁）">⚙️</span></div>
             <div class="todos-job" id="todos-job-line" hidden></div>
             <ul class="todos-list" id="todos-list"></ul>
+        </div>
+        <!-- 系统状态合体卡（UI 三期 v0 SystemCard 形态）：CPU/内存/磁盘/电池
+             粗圆角条+右对齐数值；电池行台式机/无电池时隐藏 -->
+        <div class="stat-item dash-card sys-card-v0">
+            <div class="v0-card-head">
+                <span class="stat-label">系统状态</span>
+                <span class="v0-status-ok"><span class="v0-dot"></span>运行正常</span>
+            </div>
+            <div class="v0-metric">
+                <div class="v0-metric-row"><span class="stat-label">CPU</span><span class="v0-metric-val" id="cpu-text">--%</span></div>
+                <div class="stat-bar-bg"><div class="stat-bar-fill" id="cpu-bar" style="width: 0%;"></div></div>
+            </div>
+            <div class="v0-metric">
+                <div class="v0-metric-row"><span class="stat-label">内存</span><span class="v0-metric-val" id="mem-text">--%</span></div>
+                <div class="stat-bar-bg"><div class="stat-bar-fill" id="mem-bar" style="width: 0%;"></div></div>
+            </div>
+            <div class="v0-metric">
+                <div class="v0-metric-row"><span class="stat-label">磁盘</span><span class="v0-metric-val" id="disk-text">--%</span></div>
+                <div class="stat-bar-bg"><div class="stat-bar-fill" id="disk-bar" style="width: 0%;"></div></div>
+            </div>
+            <div class="v0-metric" id="battery-row" hidden>
+                <div class="v0-metric-row"><span class="stat-label">电池</span><span class="v0-metric-val" id="battery-text">--%</span></div>
+                <div class="stat-bar-bg"><div class="stat-bar-fill" id="battery-bar" style="width: 0%;"></div></div>
+            </div>
+        </div>
+        <div class="stat-item dash-card">
+            <div class="stat-label">系统温度</div>
+            <div class="stat-value" id="temp-text">-- °C</div>
         </div>
         <div class="stat-item" style="margin-top: auto; font-size: 12px; color: var(--color-text-hint); text-align: center;">
             © 2026 小橘3号 Agent · <span id="footer-version" style="cursor:pointer;" title="v?" >V?.?.?</span>
@@ -1229,20 +1285,24 @@
             <div class="composer" id="composer">
                 <div class="attach-bar" id="attach-bar" hidden></div>
                 <div class="composer-row">
-                    <button id="dock-plus" class="dock-btn round" title="更多能力">＋</button>
+                    <button id="dock-plus" class="attach-add" title="添加附件 / 更多能力">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                        <span>添加附件</span>
+                    </button>
                     <input type="text" id="chat-input" placeholder="发消息或创建任务..." onkeypress="if(event.key === 'Enter') sendMessage()">
                     <button id="mic-btn" class="dock-btn round mic" title="语音输入（点击开始/停止）">🎤</button>
                     <button class="send-btn" onclick="sendMessage()" title="发送" aria-label="发送">↑</button>
                 </div>
                 <div class="composer-toolbar">
-                    <button id="dock-skills" class="tb-btn" title="技能清单（内置原子能力）">⚡ 技能</button>
-                    <button id="dock-plugins" class="tb-btn" title="插件清单（外部扩展）">🧩 插件</button>
                     <div class="context-tags-bar" id="context-tags-bar"></div>
                 </div>
                 <div class="input-dock-menu" id="input-dock-menu" hidden>
                     <div class="dock-menu-item" data-action="upload">📄 上传文件</div>
                     <div class="dock-menu-item" data-action="screenshot">📸 截图提问</div>
                     <div class="dock-menu-item" data-action="link">🔗 解析链接</div>
+                    <div class="dock-menu-sep"></div>
+                    <button id="dock-skills" class="dock-menu-item" type="button" title="技能清单（内置原子能力）">⚡ 技能清单</button>
+                    <button id="dock-plugins" class="dock-menu-item" type="button" title="插件清单（外部扩展）">🧩 插件清单</button>
                 </div>
                 <div class="dock-popover" id="dock-popover" hidden></div>
             </div>

@@ -36,8 +36,12 @@ class PickGeoCandidateTests(unittest.TestCase):
         是重庆长沙镇，湖南条目是英文 Changsha 不同名，pop 过滤挡不住）——
         表内城市前置直用兜底坐标，weather_now 全程零 geocoding 请求。"""
         fc = MagicMock()
-        fc.json.return_value = {"current_weather": {
-            "temperature": 18.9, "weathercode": 3, "windspeed": 3.0}}
+        fc.json.return_value = {"current": {
+            "temperature_2m": 18.9, "relative_humidity_2m": 70,
+            "weather_code": 3, "wind_speed_10m": 3.0},
+            "daily": {"time": ["2026-10-26"], "weather_code": [3],
+                      "temperature_2m_max": [21.0],
+                      "temperature_2m_min": [13.0]}}
         with patch("agent_state.state_manager.get_user_location",
                    return_value={"city": "长沙", "district": "天心区"}),                 patch.object(search_tools.requests, "get", return_value=fc) as rg:
             d = search_tools.weather_now()
@@ -74,9 +78,19 @@ class WeatherNowTests(unittest.TestCase):
                      return_value=loc)
 
     def _mock_forecast(self, temp=19.1, code=2):
+        """新契约 mock（2026-10-26 升级 open-meteo current+daily：湿度/
+        四天预报真数据）。"""
         m = MagicMock()
-        m.json.return_value = {"current_weather": {
-            "temperature": temp, "weathercode": code, "windspeed": 4.1}}
+        m.json.return_value = {
+            "current": {"temperature_2m": temp,
+                        "relative_humidity_2m": 62,
+                        "weather_code": code, "wind_speed_10m": 4.1},
+            "daily": {
+                "time": ["2026-10-26", "2026-10-27", "2026-10-28",
+                         "2026-10-29", "2026-10-30"],
+                "weather_code": [code] * 5,
+                "temperature_2m_max": [22.0] * 5,
+                "temperature_2m_min": [14.0] * 5}}
         return patch.object(search_tools.requests, "get", return_value=m)
 
     def test_local_coords_direct(self):
@@ -103,8 +117,12 @@ class WeatherNowTests(unittest.TestCase):
             {"name": "武汉", "admin1": "山东", "country_code": "CN",
              "latitude": 36.0, "longitude": 118.0, "population": 5000}]}
         fc = MagicMock()
-        fc.json.return_value = {"current_weather": {
-            "temperature": 22.0, "weathercode": 0, "windspeed": 2.0}}
+        fc.json.return_value = {"current": {
+            "temperature_2m": 22.0, "relative_humidity_2m": 60,
+            "weather_code": 0, "wind_speed_10m": 2.0},
+            "daily": {"time": ["2026-10-26"], "weather_code": [0],
+                      "temperature_2m_max": [23.0],
+                      "temperature_2m_min": [15.0]}}
         state = {"n": 0}
 
         def side(url, **kw):
@@ -120,8 +138,12 @@ class WeatherNowTests(unittest.TestCase):
         geo = MagicMock()
         geo.json.return_value = {"results": GEO_SAMPLES}
         fc = MagicMock()
-        fc.json.return_value = {"current_weather": {
-            "temperature": 18.6, "weathercode": 2, "windspeed": 5.5}}
+        fc.json.return_value = {"current": {
+            "temperature_2m": 18.6, "relative_humidity_2m": 65,
+            "weather_code": 2, "wind_speed_10m": 5.5},
+            "daily": {"time": ["2026-10-26"], "weather_code": [2],
+                      "temperature_2m_max": [20.0],
+                      "temperature_2m_min": [12.0]}}
 
         state = {"n": 0}
 

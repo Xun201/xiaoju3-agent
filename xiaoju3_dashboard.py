@@ -599,11 +599,28 @@ def api_status():
         memory = float(psutil.virtual_memory().percent)
     except Exception:
         memory = 0.0
+    # 磁盘/电池（UI 三期 v0 SystemCard 真数据，2026-10-26）：系统盘占用+
+    # 电池（台式机/无电池=None，前端隐藏该行）
+    try:
+        disk = float(psutil.disk_usage(
+            os.path.splitdrive(os.getcwd())[0] or "C:\\").percent)
+    except Exception:
+        disk = None
+    battery = None
+    try:
+        _bat = psutil.sensors_battery()
+        if _bat is not None:
+            battery = {"percent": round(float(_bat.percent), 1),
+                       "plugged": bool(_bat.power_plugged)}
+    except Exception:
+        battery = None
     return jsonify({
         "code": 200,
         "data": {
             "cpu": cpu,
             "memory": memory,
+            "disk": disk,
+            "battery": battery,
             "temperature": get_cpu_temp(),   # 三平台读取链，失败 "暂无温度"
             "timestamp": int(time.time()),
             "tts_voice": TTS_VOICE,          # 前端 TTS 音色（组 B 前端消费）

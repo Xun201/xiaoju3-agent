@@ -24,6 +24,7 @@ SEARCH_ENGINE 环境变量（.env.example：bing / baidu / serper / tavily）为
 本模块 import 零副作用，可独立单测（网络一律 mock）。
 """
 import os
+import datetime
 
 import requests
 
@@ -318,21 +319,46 @@ def weather_now():
                 raise RuntimeError(f"geocoding 无中国结果: {city}")
             lat, lon = pick["latitude"], pick["longitude"]
     fc = requests.get(_OPEN_METEO_FCST_URL, params={
-        "latitude": lat, "longitude": lon, "current_weather": True,
-        "timezone": "auto"}, timeout=8).json()
-    cw = fc.get("current_weather") or {}
-    temp = cw.get("temperature")
-    code = cw.get("weathercode")
+        "latitude": lat, "longitude": lon,
+        "current": "temperature_2m,relative_humidity_2m,weather_code,"
+                   "wind_speed_10m",
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+        "forecast_days": 5, "timezone": "auto"}, timeout=8).json()
+    cur = fc.get("current") or {}
+    temp = cur.get("temperature_2m")
+    code = cur.get("weather_code")
     if temp is None:
-        raise RuntimeError("forecast 无 current_weather 数据")
+        raise RuntimeError("forecast 无 current 数据")
+    # 四天预报（UI 三期 v0 WeatherCard 形态：今天+未来四天，真实 open-meteo
+    # daily 数据——不造假）
+    daily = fc.get("daily") or {}
+    d_times = daily.get("time") or []
+    d_codes = daily.get("weather_code") or []
+    d_max = daily.get("temperature_2m_max") or []
+    d_min = daily.get("temperature_2m_min") or []
+    _WD = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    forecast = []
+    for i, day in enumerate(d_times[:5]):
+        try:
+            wd = _WD[datetime.date.fromisoformat(day).weekday()]
+        except Exception:
+            wd = str(day)
+        forecast.append({
+            "day": wd,
+            "icon": weather_icon(d_codes[i]) if i < len(d_codes) else " weather ",
+            "high": round(d_max[i]) if i < len(d_max) else None,
+            "low": round(d_min[i]) if i < len(d_min) else None,
+        })
     disp = f"{city}·{district}" if district and district not in city else city
     return {
         "city": disp,
         "temp": temp,
         "desc": _WMO_CODES.get(code, "天气"),
         "code": code,
-        "wind": cw.get("windspeed"),
+        "wind": cur.get("wind_speed_10m"),
+        "humidity": cur.get("relative_humidity_2m"),
         "icon": weather_icon(code),
+        "forecast": forecast,
     }
 
 

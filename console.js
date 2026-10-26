@@ -331,6 +331,26 @@
                         applyBar(memBar, d.memory);   // 尾巴 H：内存独立三档变色
                     }
 
+                    const diskText = document.getElementById('disk-text');
+                    const diskBar = document.getElementById('disk-bar');
+                    if (diskText && diskBar && typeof d.disk === 'number') {
+                        diskText.textContent = d.disk + '%';
+                        diskBar.style.width = d.disk + '%';
+                    }
+                    const batRow = document.getElementById('battery-row');
+                    if (batRow) {
+                        if (d.battery) {
+                            batRow.hidden = false;
+                            const bt = document.getElementById('battery-text');
+                            const bb = document.getElementById('battery-bar');
+                            if (bt) bt.textContent = d.battery.percent + '%'
+                                + (d.battery.plugged ? ' ⚡' : '');
+                            if (bb) bb.style.width = d.battery.percent + '%';
+                        } else {
+                            batRow.hidden = true;   // 台式机/无电池：整行隐藏
+                        }
+                    }
+
                     const tempText = document.getElementById('temp-text');
                     if (tempText) {
                         tempText.textContent = (typeof d.temperature === 'number'
@@ -513,9 +533,11 @@
             const agedBadge = (t.effective_priority && t.effective_priority !== t.priority)
                 ? `<span class="todo-aged" title="时间老化：${t.priority} → ${t.effective_priority}">↑已升</span> `
                 : '';
+            const todoTime = (t.created_at || '').slice(11, 16);   // HH:MM
             return `<li class="todo-item${doneCls}" data-id="${t.id}">` +
                     `<input type="checkbox" class="todo-check"${checked} title="勾选=完成，取消=恢复">` +
                     `${agedBadge}<span class="todo-text">${escapeHtml(t.content)}</span>` +
+                    (todoTime ? `<span class="todo-time">${todoTime}</span>` : '') +
                     `${prControl}${delBtn}</li>` + noteHtml;
             }).join('');
         }
@@ -1003,6 +1025,9 @@
                 && !ev.target.closest('.dock-popover')) closeAll();
         });
         menu.addEventListener('click', function (ev) {
+            // 技能/插件按钮自带 fetch+弹层逻辑（绑在按钮本体）——菜单关闭器
+            // 跳过，防 closeAll 把异步弹出的清单又关掉
+            if (ev.target.closest('#dock-skills, #dock-plugins')) return;
             const item = ev.target.closest('.dock-menu-item');
             if (!item) return;
             closeAll();
@@ -1359,16 +1384,48 @@
         const elCity = document.getElementById('weather-city');
         const elDesc = document.getElementById('weather-desc');
         const WEATHER_POLL_MS = 20 * 60 * 1000;   // 20 分钟（后端缓存 15 分钟，前端略长）
+        const elMeta = document.getElementById('weather-meta');
+        const elFc = document.getElementById('weather-forecast');
         function renderWeather(d) {
             if (elCity) elCity.textContent = (d.city || '天气') + ' · 今日';
             // emoji 退役（UI 三期 v0 单色 SVG 图标位）：温度只出纯数字
             if (elTemp) elTemp.textContent = Math.round(d.temp) + '°C';
             if (elDesc) elDesc.textContent = (d.desc || '') +
                 (d.stale ? '（缓存·稍后自动刷新）' : '');
+            // 湿度/风力胶囊（open-meteo current 真数据；缺字段整行隐藏）
+            if (elMeta) {
+                if (d.humidity != null || d.wind != null) {
+                    elMeta.hidden = false;
+                    elMeta.innerHTML =
+                        '<span>💧 ' + (d.humidity != null
+                            ? Math.round(d.humidity) + '%' : '--') + '</span>'
+                        + '<span>🌬 ' + (d.wind != null
+                            ? Math.round(d.wind) + ' km/h' : '--') + '</span>';
+                } else {
+                    elMeta.hidden = true;
+                }
+            }
+            // 四天预报（今天+未来四天，open-meteo daily 真数据）
+            if (elFc) {
+                var fc = d.forecast || [];
+                if (fc.length) {
+                    elFc.hidden = false;
+                    elFc.innerHTML = fc.map(function (x) {
+                        return '<li><span class="v0-fc-day">' + x.day + '</span>'
+                            + '<span class="v0-fc-icon">' + (x.icon || '') + '</span>'
+                            + '<span class="v0-fc-temp">' + x.high + '°'
+                            + '<i>/' + x.low + '°</i></span></li>';
+                    }).join('');
+                } else {
+                    elFc.hidden = true;
+                }
+            }
         }
         function showUnavailable() {
             if (elTemp) elTemp.textContent = '--';
             if (elDesc) elDesc.textContent = '暂无数据（服务暂不可用）';
+            if (elMeta) elMeta.hidden = true;
+            if (elFc) elFc.hidden = true;
         }
         function loadWeather() {
             fetch('/api/weather')
