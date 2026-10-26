@@ -453,7 +453,9 @@ class InputDockTests(unittest.TestCase):
         """后端 /api/stt 两端点+状态机（sounddevice 后端录音+faster-whisper
         本地转写复用 _deps——比 MediaRecorder 稳：WebView2 getUserMedia
         权限事件 pywebview 不代理）。2026-10-26 简化语义（队长拍板）：
-        device=None 系统默认一发开流+释放必达+pyaudio 兜底，枚举花活退役。"""
+        device=None 系统默认一发开流+释放必达+pyaudio 兜底，枚举花活退役。
+        2026-10-26 二轮（队长真机反馈）：繁体/同音字双修——initial_prompt
+        强制简体+高频指令引导、_stt_t2s 繁简兜底、模型 small 档 env 可调。"""
         self.assertIn('@app.route("/api/stt/start"', self.dash)
         self.assertIn('@app.route("/api/stt/stop"', self.dash)
         seg = self.dash[self.dash.index("def api_stt_start"):]
@@ -464,6 +466,19 @@ class InputDockTests(unittest.TestCase):
         self.assertIn("_stt_open_pyaudio", self.dash)    # pyaudio 兜底引擎
         self.assertIn("np.interp(", self.dash)   # stop 重采样到 16k 锚
         self.assertIn('language="zh"', seg)   # 中文优先转写
+        # —— 二轮：简体+准确度双修锚 ——
+        self.assertIn("_STT_PROMPT", self.dash)          # 引导词常量在位
+        self.assertIn("initial_prompt=_STT_PROMPT", seg)  # transcribe 真吃引导词
+        self.assertIn("以下是普通话的句子，请使用简体中文输出。", self.dash)
+        self.assertIn("帮我记个待办", self.dash)          # 高频指令词汇引导
+        self.assertIn("def _stt_t2s", self.dash)         # 繁简兜底函数
+        self.assertIn('OpenCC("t2s")', self.dash)        # opencc 繁转简
+        self.assertIn("text = _stt_t2s(", seg)           # 出口真过 t2s
+        self.assertIn('XIAOJU3_STT_MODEL", "small"', self.dash)  # small 档 env 可调
+        self.assertIn("local_files_only=True", self.dash)  # 镜像超时回落本地缓存（2026-10-26 实锤）
+        self.assertIn("未检测到语音", seg)   # 静音 RMS 门+复读门双闸（生产实锤）
+        self.assertIn("np.sqrt(np.mean(audio ** 2))", self.dash)   # RMS 静音门
+        self.assertIn("_strip(text) in _strip(_STT_PROMPT)", self.dash)  # 引导词回声门
 
     def test_dock_css_family(self):
         for token in (".dock-btn {", ".input-dock-menu {",

@@ -949,6 +949,13 @@ def api_events():
 # 泄漏占设备）；sounddevice 打不开→pyaudio 兜底引擎（阻塞读线程模拟回调；
 # py3.14 无官方 wheel，缺席时报人话错误不装死）。
 _STT = {"recording": False, "stream": None, "frames": [], "error": ""}
+_STT_OPENCC = None   # opencc t2s 转换器（懒加载进程内复用）
+
+# 转写引导词（2026-10-26 队长真机反馈双修：whisper 短指令易出繁体+同音字错
+#（"帮我记个待办"实锤转成"幫我機個帶班"）——①强制简体声明 ②高频指令词汇
+# 表引导（把小橘的常用指令词喂给解码器提准）
+_STT_PROMPT = ("以下是普通话的句子，请使用简体中文输出。"
+               "小橘，帮我记个待办，添加日程，总结视频，系统自检。")
 
 
 def _stt_deps_path():
@@ -1028,7 +1035,9 @@ def _stt_open_pyaudio(frames_ref, rate_box):
 
 
 def _stt_whisper():
-    """faster-whisper 模型（懒加载+进程内复用；_deps 在 sys.path 由本函数保证）。"""
+    """faster-whisper 模型（懒加载+进程内复用；_deps 在 sys.path 由本函数保证）。
+    档位 small（2026-10-26 队长拍板 base→small 识别率质变，int8 CPU；内存不够
+    时 env XIAOJU3_STT_MODEL 可降回 base——env 可调不硬编码）。"""
     import sys as _sys
     deps = _stt_deps_path()
     if deps not in _sys.path:
@@ -1041,9 +1050,37 @@ def _stt_whisper():
     try:
         return _STT_MODEL
     except NameError:
-        _STT_MODEL = WhisperModel("base", device="cpu", compute_type="int8",
-                                  download_root=_os.path.join(deps, "_models"))
+        name = _os.environ.get("XIAOJU3_STT_MODEL", "small")
+        try:
+            _STT_MODEL = WhisperModel(name, device="cpu", compute_type="int8",
+                                      download_root=_os.path.join(deps, "_models"))
+        except Exception:
+            # 镜像超时不炸本地（2026-10-26 hf-mirror 挂时 eval 实锤：缓存齐全
+            # 仍 LocalEntryNotFoundError）——回落纯本地缓存加载
+            _STT_MODEL = WhisperModel(name, device="cpu", compute_type="int8",
+                                      download_root=_os.path.join(deps, "_models"),
+                                      local_files_only=True)
         return _STT_MODEL
+
+
+def _stt_t2s(text):
+    """繁→简兜底（opencc t2s，2026-10-26 队长拍板）：initial_prompt 拦不住的
+    顽固繁体在此保证简体出口。opencc 缺席→原文返回不报错（依赖缺席降级，
+    不 500 不装死）。"""
+    if not text:
+        return text
+    global _STT_OPENCC
+    try:
+        if _STT_OPENCC is None:
+            import sys as _sys
+            deps = _stt_deps_path()
+            if deps not in _sys.path:
+                _sys.path.insert(0, deps)
+            from opencc import OpenCC
+            _STT_OPENCC = OpenCC("t2s")
+        return _STT_OPENCC.convert(text)
+    except Exception:
+        return text
 
 
 @app.route("/api/stt/start", methods=["POST"])
@@ -1119,9 +1156,21 @@ def api_stt_stop():
             return jsonify({"code": 200, "data": {"text": "", "note": f"无音频数据: {e}"}})
         if audio.size < 1600:   # <0.1s 视为误触
             return jsonify({"code": 200, "data": {"text": "", "note": "录音太短"}})
+        # 静音门（2026-10-26 生产实锤）：近静音喂给 whisper 会复读
+        # initial_prompt 尾巴（"请使用简体中文输出。"实锤）——RMS 过低直接
+        # 判无语音，不进模型
+        if float(np.sqrt(np.mean(audio ** 2))) < 0.005:
+            return jsonify({"code": 200, "data": {"text": "", "note": "未检测到语音"}})
         model = _stt_whisper()
-        segments, info = model.transcribe(audio, language="zh", beam_size=1)
-        text = "".join(s.text.strip() for s in segments if s.text.strip())
+        segments, info = model.transcribe(audio, language="zh", beam_size=1,
+                                          initial_prompt=_STT_PROMPT)
+        text = _stt_t2s(
+            "".join(s.text.strip() for s in segments if s.text.strip()))
+        # 引导词复读门：静音门拦不住的底噪段会吐出引导词片段——剥标点后
+        # 是引导词子串即视为回声，丢弃（同一实锤的第二道闸）
+        _strip = lambda s: re.sub(r"[，。？！、,.?!～~\s]", "", s)
+        if len(_strip(text)) >= 4 and _strip(text) in _strip(_STT_PROMPT):
+            return jsonify({"code": 200, "data": {"text": "", "note": "未检测到语音"}})
         return jsonify({"code": 200, "data": {"text": text}})
     finally:
         _stt_close_stream()   # 第二道保险：哪怕上面任何一步抛异常也已收口
