@@ -1271,6 +1271,8 @@ def _doc_attach_store(pairs):
             _DOC_ATTACH["items"].append({"name": name, "text": text})
         total += len(text)
         stored.append(name)
+    if stored:
+        print(f"[attach] staged: files={stored} chars={total}", flush=True)
     return stored
 
 
@@ -1284,6 +1286,8 @@ def _take_doc_attachments(message):
     if not atts:
         return message
     blocks = [f"【附件 {a['name']} 全文】\n{a['text']}" for a in atts]
+    print(f"[attach] injected into chat: files={[a['name'] for a in atts]} "
+          f"chars={sum(len(a['text']) for a in atts)}", flush=True)
     return ("\n\n".join(blocks)
             + "\n\n（以上为用户上传的附件全文，请基于附件内容回答用户问题）"
             + f"\n\n用户消息：{message}")
@@ -1293,7 +1297,10 @@ def _take_doc_attachments(message):
 def api_doc_attach_clear():
     """手动清空待读附件（前端附件标签 ✕）。"""
     with _DOC_ATTACH_LOCK:
+        n = len(_DOC_ATTACH["items"])
         _DOC_ATTACH["items"] = []
+    if n:
+        print(f"[attach] cleared: {n} item(s)", flush=True)
     return jsonify({"code": 200, "data": {"ok": True}})
 
 

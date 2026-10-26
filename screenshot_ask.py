@@ -168,24 +168,45 @@ def _snip_tk(save_dir, dark):
 # ==================== Alt+A 全局热键（守护线程+消息泵） ====================
 
 _MOD_ALT = 0x0001
+_MOD_SHIFT = 0x0004
 _VK_A = 0x41
+_VK_S = 0x53
 _WM_HOTKEY = 0x0312
 _HOTKEY_ID = 1
+
+# 降级链（队长口径 2026-10-26：Alt+A 被微信/QQ 等占用是常态——逐个尝试，
+# 全部失败打印提示不崩）
+_HOTKEY_CANDIDATES = (
+    ("Alt+A", _MOD_ALT, _VK_A),
+    ("Alt+S", _MOD_ALT, _VK_S),
+    ("Alt+Shift+A", _MOD_ALT | _MOD_SHIFT, _VK_A),
+)
 
 _BUSY = threading.Lock()
 
 
 def start_hotkey_daemon(on_done=None, save_dir=None, pre_hide=None,
                         post_show=None):
-    """注册 Alt+A 全局热键并起 daemon 消息泵线程。每次触发执行一次 snip
-    （划选中重复按键忽略——busy 锁）；on_done(png_path|None) 在热键线程
-    回调。返回 stop_event（set 即退出泵并注销热键）。注册失败抛 RuntimeError
-    （热键被占/无交互桌面）。"""
+    """按降级链注册全局热键（Alt+A→Alt+S→Alt+Shift+A），起 daemon 消息泵
+    线程。每次触发执行一次 snip（划选中重复按键忽略——busy 锁）；on_done
+    (png_path|None) 在热键线程回调。返回 (stop_event, hotkey_name|None)：
+    全部注册失败时 hotkey_name=None、仅打印人话提示不抛不崩（stop set 即
+    退出泵并注销热键）。"""
     _ensure_dpi_awareness()
     user32 = ctypes.windll.user32
-    if not user32.RegisterHotKey(None, _HOTKEY_ID, _MOD_ALT, _VK_A):
-        raise RuntimeError("Alt+A 热键注册失败（可能被其他程序占用）")
+    registered = None
+    for name, mod, vk in _HOTKEY_CANDIDATES:
+        if user32.RegisterHotKey(None, _HOTKEY_ID, mod, vk):
+            registered = (name, mod, vk)
+            break
     stop = threading.Event()
+    if registered is None:
+        print("⚠️ 热键被占用，请修改设置"
+              "（已尝试 Alt+A / Alt+S / Alt+Shift+A 均被占用）", flush=True)
+        threading.Thread(target=stop.wait, daemon=True).start()
+        return stop, None
+    name, mod, vk = registered
+    print(f"⌨️ 截图热键已注册：{name}（按下即进入划选）", flush=True)
 
     def _pump():
         msg = _wt.MSG()
@@ -205,9 +226,9 @@ def start_hotkey_daemon(on_done=None, save_dir=None, pre_hide=None,
                         _BUSY.release()
         user32.UnregisterHotKey(None, _HOTKEY_ID)
 
-    t = threading.Thread(target=_pump, name="xiaoju3-hotkey-altA", daemon=True)
+    t = threading.Thread(target=_pump, name="xiaoju3-hotkey", daemon=True)
     t.start()
-    return stop
+    return stop, name
 
 
 if __name__ == "__main__":

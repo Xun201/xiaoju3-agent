@@ -1055,23 +1055,27 @@
             closeAll();
             popover.hidden = false;
         }
-        // 📎 附件就绪标签（上传→附件直读上下文；随下一次发送消费，发即隐）
+        // 📎 附件就绪标签（上传→附件直读上下文；随下一次发送消费，发即隐）。
+        // 显隐用 hidden 属性+CSS [hidden] 补丁（2026-10-26 真机实锤：作者
+        // display:flex 压过 UA [hidden]，标签条空挂常显）
         const attachBar = document.getElementById('attach-bar');
         function showAttachBar(names) {
-            if (!attachBar) return;
+            if (!attachBar || !(names || []).length) return;
             attachBar.innerHTML = '<span>📎 文件已就绪（可以直接提问）</span>'
                 + '<span class="attach-names">'
                 + (names || []).map(escapeHtml).join('、') + '</span>'
                 + '<button class="attach-clear" title="移除附件">✕ 移除</button>';
-            attachBar.hidden = false;
+            attachBar.removeAttribute('hidden');
             attachBar.querySelector('.attach-clear').addEventListener(
                 'click', function () {
                     fetch('/api/doc_attach/clear', { method: 'POST' })
                         .catch(() => {});
-                    attachBar.hidden = true;
+                    attachBar.setAttribute('hidden', '');
                 });
         }
-        function hideAttachBar() { if (attachBar) attachBar.hidden = true; }
+        function hideAttachBar() {
+            if (attachBar) attachBar.setAttribute('hidden', '');
+        }
         window.__xj3HideAttach = hideAttachBar;   // 发送流钩子（Stream/Legacy 首行调用）
         function fetchPlugins(kind) {
             fetch('/api/plugins')
