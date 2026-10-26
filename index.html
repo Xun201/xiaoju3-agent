@@ -734,6 +734,199 @@
         .first-run-error { color: #e0433f; }
         .first-run-hint { color: #2fa24c; }
         .first-run-actions { display: flex; gap: 10px; margin-top: 12px; }
+
+        /* ============================================================
+           v0.dev 换肤层（2026-10-26，换皮不换骨）：黑灰白极简卡片系。
+           只追加覆盖、不动上方任何既有类/id——console.js 挂点全保留。
+           口径：neutral 色板（#0a0a0a/#171717/#404040/#737373/#a3a3a3/
+           #d4d4d4/#e5e5e5/#f5f5f5/#fafafa）+ rounded-2xl 白卡+细边框。
+           ============================================================ */
+        :root {
+            --v0-n900: #171717;
+            --v0-n950: #0a0a0a;
+            --v0-n500: #737373;
+            --v0-n400: #a3a3a3;
+            --v0-n300: #d4d4d4;
+            --v0-n200: #e5e5e5;
+            --v0-n100: #f5f5f5;
+            --v0-n50: #fafafa;
+            --v0-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        }
+        body {
+            background: var(--v0-n50);
+            font-family: Inter, "Segoe UI", system-ui, -apple-system,
+                         "Microsoft YaHei", "PingFang SC", sans-serif;
+            gap: 16px;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        body > * { box-sizing: border-box; }
+
+        /* ---- 左栏 → v0 Dashboard aside ---- */
+        .sidebar {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            width: 320px;
+            padding: 2px 2px 8px;
+            gap: 0;
+        }
+        .panel-header {
+            display: flex; align-items: center; justify-content: space-between;
+            background: transparent; border: none; box-shadow: none;
+            padding: 4px 4px 14px;
+            font-size: 0;
+        }
+        .panel-header::before {
+            content: "✦ 小橘3号";
+            display: inline-flex; align-items: center;
+            font-size: 14px; font-weight: 600; color: var(--v0-n900);
+        }
+        .panel-header::after {
+            content: "桌面助手";
+            font-size: 12px; color: var(--v0-n500); font-weight: 400;
+        }
+        /* v0 Card：白底细边框圆角卡+微阴影 */
+        .dash-card, .stat-item.todos-card {
+            background: #ffffff;
+            border: 1px solid var(--v0-n200);
+            border-radius: 16px;
+            box-shadow: var(--v0-card-shadow);
+            padding: 18px 18px 16px;
+            margin: 0 0 16px;
+        }
+        .stat-label {
+            font-size: 12px; font-weight: 500;
+            letter-spacing: 0.08em; text-transform: uppercase;
+            color: var(--v0-n500); margin-bottom: 12px;
+        }
+        .stat-value {
+            font-size: 30px; font-weight: 600; color: var(--v0-n900);
+            letter-spacing: -0.02em;
+        }
+        .dash-note { font-size: 13px; color: var(--v0-n500); margin-top: 4px; }
+        .stat-bar-bg {
+            height: 6px; border-radius: 999px; background: var(--v0-n100);
+            overflow: hidden;
+        }
+        .stat-bar-fill {
+            background: var(--v0-n400); border-radius: 999px;
+            transition: width 0.6s ease;
+        }
+        .stat-item .stat-label span { color: var(--v0-n900); font-weight: 600; }
+        #temp-text { font-size: 30px; }
+        .dash-quick-btn {
+            background: var(--v0-n50); border: 1px solid var(--v0-n200);
+            border-radius: 10px; color: var(--v0-n900); font-weight: 500;
+        }
+        .dash-quick-btn:hover { background: var(--v0-n100); }
+        .todos-list .todo-item { border-radius: 10px; }
+        .todos-list .todo-item:hover { background: var(--v0-n50); }
+
+        /* ---- 右侧聊天区 → v0 ChatPanel 大卡 ---- */
+        .chat-area {
+            background: #ffffff;
+            border: 1px solid var(--v0-n200);
+            border-radius: 16px;
+            box-shadow: var(--v0-card-shadow);
+            overflow: hidden;
+        }
+        .chat-header {
+            background: #ffffff;
+            border-bottom: 1px solid var(--v0-n100);
+            padding: 13px 24px;
+        }
+        .header-title { font-size: 14px; font-weight: 600; color: var(--v0-n900); }
+        .header-btn {
+            border-radius: 8px; color: var(--v0-n500);
+            transition: background 0.15s, color 0.15s;
+        }
+        .header-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
+        .chat-history {
+            background: rgba(250, 250, 250, 0.6);
+            padding: 24px 32px;
+        }
+        .chat-history > * { max-width: 768px; margin-left: auto; margin-right: auto; }
+
+        /* ---- 气泡（v0 MessageBubble）---- */
+        .message.user-message {
+            background: var(--v0-n900); color: #ffffff;
+            border-radius: 16px 16px 4px 16px;
+            padding: 10px 16px; font-size: 14px; line-height: 1.6;
+            box-shadow: none; border: none;
+        }
+        .message.bot-message {
+            background: #ffffff; border: 1px solid var(--v0-n200);
+            border-radius: 16px 16px 16px 4px;
+            padding: 10px 16px; font-size: 14px; line-height: 1.6;
+            color: var(--v0-n900); box-shadow: var(--v0-card-shadow);
+        }
+        .message.bot-message .bubble-content { font-weight: 500; color: #262626; }
+        .source-badge {
+            background: var(--v0-n100); border: 1px solid var(--v0-n200);
+            color: var(--v0-n500); border-radius: 6px; font-size: 11px;
+        }
+
+        /* ---- 思考链（v0 ThinkingPanel 色）---- */
+        .think-live-label { color: var(--v0-n500); }
+        .think-live-line { color: var(--v0-n400); border-left: 1px solid var(--v0-n200); padding-left: 12px; }
+        .think-live.think-live-collapsed .think-live-label::after { color: var(--v0-n400); }
+
+        /* ---- Composer（v0 圆角 3xl 大卡）---- */
+        .chat-input-area {
+            background: rgba(250, 250, 250, 0.6);
+            border: none; padding: 4px 32px 20px;
+        }
+        .composer {
+            background: #ffffff; border: 1px solid var(--v0-n200);
+            border-radius: 24px; padding: 10px 12px 8px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+            max-width: 768px; margin: 0 auto; width: 100%;
+        }
+        .composer:focus-within {
+            border-color: var(--v0-n300);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.10);
+        }
+        .composer input {
+            font-size: 14px; color: var(--v0-n900);
+        }
+        .composer input::placeholder { color: var(--v0-n400); }
+        .send-btn {
+            width: 36px; height: 36px; padding: 0;
+            background: var(--v0-n900); border-radius: 999px;
+            font-size: 15px; line-height: 1;
+            display: inline-flex; align-items: center; justify-content: center;
+        }
+        .send-btn:hover { background: #3f3f3f; }
+        .dock-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
+        .tb-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
+        .context-tag { background: var(--v0-n100); color: var(--v0-n500); }
+        .context-tag--link:hover { background: var(--v0-n200); color: var(--v0-n900); }
+        .attach-bar {
+            background: rgba(23, 23, 23, 0.05); color: var(--v0-n900);
+            border-radius: 12px; margin: 2px 6px 8px;
+        }
+        .attach-bar .attach-clear:hover { color: #dc2626; background: transparent; }
+
+        /* ---- 附件/浮层 ---- */
+        .input-dock-menu, .dock-popover {
+            background: #ffffff; border: 1px solid var(--v0-n200);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.10);
+        }
+        .dock-menu-item:hover, .dock-popover .dp-row:hover { background: var(--v0-n50); }
+
+        /* ---- 滚动条细化（v0 质感）---- */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-thumb { background: var(--v0-n300); border-radius: 999px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--v0-n400); }
+        ::-webkit-scrollbar-track { background: transparent; }
+
+        /* ---- 响应式：≤1024px 左栏收窄（v0 lg 断点同思路）---- */
+        @media (max-width: 1024px) {
+            .sidebar { width: 264px; }
+            .chat-history { padding: 16px; }
+            .chat-input-area { padding: 4px 16px 16px; }
+        }
     </style>
     <link rel="icon" href="data:,">
 </head>
@@ -910,7 +1103,7 @@
                     <button id="dock-plus" class="dock-btn round" title="更多能力">＋</button>
                     <input type="text" id="chat-input" placeholder="发消息或创建任务..." onkeypress="if(event.key === 'Enter') sendMessage()">
                     <button id="mic-btn" class="dock-btn round mic" title="语音输入（点击开始/停止）">🎤</button>
-                    <button class="send-btn" onclick="sendMessage()">发送</button>
+                    <button class="send-btn" onclick="sendMessage()" title="发送" aria-label="发送">↑</button>
                 </div>
                 <div class="composer-toolbar">
                     <button id="dock-skills" class="tb-btn" title="技能清单（内置原子能力）">⚡ 技能</button>

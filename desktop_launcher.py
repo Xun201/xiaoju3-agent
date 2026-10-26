@@ -799,6 +799,13 @@ class QuitBridge:
             path = screenshot_ask.snip(pre_hide=_hide, post_show=_show)
             self._out(f"📷 截图：{path or '已取消'}")
             return {"ok": True, "path": path}
+        except ImportError as e:
+            # frozen 缺 tkinter（打包配置问题）→ 明确文案给前端 Toast，
+            # 不甩裸 ModuleNotFoundError（2026-10-26 真机实锤）
+            _show()
+            self._out(f"⚠️ 截图组件缺失: {e}")
+            return {"ok": False, "tkinter_missing": True,
+                    "error": "❌ 截图组件缺失，请检查打包配置"}
         except Exception as e:
             _show()   # 异常也必须把主窗还回来
             import traceback

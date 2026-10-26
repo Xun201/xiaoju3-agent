@@ -1053,7 +1053,8 @@
                 showToast('📷 划选截图：主窗暂隐，拖红框，Esc 取消');
                 window.pywebview.api.snip_now().then(function (r) {
                     if (!r || !r.ok) {
-                        showToast('❌ ' + ((r && r.error) || '截图失败'));
+                        var msg = (r && r.error) || '截图失败';
+                        showToast(msg.indexOf('❌') === 0 ? msg : '❌ ' + msg);
                         return;
                     }
                     if (!r.path) return;   // 用户取消：静默

@@ -19,6 +19,9 @@
 """
 
 from PyInstaller.utils.hooks import collect_all
+import glob as _glob
+import os as _os
+import sys as _sys
 
 # playwright lib+driver 收录（无官方 hook，hooks-contrib 2026.8 零命中；
 # collect_all 覆盖包数据 + driver 二进制 + 全部子模块）
@@ -30,25 +33,39 @@ ytdlp_datas, ytdlp_binaries, ytdlp_hiddenimports = collect_all('yt_dlp')
 
 a = Analysis(
     ['desktop_launcher.py'],
-    pathex=[],
-    binaries=pw_binaries + ytdlp_binaries,
-    datas=[
-        ('assets', 'assets'),              # 桌宠素材（pet/normal_half|full）+ ASSETS.md
-        ('index.html', '.'),               # 前端三件套（dashboard 从资源根直读）
-        ('console.js', '.'),
-        ('desktop-pet.js', '.'),
-        ('.env.example', '.'),             # 首启配置模板（数据根引导用）
-        ('mood_rules.json', '.'),          # #271① M1 规则表（缺它 frozen 静默回退最小词表——20261010 真机实锤）
-        ('mood_tone.json', '.'),           # #271① M2 语气映射表（缺它 M2 静默失效）
-        ('persona_expressions.json', '.'), # #271 批3 模式表现表（缺它 mode_suffix 空串路径=静默失效，mood_tone 同类教训）
-        ('settings_tiers.json', '.'),      # #264 B1 分档表（缺它面板 items 全空——20261010 晚真机实锤，与上述两文件同类教训）
-    ] + pw_datas + ytdlp_datas,
+pathex=[],
+binaries=pw_binaries + ytdlp_binaries,
+datas=[
+    ('assets', 'assets'),              # 桌宠素材（pet/normal_half|full）+ ASSETS.md
+    ('index.html', '.'),               # 前端三件套（dashboard 从资源根直读）
+    ('console.js', '.'),
+    ('desktop-pet.js', '.'),
+    ('.env.example', '.'),             # 首启配置模板（数据根引导用）
+    ('mood_rules.json', '.'),          # #271① M1 规则表（缺它 frozen 静默回退最小词表——20261010 真机实锤）
+    ('mood_tone.json', '.'),           # #271① M2 语气映射表（缺它 M2 静默失效）
+    ('persona_expressions.json', '.'), # #271 批3 模式表现表（缺它 mode_suffix 空串路径=静默失效，mood_tone 同类教训）
+    ('settings_tiers.json', '.'),      # #264 B1 分档表（缺它面板 items 全空——20261010 晚真机实锤，与上述两文件同类教训）
+] + pw_datas + ytdlp_datas + [
+    # ── Tcl/Tk 9 脚本库 zip（UI 三期截图遮罩 tkinter 运行依赖，2026-10-26）：
+    #    Tk9 新 zipfs 布局——PyInstaller 6.22 hook 只收 DLL/_tkinter.pyd 不收
+    #    lib*.zip（实锤：dist 全查无 init.tcl/zip），缺它 tk.Tk() 报 Can't
+    #    find a usable init.tcl。zip 放 DLL 同目录（_internal 根）=Tcl9
+    #    相邻自动挂载口径；glob 版本无关（tcl9.x 升级免改 spec）──
+] + [
+    (_p, '.') for _p in
+    _glob.glob(_os.path.join(_sys.prefix, 'tcl', 'libtcl*.zip'))
+    + _glob.glob(_os.path.join(_sys.prefix, 'tcl', 'libtk*.zip'))
+],
     hiddenimports=[
         # ── yt-dlp（#351 video_ingest 插件依赖，collect_all 全子模块）──
         'yt_dlp',
         # ── pypdf（UI 三期上传/知识摄取 PDF 解析：doc_ingest._extract_text
         #    函数内动态 import，静态分析不可见——2026-10-26 实补）──
         'pypdf',
+        # ── tkinter（UI 三期截图划选遮罩，screenshot_ask 消费；曾进 excludes
+        #    致 frozen No module named 'tkinter'——移出排除+显式声明双保险，
+        #    hook 自动收 tcl/tk 支持树）──
+        'tkinter',
         # ── 底层 C 扩展显式收集（2.0.0 构建实锤：pyi_rth_multiprocessing
         #    运行时钩子需要 _socket，自动收集漏致启动崩 No module named
         #    '_socket'——2026-10-17 用户拍板显式列 + 主入口兜底 import）──
@@ -116,7 +133,9 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter',
+        # tkinter 于 2026-10-26 移出排除并入 hiddenimports：UI 三期截图
+        # 划选（screenshot_ask.tkinter）首个消费方——排除态下 frozen 报
+        # No module named 'tkinter' 实锤
         'pytest',
         'IPython',
     ],

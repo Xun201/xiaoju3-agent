@@ -95,7 +95,13 @@ def snip(save_dir=None, pre_hide=None, post_show=None, dark=0.55):
 def _snip_tk(save_dir, dark):
     import io
     import tempfile
-    from PIL import Image, ImageEnhance, ImageTk
+    try:
+        import tkinter as tk
+        from PIL import Image, ImageEnhance, ImageTk
+    except ImportError as e:
+        # frozen 打包缺 tkinter 时给人话口径（2026-10-26 实锤：spec
+        # excludes 误伤——上层 snip_now 转 JSON，前端 Toast 明确文案）
+        raise RuntimeError(f"截图组件缺失，请检查打包配置（{e}）") from e
 
     img, (vx, vy) = grab_virtual_screen()
     vw, vh = img.size
