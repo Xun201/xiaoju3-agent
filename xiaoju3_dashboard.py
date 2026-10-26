@@ -942,6 +942,12 @@ def api_events():
 # 非 MediaRecorder——WebView2 getUserMedia 需权限事件代理而 pywebview 不处理，
 # 高风险弃用。faster-whisper 复用 video_ingest 的 _deps 底座（16kHz int16 采集
 # 直转 np.float32 数组，免临时文件）。状态机单例（start/stop 两段式）。
+# 2026-10-26 简化定稿（队长拍板）：废弃多设备枚举花活——device=None 系统默认
+# 设备一发开流；samplerate=None=设备自身默认率（sounddevice 内建回退，WASAPI
+# 不吃 16k 直采的 -9997 教训收编为缺省语义），stop 时统一重采样 16k；流释放
+# 收口 _stt_close_stream()（start 半途失败/stop 任何路径都必达 close，防流
+# 泄漏占设备）；sounddevice 打不开→pyaudio 兜底引擎（阻塞读线程模拟回调；
+# py3.14 无官方 wheel，缺席时报人话错误不装死）。
 _STT = {"recording": False, "stream": None, "frames": [], "error": ""}
 
 
@@ -949,6 +955,76 @@ def _stt_deps_path():
     """_deps 绝对路径（video_ingest 同源——依赖自足模式复用）。"""
     import os as _os
     return _os.path.join(main.AGENT_STATE_DIR, "plugins", "_deps")
+
+
+def _stt_close_stream():
+    """无条件释放当前录音流（close 必达——泄漏流占死设备=后续 -9999 温床）。
+    两步各自吞异常：哪怕 stop 炸了 close 也要走到。"""
+    stream = _STT.get("stream")
+    _STT["stream"] = None
+    if stream is None:
+        return
+    for step in ("stop", "close"):
+        try:
+            getattr(stream, step)()
+        except Exception:
+            pass
+
+
+def _stt_open_pyaudio(frames_ref, rate_box):
+    """pyaudio 兜底引擎（sounddevice 打不开才走）：默认输入设备阻塞开流+
+    后台读线程模拟回调形态，返回带 stop()/close() 口的包装流（与
+    sounddevice InputStream 同构，释放路径零分支）。
+    py3.14 无官方 wheel（源码构建需 PortAudio 头文件，2026-10-26 实测失败）
+    ——缺席时人话报错，不静默假装可用。"""
+    try:
+        import pyaudio
+    except ImportError:
+        raise RuntimeError(
+            "sounddevice 打不开，且 pyaudio 兜底未安装（Python 3.14 暂无官方 "
+            "wheel）——请检查系统麦克风隐私设置后重试")
+    import threading as _th
+    import numpy as _np
+    pa = pyaudio.PyAudio()
+    try:
+        info = pa.get_default_input_device_info()
+        rate = int(info["defaultSampleRate"])
+        stream = pa.open(format=pyaudio.paInt16, channels=1, rate=rate,
+                         input=True, frames_per_buffer=1024)
+    except Exception:
+        pa.terminate()
+        raise
+    stop_evt = _th.Event()
+
+    def _reader():
+        while not stop_evt.is_set():
+            try:
+                data = stream.read(1024, exception_on_overflow=False)
+            except Exception:
+                break
+            frames_ref.append(
+                _np.frombuffer(data, dtype=_np.int16).reshape(-1, 1))
+
+    th = _th.Thread(target=_reader, daemon=True)
+    th.start()
+    rate_box["rate"] = rate
+
+    class _PyAudioStream:
+        def stop(self):
+            stop_evt.set()
+            th.join(timeout=2.0)
+
+        def close(self):
+            try:
+                stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+            pa.terminate()
+    return _PyAudioStream()
 
 
 def _stt_whisper():
@@ -972,8 +1048,8 @@ def _stt_whisper():
 
 @app.route("/api/stt/start", methods=["POST"])
 def api_stt_start():
-    """开始录音（16kHz 单声道 int16；sounddevice InputStream 后台回调采集）。
-    已在录/无麦克风/依赖缺失 → 人话错误不 500。"""
+    """开始录音（系统默认输入设备；sounddevice InputStream 后台回调采集，
+    pyaudio 兜底）。已在录/无麦克风/依赖缺失 → 人话错误不 500。"""
     if _STT["recording"]:
         return jsonify({"code": 409, "error": "已在录音中"})
     try:
@@ -984,89 +1060,71 @@ def api_stt_start():
         import sounddevice as sd
         _STT["frames"] = []
         _STT["error"] = ""
+        _STT["engine"] = ""
 
         def _cb(indata, frames, time_info, status):
             _STT["frames"].append(indata.copy())
 
-        # MME -9999 修复（2026-10-26 生产实锤两轮）：PortAudio 默认 MME 后端
-        # 反复开关流出 Unanticipated host error——**直接优先 WASAPI 输入设备**
-        #（Windows 现代音频 API 稳定；query_hostapis() 无参返全部列表，
-        #  -1 非法索引曾炸 Error querying host API -1）；无 WASAPI 回退默认。
-        # PortAudio 四坑链终修（2026-10-26：MME -9999/-1 非法/-9997 采样率/
-        # -9996 虚拟设备不可开）——**候选设备枚举逐个重试**：WASAPI 真实输入
-        # 设备优先（跳过名称含 virtual/remote 的疑似虚拟设备），失败轮空，
-        # 最后兜底 device=None（MME 默认，自动重采样）；每个设备按自身默认
-        # 采样率开流（WASAPI 不吃 16k 直采），stop 时统一重采样 16k。
-        apis = sd.query_hostapis()
-        wasapi_hosts = [i for i, a in enumerate(apis)
-                        if "wasapi" in str(a.get("name", "")).lower()]
-        cands = []
-        for d in sd.query_devices():
-            if d["max_input_channels"] > 0 and d.get("hostapi") in wasapi_hosts:
-                name = str(d.get("name", "")).lower()
-                if "virtual" in name or "remote" in name:
-                    continue   # 虚拟/远程显示适配器类设备不可开输入流（-9996 实锤）
-                cands.append(d["index"])
-        cands.append(None)   # 兜底默认设备（MME，自动重采样）
-        last_err = None
-        for dev in cands:
+        # 防泄漏守卫：上一条流若因异常残留未释放，开新流前先收口
+        _stt_close_stream()
+        try:
+            stream = sd.InputStream(samplerate=None, channels=1,
+                                    dtype="int16", device=None, callback=_cb)
             try:
-                sr = 16000 if dev is None else int(
-                    sd.query_devices(dev)["default_samplerate"])
-                stream = sd.InputStream(samplerate=sr, channels=1,
-                                        dtype="int16", device=dev,
-                                        callback=_cb)
                 stream.start()
-                _STT["stream"] = stream
-                _STT["samplerate"] = sr
-                break
-            except Exception as e:
-                last_err = e
-                continue
-        else:
-            raise RuntimeError(f"全部 {len(cands)} 个候选设备均无法打开: {last_err}")
-        _STT["recording"] = True
-        return jsonify({"code": 200, "data": {"ok": True}})
+            except Exception:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+                raise
+            _STT["engine"] = "sounddevice"
+        except Exception:
+            stream = _stt_open_pyaudio(_STT["frames"], _STT)
+            _STT["engine"] = "pyaudio"
+        _STT["stream"] = stream
+        _STT["samplerate"] = int(getattr(stream, "samplerate", 0)
+                                 or _STT.get("rate") or 16000)
     except Exception as e:
+        _stt_close_stream()   # 开流半途失败也绝不留半开流
         _STT["recording"] = False
         return jsonify({"code": 503, "error": f"录音启动失败: {e}"}), 503
+    _STT["recording"] = True
+    return jsonify({"code": 200, "data": {"ok": True, "engine": _STT["engine"]}})
 
 
 @app.route("/api/stt/stop", methods=["POST"])
 def api_stt_stop():
     """停止录音+本地转写：frames→np.float32/32768→Whisper（语言中文优先）
-    →文字。空音频/静音 → 空串文案（不报错——用户可能误触）。"""
+    →文字。空音频/静音 → 空串文案（不报错——用户可能误触）。
+    流释放两道保险：先收口（转写前归还设备，不让慢模型占着麦），外层
+    finally 再兜一次（任何路径退出流必已释放）。"""
     if not _STT["recording"]:
         return jsonify({"code": 409, "error": "没有进行中的录音"})
     _STT["recording"] = False
     try:
-        _STT["stream"].stop()
-        _STT["stream"].close()
-    except Exception:
-        pass
-    _STT["stream"] = None
-    frames = _STT["frames"]
-    _STT["frames"] = []
-    try:
-        import numpy as np
-        audio = np.concatenate(frames, axis=0).flatten().astype(np.float32) / 32768.0
-        sr = _STT.get("samplerate") or 16000
-        if sr != 16000:   # WASAPI 按设备默认率采集——统一重采样到 Whisper 16kHz
-            n_out = int(len(audio) * 16000 / sr)
-            audio = np.interp(
-                np.linspace(0, len(audio) - 1, n_out),
-                np.arange(len(audio)), audio).astype(np.float32)
-    except Exception as e:
-        return jsonify({"code": 200, "data": {"text": "", "note": f"无音频数据: {e}"}})
-    if audio.size < 1600:   # <0.1s 视为误触
-        return jsonify({"code": 200, "data": {"text": "", "note": "录音太短"}})
-    try:
+        _stt_close_stream()
+        frames = _STT["frames"]
+        _STT["frames"] = []
+        try:
+            import numpy as np
+            audio = np.concatenate(frames, axis=0).flatten().astype(np.float32) / 32768.0
+            sr = _STT.get("samplerate") or 16000
+            if sr != 16000:   # 按设备默认率采集——统一重采样到 Whisper 16kHz
+                n_out = int(len(audio) * 16000 / sr)
+                audio = np.interp(
+                    np.linspace(0, len(audio) - 1, n_out),
+                    np.arange(len(audio)), audio).astype(np.float32)
+        except Exception as e:
+            return jsonify({"code": 200, "data": {"text": "", "note": f"无音频数据: {e}"}})
+        if audio.size < 1600:   # <0.1s 视为误触
+            return jsonify({"code": 200, "data": {"text": "", "note": "录音太短"}})
         model = _stt_whisper()
         segments, info = model.transcribe(audio, language="zh", beam_size=1)
         text = "".join(s.text.strip() for s in segments if s.text.strip())
         return jsonify({"code": 200, "data": {"text": text}})
-    except Exception as e:
-        return jsonify({"code": 503, "error": f"转写失败: {e}"}), 503
+    finally:
+        _stt_close_stream()   # 第二道保险：哪怕上面任何一步抛异常也已收口
 
 
 @app.route("/api/plugins")
@@ -1104,6 +1162,15 @@ def api_plugins():
             db = _sq.connect(dbp)
             data["context"]["doc_count"] = db.execute(
                 "SELECT COUNT(DISTINCT doc_path) FROM chunks").fetchone()[0]
+            # 文档清单（前端标签点击弹层消费，2026-10-26）——最近摄取的块
+            # 靠前（MAX(rowid) 近似），上限 20 防超长清单撑爆浮层
+            rows = db.execute(
+                "SELECT doc_path, MAX(doc_title) AS t, COUNT(*) AS n "
+                "FROM chunks GROUP BY doc_path "
+                "ORDER BY MAX(rowid) DESC LIMIT 20").fetchall()
+            data["context"]["docs"] = [
+                {"path": r[0], "title": r[1] or "", "chunks": r[2]}
+                for r in rows]
             db.close()
     except Exception:
         pass

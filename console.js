@@ -993,8 +993,13 @@
             menu.hidden = !was;
         }
         plus.addEventListener('click', toggleMenu);
+        // 外点关闭豁免清单（2026-10-26 修复＋号/技能/插件"点击无响应"：旧版
+        // 只认 .input-dock 类而 HTML 里无人带该类→按钮自己的点击也冒泡进
+        // closeAll，同一次 click 内开了又关=肉眼无响应。改为显式豁免三个
+        // 触发按钮+标签条+两浮层）
         document.addEventListener('click', function (ev) {
-            if (!ev.target.closest('.input-dock') && !ev.target.closest('.input-dock-menu')
+            if (!ev.target.closest('#dock-plus, #dock-skills, #dock-plugins, .context-tags-bar')
+                && !ev.target.closest('.input-dock-menu')
                 && !ev.target.closest('.dock-popover')) closeAll();
         });
         menu.addEventListener('click', function (ev) {
@@ -1054,20 +1059,47 @@
                 .then(res => res.json())
                 .then(res => {
                     const ctx = (res.data || {}).context || {};
-                    const tags = [];
-                    if (ctx.doc_count) tags.push('📚 已摄取文档 ' + ctx.doc_count);
-                    if (ctx.video_job === 'running') tags.push('⏳ 转写中');
-                    if (ctx.video_last) tags.push('📺 ' + ctx.video_last);
-                    if (tags.length) {
-                        bar.innerHTML = tags.map(function (t) {
-                            return '<span class="context-tag">' + escapeHtml(t) + '</span>';
-                        }).join('');
+                    const parts = [];
+                    if (ctx.doc_count) {
+                        // 文档标签可点开清单（2026-10-26：旧版纯 span 零绑定=
+                        // 设计缺口；context-tag--link 带指针态）
+                        parts.push('<span class="context-tag context-tag--link"'
+                            + ' data-action="docs" title="点击查看文档清单">📚 已摄取文档 '
+                            + ctx.doc_count + '</span>');
+                    }
+                    if (ctx.video_job === 'running') parts.push('<span class="context-tag">⏳ 转写中</span>');
+                    if (ctx.video_last) parts.push('<span class="context-tag">📺 '
+                        + escapeHtml(ctx.video_last) + '</span>');
+                    if (parts.length) {
+                        bar.innerHTML = parts.join('');
                         bar.hidden = false;
                     } else {
                         bar.hidden = true;
                     }
                 })
                 .catch(() => {});
+        }
+        // 文档标签点击→文档清单浮层。标签条子元素每 30s 重渲染，事件委托
+        // 绑静态父级（bar 本体），重渲染不丢监听。
+        const tagsBar = document.getElementById('context-tags-bar');
+        if (tagsBar) {
+            tagsBar.addEventListener('click', function (ev) {
+                const tag = ev.target.closest('[data-action="docs"]');
+                if (!tag) return;
+                fetch('/api/plugins')
+                    .then(res => res.json())
+                    .then(res => {
+                        const ctx = (res.data || {}).context || {};
+                        const docs = ctx.docs || [];
+                        const rows = docs.map(function (d) {
+                            return '<div class="dp-row">📄 ' + escapeHtml(d.title || d.path)
+                                + ' <span class="dp-sub">' + (d.chunks || 0) + ' 段</span></div>';
+                        });
+                        showPopover('已摄取文档（' + (ctx.doc_count || docs.length) + '）',
+                                    rows.join('') || '<div class="dp-sub">暂无已摄取文档</div>');
+                    })
+                    .catch(() => showToast('清单获取失败'));
+            });
         }
         refreshContextTags();
         setInterval(refreshContextTags, 30000);   // 30s 低频（任务态非实时）

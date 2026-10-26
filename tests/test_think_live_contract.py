@@ -452,11 +452,16 @@ class InputDockTests(unittest.TestCase):
     def test_stt_endpoints(self):
         """后端 /api/stt 两端点+状态机（sounddevice 后端录音+faster-whisper
         本地转写复用 _deps——比 MediaRecorder 稳：WebView2 getUserMedia
-        权限事件 pywebview 不代理）。"""
+        权限事件 pywebview 不代理）。2026-10-26 简化语义（队长拍板）：
+        device=None 系统默认一发开流+释放必达+pyaudio 兜底，枚举花活退役。"""
         self.assertIn('@app.route("/api/stt/start"', self.dash)
         self.assertIn('@app.route("/api/stt/stop"', self.dash)
         seg = self.dash[self.dash.index("def api_stt_start"):]
-        self.assertIn("cands.append(None)", self.dash)   # 枚举重试兜底默认（四坑链终修）
+        self.assertIn("device=None", self.dash)          # 系统默认设备（枚举退役）
+        self.assertIn("samplerate=None", self.dash)      # 设备自身默认率（-9997 教训缺省语义化）
+        self.assertIn("def _stt_close_stream", self.dash)  # 释放必达收口
+        self.assertIn("finally:", seg)                   # stop 任何路径退出都释放
+        self.assertIn("_stt_open_pyaudio", self.dash)    # pyaudio 兜底引擎
         self.assertIn("np.interp(", self.dash)   # stop 重采样到 16k 锚
         self.assertIn('language="zh"', seg)   # 中文优先转写
 
@@ -473,12 +478,24 @@ class InputDockTests(unittest.TestCase):
         self.assertIn("refreshContextTags()", self.js)
         self.assertIn("setInterval(refreshContextTags, 30000);", self.js)
 
+    def test_dock_click_fix(self):
+        """＋/技能/插件"点击无响应"修复+文档标签可点开清单（2026-10-26
+        队长真机实锤）：①旧版外点关闭器只认 .input-dock 类而 HTML 无人带
+        该类→按钮自己的点击也冒泡进 closeAll，同一次 click 内开了又关；
+        ②文档标签原为纯 span 零绑定=设计缺口。锚锁豁免清单+委托绑定+
+        docs 清单消费。"""
+        self.assertIn("closest('#dock-plus, #dock-skills, #dock-plugins, "
+                      ".context-tags-bar'", self.js)
+        self.assertIn('data-action="docs"', self.js)
+        self.assertIn("context-tag--link", self.js)
+        self.assertIn("context-tag--link", self.html)   # 指针态 CSS 在位
+
     def test_plugins_endpoint(self):
         self.assertIn('@app.route("/api/plugins")', self.dash)
         body = self.dash[self.dash.index('def api_plugins():'):]
         body = body[:body.index("@app.route")]
         for token in ("tool_registry.TOOL_MANIFEST", "plugin_loader.loaded_plugins()",
-                      "video_job", "doc_count"):
+                      "video_job", "doc_count", 'data["context"]["docs"]'):
             self.assertIn(token, body)
 
 
