@@ -239,28 +239,100 @@ def ingest_document(path=""):
         return f"❌ 摄取失败：{e}"
 
 
+def _like_rows(query, k=3):
+    """关键词 LIKE 打分行（一期逻辑原样抽取）：(score, rowid, title, text)。"""
+    db = _db()
+    rows = db.execute(
+        "SELECT rowid, doc_title, doc_path, text FROM chunks").fetchall()
+    db.close()
+    terms = [query[i:i + 2] for i in range(0, min(len(query), 12) - 1)]
+    scored = []
+    for rowid, title, path, text in rows:
+        score = sum(1 for t in terms if t in text) + (2 if query in text else 0)
+        if score > 0:
+            scored.append((score, rowid, title, text))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return scored[:k]
+
+
+def _embed_query(query):
+    """查询文本 → 向量（与块向量同模型同维度）。"""
+    return _unpack_vec(_ollama_embed_batch([query])[0])
+
+
+def _vector_top(query, k=3):
+    """向量余弦 Top-K（#352 二期切片 b）：查询嵌入 vs 全库 BLOB。
+    Ollama/模型不可用或维度不符（换模型旧向量）→ 抛异常由上层降级。"""
+    import math
+    db = _db()
+    try:
+        _ensure_embedding_col(db)
+        rows = db.execute(
+            "SELECT rowid, doc_title, doc_path, text, embedding "
+            "FROM chunks WHERE embedding IS NOT NULL").fetchall()
+    finally:
+        db.close()
+    if not rows:
+        return []
+    q = _embed_query(query)
+    qn = math.sqrt(sum(x * x for x in q)) or 1.0
+    scored = []
+    for rowid, title, path, text, blob in rows:
+        v = _unpack_vec(blob)
+        if len(v) != len(q):
+            continue   # 维度不符（换过 embedding 模型的旧向量）：跳过待重嵌
+        dot = sum(a * b for a, b in zip(q, v))
+        vn = math.sqrt(sum(x * x for x in v)) or 1.0
+        scored.append((dot / (qn * vn), rowid, title, text))
+    scored.sort(key=lambda x: -x[0])
+    return scored[:k]
+
+
 def search_knowledge(query=""):
-    """模型工具：LIKE 检索 top3 片段（模型拿到片段后自行组织回答）。"""
+    """模型工具：向量语义 Top3 + 关键词 LIKE Top3 去重合并（#352 二期切片 b）。
+
+    向量链（Ollama/模型）不可用时自动回退纯 LIKE——永不比一期差。"""
     query = str(query or "").strip()
     if len(query) < 2:
         return "❌ 检索词太短（至少 2 个字）。"
     db = _db()
-    rows = db.execute("SELECT doc_title, text FROM chunks").fetchall()
+    total = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     db.close()
-    if not rows:
+    if not total:
         return "📭 知识库还是空的。先发文档路径说「摄取」即可入库。"
-    terms = [query[i:i + 2] for i in range(0, min(len(query), 12) - 1)]
-    scored = []
-    for title, text in rows:
-        score = sum(1 for t in terms if t in text) + (2 if query in text else 0)
-        if score > 0:
-            scored.append((score, title, text))
-    if not scored:
+
+    # 1) 向量语义 Top3（不可用=静默降级纯 LIKE）
+    try:
+        vec_hits = _vector_top(query, 3)   # (score, rowid, title, text)
+    except Exception as e:
+        print(f"[doc_search] 向量链不可用，回退 LIKE 检索：{e}", flush=True)
+        vec_hits = []
+
+    # 2) 关键词 LIKE Top3（一期逻辑原样）
+    like_hits = _like_rows(query)          # (score, rowid, title, text)
+
+    if not vec_hits and not like_hits:
         return "📭 知识库里没有找到相关内容。"
-    scored.sort(reverse=True)
+
+    # 3) 融合去重（rowid 去重；语义命中优先排前，关键词命中补位）
+    merged = {}
+    for tag, score, rowid, title, text in (
+            [("语义",) + h for h in vec_hits]
+            + [("关键词",) + h for h in like_hits]):
+        if rowid in merged:
+            if tag not in merged[rowid]["tags"]:
+                merged[rowid]["tags"].append(tag)
+        else:
+            merged[rowid] = {"title": title, "text": text,
+                             "tags": [tag], "sem": tag == "语义"}
+    ordered = sorted(merged.values(),
+                     key=lambda m: (-m["sem"], -len(m["tags"])))[:6]
     lines = ["📚 知识库相关片段："]
-    for i, (score, title, text) in enumerate(scored[:3], 1):
-        lines.append(f"{i}. 【{title}】{text[:200]}{'…' if len(text) > 200 else ''}")
+    for i, m in enumerate(ordered, 1):
+        tagmark = f"（{'/'.join(m['tags'])}）" if m["tags"] else ""
+        text = m["text"]
+        lines.append(f"{i}. 【{m['title']}】{tagmark}"
+                     f"{text[:200]}{'…' if len(text) > 200 else ''}")
     return "\n".join(lines)
 
 

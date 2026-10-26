@@ -298,5 +298,85 @@ class EmbedPipelineTests(unittest.TestCase):
         self.assertIn("嵌入失败", str(cm.exception))
 
 
+
+
+class HybridSearchTests(unittest.TestCase):
+    """切片 b 混合检索（2026-10-26）：向量语义 Top3 + LIKE Top3 去重合并；
+    向量链不可用自动降级纯 LIKE（永不比一期差）。"""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="xj3_hybrid_")
+        self.mod = self._load_mod()
+        import sqlite3
+        self.dbp = os.path.join(self._tmp, "knowledge.db")
+        self.conn = sqlite3.connect(self.dbp)
+        self.conn.execute("""CREATE TABLE chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_title TEXT, doc_path TEXT, chunk_index INTEGER,
+            text TEXT, embedding BLOB)""")
+        # 三块语料：A=部署教程（含"部署"）、B=安装手册（含"安装"）、C=天气
+        self.vecs = {"A": [1.0, 0.0], "B": [0.9, 0.1], "C": [0.0, 1.0]}
+        self.texts = {
+            "A": ("部署教程", "生产环境部署需要配置域名与证书，然后重启服务"),
+            "B": ("安装手册", "安装前先下载安装包，安装完成后运行安装程序"),
+            "C": ("天气记录", "今天天气多云转晴，适合出行")}
+        for k, (t, x) in self.texts.items():
+            self.conn.execute(
+                "INSERT INTO chunks (doc_title, doc_path, chunk_index, text,"
+                " embedding) VALUES (?,?,?,?,?)",
+                (t, k, 0, x, self.mod._pack_vec(self.vecs[k])))
+        self.conn.commit()
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _load_mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "doc_ingest_hybrid_test",
+            os.path.join(PROJECT_ROOT, "agent_state", "plugins",
+                         "doc_ingest.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _set_query_vec(self, vec):
+        """patch 查询向量（与 _embed_query 同位——测试注入不出网）。"""
+        import struct
+        blob = self.mod._pack_vec(vec)
+        return patch.object(self.mod, "_embed_query",
+                            lambda q: self.mod._unpack_vec(blob))
+
+    def test_vector_ranking_semantic(self):
+        """查询向量靠近 A → 语义命中 A 排首位（非字面命中）。"""
+        mod = self.mod
+        with self._set_query_vec([0.95, 0.05]),                 patch.object(mod, "_DATA", self._tmp):
+            hits = mod._vector_top("部署", 3)
+        self.assertEqual(hits[0][2], "部署教程")   # 语义最近者第一
+        self.assertEqual(hits[1][2], "安装手册")
+
+    def test_fusion_dedup_and_order(self):
+        """向量+LIKE 双路命中同一行 → 去重单条、语义优先排前。"""
+        mod = self.mod
+        with self._set_query_vec([0.95, 0.05]),                 patch.object(mod, "_DATA", self._tmp):
+            out = mod.search_knowledge("部署")
+        self.assertIn("📚 知识库相关片段", out)
+        self.assertIn("部署教程", out)
+        self.assertIn("语义", out)
+
+    def test_vector_chain_downgrades_to_like(self):
+        """向量链炸（Ollama 挂）→ 自动降级纯 LIKE，输出不空。"""
+        mod = self.mod
+        def boom(texts):
+            raise RuntimeError("Ollama down")
+        with patch.object(mod, "_embed_query", side_effect=boom),                 patch.object(mod, "_DATA", self._tmp):
+            out = mod.search_knowledge("安装")
+        self.assertIn("📚 知识库相关片段", out)
+        self.assertIn("安装", out)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
 if __name__ == "__main__":
     unittest.main()
