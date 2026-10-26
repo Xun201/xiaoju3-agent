@@ -1169,6 +1169,26 @@
             hideAttachBar();
             if (window.__xj3HideShot) window.__xj3HideShot();
         };   // 发送流钩子（Stream/Legacy 首行调用）：文本附件+截图都随发送消费
+        // 幽灵附件态封死（2026-10-26 阻断 Bug②，真机实锤：22:16 传书未发消息
+        // →22:21 刷新页面芯片即焚→22:21:51 纯链路测试被注入 5 分钟前的 2500 字
+        // 小说全文）。芯片是附件就绪的唯一信标：刷新/重开窗口后芯片必空，
+        // 后端滞留的 _DOC_ATTACH/_SHOT_ATTACH 必须同步清空——页面加载即对表。
+        fetch('/api/doc_attach/clear', { method: 'POST' }).catch(function () {});
+        fetch('/api/screenshot/clear', { method: 'POST' }).catch(function () {});
+        // 发送按钮置灰联动（2026-10-26 阻断 Bug①）：输入框空→disabled 置灰
+        // 不可点，有字→蓝色可点；发送清空后经 __xj3SyncSendBtn 同步回灰。
+        // Enter 键入口走 sendMessage 内空文本守卫，与按钮态同一判定源（trim）。
+        var sendBtn = document.getElementById('send-btn');
+        var chatInput = document.getElementById('chat-input');
+        function syncSendBtn() {
+            if (!sendBtn || !chatInput) return;
+            sendBtn.disabled = !((chatInput.value || '').trim());
+        }
+        if (sendBtn && chatInput) {
+            chatInput.addEventListener('input', syncSendBtn);
+            syncSendBtn();
+        }
+        window.__xj3SyncSendBtn = syncSendBtn;
         // 📷 截图就绪标签（复用附件条位芯片形态；发送时 GLM-4V 看图回答）
         function showShotBar(size) {
             if (!attachBar) return;
@@ -1251,6 +1271,28 @@
         }
         // 文档标签点击→文档清单浮层。标签条子元素每 30s 重渲染，事件委托
         // 绑静态父级（bar 本体），重渲染不丢监听。
+        // 知识库文档管理器（2026-10-26 队长拍板）：清单每行=📄名（点击即
+        // 重挂为附件）+大小/段数/入库时间+↻挂载+🗑删除。path 走 docsCache
+        // 索引传递（路径塞 data 属性会被引号反斜杠搞坏）；行内按钮委托绑
+        // popover 容器（showPopover 每次 innerHTML 重写不丢监听）。
+        var docsCache = [];
+        function fmtDocRow(d, i) {
+            var sub = [];
+            if (d.size) sub.push(escapeHtml(d.size));
+            sub.push((d.chunks || 0) + ' 段');
+            if (d.ingested_at) sub.push(escapeHtml(d.ingested_at));
+            return '<div class="dp-row dp-doc-row">'
+                + '<span class="dp-doc-main" data-act="remount" data-idx="' + i
+                + '" title="点击挂载为附件，下一条消息 AI 直接读它回答">📄 '
+                + escapeHtml(d.title || d.path) + '</span>'
+                + '<span class="dp-sub">' + sub.join(' · ') + '</span>'
+                + '<span class="dp-doc-acts">'
+                + '<button class="dp-doc-btn" data-act="remount" data-idx="' + i
+                + '" title="挂载为附件">↻</button>'
+                + '<button class="dp-doc-btn dp-doc-del" data-act="del-doc" data-idx="' + i
+                + '" title="从知识库彻底删除（切片+向量一并清除）">🗑</button>'
+                + '</span></div>';
+        }
         const tagsBar = document.getElementById('context-tags-bar');
         if (tagsBar) {
             tagsBar.addEventListener('click', function (ev) {
@@ -1261,16 +1303,56 @@
                     .then(res => {
                         const ctx = (res.data || {}).context || {};
                         const docs = ctx.docs || [];
-                        const rows = docs.map(function (d) {
-                            return '<div class="dp-row">📄 ' + escapeHtml(d.title || d.path)
-                                + ' <span class="dp-sub">' + (d.chunks || 0) + ' 段</span></div>';
-                        });
+                        docsCache = docs;
                         showPopover('已摄取文档（' + (ctx.doc_count || docs.length) + '）',
-                                    rows.join('') || '<div class="dp-sub">暂无已摄取文档</div>');
+                                    docs.map(fmtDocRow).join('')
+                                    || '<div class="dp-sub">暂无已摄取文档</div>');
                     })
                     .catch(() => showToast('清单获取失败'));
             });
         }
+        popover.addEventListener('click', function (ev) {
+            const btn = ev.target.closest('[data-act]');
+            if (!btn) return;
+            const d = docsCache[parseInt(btn.dataset.idx, 10)];
+            if (!d) return;
+            if (btn.dataset.act === 'remount') {
+                showToast('⏳ 正在挂载「' + (d.title || '文档') + '」…');
+                fetch('/api/knowledge/doc/remount', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: d.path })
+                }).then(res => res.json()).then(function (r) {
+                    if (r.code === 200 && (r.data || {}).ok) {
+                        showAttachBar([{ name: r.data.name,
+                                         size: r.data.size || (r.data.chars + ' 字符') }]);
+                        closeAll();
+                        showToast('📎 已挂载「' + r.data.name + '」，直接提问即可'
+                            + (r.data.source === 'chunks'
+                               ? '（原文已不在，由知识切片拼回）' : ''));
+                    } else {
+                        showToast('❌ ' + ((r || {}).error || '挂载失败'));
+                    }
+                }).catch(function () { showToast('❌ 挂载失败'); });
+            } else if (btn.dataset.act === 'del-doc') {
+                if (!window.confirm('确定从知识库彻底删除《' + (d.title || d.path)
+                    + '》？其全部切片与向量将一并删除，不可恢复。')) return;
+                fetch('/api/knowledge/doc/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: d.path })
+                }).then(res => res.json()).then(function (r) {
+                    if (r.code === 200 && (r.data || {}).ok) {
+                        showToast('🗑 已删除《' + (d.title || '') + '》'
+                            + '（' + r.data.chunks + ' 块）');
+                        refreshContextTags();   // 计数标签与清单即时同步
+                        closeAll();
+                    } else {
+                        showToast('❌ ' + ((r || {}).error || '删除失败'));
+                    }
+                }).catch(function () { showToast('❌ 删除失败'); });
+            }
+        });
         refreshContextTags();
         setInterval(refreshContextTags, 30000);   // 30s 低频（任务态非实时）
     })();
@@ -1636,6 +1718,7 @@
 
         appendUserMessage(text);
         input.value = '';
+        if (window.__xj3SyncSendBtn) window.__xj3SyncSendBtn();   // 清空后同步回灰（Bug①）
 
         const loadingMsg = document.createElement('div');
         loadingMsg.className = 'message bot-message';

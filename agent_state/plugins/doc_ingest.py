@@ -95,7 +95,17 @@ def _db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         doc_title TEXT, doc_path TEXT, chunk_index INTEGER, text TEXT)""")
     db.execute("""CREATE INDEX IF NOT EXISTS idx_doc ON chunks(doc_path)""")
+    _ensure_ingested_at_col(db)
     return db
+
+
+def _ensure_ingested_at_col(db):
+    """chunks 表补 ingested_at TEXT 列（幂等——已存在则跳过；文档管理器
+    清单要显示入库时间，2026-10-26。旧行 NULL=摄取时间未知，前端如实留空）。"""
+    cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+    if "ingested_at" not in cols:
+        db.execute("ALTER TABLE chunks ADD COLUMN ingested_at TEXT")
+        db.commit()
 
 
 _MAX_DOC_BYTES = 20 * 1024 * 1024   # 20MB 上限：超大文档同步提取阻塞请求线程（二期异步化前先挡）
@@ -226,9 +236,12 @@ def ingest_document(path=""):
         db = _db()
         title = os.path.basename(path)
         db.execute("DELETE FROM chunks WHERE doc_path=?", (path,))
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%Y-%m-%d %H:%M")
         db.executemany(
-            "INSERT INTO chunks (doc_title, doc_path, chunk_index, text) VALUES (?,?,?,?)",
-            [(title, path, i, p) for i, p in enumerate(pieces)])
+            "INSERT INTO chunks (doc_title, doc_path, chunk_index, text, ingested_at) "
+            "VALUES (?,?,?,?,?)",
+            [(title, path, i, p, ts) for i, p in enumerate(pieces)])
         db.commit()
         total = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         db.close()

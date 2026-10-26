@@ -1077,7 +1077,8 @@
             font-size: 15px; line-height: 1;
             display: inline-flex; align-items: center; justify-content: center;
         }
-        .send-btn:hover { background: #1d4ed8; }
+        .send-btn:hover:not(:disabled) { background: #1d4ed8; }
+        .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }   /* 空输入置灰（2026-10-26 阻断 Bug①） */
         .dock-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
         .tb-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
         .context-tag { background: var(--v0-n100); color: var(--v0-n500); }
@@ -1121,6 +1122,14 @@
         }
         .attach-chip .attach-clear:hover { color: #dc2626; background: var(--v0-n100); }
         .attach-ready { font-size: 12px; color: var(--v0-n500); padding: 0 2px; }
+        /* 知识库文档管理器浮层行（2026-10-26）：名可点重挂+↻/🗑 动作钮 */
+        .dock-popover .dp-doc-row { display: flex; align-items: center; gap: 8px; }
+        .dock-popover .dp-doc-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+        .dock-popover .dp-doc-main:hover { color: var(--v0-n900); text-decoration: underline; }
+        .dock-popover .dp-doc-acts { display: flex; gap: 4px; flex-shrink: 0; }
+        .dock-popover .dp-doc-btn { border: none; background: transparent; cursor: pointer; font-size: 13px; line-height: 1; padding: 4px 5px; border-radius: 6px; color: var(--v0-n500); }
+        .dock-popover .dp-doc-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
+        .dock-popover .dp-doc-btn.dp-doc-del:hover { background: #fee2e2; color: #dc2626; }
 
         /* ---- 附件/浮层 ---- */
         .input-dock-menu, .dock-popover {
@@ -1363,7 +1372,7 @@
                     <button id="mic-btn" class="dock-btn round mic" title="语音输入（点击开始/停止）" aria-label="语音输入">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
                     </button>
-                    <button class="send-btn" onclick="sendMessage()" title="发送" aria-label="发送">
+                    <button id="send-btn" class="send-btn" onclick="sendMessage()" title="发送" aria-label="发送" disabled>
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
                     </button>
                 </div>

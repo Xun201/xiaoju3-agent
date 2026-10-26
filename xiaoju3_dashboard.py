@@ -1266,17 +1266,42 @@ def api_plugins():
                             "doc_ingest", "knowledge.db")
         if _os.path.isfile(dbp):
             db = _sq.connect(dbp)
+            try:
+                # schema 自愈：清单 SQL 引用 ingested_at，但列要等插件首次
+                # 摄取才由 _ensure_ingested_at_col 补——旧库先查就 no such
+                # column 被 except 吞成空清单。此处幂等补列（已存在即跳过）。
+                db.execute("ALTER TABLE chunks ADD COLUMN ingested_at TEXT")
+                db.commit()
+            except Exception:
+                pass
             data["context"]["doc_count"] = db.execute(
                 "SELECT COUNT(DISTINCT doc_path) FROM chunks").fetchone()[0]
             # 文档清单（前端标签点击弹层消费，2026-10-26）——最近摄取的块
-            # 靠前（MAX(rowid) 近似），上限 20 防超长清单撑爆浮层
+            # 靠前（MAX(rowid) 近似），上限 20 防超长清单撑爆浮层。
+            # 文档管理器补充：size=原文件真实大小（文件还在时），否则切片
+            # 文本长度近似；ingested_at=入库时间（老数据 NULL 如实传空）
             rows = db.execute(
-                "SELECT doc_path, MAX(doc_title) AS t, COUNT(*) AS n "
+                "SELECT doc_path, MAX(doc_title) AS t, COUNT(*) AS n, "
+                "SUM(LENGTH(text)) AS sz, MIN(ingested_at) AS ts "
                 "FROM chunks GROUP BY doc_path "
                 "ORDER BY MAX(rowid) DESC LIMIT 20").fetchall()
-            data["context"]["docs"] = [
-                {"path": r[0], "title": r[1] or "", "chunks": r[2]}
-                for r in rows]
+            docs = []
+            for r in rows:
+                size = ""
+                try:
+                    if r[0] and os.path.isfile(r[0]):
+                        raw = os.path.getsize(r[0])
+                        size = (f"{raw / 1024 / 1024:.1f} MB"
+                                if raw >= 1024 * 1024
+                                else f"{max(1, raw // 1024)} KB")
+                except Exception:
+                    size = ""
+                if not size and r[3]:
+                    size = f"约 {max(1, r[3] // 1024)} KB 文本"
+                docs.append({"path": r[0], "title": r[1] or "",
+                             "chunks": r[2], "size": size,
+                             "ingested_at": r[4] or ""})
+            data["context"]["docs"] = docs
             db.close()
     except Exception:
         pass
@@ -1337,6 +1362,113 @@ def _take_doc_attachments(message):
     return ("\n\n".join(blocks)
             + "\n\n（以上为用户上传的附件全文，请基于附件内容回答用户问题）"
             + f"\n\n用户消息：{message}")
+
+
+def _doc_attach_replace(stash):
+    """替换语义挂载（2026-10-26 Bug②闭环）：一次就绪批=全量待注入，后到
+    为准（与截图互斥同构）。doc_upload / knowledge remount 共用；stash 空
+    时不动作（保留旧批——前端芯片还显示着它，清了反而制造幽灵态）。"""
+    if not stash:
+        return []
+    with _DOC_ATTACH_LOCK:
+        _DOC_ATTACH["items"] = []
+    with _SHOT_LOCK:
+        _SHOT_ATTACH["path"] = None
+    return _doc_attach_store(stash)
+
+
+@app.route("/api/knowledge/doc/remount", methods=["POST"])
+def api_knowledge_doc_remount():
+    """历史文档一键重挂为附件（知识库文档管理器 2026-10-26）：知识库清单
+    里点文档 → 重新走上传同链挂为下一次对话的注入上下文（📎 芯片复活）。
+    首选原文件重解析（与上传行为完全一致）；原文件已不在则从 chunks 按
+    chunk_index 拼回（截断口径同上传）。"""
+    data = request.get_json(silent=True) or {}
+    path = str(data.get("path") or "").strip()
+    if not path:
+        return jsonify({"code": 400, "error": "没有收到文档路径"}), 400
+    try:
+        import sqlite3 as _sq
+        import xiaoju3 as _x3
+        dbp = os.path.join(_x3.AGENT_STATE_DIR, "plugins", "doc_ingest",
+                           "knowledge.db")
+        if not os.path.isfile(dbp):
+            return jsonify({"code": 404, "error": "知识库还没有建立"}), 404
+        db = _sq.connect(dbp)
+        title = db.execute(
+            "SELECT doc_title FROM chunks WHERE doc_path=? LIMIT 1",
+            (path,)).fetchone()
+        if not title:
+            db.close()
+            return jsonify({"code": 404, "error": "该文档不在知识库里"}), 404
+        name = title[0] or os.path.basename(path)
+        text, source = "", "file"
+        if os.path.isfile(path):
+            try:
+                import plugin_loader
+                rec = plugin_loader.loaded_plugins().get("doc_ingest")
+                extract = rec["module"]._extract_text if rec else None
+                if extract:
+                    text = str(extract(path)).strip()
+            except Exception:
+                text = ""
+        if not text:
+            rows = db.execute(
+                "SELECT text FROM chunks WHERE doc_path=? "
+                "ORDER BY chunk_index", (path,)).fetchall()
+            text = "\n".join(r[0] or "" for r in rows).strip()
+            source = "chunks"
+        db.close()
+        if not text:
+            return jsonify({"code": 422,
+                            "error": "原文与切片都取不到内容，无法挂载"}), 422
+        stored = _doc_attach_replace([(name, text)])
+        if not stored:
+            return jsonify({"code": 422, "error": "挂载失败（内容为空）"}), 422
+        size = ""
+        if source == "file":
+            try:
+                raw = os.path.getsize(path)
+                size = (f"{raw / 1024 / 1024:.1f} MB" if raw >= 1024 * 1024
+                        else f"{max(1, raw // 1024)} KB")
+            except Exception:
+                size = ""
+        return jsonify({"code": 200, "data": {
+            "ok": True, "name": stored[0], "chars": len(text),
+            "size": size, "source": source}})
+    except Exception as e:
+        return jsonify({"code": 500, "error": f"重挂失败：{e}"}), 500
+
+
+@app.route("/api/knowledge/doc/delete", methods=["POST"])
+def api_knowledge_doc_delete():
+    """彻底删除知识库文档（知识库文档管理器 2026-10-26）：DELETE 该
+    doc_path 全部切片行——text 与 embedding BLOB 同行同删（向量即列，
+    删行即删向量，无独立向量库残留）。"""
+    data = request.get_json(silent=True) or {}
+    path = str(data.get("path") or "").strip()
+    if not path:
+        return jsonify({"code": 400, "error": "没有收到文档路径"}), 400
+    try:
+        import sqlite3 as _sq
+        import xiaoju3 as _x3
+        dbp = os.path.join(_x3.AGENT_STATE_DIR, "plugins", "doc_ingest",
+                           "knowledge.db")
+        if not os.path.isfile(dbp):
+            return jsonify({"code": 404, "error": "知识库还没有建立"}), 404
+        db = _sq.connect(dbp)
+        n = db.execute("SELECT COUNT(*) FROM chunks WHERE doc_path=?",
+                       (path,)).fetchone()[0]
+        if not n:
+            db.close()
+            return jsonify({"code": 404, "error": "该文档不在知识库里"}), 404
+        db.execute("DELETE FROM chunks WHERE doc_path=?", (path,))
+        db.commit()
+        db.close()
+        print(f"[knowledge] deleted: {path} chunks={n}", flush=True)
+        return jsonify({"code": 200, "data": {"ok": True, "chunks": n}})
+    except Exception as e:
+        return jsonify({"code": 500, "error": f"删除失败：{e}"}), 500
 
 
 @app.route("/api/doc_attach/clear", methods=["POST"])
@@ -1445,7 +1577,12 @@ def api_doc_upload():
                             "size": size})
         except Exception as e:
             results.append({"path": p, "ok": False, "message": str(e)[:120]})
-    stored = _doc_attach_store(stash)
+    if stash:
+        # 替换语义（2026-10-26 阻断 Bug②）：一次上传=一批，后到为准——
+        # 旧 append 累积会让换传的旧文档滞留待注入（真机：同书传两次=双份）。
+        # _doc_attach_replace 内含 stash 空时不动作：全失败时保留旧批
+        #（前端芯片还显示着它，清了反而制造幽灵态）。
+        stored = _doc_attach_replace(stash)
     for r in results:
         if r["ok"] and r["path"] and os.path.basename(r["path"]) not in stored:
             r["ok"] = False   # 超总量被截掉的文件如实标失败
