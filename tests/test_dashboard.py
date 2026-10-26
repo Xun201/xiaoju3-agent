@@ -113,7 +113,9 @@ class StatusApiTests(unittest.TestCase):
         """psutil 正常：code=200，data 恰好五字段且数值正确。"""
         fake_psutil = mock.Mock()
         fake_psutil.cpu_percent.return_value = 32.5
-        fake_psutil.virtual_memory.return_value = mock.Mock(percent=61.2)
+        fake_psutil.virtual_memory.return_value = mock.Mock(
+            percent=61.2, used=int(9.8 * 1024 ** 3),
+            total=int(16 * 1024 ** 3))
         fake_psutil.sensors_temperatures.return_value = {
             "coretemp": [mock.Mock(current=52.3), mock.Mock(current=45.0)],
         }
@@ -130,7 +132,8 @@ class StatusApiTests(unittest.TestCase):
         self.assertEqual(payload["code"], 200)
         data = payload["data"]
         self.assertEqual(set(data.keys()),
-                         {"cpu", "memory", "disk", "battery", "temperature", "timestamp",
+                         {"cpu", "memory", "mem_used", "mem_total", "disk", "disk_used",
+                         "disk_total", "battery", "temperature", "timestamp",
                          "tts_voice", "creator", "version"})
         self.assertEqual(data["cpu"], 32.5)
         self.assertEqual(data["memory"], 61.2)
@@ -155,7 +158,8 @@ class StatusApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()["data"]
         self.assertEqual(set(data.keys()),
-                         {"cpu", "memory", "disk", "battery", "temperature", "timestamp",
+                         {"cpu", "memory", "mem_used", "mem_total", "disk", "disk_used",
+                         "disk_total", "battery", "temperature", "timestamp",
                          "tts_voice", "creator", "version"})
         self.assertEqual(data["cpu"], 0.0)
         self.assertEqual(data["memory"], 0.0)

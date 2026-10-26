@@ -327,14 +327,20 @@
                     const memText = document.getElementById('mem-text');
                     const memBar = document.getElementById('mem-bar');
                     if (memText && memBar) {
-                        memText.textContent = d.memory + '%';
+                        memText.textContent = (d.mem_used != null
+                            ? d.mem_used + 'GB / ' + d.mem_total + 'GB ('
+                              + d.memory + '%)'
+                            : d.memory + '%');
                         applyBar(memBar, d.memory);   // 尾巴 H：内存独立三档变色
                     }
 
                     const diskText = document.getElementById('disk-text');
                     const diskBar = document.getElementById('disk-bar');
                     if (diskText && diskBar && typeof d.disk === 'number') {
-                        diskText.textContent = d.disk + '%';
+                        diskText.textContent = (d.disk_used != null
+                            ? d.disk_used + 'GB / ' + d.disk_total + 'GB ('
+                              + d.disk + '%)'
+                            : d.disk + '%');
                         diskBar.style.width = d.disk + '%';
                     }
                     const batRow = document.getElementById('battery-row');
@@ -353,9 +359,10 @@
 
                     const tempText = document.getElementById('temp-text');
                     if (tempText) {
-                        tempText.textContent = (typeof d.temperature === 'number'
-                ? d.temperature + ' °C'
-                : (d.temperature || 'N/A'));   // 字符串占位（如"暂无温度"）直接展示
+                        tempText.textContent = 'GPU '
+                            + (typeof d.temperature === 'number'
+                               ? d.temperature + '°C'
+                               : (d.temperature || 'N/A'));
                     }
 
                     // TTS 音色回退链第二级：后端 .env TTS_VOICE（payload 契约

@@ -596,16 +596,24 @@ def api_status():
     except Exception:
         cpu = 0.0
     try:
-        memory = float(psutil.virtual_memory().percent)
+        vm = psutil.virtual_memory()
+        memory = float(vm.percent)
+        mem_used_gb = round(vm.used / 1024 ** 3, 1)
+        mem_total_gb = round(vm.total / 1024 ** 3, 1)
     except Exception:
         memory = 0.0
+        mem_used_gb = mem_total_gb = None
     # 磁盘/电池（UI 三期 v0 SystemCard 真数据，2026-10-26）：系统盘占用+
-    # 电池（台式机/无电池=None，前端隐藏该行）
+    # 容量（GB）+电池（台式机/无电池=None，前端隐藏该行）
     try:
-        disk = float(psutil.disk_usage(
-            os.path.splitdrive(os.getcwd())[0] or "C:\\").percent)
+        du = psutil.disk_usage(
+            os.path.splitdrive(os.getcwd())[0] or "C:\\")
+        disk = float(du.percent)
+        disk_used_gb = round(du.used / 1024 ** 3, 1)
+        disk_total_gb = round(du.total / 1024 ** 3, 1)
     except Exception:
         disk = None
+        disk_used_gb = disk_total_gb = None
     battery = None
     try:
         _bat = psutil.sensors_battery()
@@ -619,7 +627,11 @@ def api_status():
         "data": {
             "cpu": cpu,
             "memory": memory,
+            "mem_used": mem_used_gb,
+            "mem_total": mem_total_gb,
             "disk": disk,
+            "disk_used": disk_used_gb,
+            "disk_total": disk_total_gb,
             "battery": battery,
             "temperature": get_cpu_temp(),   # 三平台读取链，失败 "暂无温度"
             "timestamp": int(time.time()),

@@ -231,7 +231,7 @@ class MemoryProgressBarTests(unittest.TestCase):
         body = js[start:js.index("// ==================== 2.", start)]
         self.assertIn("getElementById('mem-text')", body)
         self.assertIn("getElementById('mem-bar')", body)
-        self.assertIn("memText.textContent = d.memory + '%'", body)
+        self.assertIn("d.mem_used + 'GB / ' + d.mem_total + 'GB ('", body)
         self.assertIn("applyBar(memBar, d.memory)", body)
 
     def test_mem_bar_three_level_thresholds(self):
