@@ -399,9 +399,11 @@ def _ollama_embed_batch(texts):
 
 def _embed_backfill_once(db_path=None):
     """同步补嵌一轮（≤_EMBED_ROUND_CAP 块）。返回 (done, left)。
-    db_path 可注入（测试隔离）；缺省走 _db() 生产库。"""
+    db_path 可注入（测试隔离）；缺省走 _db() 生产库。
+    （2026-10-26 真机验证抓拍：db_path 缺省分支误把 _db() 的 Connection
+     当路径传 sqlite3.connect——TypeError，已修）"""
     import sqlite3
-    db = sqlite3.connect(db_path or _db())
+    db = sqlite3.connect(db_path) if db_path else _db()
     _ensure_embedding_col(db)
     rows = db.execute(
         "SELECT rowid, text FROM chunks WHERE embedding IS NULL "
