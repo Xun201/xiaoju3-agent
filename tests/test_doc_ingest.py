@@ -30,6 +30,10 @@ class DocIngestExceptionTests(unittest.TestCase):
         self._enter = patch.object(plugin_loader, "external_dir",
                                    lambda: self._tmp)
         self._enter.start()
+        # 快照工具注册表（tearDown 还原——#312 插件工具注册进
+        # tools.TOOL_WHITELIST，不还原会顺序污染 test_brain 白名单断言）
+        import tools as _tools_mod
+        self._whitelist_snapshot = set(_tools_mod.TOOL_WHITELIST)
         # 真插件源码 copy 进 tmp（load_all 前置条件）+清 rejected/装载态
         plugin_loader._loaded.clear()
         plugin_loader._rejected.clear()
@@ -42,8 +46,12 @@ class DocIngestExceptionTests(unittest.TestCase):
 
     def tearDown(self):
         self._enter.stop()
+        plugin_loader.unload_all()   # 插件 teardown（含工具注销）
         plugin_loader._loaded.clear()
         plugin_loader._rejected.clear()
+        # 白名单还原快照（ext_* 注销若有遗漏此处兜底）
+        import tools as _tools_mod
+        _tools_mod.TOOL_WHITELIST[:] = sorted(self._whitelist_snapshot)
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _write(self, name, content, encoding="utf-8"):
@@ -373,6 +381,61 @@ class HybridSearchTests(unittest.TestCase):
             out = mod.search_knowledge("安装")
         self.assertIn("📚 知识库相关片段", out)
         self.assertIn("安装", out)
+
+
+
+
+class RecursiveChunkTests(unittest.TestCase):
+    """中文标点递归切块（2.1.1 首任务，2026-10-27）：替代纯滑窗硬截断。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "doc_ingest_recchunk",
+            os.path.join(PROJECT_ROOT, "agent_state", "plugins", "doc_ingest.py"))
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_short_text_single_chunk(self):
+        """短文本零拆分：多段落完整合并为一块（自然边界保留）。"""
+        segs = self.mod._chunks("第一段很短。\n\n第二段也不长。\n\n第三段。")
+        self.assertEqual(segs, ["第一段很短。\n\n第二段也不长。\n\n第三段。"])
+
+    def test_long_no_punctuation_hard_split(self):
+        """无分隔符超长段：字符级兜底切块。"""
+        segs = self.mod._chunks("x" * 1200)
+        self.assertEqual(len(segs), 3)
+        self.assertLessEqual(len(segs[0]), 500)
+        self.assertGreater(sum(len(x) for x in segs), 1200)   # 重叠保证衔接
+
+    def test_sentence_boundary_chunks_capped(self):
+        """长句串：句界切+贪心合并，每块 ≤500 且带 50 字重叠。"""
+        segs = self.mod._chunks("这是一句很长的话。" * 100)
+        self.assertTrue(segs)
+        for x in segs:
+            self.assertLessEqual(len(x), 500)
+        # 重叠存在：相邻块边界衔接（总字符 > 原文 900）
+        self.assertGreater(sum(len(x) for x in segs), 900)
+
+    def test_question_exclamation_separators(self):
+        """？！分隔符参与递归（长段落内句级细分）。"""
+        segs = self.mod._chunks("第一句！第二句？第三句。" * 60)
+        self.assertTrue(all(len(x) <= 500 for x in segs))
+        self.assertTrue(any("！" in x or "？" in x for x in segs))
+
+    def test_empty_and_whitespace(self):
+        self.assertEqual(self.mod._chunks(""), [])
+        self.assertEqual(self.mod._chunks("   \n\n  "), [])
+
+    def test_mixed_paragraph_then_hard_tail(self):
+        """混合：正常段落 + 超长无标点尾巴，两策略协作不丢字。"""
+        text = ("有标点的正常开头。\n\n" + "y" * 1100)
+        segs = self.mod._chunks(text)
+        self.assertTrue(all(len(x) <= 500 for x in segs))
+        joined = "".join(segs)
+        self.assertIn("有标点的正常开头。", joined)
+        self.assertIn("y" * 400, joined)
 
 
 if __name__ == "__main__":

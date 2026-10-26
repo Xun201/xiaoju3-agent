@@ -2067,6 +2067,40 @@ def _relationship_suffix(user_id):
         return ""
 
 
+# ---- 历史上下文清洗（2026-10-27 真机实锤修复：纯净闲聊被污染） ----
+# 实锤链：①dashboard /api/chat 与 /api/chat/stream 每轮调 main._inject_recent_actions
+# 注入昨天控灯记录（r1 把"你好"当设备操作延续解读）→ 已在 main 侧加 24h 新鲜度窗；
+# ②历史 assistant 落盘带完整 <think> 原文（50 条里 25 条），思考里反复复读
+# "设备操作记录"形成自激——历史只需结论，组装时剥思考块；③附件注入块
+# （_take_doc_attachments 产物）若落历史会跨轮污染——user 侧防御性剥离。
+_THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
+_ATTACH_INJECT_MARK = "（以上为用户上传的附件全文"
+
+
+def _strip_history_think_blocks(text):
+    """历史 assistant 消息剥 <think>…</think> 块（思考原文只在当轮 UI 有
+    价值，进历史就是下一轮的自激燃料）。孤立开头 <think>（截断生成）剥到
+    末尾；剥空兜底占位。无标记原样返回。"""
+    if not text or "<think>" not in text:
+        return text
+    out = _THINK_BLOCK_RE.sub("", text)
+    if out.lstrip().startswith("<think>"):
+        out = ""
+    out = out.strip()
+    return out or "[历史思考内容已省略]"
+
+
+def _strip_consumed_attachments(text):
+    """历史 user 消息剥"已消费附件注入块"，恢复纯用户原话（注入块形态：
+    【附件 x 全文】…（以上为用户上传的附件全文…）\n\n用户消息：原话）。
+    无标记原样返回（QQ 等链路零影响）。"""
+    if not text or "【附件 " not in text or _ATTACH_INJECT_MARK not in text:
+        return text
+    rest = text.partition(_ATTACH_INJECT_MARK)[2]
+    user_part = rest.partition("\n\n用户消息：")[2].strip()
+    return user_part or "[历史附件内容已省略]"
+
+
 def _build_messages(message, history, user_id=None):
     """组装模型消息：system 提示词置顶 + 历史 + 本条用户消息。
 
@@ -2106,6 +2140,10 @@ def _build_messages(message, history, user_id=None):
         if not isinstance(m, dict):
             continue
         role, content = m.get("role"), m.get("content") or ""
+        if role == "user":
+            content = _strip_consumed_attachments(content)
+        elif role == "assistant":
+            content = _strip_history_think_blocks(content)
         if role == "system":
             for prefix in ("【前情提要】", "以下是关于用户的长期记忆",
                            "以下是最近的设备操作记录"):

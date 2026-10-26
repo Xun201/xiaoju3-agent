@@ -346,6 +346,58 @@ class D1StreamThinkingTests(unittest.TestCase):
         self.assertEqual(out, "等于 2")
 
 
+
+
+class HistoryContextCleanTests(unittest.TestCase):
+    """历史上下文清洗（2026-10-27 真机实锤：纯净闲聊被污染）——
+    assistant 剥 <think> 块 + user 剥已消费附件注入块。"""
+
+    def test_build_messages_strips_think_from_history(self):
+        """历史 assistant 的思考块被剥，正文保留（自激燃料根除）。"""
+        history = [
+            {"role": "user", "content": "你好"},
+            {"role": "assistant",
+             "content": "<think>\n我要分析设备操作记录 control_ha_device…\n</think>你好呀，主人！"},
+        ]
+        msgs = brain._build_messages("在吗", history)
+        asst = [m for m in msgs if m["role"] == "assistant"]
+        self.assertEqual(len(asst), 1)
+        self.assertEqual(asst[0]["content"], "你好呀，主人！")
+        self.assertNotIn("control_ha_device", asst[0]["content"])
+
+    def test_build_messages_strips_orphan_think(self):
+        """孤立开头 <think>（截断生成）剥到末尾，兜底占位。"""
+        history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "<think>\n没写完就断了"},
+        ]
+        msgs = brain._build_messages("你好", history)
+        asst = [m for m in msgs if m["role"] == "assistant"]
+        self.assertEqual(asst[0]["content"], "[历史思考内容已省略]")
+
+    def test_build_messages_strips_consumed_attachment(self):
+        """历史 user 侧注入块剥成纯原话（多附件块连排同样恢复）。"""
+        inject = ("【附件 a.txt 全文】\n很长内容甲\n\n【附件 b.txt 全文】\n很长内容乙"
+                  "\n\n（以上为用户上传的附件全文，请基于附件内容回答用户问题）"
+                  "\n\n用户消息：这份附件讲什么")
+        history = [{"role": "user", "content": inject}]
+        msgs = brain._build_messages("在吗", history)
+        users = [m for m in msgs if m["role"] == "user"]
+        self.assertEqual(users[0]["content"], "这份附件讲什么")
+        self.assertNotIn("很长内容", users[0]["content"])
+
+    def test_build_messages_plain_history_untouched(self):
+        """无标记历史零变化（回归保护：普通对话/普通 JSON 不误剥）。"""
+        history = [
+            {"role": "user", "content": "讲讲 LangChain 的 TextSplitter"},
+            {"role": "assistant", "content": "它有 recursive 与 character 两家。"},
+        ]
+        msgs = brain._build_messages("继续", history)
+        non_system = [m for m in msgs if m["role"] != "system"]
+        self.assertEqual(non_system[0]["content"], "讲讲 LangChain 的 TextSplitter")
+        self.assertEqual(non_system[1]["content"], "它有 recursive 与 character 两家。")
+
+
 if __name__ == "__main__":
     unittest.main()
     """ask_cloud：Bearer 鉴权、choices 解析、API 报错与连接异常文案。"""

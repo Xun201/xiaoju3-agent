@@ -22,8 +22,11 @@ import sqlite3  # noqa: E402
 
 _DATA = None      # setup 注入：插件数据目录（knowledge.db 落盘位）
 _DB = "knowledge.db"
-_CHUNK = 500      # 滑窗块大小（字符）
+_CHUNK = 500      # 块大小（字符）
 _OVERLAP = 50     # 重叠（上下文连续性）
+# 中文标点递归分隔符（2.1.1 解冻首任务，2026-10-27 队长拍板；LangChain
+# RecursiveCharacterTextSplitter 同构——先语义单位后硬切，尊重自然边界）
+_CHUNK_SEPARATORS = ["\n\n", "。", "！", "？", " ", ""]
 
 
 def _extract_path(message, _match=None):
@@ -211,16 +214,48 @@ def _extract_xlsx(path):
 
 
 def _chunks(text):
-    """滑窗切块：500 字/块、50 字重叠。空块跳过。"""
+    """中文标点递归切块（2.1.1，2026-10-27）：分隔符递归降级（段落→句号→
+    感叹→问号→空格→字符硬切），超长段沿分隔符链继续细分，尊重自然边界；
+    小片贪心合并回 _CHUNK，块间借 _OVERLAP 尾巴做滑窗重叠（边界信息损失
+    的廉价保险）。对比旧版纯滑窗：块从"任意截断"变"完整语义单元"，
+    LIKE/向量检索命中率更高。空块跳过。"""
     text = text.strip()
-    out = []
-    i = 0
-    while i < len(text):
-        piece = text[i:i + _CHUNK].strip()
-        if piece:
-            out.append(piece)
-        i += _CHUNK - _OVERLAP
-    return out
+    if not text:
+        return []
+
+    def _split(seg, seps):
+        if len(seg) <= _CHUNK:
+            return [seg]
+        if not seps:
+            # 字符级兜底：无任何分隔符的超长段（URL/无标点英文串）
+            return [seg[i:i + _CHUNK] for i in range(0, len(seg), _CHUNK)]
+        sep, rest = seps[0], seps[1:]
+        parts = seg.split(sep) if sep else list(seg)
+        if sep:   # keep_separator：分隔符粘回前片尾部，句界不丢
+            parts = [p + sep for p in parts[:-1]] + [parts[-1]]
+        out = []
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            if len(p) <= _CHUNK:
+                out.append(p)
+            else:
+                out.extend(_split(p, rest))
+        return out
+
+    pieces = _split(text, _CHUNK_SEPARATORS)
+    merged, cur = [], ""
+    for piece in pieces:
+        if cur and len(cur) + len(piece) > _CHUNK:
+            merged.append(cur)
+            borrow = min(_OVERLAP, max(0, _CHUNK - len(piece)))
+            cur = cur[-borrow:] + piece if borrow else piece
+        else:
+            cur += piece
+    if cur:
+        merged.append(cur)
+    return merged
 
 
 def ingest_document(path=""):
@@ -442,7 +477,7 @@ def _embed_backfill_thread():
     global _embed_job
     import sqlite3
     _embed_job = {"running": True, "done": 0, "total": 0, "error": ""}
-    db = sqlite3.connect(_db())
+    db = _db()   # 2026-10-27 同根雷补刀：sqlite3.connect(_db()) 把 Connection 当路径传（266b28a 只修了 once 分支）
     _ensure_embedding_col(db)
     _embed_job["total"] = db.execute(
         "SELECT COUNT(*) FROM chunks WHERE embedding IS NULL").fetchone()[0]

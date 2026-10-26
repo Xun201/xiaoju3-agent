@@ -507,8 +507,23 @@ TERMINAL_HISTORY_FILE = os.path.join(AGENT_STATE_DIR, "history_terminal.json")
 
 
 def _read_console_history():
-    """读取控制台会话历史（role/content JSON 列表，缺失或损坏返回空列表）。"""
-    return load_memory(HISTORY_FILE)
+    """读取控制台会话历史（role/content JSON 列表，缺失或损坏返回空列表）。
+
+    2026-10-27 读出即清洗（文件保留原文，消费侧净化）：assistant 剥
+    <think> 块（50 条里 25 条带思考原文，r1 逐轮复读形成自激污染——
+    "你好"被解读成设备日志分析）、user 剥已消费附件注入块（防线）。
+    /api/history 回放同步受益（无思考块=纯正文渲染，前端 splitThinkBlock
+    无块不插卡，兼容）。"""
+    history = load_memory(HISTORY_FILE)
+    for m in history:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content") or ""
+        if m.get("role") == "assistant" and "<think>" in c:
+            m["content"] = brain._strip_history_think_blocks(c)
+        elif m.get("role") == "user" and "【附件 " in c:
+            m["content"] = brain._strip_consumed_attachments(c)
+    return history
 
 
 def _append_console_history(user_msg, reply, source):

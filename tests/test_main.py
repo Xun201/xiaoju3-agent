@@ -1108,9 +1108,13 @@ class TestRecentActionsInjection(_MainCase):
     """最近设备操作记录注入（指代消解上下文）：QQ/网页通道均注入、
     空记录不注入、损坏记录不炸主链路、注入块紧跟置顶系统提示词。"""
 
-    def _seed_actions(self, details):
-        """向 tmp 记录文件预置设备操作（与 tools.record_recent_action 同构）。"""
-        entries = [{"ts": "2026-09-30 12:00:00", "tool": "control_ha_device",
+    def _seed_actions(self, details, ts=None):
+        """向 tmp 记录文件预置设备操作（与 tools.record_recent_action 同构）。
+        2026-10-27 起缺省种**新鲜** ts（6h 窗内）——旧硬编码 ts 会被新鲜度
+        过滤正确拒注（新契约）；测过期行为显式传旧 ts。"""
+        if ts is None:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        entries = [{"ts": ts, "tool": "control_ha_device",
                     "detail": d} for d in details]
         with open(self.actions_file, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False)
@@ -1129,6 +1133,39 @@ class TestRecentActionsInjection(_MainCase):
         self.assertIn("control_ha_device: light.living → turn_on",
                       blocks[0]["content"])
         self.smart_ask.assert_called_once()
+
+    def test_stale_records_not_injected(self):
+        """2026-10-27 新鲜度窗（6h）：隔夜控灯记录不注入（真机实锤：
+        r1 把"你好"当设备操作延续解读，纯净闲聊被污染）。"""
+        stale = time.strftime("%Y-%m-%d %H:%M:%S",
+                              time.localtime(time.time() - 7 * 3600))
+        self._seed_actions(["control_ha_device: light.living → turn_on"],
+                           ts=stale)
+        main.handle_message('web', 'admin', None, "你好")
+        blocks = self._action_blocks()
+        self.assertEqual(len(blocks), 0)
+
+    def test_inject_capped_to_two_most_recent(self):
+        """2026-10-27 注入上限：多条新鲜记录只注最近 2 条（历史全是噪声）。"""
+        t1 = time.strftime("%Y-%m-%d %H:%M:%S",
+                           time.localtime(time.time() - 3 * 3600))
+        t2 = time.strftime("%Y-%m-%d %H:%M:%S",
+                           time.localtime(time.time() - 2 * 3600))
+        t3 = time.strftime("%Y-%m-%d %H:%M:%S",
+                           time.localtime(time.time() - 1 * 3600))
+        entries = [
+            {"ts": t1, "tool": "control_ha_device", "detail": "老操作甲"},
+            {"ts": t2, "tool": "control_ha_device", "detail": "中位操作乙"},
+            {"ts": t3, "tool": "control_ha_device", "detail": "最新操作丙"},
+        ]
+        with open(self.actions_file, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False)
+        main.handle_message('web', 'admin', None, "你好")
+        blocks = self._action_blocks()
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("最新操作丙", blocks[0]["content"])
+        self.assertIn("中位操作乙", blocks[0]["content"])
+        self.assertNotIn("老操作甲", blocks[0]["content"])
 
     def test_qq_channel_injects_recent_actions(self):
         self._seed_actions(["adb_tap: 点击 (10, 20)"])

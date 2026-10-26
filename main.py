@@ -526,22 +526,52 @@ def _inject_long_term_memories(history):
     return [block] + list(history)
 
 
+_RECENT_ACTIONS_TTL_HOURS = 6.0    # 6h 窗：隔夜记录已脱语境（10-27 实锤：
+# 24h 窗太宽——昨晚 21:27 的测试灯记录今早 07:58 仍被注入，r1 继续念叨）；
+# 注入条数再收至最近 2 条（指代消解本质只看最近操作，5 条历史全是噪声）
+_RECENT_ACTIONS_INJECT_MAX = 2
+
+
+def _filter_recent_actions(actions, ttl_hours=None):
+    """新鲜度过滤（2026-10-27 真机实锤修复）：只保留 TTL 内的记录——
+    昨天的 turn_on 测试灯记录隔天每轮照注，r1 把"你好"当成设备操作的
+    延续来解读，纯净闲聊被污染。ts 缺失/格式坏=按过期处理（保守）。"""
+    ttl = ttl_hours if ttl_hours is not None else _RECENT_ACTIONS_TTL_HOURS
+    now = time.time()
+    out = []
+    for a in actions:
+        try:
+            ts = time.mktime(time.strptime(a.get("ts", ""),
+                                           "%Y-%m-%d %H:%M:%S"))
+            if now - ts <= ttl * 3600:
+                out.append(a)
+        except Exception:
+            continue
+    return out
+
+
 def _inject_recent_actions(history):
-    """最近设备操作注入（指代消解上下文）：进入 smart_ask 前取最近 5 条设备
-    操作记录，以"以下是最近的设备操作记录"为中文前缀拼入系统上下文；
-    空记录（无文件/读取异常）不拼。范围说明：仪表盘 /api/chat 直连
-    smart_ask 不经本链路，不在注入范围。"""
+    """最近设备操作注入（指代消解上下文）：进入 smart_ask 前取最近 5 条
+    **24 小时内**的设备操作记录，以"以下是最近的设备操作记录"为中文前缀
+    拼入系统上下文；空记录/全过期（无文件/读取异常）不拼。
+    范围修正（2026-10-27）：仪表盘 /api/chat 与 /api/chat/stream 同样调用
+    本函数（xiaoju3_dashboard.py 两处实锤），旧 docstring 说"不经本链路"
+    已过时。包装文案明确"背景参考"语义——r1 曾把注入块当用户问题解读。"""
     try:
         actions = get_recent_actions()
     except Exception as e:
         print(f"⚠️ 读取设备操作记录失败: {e}")
         actions = []
+    actions = _filter_recent_actions(actions)
     if not actions:
         return history
+    actions = actions[-_RECENT_ACTIONS_INJECT_MAX:]   # 最多最近 2 条
     lines = "\n".join(f"· {a.get('detail', '')}" for a in actions)
     block = {"role": "system",
-             "content": (f"以下是最近的设备操作记录（最新在最后），主人提到"
-                         f"\"它/再一次/刚才那个\"等指代时可据此解析：\n{lines}")}
+             "content": (f"以下是最近的设备操作记录（仅背景参考，最新在最后，"
+                         f"不是用户当前的问题——用户当前消息与此无关时直接"
+                         f"正常回答；主人提到\"它/再一次/刚才那个\"等指代时"
+                         f"可据此解析）：\n{lines}")}
     if history and isinstance(history[0], dict) and history[0].get("role") == "system":
         return [history[0], block] + list(history[1:])
     return [block] + list(history)
