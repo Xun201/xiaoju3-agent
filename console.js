@@ -1032,7 +1032,14 @@
                         .then(res => res.json())
                         .then(d => {
                             if (d.code === 200 && (d.data || {}).ok_count > 0) {
-                                showAttachBar(d.data.names || []);
+                                showAttachBar((d.data.results || [])
+                                    .filter(function (x) { return x.ok; })
+                                    .map(function (x) {
+                                        return {
+                                            name: (x.path || '').split(/[\/]/).pop(),
+                                            size: x.size || ''
+                                        };
+                                    }));
                                 showToast('📎 文件已就绪，直接提问即可');
                             } else if (d.code === 200) {
                                 showToast('❌ 读取失败：'
@@ -1066,7 +1073,7 @@
                         .then(res => res.json())
                         .then(d => {
                             if (d.code === 200) {
-                                showShotBar();
+                                showShotBar(d.data.size || '');
                                 showToast('📷 截图已就绪，输入问题后发送');
                             } else {
                                 showToast('❌ ' + (d.error || '截图暂存失败'));
@@ -1087,15 +1094,32 @@
             popover.hidden = false;
         }
         // 📎 附件就绪标签（上传→附件直读上下文；随下一次发送消费，发即隐）。
-        // 显隐用 hidden 属性+CSS [hidden] 补丁（2026-10-26 真机实锤：作者
-        // display:flex 压过 UA [hidden]，标签条空挂常显）
+        // v0 芯片形态（2026-10-26 像素级对齐）：白底细边框微阴影圆角小方块，
+        // 文件名+大小+右上角 ✕；显隐用 hidden 属性+CSS [hidden] 补丁
         const attachBar = document.getElementById('attach-bar');
-        function showAttachBar(names) {
-            if (!attachBar || !(names || []).length) return;
-            attachBar.innerHTML = '<span>📎 文件已就绪（可以直接提问）</span>'
-                + '<span class="attach-names">'
-                + (names || []).map(escapeHtml).join('、') + '</span>'
-                + '<button class="attach-clear" title="移除附件">✕ 移除</button>';
+        var DOC_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none"'
+            + ' stroke="currentColor" stroke-width="2" stroke-linecap="round"'
+            + ' stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0'
+            + ' 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v4a2 2 0 0 0 2 2h6"/></svg>';
+        var CAM_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none"'
+            + ' stroke="currentColor" stroke-width="2" stroke-linecap="round"'
+            + ' stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2'
+            + ' 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-1.5-3Z"/>'
+            + '<circle cx="12" cy="13" r="3"/></svg>';
+        function showAttachBar(items) {
+            if (!attachBar || !(items || []).length) return;
+            var chips = items.map(function (f) {
+                return '<span class="attach-chip">'
+                    + '<span class="attach-chip-ico">' + DOC_SVG + '</span>'
+                    + '<span class="attach-chip-body">'
+                    + '<span class="attach-chip-name">' + escapeHtml(f.name) + '</span>'
+                    + '<span class="attach-chip-size">' + escapeHtml(f.size || '') + '</span>'
+                    + '</span>'
+                    + '<button class="attach-clear" title="移除附件">✕</button>'
+                    + '</span>';
+            }).join('');
+            attachBar.innerHTML = '<div class="attach-chip-row">' + chips + '</div>'
+                + '<div class="attach-ready">📎 文件已就绪（可以直接提问）</div>';
             attachBar.removeAttribute('hidden');
             attachBar.querySelector('.attach-clear').addEventListener(
                 'click', function () {
@@ -1111,11 +1135,19 @@
             hideAttachBar();
             if (window.__xj3HideShot) window.__xj3HideShot();
         };   // 发送流钩子（Stream/Legacy 首行调用）：文本附件+截图都随发送消费
-        // 📷 截图就绪标签（复用附件条位；发送时 GLM-4V 看图回答）
-        function showShotBar() {
+        // 📷 截图就绪标签（复用附件条位芯片形态；发送时 GLM-4V 看图回答）
+        function showShotBar(size) {
             if (!attachBar) return;
-            attachBar.innerHTML = '<span>📷 截图已就绪（发送时 AI 直接看图回答）</span>'
-                + '<button class="attach-clear" title="移除截图">✕ 移除</button>';
+            attachBar.innerHTML = '<div class="attach-chip-row">'
+                + '<span class="attach-chip">'
+                + '<span class="attach-chip-ico">' + CAM_SVG + '</span>'
+                + '<span class="attach-chip-body">'
+                + '<span class="attach-chip-name">屏幕截图</span>'
+                + '<span class="attach-chip-size">' + escapeHtml(size || '') + '</span>'
+                + '</span>'
+                + '<button class="attach-clear" title="移除截图">✕</button>'
+                + '</span></div>'
+                + '<div class="attach-ready">📷 截图已就绪（发送时 AI 直接看图回答）</div>';
             attachBar.removeAttribute('hidden');
             attachBar.querySelector('.attach-clear').addEventListener(
                 'click', function () {
@@ -1329,7 +1361,8 @@
         const WEATHER_POLL_MS = 20 * 60 * 1000;   // 20 分钟（后端缓存 15 分钟，前端略长）
         function renderWeather(d) {
             if (elCity) elCity.textContent = (d.city || '天气') + ' · 今日';
-            if (elTemp) elTemp.textContent = Math.round(d.temp) + '°C ' + (d.icon || '');
+            // emoji 退役（UI 三期 v0 单色 SVG 图标位）：温度只出纯数字
+            if (elTemp) elTemp.textContent = Math.round(d.temp) + '°C';
             if (elDesc) elDesc.textContent = (d.desc || '') +
                 (d.stale ? '（缓存·稍后自动刷新）' : '');
         }

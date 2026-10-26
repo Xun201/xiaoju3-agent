@@ -1334,8 +1334,11 @@ def api_screenshot_stage():
         with _DOC_ATTACH_LOCK:
             if _DOC_ATTACH["items"]:
                 _DOC_ATTACH["items"] = []   # 截图与文本附件互斥：后到为准
-    print(f"[shot] staged: {path}", flush=True)
-    return jsonify({"code": 200, "data": {"ok": True}})
+    sz = os.path.getsize(path)
+    size = (f"{sz / 1024 / 1024:.1f} MB" if sz >= 1024 * 1024
+            else f"{max(1, sz // 1024)} KB")
+    print(f"[shot] staged: {path} ({size})", flush=True)
+    return jsonify({"code": 200, "data": {"ok": True, "size": size}})
 
 
 @app.route("/api/screenshot/clear", methods=["POST"])
@@ -1388,8 +1391,12 @@ def api_doc_upload():
             text = str(extract(p))
             if not text.strip():
                 raise RuntimeError("提取后没有可用文本（可能是扫描件图片 PDF）")
+            sz = os.path.getsize(p)
+            size = (f"{sz / 1024 / 1024:.1f} MB" if sz >= 1024 * 1024
+                    else f"{max(1, sz // 1024)} KB")
             stash.append((os.path.basename(p), text))
-            results.append({"path": p, "ok": True, "message": "已就绪"})
+            results.append({"path": p, "ok": True, "message": "已就绪",
+                            "size": size})
         except Exception as e:
             results.append({"path": p, "ok": False, "message": str(e)[:120]})
     stored = _doc_attach_store(stash)

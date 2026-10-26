@@ -754,11 +754,23 @@
         }
         body {
             background: var(--v0-n50);
-            font-family: Inter, "Segoe UI", system-ui, -apple-system,
-                         "Microsoft YaHei", "PingFang SC", sans-serif;
+            /* 队长指定现代无衬线栈（2026-10-26 像素级对齐）：告别默认衬线
+               回退；中文回退雅黑/苹方。!important 压过旧皮肤外层规则 */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                         Roboto, "Helvetica Neue", Arial,
+                         "Microsoft YaHei", "PingFang SC", sans-serif !important;
             gap: 16px;
             padding: 16px;
             box-sizing: border-box;
+        }
+        /* 表单控件默认不继承字体——显式拉齐（否则输入框仍是旧字体） */
+        button, input, textarea, select {
+            font-family: inherit;
+        }
+        /* 数字位统一等宽数字（温度/CPU/内存百分比不跳动） */
+        .stat-value, .v0-metric-val, .v0-big, #weather-temp, #temp-text,
+        .v0-chip, .source-badge {
+            font-variant-numeric: tabular-nums;
         }
         body > * { box-sizing: border-box; }
 
@@ -787,13 +799,14 @@
             content: "桌面助手";
             font-size: 12px; color: var(--v0-n500); font-weight: 400;
         }
-        /* v0 Card：白底细边框圆角卡+微阴影 */
+        /* v0 Card：纯白+去边框+极淡阴影（队长口径 2026-10-26：卡浮在
+           #fafafa 底色上）；内边距 24px 呼吸位 */
         .dash-card, .stat-item.todos-card {
             background: #ffffff;
-            border: 1px solid var(--v0-n200);
+            border: none;
             border-radius: 16px;
-            box-shadow: var(--v0-card-shadow);
-            padding: 18px 18px 16px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+            padding: 24px;
         }
         .stat-label {
             font-size: 12px; font-weight: 500;
@@ -832,7 +845,9 @@
             font-size: 46px !important; font-weight: 700 !important;
             letter-spacing: -0.03em; line-height: 1;
         }
-        .v0-weather-icon { font-size: 46px; line-height: 1; }
+        .v0-weather-icon {
+            display: flex; align-items: flex-end;
+        }
         .stat-value {
             font-size: 30px; font-weight: 600; color: var(--v0-n900);
             letter-spacing: -0.02em;
@@ -917,7 +932,7 @@
         /* ---- 思考链（v0 ThinkingPanel 色：Brain 行灰字+左线小字）---- */
         .think-live {
             font-size: 12px; color: var(--v0-n500);
-            margin: 0 0 2px;
+            margin: 0 0 10px;   /* 与下方白色气泡卡拉开（队长口径） */
         }
         .think-live-label { color: var(--v0-n500); }
         .think-live-line {
@@ -959,10 +974,44 @@
         .context-tag { background: var(--v0-n100); color: var(--v0-n500); }
         .context-tag--link:hover { background: var(--v0-n200); color: var(--v0-n900); }
         .attach-bar {
-            background: rgba(23, 23, 23, 0.05); color: var(--v0-n900);
-            border-radius: 12px; margin: 2px 6px 8px;
+            background: transparent; padding: 0; margin: 0 0 8px;
+            color: var(--v0-n900);
         }
-        .attach-bar .attach-clear:hover { color: #dc2626; background: transparent; }
+        .attach-chip-row {
+            display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 4px;
+            max-width: 100%;
+        }
+        .attach-chip {
+            position: relative; flex-shrink: 0;
+            display: flex; align-items: center; gap: 8px;
+            background: #ffffff; border: 1px solid var(--v0-n200);
+            border-radius: 12px; padding: 8px 26px 8px 10px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        }
+        .attach-chip-ico {
+            width: 28px; height: 28px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--v0-n50); border-radius: 8px;
+            color: var(--v0-n700, #404040);
+        }
+        .attach-chip-body { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+        .attach-chip-name {
+            font-size: 12px; font-weight: 500; color: #171717;
+            max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .attach-chip-size {
+            font-size: 10px; color: var(--v0-n400);
+            font-variant-numeric: tabular-nums;
+        }
+        .attach-chip .attach-clear {
+            position: absolute; top: 3px; right: 3px;
+            border: none; background: transparent; cursor: pointer;
+            color: var(--v0-n400); font-size: 11px; line-height: 1;
+            padding: 2px; border-radius: 4px;
+        }
+        .attach-chip .attach-clear:hover { color: #dc2626; background: var(--v0-n100); }
+        .attach-ready { font-size: 12px; color: var(--v0-n500); padding: 0 2px; }
 
         /* ---- 附件/浮层 ---- */
         .input-dock-menu, .dock-popover {
@@ -1054,19 +1103,19 @@
              前端轮询），失败显示"暂无数据"绝不崩面板 -->
         <div class="stat-item dash-card">
             <div class="v0-card-head">
-                <span class="stat-label v0-head-label">🌤️ 天气</span>
+                <span class="stat-label v0-head-label">天气</span>
                 <span class="v0-chip" id="weather-city">天气</span>
             </div>
             <div class="v0-weather-row">
                 <div class="stat-value v0-big" id="weather-temp">--</div>
-                <div class="v0-weather-icon" aria-hidden="true">⛅</div>
+                <div class="v0-weather-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="#404040" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/></svg></div>
             </div>
             <div class="v0-chip v0-chip-soft" id="weather-desc">加载中…</div>
         </div>
         <!-- 快捷指令卡（答辩微调）：[记待办] 预填输入框；[系统自检] 消费
              既有 /api/health + toast——零新增后端、零流式逻辑改动 -->
         <div class="stat-item dash-card">
-            <div class="stat-label">⚡ 快捷指令</div>
+            <div class="stat-label">快捷指令</div>
             <div class="dash-quick">
                 <button id="quick-todo" class="dash-quick-btn" title="预填待办内容后发送">📝 记待办</button>
                 <button id="quick-check" class="dash-quick-btn" title="检查后端服务健康状态">🩺 系统自检</button>

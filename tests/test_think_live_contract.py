@@ -588,33 +588,43 @@ class Ui3UploadTests(unittest.TestCase):
 
         fake._extract_text = fake_extract
         client = D.app.test_client()
+        # 新端点会 getsize——假路径须落成真文件（2026-10-26 size 字段新增）
+        tmpdir = os.path.join(PROJECT_ROOT, "_dev")
+        real_docx = os.path.join(tmpdir, "_u3t_a.docx")
+        real_pdf = os.path.join(tmpdir, "_u3t_scan.pdf")
+        real_txt = os.path.join(tmpdir, "_u3t_b.txt")
+        for pth in (real_docx, real_pdf, real_txt):
+            with open(pth, "wb") as f:
+                f.write(b"x")
         with mock.patch.object(plugin_loader, "loaded_plugins",
                                lambda: {"doc_ingest": {"module": fake}}):
             self.assertEqual(client.post(
                 "/api/doc_upload", json={}).get_json()["code"], 400)
             r = client.post("/api/doc_upload", json={"paths": [
-                "F:/x/a.docx", "F:/x/c.exe", "F:/x/scan.pdf"]}).get_json()
+                real_docx, "F:/x/c.exe", real_pdf]}).get_json()
             self.assertEqual(r["code"], 200)
             self.assertEqual(r["data"]["ok_count"], 1)
-            self.assertEqual(r["data"]["names"], ["a.docx"])
+            self.assertEqual(r["data"]["names"], ["_u3t_a.docx"])
             self.assertFalse(r["data"]["results"][1]["ok"])
             self.assertIn("仅支持文档", r["data"]["results"][1]["message"])
             self.assertFalse(r["data"]["results"][2]["ok"])
             self.assertIn("扫描件", r["data"]["results"][2]["message"])
             # 注入消费：下一句话被包裹、附件一次性消费（队长纠偏核心契约）
             wrapped = D._take_doc_attachments("总结一下")
-            self.assertIn("【附件 a.docx 全文】", wrapped)
+            self.assertIn("【附件 _u3t_a.docx 全文】", wrapped)
             self.assertIn("大肥鱼的灵魂", wrapped)
             self.assertIn("用户消息：总结一下", wrapped)
             self.assertEqual(D._take_doc_attachments("第二条"),
                              "第二条")   # 已消费，不重复注入
             # ✕ 清空：重新挂载→clear→消费为原文
             client.post("/api/doc_upload",
-                        json={"paths": ["F:/x/b.txt"]}).get_json()
+                        json={"paths": [real_txt]}).get_json()
             client.post("/api/doc_attach/clear").get_json()
             self.assertEqual(D._take_doc_attachments("x"), "x")
-        self.assertEqual(calls, ["F:/x/a.docx", "F:/x/scan.pdf",
-                                 "F:/x/b.txt"])   # exe 被白名单拦在插件外
+        self.assertEqual(calls, [real_docx, real_pdf,
+                                 real_txt])   # exe 被白名单拦在插件外
+        for pth in (real_docx, real_pdf, real_txt):
+            os.remove(pth)
 
 
 class Ui3ShotTests(unittest.TestCase):
