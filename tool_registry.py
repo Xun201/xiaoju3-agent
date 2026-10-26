@@ -34,6 +34,11 @@ manifest 参数（默认 TOOL_MANIFEST），测试可传扩展副本验证"一�
 """
 import importlib
 
+# 外部插件工具条目（#312 插件总线汇聚容器）：plugin_loader 写入，_entries
+# 合并消费——派生函数（白名单/权限组/协议行）自动覆盖插件工具，一处生效三处。
+# 本模块不 import plugin_loader（单向依赖：loader → registry）。
+external_tools = []
+
 TOOL_MANIFEST = [
     # ── 工作区文件（Lv.2/Lv.3）──
     {"name": "list_files", "desc": "列出工作区内的所有文件", "params": "无",
@@ -85,8 +90,10 @@ TOOL_MANIFEST = [
 
 
 def _entries(manifest=None):
-    """条目列表（None = 真实登记表；测试传扩展副本）。"""
-    return TOOL_MANIFEST if manifest is None else manifest
+    """条目列表（None = 内置登记表 + 插件总线汇聚合并视图；测试传扩展副本）。"""
+    if manifest is None:
+        return TOOL_MANIFEST + external_tools
+    return manifest
 
 
 def whitelist_names(manifest=None):
