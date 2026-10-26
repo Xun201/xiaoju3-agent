@@ -416,6 +416,22 @@
                         0 12px 36px rgba(31, 41, 55, 0.10);
         }
         .composer-row { display: flex; align-items: center; gap: 8px; }
+        /* 附件就绪标签（UI 三期：上传→附件直读上下文，2026-10-26） */
+        .attach-bar {
+            display: flex; align-items: center; gap: 6px;
+            margin: 2px 6px 4px; padding: 4px 10px;
+            background: rgba(37, 99, 235, 0.07); border-radius: 8px;
+            font-size: 12px; color: #2563eb;
+        }
+        .attach-bar .attach-names {
+            flex: 1; min-width: 0; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        .attach-bar .attach-clear {
+            border: none; background: transparent; color: #6b7280;
+            cursor: pointer; font-size: 12px; padding: 0 2px;
+        }
+        .attach-bar .attach-clear:hover { color: #dc2626; }
         .composer input {
             flex: 1; min-width: 0;
             padding: 8px 10px; border: none; outline: none;
@@ -886,6 +902,7 @@
              （上：圆形＋ / 输入 / 🎤 / 发送；下：技能·插件·上下文标签工具栏） -->
         <div class="chat-input-area">
             <div class="composer" id="composer">
+                <div class="attach-bar" id="attach-bar" hidden></div>
                 <div class="composer-row">
                     <button id="dock-plus" class="dock-btn round" title="更多能力">＋</button>
                     <input type="text" id="chat-input" placeholder="发消息或创建任务..." onkeypress="if(event.key === 'Enter') sendMessage()">

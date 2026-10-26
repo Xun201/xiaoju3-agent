@@ -534,12 +534,20 @@ class Ui3UploadTests(unittest.TestCase):
         cls.dash = _read("xiaoju3_dashboard.py")
         cls.js = _read("console.js")
         cls.launcher = _read("desktop_launcher.py")
+        cls.html = _read("index.html")
 
     def test_upload_static_anchors(self):
         self.assertIn('@app.route("/api/doc_upload"', self.dash)
-        self.assertIn("ingest_document", self.dash)
-        self.assertIn('allowed = (".txt", ".pdf", ".md")', self.dash)
-        self.assertIn("paths[:10]", self.dash)          # 单次上限防轰炸
+        self.assertIn("_extract_text", self.dash)          # 解析引擎=doc_ingest
+        self.assertIn('".txt", ".md", ".pdf", ".docx", ".xlsx"', self.dash)
+        self.assertIn("paths[:5]", self.dash)              # 单次上限防轰炸
+        self.assertIn("_DOC_ATTACH_TOTAL", self.dash)      # 附件总量截断（队长口径）
+        self.assertIn("def _take_doc_attachments", self.dash)
+        # 注入点=进大脑前、前置钩子后（斜杠指令不吃附件）
+        self.assertIn("smart_ask(_take_doc_attachments(user_msg),", self.dash)
+        self.assertIn("brain.smart_ask_stream(\n                    "
+                      "_take_doc_attachments(user_msg)", self.dash)
+        self.assertIn('"/api/doc_attach/clear"', self.dash)
         self.assertIn("def pick_docs", self.launcher)
         self.assertIn("allow_multiple=True", self.launcher)
         self.assertIn("文档文件 (*.txt;*.pdf)", self.launcher)
@@ -547,17 +555,20 @@ class Ui3UploadTests(unittest.TestCase):
         # 自带 import（模块级引用=运行时 NameError）
         body = _extract_span(self.launcher, "def pick_docs", "def quit_app")
         self.assertIn("import webview", body)
-        # 前端接线：选择器→端点→Toast→立刻刷标签
+        # 前端接线：选择器→端点→📎 附件就绪标签→发送随消费
         self.assertIn("window.pywebview.api.pick_docs()", self.js)
         self.assertIn("'/api/doc_upload'", self.js)
-        self.assertIn("个文件已成功入库", self.js)
-        self.assertIn("refreshContextTags()", self.js)
-        self.assertIn("请在桌面窗口中使用", self.js)   # 浏览器预览降级
+        self.assertIn("📎 文件已就绪（可以直接提问）", self.js)
+        self.assertIn("showAttachBar(", self.js)
+        self.assertIn("'/api/doc_attach/clear'", self.js)
+        self.assertIn("__xj3HideAttach", self.js)
+        self.assertIn('id="attach-bar"', self.html)
+        self.assertIn("attach-bar {", self.html)
 
     def test_doc_upload_behavior(self):
-        """stub doc_ingest 走真 Flask 端点：白名单拦截/成功计数/插件 ❌ 透传/
-        exe 根本不进插件。插件层 20MB/加密/扫描件兜底属 doc_ingest 自身职责
-        （批 4 测试已覆盖），本层只测端点编排。"""
+        """stub doc_ingest 走真 Flask 端点：白名单拦截/插件 ❌ 透传/截断挂载/
+        注入一次性消费/✕ 清空。插件层 20MB/加密/扫描件兜底属 doc_ingest
+        自身职责（批 4+构造用例已覆盖），本层只测端点编排与注入链。"""
         import types
         import sys
         from unittest import mock
@@ -567,30 +578,41 @@ class Ui3UploadTests(unittest.TestCase):
         fake = types.ModuleType("doc_ingest_stub")
         calls = []
 
-        def fake_ingest(path=""):
+        def fake_extract(path):
             calls.append(str(path))
-            if str(path).endswith("bad.txt"):
-                return "❌ 文档提取后没有可用文本（可能是扫描件图片 PDF）。"
-            return "📚 《%s》已入库：2 个知识块（库内共 2 块）。" % os.path.basename(path)
+            if str(path).endswith("scan.pdf"):
+                raise RuntimeError("提取后没有可用文本（可能是扫描件图片 PDF）")
+            return "大肥鱼的灵魂在于记忆的持久化和鲜活度。" * 100
 
-        fake.ingest_document = fake_ingest
+        fake._extract_text = fake_extract
         client = D.app.test_client()
         with mock.patch.object(plugin_loader, "loaded_plugins",
                                lambda: {"doc_ingest": {"module": fake}}):
             self.assertEqual(client.post(
                 "/api/doc_upload", json={}).get_json()["code"], 400)
             r = client.post("/api/doc_upload", json={"paths": [
-                "F:/x/a.txt", "F:/x/b.pdf", "F:/x/c.exe",
-                "F:/x/bad.txt"]}).get_json()
-        self.assertEqual(r["code"], 200)
-        self.assertEqual(r["data"]["ok_count"], 2)
-        self.assertEqual(r["data"]["total"], 4)
-        self.assertFalse(r["data"]["results"][2]["ok"])
-        self.assertIn("仅支持 TXT/PDF", r["data"]["results"][2]["message"])
-        self.assertFalse(r["data"]["results"][3]["ok"])
-        self.assertIn("没有可用文本", r["data"]["results"][3]["message"])
-        self.assertEqual(calls, ["F:/x/a.txt", "F:/x/b.pdf",
-                                 "F:/x/bad.txt"])   # 仅 exe 被白名单拦在插件外
+                "F:/x/a.docx", "F:/x/c.exe", "F:/x/scan.pdf"]}).get_json()
+            self.assertEqual(r["code"], 200)
+            self.assertEqual(r["data"]["ok_count"], 1)
+            self.assertEqual(r["data"]["names"], ["a.docx"])
+            self.assertFalse(r["data"]["results"][1]["ok"])
+            self.assertIn("仅支持文档", r["data"]["results"][1]["message"])
+            self.assertFalse(r["data"]["results"][2]["ok"])
+            self.assertIn("扫描件", r["data"]["results"][2]["message"])
+            # 注入消费：下一句话被包裹、附件一次性消费（队长纠偏核心契约）
+            wrapped = D._take_doc_attachments("总结一下")
+            self.assertIn("【附件 a.docx 全文】", wrapped)
+            self.assertIn("大肥鱼的灵魂", wrapped)
+            self.assertIn("用户消息：总结一下", wrapped)
+            self.assertEqual(D._take_doc_attachments("第二条"),
+                             "第二条")   # 已消费，不重复注入
+            # ✕ 清空：重新挂载→clear→消费为原文
+            client.post("/api/doc_upload",
+                        json={"paths": ["F:/x/b.txt"]}).get_json()
+            client.post("/api/doc_attach/clear").get_json()
+            self.assertEqual(D._take_doc_attachments("x"), "x")
+        self.assertEqual(calls, ["F:/x/a.docx", "F:/x/scan.pdf",
+                                 "F:/x/b.txt"])   # exe 被白名单拦在插件外
 
 
 if __name__ == "__main__":

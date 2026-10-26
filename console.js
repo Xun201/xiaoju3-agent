@@ -1008,9 +1008,9 @@
             closeAll();
             const act = item.dataset.action;
             if (act === 'upload') {
-                // UI 三期（2026-10-26）：系统文件选择器（js_api 桥）拿绝对
-                // 路径 → POST /api/doc_upload 直取 doc_ingest 摄取（绕 LLM
-                // 意图识别）；成功后立刻刷新上下文文档标签
+                // UI 三期（队长纠偏 2026-10-26）：上传=附件直读上下文（非建
+                // 知识库）——选择器拿绝对路径→后端解析全文挂「下一次对话」→
+                // 📎 附件就绪标签，AI 直接看全文回答
                 if (!window.pywebview || !window.pywebview.api) {
                     showToast('📎 上传请在桌面窗口中使用（浏览器预览不支持）');
                     return;
@@ -1021,7 +1021,7 @@
                         return;
                     }
                     if (!(r.paths || []).length) return;   // 用户取消：静默
-                    showToast('⏳ 正在摄取 ' + r.paths.length + ' 个文件…');
+                    showToast('⏳ 正在读取 ' + r.paths.length + ' 个文件…');
                     fetch('/api/doc_upload', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1030,16 +1030,16 @@
                         .then(res => res.json())
                         .then(d => {
                             if (d.code === 200 && (d.data || {}).ok_count > 0) {
-                                showToast('📚 ' + d.data.ok_count + ' 个文件已成功入库');
-                                refreshContextTags();   // 立刻刷新 📚 标签
+                                showAttachBar(d.data.names || []);
+                                showToast('📎 文件已就绪，直接提问即可');
                             } else if (d.code === 200) {
-                                showToast('❌ 摄取失败：'
+                                showToast('❌ 读取失败：'
                                     + (((d.data || {}).results || [])[0] || {}).message);
                             } else {
                                 showToast('❌ ' + (d.error || '上传失败'));
                             }
                         })
-                        .catch(() => showToast('❌ 摄取服务不可达'));
+                        .catch(() => showToast('❌ 上传服务不可达'));
                 }).catch(function (e) { showToast('❌ ' + e); });
             } else if (act === 'screenshot') {
                 showToast('📸 截图提问三期上线（待视觉模型接入）');
@@ -1055,6 +1055,24 @@
             closeAll();
             popover.hidden = false;
         }
+        // 📎 附件就绪标签（上传→附件直读上下文；随下一次发送消费，发即隐）
+        const attachBar = document.getElementById('attach-bar');
+        function showAttachBar(names) {
+            if (!attachBar) return;
+            attachBar.innerHTML = '<span>📎 文件已就绪（可以直接提问）</span>'
+                + '<span class="attach-names">'
+                + (names || []).map(escapeHtml).join('、') + '</span>'
+                + '<button class="attach-clear" title="移除附件">✕ 移除</button>';
+            attachBar.hidden = false;
+            attachBar.querySelector('.attach-clear').addEventListener(
+                'click', function () {
+                    fetch('/api/doc_attach/clear', { method: 'POST' })
+                        .catch(() => {});
+                    attachBar.hidden = true;
+                });
+        }
+        function hideAttachBar() { if (attachBar) attachBar.hidden = true; }
+        window.__xj3HideAttach = hideAttachBar;   // 发送流钩子（Stream/Legacy 首行调用）
         function fetchPlugins(kind) {
             fetch('/api/plugins')
                 .then(res => res.json())
@@ -1449,6 +1467,7 @@
     // =界面假死；node --check 与静态锚均查不出作用域错）。本轮结构根修：
     // 调用点与声明点同层，此类雷从结构上不可能再犯。
     function sendMessageStream(text, loadingMsg, rotateTimer) {
+        if (window.__xj3HideAttach) window.__xj3HideAttach();   // 附件随本次消息消费（2026-10-26）
         // C3b 修复：自取元素与作用域解耦（裸 history 解析到 window.history）
         const history = document.getElementById('chat-history');
         // ⏱️ 总闸 190s AbortController（比后端 180s 硬超时略长的最终防线）
@@ -1686,6 +1705,7 @@
     }
     // 旧路分支（回退用；原实现原样保留）
     function sendMessageLegacy(text, loadingMsg, rotateTimer) {
+        if (window.__xj3HideAttach) window.__xj3HideAttach();   // 附件随本次消息消费（2026-10-26）
         // C3b 修复：同 sendMessageStream——自取 history，裸名解析到
         // window.history 使 .then/.catch 全链 DOM 操作炸、回复不渲染
         const history = document.getElementById('chat-history');

@@ -68,8 +68,9 @@ class DocIngestExceptionTests(unittest.TestCase):
         self.assertTrue(out.startswith("❌"))
 
     def test_unsupported_format(self):
-        """不支持的扩展名 → ❌ 人话提示。"""
-        p = self._write("文档.docx", "内容")
+        """不支持的扩展名 → ❌ 人话提示（.docx/.xlsx 自 2026-10-26 起支持，
+        反例换 .rtf）。"""
+        p = self._write("文档.rtf", "内容")
         out = self.mod.ingest_document(p)
         self.assertIn("不支持的格式", out)
 
@@ -137,6 +138,86 @@ class DocIngestExceptionTests(unittest.TestCase):
         self.assertLessEqual(plugin["level"], 3)          # D1 外部锁 Lv.3
         for t in plugin["tools"]:
             self.assertTrue(t["name"].startswith("ext_"))  # D2 前缀强制
+
+
+class DocxXlsxExtractTests(unittest.TestCase):
+    """UI 三期新格式（2026-10-26 队长纠偏）：docx/xlsx 纯 stdlib 解析
+    （zip+XML 零新依赖——python-docx 带 lxml 体积代价否决）。构造最小
+    OOXML 直接验 _extract_text 路由与文本还原。"""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="xj3_docing_")
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "doc_ingest_direct",
+            os.path.join(PROJECT_ROOT, "agent_state", "plugins", "doc_ingest.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _make_docx(self, xml_body):
+        import zipfile
+        path = os.path.join(self._tmp, "t.docx")
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("word/document.xml",
+                       '<?xml version="1.0"?><w:document xmlns:w="w">'
+                       + xml_body + "</w:document>")
+        return path
+
+    def test_docx_paragraphs_and_table(self):
+        path = self._make_docx(
+            "<w:p><w:r><w:t>第一段：大肥鱼</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>第二段</w:t></w:r></w:p>"
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>记忆持久化</w:t></w:r></w:p>"
+            "</w:tc><w:tc><w:p><w:r><w:t>鲜活度</w:t></w:r></w:p></w:tc>"
+            "</w:tr></w:tbl>")
+        text = self._mod()._extract_text(path)
+        self.assertIn("第一段：大肥鱼", text)
+        self.assertIn("第二段", text)
+        self.assertIn("记忆持久化", text)   # 单元格文本还原（段/制表混排）
+        self.assertIn("鲜活度", text)
+
+    def test_docx_entity_unescape(self):
+        path = self._make_docx(
+            "<w:p><w:r><w:t>A &amp; B &lt;C&gt;</w:t></w:r></w:p>")
+        text = self._mod()._extract_text(path)
+        self.assertIn("A & B <C>", text)
+
+    def _make_xlsx(self):
+        import zipfile
+        path = os.path.join(self._tmp, "t.xlsx")
+        NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        shared = ('<?xml version="1.0"?><sst xmlns="%s">'
+                  '<si><t>名称</t></si><si><t>大肥鱼</t></si></sst>' % NS)
+        sheet = ('<?xml version="1.0"?><worksheet xmlns="%s"><sheetData>'
+                 '<row r="1"><c r="A1" t="s"><v>0</v></c>'
+                 '<c r="B1" t="s"><v>1</v></c></row>'
+                 '<row r="2"><c r="A2"><v>42</v></c>'
+                 '<c r="B2" t="inlineStr"><is><t>备注</t></is></c></row>'
+                 "</sheetData></worksheet>" % NS)
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("xl/sharedStrings.xml", shared)
+            z.writestr("xl/worksheets/sheet1.xml", sheet)
+        return path
+
+    def test_xlsx_rows_and_shared_strings(self):
+        text = self._mod()._extract_text(self._make_xlsx())
+        self.assertIn("名称\t大肥鱼", text)      # 共享字符串还原
+        self.assertIn("42\t备注", text)          # 数值+内联字符串
+        self.assertIn("sheet1.xml", text)        # 表名头
+
+    def test_docx_corrupted_friendly_error(self):
+        path = os.path.join(self._tmp, "bad.docx")
+        with open(path, "wb") as f:
+            f.write(b"not a zip")
+        with self.assertRaises(RuntimeError) as cm:
+            self._mod()._extract_text(path)
+        self.assertIn("损坏", str(cm.exception))
 
 
 if __name__ == "__main__":

@@ -9,10 +9,12 @@ import brain
 
 
 # 1 静态接线：两端点调用行均带 user_id="owner"
+#   （2026-10-26 UI 三期附件直读：首参改为 _take_doc_attachments(user_msg)
+#    包装——owner uid 透传语义不变，锚随调用形态更新）
 def test_dashboard_endpoints_pass_owner_uid():
     with open("xiaoju3_dashboard.py", encoding="utf-8") as f:
         src = f.read()
-    assert 'smart_ask(user_msg, history, user_id="owner")' in src
+    assert "smart_ask(_take_doc_attachments(user_msg)," in src
     assert "user_id=\"owner\")   # 控制台=owner 语境" in src
 
 

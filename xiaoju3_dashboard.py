@@ -1248,13 +1248,61 @@ def api_plugins():
     return jsonify({"code": 200, "data": data})
 
 
+# ==================== UI 三期附件直读（2026-10-26 队长纠偏） ====================
+# 上传≠建知识库：解析出的全文（截断）挂为「下一次对话」的注入上下文——
+# 像给大模型发附件一样，让 AI 直接看到文件并基于它回答（不用再问
+# "知识库里怎么说"）。对话发起时 _take_doc_attachments 一次性消费。
+_DOC_ATTACH = {"items": []}          # [{name, text}]
+_DOC_ATTACH_LOCK = threading.Lock()
+_DOC_ATTACH_PER_FILE = 2500          # 单文件字符截断（队长口径总量 3000-5000 字内）
+_DOC_ATTACH_TOTAL = 5000             # 附件总量截断（先上传先占坑）
+
+
+def _doc_attach_store(pairs):
+    """待读附件批量入库：每文件截断+总量截断。返回实际挂载的文件名列表。"""
+    stored, total = [], 0
+    for name, text in pairs:
+        text = (text or "").strip()[:_DOC_ATTACH_PER_FILE]
+        if total + len(text) > _DOC_ATTACH_TOTAL:
+            text = text[:max(0, _DOC_ATTACH_TOTAL - total)]
+        if not text:
+            break
+        with _DOC_ATTACH_LOCK:
+            _DOC_ATTACH["items"].append({"name": name, "text": text})
+        total += len(text)
+        stored.append(name)
+    return stored
+
+
+def _take_doc_attachments(message):
+    """消费待读附件：有则把全文块拼在用户消息前（一次性绑定下一次对话），
+    无则原样返回。位置/儿童锁/斜杠指令等前置钩子仍吃原始消息（调用序：
+    钩子在前、本函数在 smart_ask 调用点）。"""
+    with _DOC_ATTACH_LOCK:
+        atts = _DOC_ATTACH["items"]
+        _DOC_ATTACH["items"] = []
+    if not atts:
+        return message
+    blocks = [f"【附件 {a['name']} 全文】\n{a['text']}" for a in atts]
+    return ("\n\n".join(blocks)
+            + "\n\n（以上为用户上传的附件全文，请基于附件内容回答用户问题）"
+            + f"\n\n用户消息：{message}")
+
+
+@app.route("/api/doc_attach/clear", methods=["POST"])
+def api_doc_attach_clear():
+    """手动清空待读附件（前端附件标签 ✕）。"""
+    with _DOC_ATTACH_LOCK:
+        _DOC_ATTACH["items"] = []
+    return jsonify({"code": 200, "data": {"ok": True}})
+
+
 @app.route("/api/doc_upload", methods=["POST"])
 def api_doc_upload():
-    """UI 三期上传入口（2026-10-26）：前端文件选择器拿到的绝对路径 → 绕
-    LLM 意图识别，直调 doc_ingest.ingest_document 切片入库（同路径重摄=
-    替换旧块，幂等）。多文件逐个摄取逐个返回（单次上限 10 个防误拖轰炸）；
-    20MB/加密 PDF/扫描件等异常由插件层人话 ❌ 串兜底，本端点只按前缀判
-    成败并透传原话。"""
+    """UI 三期上传入口（2026-10-26 队长纠偏：附件直读≠建知识库）——前端
+    文件选择器拿到的绝对路径 → doc_ingest._extract_text 解析全文（pdf/
+    txt/md/docx/xlsx/代码文本；20MB/加密/损坏人话兜底）→ 截断挂为下一次
+    对话的注入上下文。多文件逐个解析（单次上限 5 个）；❌ 人话逐文件透传。"""
     data = request.get_json(silent=True) or {}
     paths = data.get("paths") or []
     if not isinstance(paths, list) or not paths:
@@ -1262,26 +1310,37 @@ def api_doc_upload():
     try:
         import plugin_loader
         rec = plugin_loader.loaded_plugins().get("doc_ingest")
-        ingest = rec["module"].ingest_document if rec else None
+        extract = rec["module"]._extract_text if rec else None
     except Exception:
-        ingest = None
-    if ingest is None:
+        extract = None
+    if extract is None:
         return jsonify({"code": 503, "error": "doc_ingest 插件未装载"}), 503
-    allowed = (".txt", ".pdf", ".md")   # 对话框层限 txt/pdf，白名单含 .md 兜底
-    results = []
-    ok_count = 0
-    for p in paths[:10]:
+    allowed = (".txt", ".md", ".pdf", ".docx", ".xlsx",
+               ".py", ".js", ".json")
+    results, stash = [], []
+    for p in paths[:5]:
         p = str(p).strip()
         if os.path.splitext(p)[1].lower() not in allowed:
             results.append({"path": p, "ok": False,
-                            "message": "仅支持 TXT/PDF 文档"})
+                            "message": "仅支持文档（txt/md/pdf/docx/xlsx）"
+                                       "与代码文件（py/js/json）"})
             continue
-        msg = str(ingest(p))
-        ok = not msg.startswith("❌")
-        ok_count += 1 if ok else 0
-        results.append({"path": p, "ok": ok, "message": msg})
-    return jsonify({"code": 200, "data": {"ok_count": ok_count,
+        try:
+            text = str(extract(p))
+            if not text.strip():
+                raise RuntimeError("提取后没有可用文本（可能是扫描件图片 PDF）")
+            stash.append((os.path.basename(p), text))
+            results.append({"path": p, "ok": True, "message": "已就绪"})
+        except Exception as e:
+            results.append({"path": p, "ok": False, "message": str(e)[:120]})
+    stored = _doc_attach_store(stash)
+    for r in results:
+        if r["ok"] and r["path"] and os.path.basename(r["path"]) not in stored:
+            r["ok"] = False   # 超总量被截掉的文件如实标失败
+            r["message"] = "附件总量已达上限（先上传的优先）"
+    return jsonify({"code": 200, "data": {"ok_count": len(stored),
                                           "total": len(results),
+                                          "names": stored,
                                           "results": results}})
 
 
@@ -1530,7 +1589,8 @@ def api_chat():
         print(f"[香橙派收到消息] {user_msg}")
         # 控制台=owner 本机语境（与 relationship.tone_prefix 同源兜底）：
         # 不传 user_id 时 persona 段 uid 空串→控制台人格永不生效（冒烟实锤）
-        reply, source = smart_ask(user_msg, history, user_id="owner")
+        reply, source = smart_ask(_take_doc_attachments(user_msg),
+                                  history, user_id="owner")
         print(f"[香橙派生成回复] 来源: {source}")
         # 🛡️ Web 出口净化（纵深防御）：smart_ask 共享链路可能带回 QQ 专用 CQ 码
         # （face 表情码 / [CQ:image] 表情包等），网页无法解析——返回与落盘前统一
@@ -1667,7 +1727,7 @@ def api_chat_stream():
         def runner():
             try:
                 reply, source = brain.smart_ask_stream(
-                    user_msg, history, on_event=on_event,
+                    _take_doc_attachments(user_msg), history, on_event=on_event,
                     user_id="owner")   # 控制台=owner 语境（persona 修复同 api_chat）
                 holder["reply"] = reply
                 holder["source"] = source

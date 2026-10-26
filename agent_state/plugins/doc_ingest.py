@@ -134,7 +134,69 @@ def _extract_text(path):
             except UnicodeDecodeError:
                 continue
         raise RuntimeError("文本编码无法识别（试过 UTF-8/GBK）")
-    raise RuntimeError(f"不支持的格式 {ext}（一期支持 .pdf/.txt/.md）")
+    if ext == ".docx":
+        return _extract_docx(path)
+    if ext == ".xlsx":
+        return _extract_xlsx(path)
+    raise RuntimeError(
+        f"不支持的格式 {ext}（支持 .pdf/.txt/.md/.docx/.xlsx 及代码文本）")
+
+
+def _extract_docx(path):
+    """docx 正文提取（纯 stdlib：docx=zip+XML，零新依赖——python-docx 带
+    lxml 体积代价不值）。w:p=段落换行、w:tc=单元格制表，标签全剥、实体还原。"""
+    import io
+    import re
+    import zipfile
+    import html as _html
+    try:
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+    except zipfile.BadZipFile as e:
+        raise RuntimeError(f"docx 文件损坏或格式异常：{e}")
+    xml = xml.replace("</w:tc>", "\t").replace("</w:p>", "\n")
+    text = _html.unescape(re.sub(r"<[^>]+>", "", xml))
+    return text.strip()
+
+
+def _extract_xlsx(path):
+    """xlsx 表格提取（纯 stdlib 同上）：sharedStrings+前 3 个工作表，
+    每行单元格制表拼接。容忍内联字符串/空单元格；日期按原始数值吐出。"""
+    import zipfile
+    from xml.etree import ElementTree as ET
+    NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    try:
+        with zipfile.ZipFile(path) as z:
+            shared = []
+            if "xl/sharedStrings.xml" in z.namelist():
+                sroot = ET.fromstring(z.read("xl/sharedStrings.xml"))
+                for si in sroot.findall(f"{NS}si"):
+                    shared.append("".join(
+                        t.text or "" for t in si.iter(f"{NS}t")))
+            out = []
+            sheets = sorted(n for n in z.namelist()
+                            if n.startswith("xl/worksheets/sheet")
+                            and n.endswith(".xml"))[:3]
+            for name in sheets:
+                out.append(f"【{os.path.basename(name)}】")
+                root = ET.fromstring(z.read(name))
+                for row in root.iter(f"{NS}row"):
+                    cells = []
+                    for c in row.findall(f"{NS}c"):
+                        v = c.find(f"{NS}v")
+                        if c.get("t") == "s" and v is not None:
+                            cells.append(shared[int(v.text or "0")])
+                        elif v is not None:
+                            cells.append(v.text or "")
+                        else:
+                            is_el = c.find(f"{NS}is")
+                            cells.append("".join(
+                                t.text or "" for t in is_el.iter(f"{NS}t"))
+                                if is_el is not None else "")
+                    out.append("\t".join(cells))
+            return "\n".join(out).strip()
+    except zipfile.BadZipFile as e:
+        raise RuntimeError(f"xlsx 文件损坏或格式异常：{e}")
 
 
 def _chunks(text):

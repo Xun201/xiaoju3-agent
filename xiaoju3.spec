@@ -46,6 +46,9 @@ a = Analysis(
     hiddenimports=[
         # ── yt-dlp（#351 video_ingest 插件依赖，collect_all 全子模块）──
         'yt_dlp',
+        # ── pypdf（UI 三期上传/知识摄取 PDF 解析：doc_ingest._extract_text
+        #    函数内动态 import，静态分析不可见——2026-10-26 实补）──
+        'pypdf',
         # ── 底层 C 扩展显式收集（2.0.0 构建实锤：pyi_rth_multiprocessing
         #    运行时钩子需要 _socket，自动收集漏致启动崩 No module named
         #    '_socket'——2026-10-17 用户拍板显式列 + 主入口兜底 import）──
