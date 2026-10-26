@@ -767,7 +767,8 @@ class QuitBridge:
                 return {"ok": False, "error": "窗口未就绪"}
             result = win.create_file_dialog(
                 _webview.OPEN_DIALOG, allow_multiple=True,
-                file_types=("文档文件 (*.txt;*.pdf)",))
+                file_types=("文档文件 (*.txt;*.pdf;*.docx;*.xlsx;*.md;"
+                            "*.py;*.js;*.json)", "所有文件 (*.*)"))
             paths = [str(p) for p in (result or [])]
             self._out(f"📎 文件选择：{len(paths)} 个")
             return {"ok": True, "paths": paths}

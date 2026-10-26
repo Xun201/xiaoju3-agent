@@ -550,7 +550,9 @@ class Ui3UploadTests(unittest.TestCase):
         self.assertIn('"/api/doc_attach/clear"', self.dash)
         self.assertIn("def pick_docs", self.launcher)
         self.assertIn("allow_multiple=True", self.launcher)
-        self.assertIn("文档文件 (*.txt;*.pdf)", self.launcher)
+        self.assertIn("文档文件 (*.txt;*.pdf;*.docx;*.xlsx;*.md;",
+                      self.launcher)
+        self.assertIn('"*.py;*.js;*.json)", "所有文件 (*.*)"', self.launcher)
         # #34 族雷：本文件 webview 为函数内延迟导入——pick_docs 体内必须
         # 自带 import（模块级引用=运行时 NameError）
         body = _extract_span(self.launcher, "def pick_docs", "def quit_app")

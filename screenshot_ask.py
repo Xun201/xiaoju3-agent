@@ -108,8 +108,8 @@ def _snip_tk(save_dir, dark):
     result = {"path": None}
 
     root = tk.Tk()
-    root.overriderirect(False)
-    root.overrideredirect(True)
+    root.overrideredirect(True)   # 无边框置顶（2026-10-26 修拼写雷：
+    # overriderirect 属性不存在→AttributeError 杀死整个划选+热键泵）
     root.geometry(f"{vw}x{vh}+{vx}+{vy}")
     root.attributes("-topmost", True)
     root.config(cursor="crosshair", bg="black")
@@ -160,7 +160,8 @@ def _snip_tk(save_dir, dark):
     canvas.bind("<ButtonRelease-1>", _release)
     root.bind("<Escape>", _cancel)
     canvas.bind("<Button-3>", _cancel)   # 右键取消（微信同款）
-    root.focus_force()
+    # 焦点在窗口映射后再取（映射前 focus_force 静默失效——Esc 失灵根因）
+    root.after(100, root.focus_force)
     root.mainloop()
     return result["path"]
 
@@ -186,45 +187,52 @@ _BUSY = threading.Lock()
 
 
 def start_hotkey_daemon(on_done=None, save_dir=None, pre_hide=None,
-                        post_show=None):
-    """按降级链注册全局热键（Alt+A→Alt+S→Alt+Shift+A），起 daemon 消息泵
-    线程。每次触发执行一次 snip（划选中重复按键忽略——busy 锁）；on_done
-    (png_path|None) 在热键线程回调。返回 (stop_event, hotkey_name|None)：
-    全部注册失败时 hotkey_name=None、仅打印人话提示不抛不崩（stop set 即
-    退出泵并注销热键）。"""
+                        post_show=None, candidates=None):
+    """按降级链注册全局热键（缺省 Alt+A→Alt+S→Alt+Shift+A；candidates 可
+    自带 [(名称, mod, vk), ...]），起 daemon 消息泵线程。每次触发执行一次
+    snip（划选中重复按键忽略——busy 锁）；on_done(png_path|None) 在热键
+    线程回调。返回 (stop_event, hotkey_name|None)：全部注册失败时
+    hotkey_name=None、仅打印人话提示不抛不崩。泵全程 try/except 兜底——
+    异常打印 traceback 而非静默杀线程（2026-10-26 拼写雷教训：异常死线程
+    让遮罩永不出现且无任何报错）。"""
     _ensure_dpi_awareness()
     user32 = ctypes.windll.user32
     registered = None
-    for name, mod, vk in _HOTKEY_CANDIDATES:
+    for name, mod, vk in (candidates or _HOTKEY_CANDIDATES):
         if user32.RegisterHotKey(None, _HOTKEY_ID, mod, vk):
             registered = (name, mod, vk)
             break
     stop = threading.Event()
     if registered is None:
         print("⚠️ 热键被占用，请修改设置"
-              "（已尝试 Alt+A / Alt+S / Alt+Shift+A 均被占用）", flush=True)
+              "（降级链内候选全部被占用）", flush=True)
         threading.Thread(target=stop.wait, daemon=True).start()
         return stop, None
     name, mod, vk = registered
     print(f"⌨️ 截图热键已注册：{name}（按下即进入划选）", flush=True)
 
     def _pump():
-        msg = _wt.MSG()
-        while not stop.is_set():
-            # GetMessageW 阻塞泵本线程消息；WM_HOTKEY=划选触发
-            r = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
-            if r <= 0 or stop.is_set():
-                break
-            if msg.message == _WM_HOTKEY:
-                if _BUSY.acquire(blocking=False):
-                    try:
-                        path = snip(save_dir=save_dir, pre_hide=pre_hide,
-                                    post_show=post_show)
-                        if on_done:
-                            on_done(path)
-                    finally:
-                        _BUSY.release()
-        user32.UnregisterHotKey(None, _HOTKEY_ID)
+        try:
+            msg = _wt.MSG()
+            while not stop.is_set():
+                # GetMessageW 阻塞泵本线程消息；WM_HOTKEY=划选触发
+                r = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                if r <= 0 or stop.is_set():
+                    break
+                if msg.message == _WM_HOTKEY:
+                    if _BUSY.acquire(blocking=False):
+                        try:
+                            path = snip(save_dir=save_dir, pre_hide=pre_hide,
+                                        post_show=post_show)
+                            if on_done:
+                                on_done(path)
+                        except Exception:
+                            import traceback
+                            traceback.print_exc()   # 静默杀线程=无报错无遮罩
+                        finally:
+                            _BUSY.release()
+        finally:
+            user32.UnregisterHotKey(None, _HOTKEY_ID)
 
     t = threading.Thread(target=_pump, name="xiaoju3-hotkey", daemon=True)
     t.start()

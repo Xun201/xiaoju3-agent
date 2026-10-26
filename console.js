@@ -1015,6 +1015,8 @@
                     showToast('📎 上传请在桌面窗口中使用（浏览器预览不支持）');
                     return;
                 }
+                showToast('📎 支持 TXT/PDF/Word/Excel/代码等格式，'
+                    + '请选择具体文件，不支持直接选文件夹');
                 window.pywebview.api.pick_docs().then(function (r) {
                     if (!r || !r.ok) {
                         showToast('❌ ' + ((r && r.error) || '选择器打开失败'));
