@@ -756,6 +756,25 @@ class QuitBridge:
         return {"ok": True, "unlocked": bool(cur.get("dev_unlocked")),
                 "mode_on": bool(cur.get("dev_mode_on"))}
 
+    def pick_docs(self):
+        """系统文件选择器（UI 三期上传入口，2026-10-26）：多选 TXT/PDF，
+        返回绝对路径列表。前端拿路径 POST /api/doc_upload 直取 doc_ingest
+        摄取（绕 LLM 意图识别）。取消选择=空列表（前端静默）。"""
+        try:
+            import webview as _webview   # 延迟导入同款（本文件 webview 非模块级）
+            win = self._window_getter()
+            if win is None:
+                return {"ok": False, "error": "窗口未就绪"}
+            result = win.create_file_dialog(
+                _webview.OPEN_DIALOG, allow_multiple=True,
+                file_types=("文档文件 (*.txt;*.pdf)",))
+            paths = [str(p) for p in (result or [])]
+            self._out(f"📎 文件选择：{len(paths)} 个")
+            return {"ok": True, "paths": paths}
+        except Exception as e:
+            self._out(f"⚠️ pick_docs 失败: {e}")
+            return {"ok": False, "error": str(e)[:200]}
+
     def quit_app(self, mode="backend_only", remember=False):
         if mode not in ("backend_only", "full_exit"):
             return {"ok": False, "error": "invalid_mode"}

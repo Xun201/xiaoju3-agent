@@ -1008,7 +1008,39 @@
             closeAll();
             const act = item.dataset.action;
             if (act === 'upload') {
-                showToast('📄 文件上传三期上线（将接入 doc_ingest 摄取）');
+                // UI 三期（2026-10-26）：系统文件选择器（js_api 桥）拿绝对
+                // 路径 → POST /api/doc_upload 直取 doc_ingest 摄取（绕 LLM
+                // 意图识别）；成功后立刻刷新上下文文档标签
+                if (!window.pywebview || !window.pywebview.api) {
+                    showToast('📎 上传请在桌面窗口中使用（浏览器预览不支持）');
+                    return;
+                }
+                window.pywebview.api.pick_docs().then(function (r) {
+                    if (!r || !r.ok) {
+                        showToast('❌ ' + ((r && r.error) || '选择器打开失败'));
+                        return;
+                    }
+                    if (!(r.paths || []).length) return;   // 用户取消：静默
+                    showToast('⏳ 正在摄取 ' + r.paths.length + ' 个文件…');
+                    fetch('/api/doc_upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ paths: r.paths })
+                    })
+                        .then(res => res.json())
+                        .then(d => {
+                            if (d.code === 200 && (d.data || {}).ok_count > 0) {
+                                showToast('📚 ' + d.data.ok_count + ' 个文件已成功入库');
+                                refreshContextTags();   // 立刻刷新 📚 标签
+                            } else if (d.code === 200) {
+                                showToast('❌ 摄取失败：'
+                                    + (((d.data || {}).results || [])[0] || {}).message);
+                            } else {
+                                showToast('❌ ' + (d.error || '上传失败'));
+                            }
+                        })
+                        .catch(() => showToast('❌ 摄取服务不可达'));
+                }).catch(function (e) { showToast('❌ ' + e); });
             } else if (act === 'screenshot') {
                 showToast('📸 截图提问三期上线（待视觉模型接入）');
             } else if (act === 'link') {

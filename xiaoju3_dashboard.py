@@ -1248,6 +1248,43 @@ def api_plugins():
     return jsonify({"code": 200, "data": data})
 
 
+@app.route("/api/doc_upload", methods=["POST"])
+def api_doc_upload():
+    """UI 三期上传入口（2026-10-26）：前端文件选择器拿到的绝对路径 → 绕
+    LLM 意图识别，直调 doc_ingest.ingest_document 切片入库（同路径重摄=
+    替换旧块，幂等）。多文件逐个摄取逐个返回（单次上限 10 个防误拖轰炸）；
+    20MB/加密 PDF/扫描件等异常由插件层人话 ❌ 串兜底，本端点只按前缀判
+    成败并透传原话。"""
+    data = request.get_json(silent=True) or {}
+    paths = data.get("paths") or []
+    if not isinstance(paths, list) or not paths:
+        return jsonify({"code": 400, "error": "没有收到文件路径"}), 400
+    try:
+        import plugin_loader
+        rec = plugin_loader.loaded_plugins().get("doc_ingest")
+        ingest = rec["module"].ingest_document if rec else None
+    except Exception:
+        ingest = None
+    if ingest is None:
+        return jsonify({"code": 503, "error": "doc_ingest 插件未装载"}), 503
+    allowed = (".txt", ".pdf", ".md")   # 对话框层限 txt/pdf，白名单含 .md 兜底
+    results = []
+    ok_count = 0
+    for p in paths[:10]:
+        p = str(p).strip()
+        if os.path.splitext(p)[1].lower() not in allowed:
+            results.append({"path": p, "ok": False,
+                            "message": "仅支持 TXT/PDF 文档"})
+            continue
+        msg = str(ingest(p))
+        ok = not msg.startswith("❌")
+        ok_count += 1 if ok else 0
+        results.append({"path": p, "ok": ok, "message": msg})
+    return jsonify({"code": 200, "data": {"ok_count": ok_count,
+                                          "total": len(results),
+                                          "results": results}})
+
+
 @app.route("/api/plugin_debug")
 def api_plugin_debug():
     """插件总线 frozen 诊断（#348 三期侦察，只读零副作用）。

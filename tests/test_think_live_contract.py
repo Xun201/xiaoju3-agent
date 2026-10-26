@@ -525,5 +525,73 @@ class InputDockTests(unittest.TestCase):
             self.assertIn(token, body)
 
 
+class Ui3UploadTests(unittest.TestCase):
+    """UI 三期上传链（2026-10-26）：＋菜单→系统文件选择器（js_api 桥）→
+    /api/doc_upload 直取 doc_ingest（绕 LLM 意图）→Toast+标签刷新。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dash = _read("xiaoju3_dashboard.py")
+        cls.js = _read("console.js")
+        cls.launcher = _read("desktop_launcher.py")
+
+    def test_upload_static_anchors(self):
+        self.assertIn('@app.route("/api/doc_upload"', self.dash)
+        self.assertIn("ingest_document", self.dash)
+        self.assertIn('allowed = (".txt", ".pdf", ".md")', self.dash)
+        self.assertIn("paths[:10]", self.dash)          # 单次上限防轰炸
+        self.assertIn("def pick_docs", self.launcher)
+        self.assertIn("allow_multiple=True", self.launcher)
+        self.assertIn("文档文件 (*.txt;*.pdf)", self.launcher)
+        # #34 族雷：本文件 webview 为函数内延迟导入——pick_docs 体内必须
+        # 自带 import（模块级引用=运行时 NameError）
+        body = _extract_span(self.launcher, "def pick_docs", "def quit_app")
+        self.assertIn("import webview", body)
+        # 前端接线：选择器→端点→Toast→立刻刷标签
+        self.assertIn("window.pywebview.api.pick_docs()", self.js)
+        self.assertIn("'/api/doc_upload'", self.js)
+        self.assertIn("个文件已成功入库", self.js)
+        self.assertIn("refreshContextTags()", self.js)
+        self.assertIn("请在桌面窗口中使用", self.js)   # 浏览器预览降级
+
+    def test_doc_upload_behavior(self):
+        """stub doc_ingest 走真 Flask 端点：白名单拦截/成功计数/插件 ❌ 透传/
+        exe 根本不进插件。插件层 20MB/加密/扫描件兜底属 doc_ingest 自身职责
+        （批 4 测试已覆盖），本层只测端点编排。"""
+        import types
+        import sys
+        from unittest import mock
+        sys.path.insert(0, PROJECT_ROOT)
+        import plugin_loader
+        import xiaoju3_dashboard as D
+        fake = types.ModuleType("doc_ingest_stub")
+        calls = []
+
+        def fake_ingest(path=""):
+            calls.append(str(path))
+            if str(path).endswith("bad.txt"):
+                return "❌ 文档提取后没有可用文本（可能是扫描件图片 PDF）。"
+            return "📚 《%s》已入库：2 个知识块（库内共 2 块）。" % os.path.basename(path)
+
+        fake.ingest_document = fake_ingest
+        client = D.app.test_client()
+        with mock.patch.object(plugin_loader, "loaded_plugins",
+                               lambda: {"doc_ingest": {"module": fake}}):
+            self.assertEqual(client.post(
+                "/api/doc_upload", json={}).get_json()["code"], 400)
+            r = client.post("/api/doc_upload", json={"paths": [
+                "F:/x/a.txt", "F:/x/b.pdf", "F:/x/c.exe",
+                "F:/x/bad.txt"]}).get_json()
+        self.assertEqual(r["code"], 200)
+        self.assertEqual(r["data"]["ok_count"], 2)
+        self.assertEqual(r["data"]["total"], 4)
+        self.assertFalse(r["data"]["results"][2]["ok"])
+        self.assertIn("仅支持 TXT/PDF", r["data"]["results"][2]["message"])
+        self.assertFalse(r["data"]["results"][3]["ok"])
+        self.assertIn("没有可用文本", r["data"]["results"][3]["message"])
+        self.assertEqual(calls, ["F:/x/a.txt", "F:/x/b.pdf",
+                                 "F:/x/bad.txt"])   # 仅 exe 被白名单拦在插件外
+
+
 if __name__ == "__main__":
     unittest.main()
