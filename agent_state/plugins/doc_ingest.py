@@ -17,6 +17,7 @@
 隔离：全部操作 try/except 落 ❌ 串；检索只读；入库幂等（同文档重摄=替换）。
 """
 import os  # noqa: E402
+import threading  # noqa: E402
 import sqlite3  # noqa: E402
 
 _DATA = None      # setup 注入：插件数据目录（knowledge.db 落盘位）
@@ -231,6 +232,7 @@ def ingest_document(path=""):
         db.commit()
         total = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         db.close()
+        _kick_embed_backfill()   # 切片 a：后台补嵌向量（Ollama 不可用=静默下次再试）
         return (f"📚 《{title}》已入库：{len(pieces)} 个知识块"
                 f"（库内共 {total} 块）。现在可以直接问它里面的内容了。")
     except Exception as e:
@@ -277,3 +279,105 @@ def search_reply(query="", **_):
 
 def teardown():
     """卸载钩子：无后台资源，占位（契约完整）。"""
+
+
+# ==================== 向量嵌入管线（#352 二期切片 a，2026-10-26） ====================
+# Embedding = 本地 Ollama nomic-embed-text（768 维，全本地零 API 费）；向量以
+# float32 BLOB 存 chunks.embedding；检索层（切片 b）消费。降级纪律：Ollama/
+# 模型不可用 → 后台任务静默退出打日志，下次摄取自动重试——绝不阻塞摄取主链。
+_OLLAMA_URL = os.environ.get("XIAOJU3_OLLAMA_URL", "http://localhost:11434")
+_EMBED_MODEL = os.environ.get("XIAOJU3_EMBED_MODEL", "nomic-embed-text")
+_EMBED_BATCH = 16
+_EMBED_ROUND_CAP = 400   # 单轮补嵌上限（防首库大批量长跑；重摄自动续）
+_embed_job = {"running": False, "done": 0, "total": 0, "error": ""}
+
+
+def _ensure_embedding_col(db):
+    """chunks 表补 embedding BLOB 列（幂等——已存在则跳过）。"""
+    cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+    if "embedding" not in cols:
+        db.execute("ALTER TABLE chunks ADD COLUMN embedding BLOB")
+        db.commit()
+
+
+def _pack_vec(vec):
+    """float 列表 → float32 BLOB。"""
+    import struct
+    return struct.pack(f"{len(vec)}f", *[float(x) for x in vec])
+
+
+def _unpack_vec(blob):
+    import struct
+    return struct.unpack(f"{len(blob) // 4}f", blob)
+
+
+def _ollama_embed_batch(texts):
+    """批量调 Ollama /api/embed → float32 BLOB 列表。非 200/长度不符皆抛异常。"""
+    import requests
+    resp = requests.post(
+        _OLLAMA_URL.rstrip("/") + "/api/embed",
+        json={"model": _EMBED_MODEL, "input": list(texts)}, timeout=300)
+    resp.raise_for_status()
+    embs = resp.json().get("embeddings") or []
+    if len(embs) != len(texts):
+        raise RuntimeError(
+            f"Ollama 返回 {len(embs)} 条向量，期望 {len(texts)} 条")
+    return [_pack_vec(e) for e in embs]
+
+
+def _embed_backfill_once(db_path=None):
+    """同步补嵌一轮（≤_EMBED_ROUND_CAP 块）。返回 (done, left)。
+    db_path 可注入（测试隔离）；缺省走 _db() 生产库。"""
+    import sqlite3
+    db = sqlite3.connect(db_path or _db())
+    _ensure_embedding_col(db)
+    rows = db.execute(
+        "SELECT rowid, text FROM chunks WHERE embedding IS NULL "
+        "LIMIT ?", (_EMBED_ROUND_CAP,)).fetchall()
+    done = 0
+    for rowid, text in rows:
+        try:
+            blob = _ollama_embed_batch([text])[0]
+            db.execute("UPDATE chunks SET embedding=? WHERE rowid=?",
+                       (blob, rowid))
+            db.commit()
+            done += 1
+        except Exception as e:
+            db.close()
+            raise RuntimeError(f"嵌入失败（rowid={rowid}）：{e}") from e
+    left = db.execute(
+        "SELECT COUNT(*) FROM chunks WHERE embedding IS NULL").fetchone()[0]
+    db.close()
+    return done, left
+
+
+def _embed_backfill_thread():
+    global _embed_job
+    import sqlite3
+    _embed_job = {"running": True, "done": 0, "total": 0, "error": ""}
+    db = sqlite3.connect(_db())
+    _ensure_embedding_col(db)
+    _embed_job["total"] = db.execute(
+        "SELECT COUNT(*) FROM chunks WHERE embedding IS NULL").fetchone()[0]
+    db.close()
+    while True:
+        try:
+            done, left = _embed_backfill_once()
+            _embed_job["done"] += done
+            _embed_job["total"] = _embed_job["done"] + left
+            if left == 0:
+                _embed_job["running"] = False
+                break
+        except Exception as e:
+            _embed_job["running"] = False
+            _embed_job["error"] = str(e)[:160]
+            print(f"[doc_embed] 补嵌中断（下次摄取自动重试）：{e}", flush=True)
+            break
+
+
+def _kick_embed_backfill():
+    """非阻塞启动补嵌线程（已在跑则跳过）。"""
+    global _embed_job
+    if _embed_job.get("running"):
+        return
+    threading.Thread(target=_embed_backfill_thread, daemon=True).start()

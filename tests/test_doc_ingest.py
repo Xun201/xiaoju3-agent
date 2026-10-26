@@ -220,5 +220,83 @@ class DocxXlsxExtractTests(unittest.TestCase):
         self.assertIn("损坏", str(cm.exception))
 
 
+class EmbedPipelineTests(unittest.TestCase):
+    """切片 a 嵌入管线（2026-10-26）：embedding 列幂等+BLOB 存取+补嵌消费+
+    Ollama 不可用人话降级（mock requests 零真网）。"""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="xj3_embed_")
+        self.mod = self._load_mod()
+        import sqlite3
+        self.dbp = os.path.join(self._tmp, "knowledge.db")
+        self.conn = sqlite3.connect(self.dbp)
+        self.conn.execute("""CREATE TABLE chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_title TEXT, doc_path TEXT, chunk_index INTEGER,
+            text TEXT, embedding BLOB)""")
+        self.conn.execute("INSERT INTO chunks (doc_title, doc_path, "
+                          "chunk_index, text) VALUES ('t', 'p', 0, '块0')")
+        self.conn.commit()
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _load_mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "doc_ingest_embed_test",
+            os.path.join(PROJECT_ROOT, "agent_state", "plugins",
+                         "doc_ingest.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_ensure_col_idempotent(self):
+        self.mod._ensure_embedding_col(self.conn)
+        self.mod._ensure_embedding_col(self.conn)   # 二次不炸
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(chunks)")}
+        self.assertIn("embedding", cols)
+
+    def test_pack_unpack_roundtrip(self):
+        vec = [0.1, -0.25, 3.5]
+        blob = self.mod._pack_vec(vec)
+        self.assertIsInstance(blob, bytes)
+        back = self.mod._unpack_vec(blob)
+        for a, b in zip(vec, back):
+            self.assertAlmostEqual(a, b, places=5)
+
+    def test_backfill_fills_null_rows(self):
+        """3 行 NULL → 补嵌后全落 BLOB（mock _ollama_embed_batch）。"""
+        mod = self.mod
+        import sqlite3 as sq
+        db = sq.connect(self.dbp)
+        for i in range(3):
+            db.execute("INSERT INTO chunks (doc_title, doc_path, "
+                       "chunk_index, text) VALUES ('t', 'p', ?, ?)", (i, f"块{i}"))
+        db.commit()
+        db.commit()
+        db.close()
+        with patch.object(mod, "_ollama_embed_batch",
+                          lambda texts: [mod._pack_vec([0.5] * 8)
+                                         for _ in texts]):
+            done, left = mod._embed_backfill_once(self.dbp)
+        self.assertEqual(done, 4)   # setUp 1 行 + 本用例 3 行（NULL 全消费）
+        db2 = sq.connect(self.dbp)   # 管线内已 close 自身连接——重开查询
+        rows = db2.execute("SELECT embedding FROM chunks").fetchall()
+        db2.close()
+        self.assertTrue(all(r[0] for r in rows))
+
+    def test_ollama_unavailable_friendly_error(self):
+        """Ollama 不可用 → 人话 RuntimeError（管线不炸，下次摄取重试）。"""
+        mod_ = self._load_mod()
+        # _ollama_embed_batch 抛裸异常属设计；人话包装在管线入口
+        # _embed_backfill_once——此处验证入口的人话降级
+        with patch("requests.post",
+                   side_effect=ConnectionError("refused")):
+            with self.assertRaises(RuntimeError) as cm:
+                mod_._embed_backfill_once(self.dbp)
+        self.assertIn("嵌入失败", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
