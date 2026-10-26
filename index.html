@@ -769,8 +769,9 @@
             box-shadow: none;
             width: 320px;
             padding: 2px 2px 8px;
-            gap: 0;
+            gap: 16px;                       /* 卡片漂浮间距（v0 gap-4） */
         }
+        .dash-card, .stat-item.todos-card { margin: 0; }   /* 间距交给 gap */
         .panel-header {
             display: flex; align-items: center; justify-content: space-between;
             background: transparent; border: none; box-shadow: none;
@@ -793,24 +794,59 @@
             border-radius: 16px;
             box-shadow: var(--v0-card-shadow);
             padding: 18px 18px 16px;
-            margin: 0 0 16px;
         }
         .stat-label {
             font-size: 12px; font-weight: 500;
             letter-spacing: 0.08em; text-transform: uppercase;
             color: var(--v0-n500); margin-bottom: 12px;
         }
+        .v0-card-head {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 14px;
+        }
+        .v0-card-head .stat-label { margin-bottom: 0; }
+        .v0-chip {
+            display: inline-flex; align-items: center;
+            padding: 4px 12px; border-radius: 999px;
+            background: #ffffff; border: 1px solid var(--v0-n200);
+            font-size: 12px; font-weight: 500; color: var(--v0-n500);
+        }
+        .v0-chip-soft {
+            background: var(--v0-n100); border: none;
+            color: var(--v0-n900); font-weight: 400;
+            margin-top: 12px;
+        }
+        .v0-metric-row {
+            display: flex; align-items: baseline; justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .v0-metric-row .stat-label { margin-bottom: 0; }
+        .v0-metric-val {
+            font-family: "Cascadia Mono", Consolas, monospace;
+            font-size: 13px; font-weight: 600; color: var(--v0-n900);
+        }
+        .v0-weather-row {
+            display: flex; align-items: flex-end; justify-content: space-between;
+        }
+        .v0-big {
+            font-size: 46px !important; font-weight: 700 !important;
+            letter-spacing: -0.03em; line-height: 1;
+        }
+        .v0-weather-icon { font-size: 46px; line-height: 1; }
         .stat-value {
             font-size: 30px; font-weight: 600; color: var(--v0-n900);
             letter-spacing: -0.02em;
         }
         .dash-note { font-size: 13px; color: var(--v0-n500); margin-top: 4px; }
         .stat-bar-bg {
-            height: 6px; border-radius: 999px; background: var(--v0-n100);
+            height: 8px;                       /* v0 粗壮进度条 */
+            border-radius: 999px; background: var(--v0-n100);
             overflow: hidden;
         }
         .stat-bar-fill {
-            background: var(--v0-n400); border-radius: 999px;
+            background: var(--v0-n400);        /* v0 中性条（旧渐变退役） */
+            background-image: none;
+            border-radius: 999px;
             transition: width 0.6s ease;
         }
         .stat-item .stat-label span { color: var(--v0-n900); font-weight: 600; }
@@ -843,36 +879,56 @@
         }
         .header-btn:hover { background: var(--v0-n100); color: var(--v0-n900); }
         .chat-history {
-            background: rgba(250, 250, 250, 0.6);
+            background: var(--v0-n50);          /* 队长拍板：极浅灰 #fafafa */
             padding: 24px 32px;
         }
         .chat-history > * { max-width: 768px; margin-left: auto; margin-right: auto; }
 
-        /* ---- 气泡（v0 MessageBubble）---- */
+        /* ---- 气泡（v0 MessageBubble：思考链浮在气泡上方，不嵌套）---- */
         .message.user-message {
-            background: var(--v0-n900); color: #ffffff;
-            border-radius: 16px 16px 4px 16px;
+            background: var(--v0-n950); color: #ffffff;
+            border-radius: 18px 18px 4px 18px;
             padding: 10px 16px; font-size: 14px; line-height: 1.6;
             box-shadow: none; border: none;
         }
         .message.bot-message {
-            background: #ffffff; border: 1px solid var(--v0-n200);
-            border-radius: 16px 16px 16px 4px;
-            padding: 10px 16px; font-size: 14px; line-height: 1.6;
-            color: var(--v0-n900); box-shadow: var(--v0-card-shadow);
+            /* 容器透明化：思考链/来源徽标在气泡外裸排（v0 形态），只有
+               正文 .bubble-content 承载白卡气泡 */
+            background: transparent; border: none; box-shadow: none;
+            padding: 0; border-radius: 0;
+            display: flex; flex-direction: column; align-items: flex-start;
+            gap: 2px;
         }
-        .message.bot-message .bubble-content { font-weight: 500; color: #262626; }
+        .message.bot-message .bubble-content {
+            background: #ffffff; border: 1px solid var(--v0-n200);
+            border-radius: 4px 16px 16px 16px;
+            padding: 10px 16px;
+            box-shadow: var(--v0-card-shadow);
+            font-weight: 500; color: #262626;
+            max-width: 100%;
+        }
+        .message.bot-message .source-badge,
+        .message.bot-message .msg-tools { align-self: flex-start; margin-top: 6px; }
         .source-badge {
             background: var(--v0-n100); border: 1px solid var(--v0-n200);
             color: var(--v0-n500); border-radius: 6px; font-size: 11px;
         }
 
-        /* ---- 思考链（v0 ThinkingPanel 色）---- */
+        /* ---- 思考链（v0 ThinkingPanel 色：Brain 行灰字+左线小字）---- */
+        .think-live {
+            font-size: 12px; color: var(--v0-n500);
+            margin: 0 0 2px;
+        }
         .think-live-label { color: var(--v0-n500); }
-        .think-live-line { color: var(--v0-n400); border-left: 1px solid var(--v0-n200); padding-left: 12px; }
-        .think-live.think-live-collapsed .think-live-label::after { color: var(--v0-n400); }
+        .think-live-line {
+            color: var(--v0-n400); border-left: 1px solid var(--v0-n200);
+            padding-left: 12px;
+        }
+        .think-live.think-live-collapsed .think-live-label::after {
+            color: var(--v0-n400);
+        }
 
-        /* ---- Composer（v0 圆角 3xl 大卡）---- */
+        /* ---- Composer（v0 圆角 3xl 大卡+深度柔影）---- */
         .chat-input-area {
             background: rgba(250, 250, 250, 0.6);
             border: none; padding: 4px 32px 20px;
@@ -880,12 +936,12 @@
         .composer {
             background: #ffffff; border: 1px solid var(--v0-n200);
             border-radius: 24px; padding: 10px 12px 8px;
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
             max-width: 768px; margin: 0 auto; width: 100%;
         }
         .composer:focus-within {
             border-color: var(--v0-n300);
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.10);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.09);
         }
         .composer input {
             font-size: 14px; color: var(--v0-n900);
@@ -976,23 +1032,36 @@
     <div class="sidebar">
         <div class="panel-header">小橘3号 · 系统状态</div>
         <div class="stat-item dash-card">
-            <div class="stat-label">CPU 占用 <span id="cpu-text">--%</span></div>
+            <div class="v0-card-head">
+                <span class="stat-label">CPU 占用</span>
+                <span class="v0-metric-val" id="cpu-text">--%</span>
+            </div>
             <div class="stat-bar-bg"><div class="stat-bar-fill" id="cpu-bar" style="width: 0%;"></div></div>
         </div>
         <div class="stat-item dash-card">
-            <div class="stat-label">内存占用 <span id="mem-text">--%</span></div>
+            <div class="v0-card-head">
+                <span class="stat-label">内存占用</span>
+                <span class="v0-metric-val" id="mem-text">--%</span>
+            </div>
             <div class="stat-bar-bg"><div class="stat-bar-fill" id="mem-bar" style="width: 0%;"></div></div>
         </div>
         <div class="stat-item dash-card">
             <div class="stat-label">系统温度</div>
             <div class="stat-value" id="temp-text">-- °C</div>
         </div>
-        <!-- 天气卡（#351 一期真实化）：GET /api/weather（15 分钟缓存后端+
-             20 分钟前端轮询），失败显示"暂无数据"绝不崩面板 -->
+        <!-- 天气卡（#351 一期真实化 + UI 三期 v0 WeatherCard 形态）：超大温度
+             数字+放大图标+胶囊描述；GET /api/weather（15 分钟缓存后端+20 分钟
+             前端轮询），失败显示"暂无数据"绝不崩面板 -->
         <div class="stat-item dash-card">
-            <div class="stat-label">🌤️ <span id="weather-city">天气</span></div>
-            <div class="stat-value"><span id="weather-temp">--</span></div>
-            <div class="dash-note" id="weather-desc">加载中…</div>
+            <div class="v0-card-head">
+                <span class="stat-label v0-head-label">🌤️ 天气</span>
+                <span class="v0-chip" id="weather-city">天气</span>
+            </div>
+            <div class="v0-weather-row">
+                <div class="stat-value v0-big" id="weather-temp">--</div>
+                <div class="v0-weather-icon" aria-hidden="true">⛅</div>
+            </div>
+            <div class="v0-chip v0-chip-soft" id="weather-desc">加载中…</div>
         </div>
         <!-- 快捷指令卡（答辩微调）：[记待办] 预填输入框；[系统自检] 消费
              既有 /api/health + toast——零新增后端、零流式逻辑改动 -->
