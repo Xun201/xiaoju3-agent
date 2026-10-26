@@ -442,12 +442,19 @@ class InputDockTests(unittest.TestCase):
         self.assertNotIn("chat-input-area button {", h)  # 旧按钮族退役
 
     def test_voice_input_js(self):
-        """语音两段式：start（红色呼吸态）/stop（文字填入不自动发送）。"""
+        """语音两段式：start（红色呼吸态）/stop（文字填入不自动发送）。
+        2026-10-26 三轮：busy 在飞守卫+后端状态采纳（防 webview 响应迟滞
+        脱同步——生产 11:37 序列 start×4 实锤）。"""
         self.assertIn("function initVoiceInput", self.js)
         self.assertIn("fetch('/api/stt/start'", self.js)
         self.assertIn("fetch('/api/stt/stop'", self.js)
         self.assertIn("mic.classList.add('recording')", self.js)
         self.assertIn("input.value = (input.value ? input.value + ' ' : '')", self.js)
+        self.assertIn("let busy = false", self.js)          # 在飞守卫
+        self.assertIn("if (busy) return;", self.js)
+        self.assertIn(".finally(function () { busy = false; })", self.js)
+        self.assertIn("继续录音中", self.js)                 # 幂等 note 态提示
+        self.assertIn("没有进行中的录音", self.js)           # 409 语义化轻提示
 
     def test_stt_endpoints(self):
         """后端 /api/stt 两端点+状态机（sounddevice 后端录音+faster-whisper
@@ -476,9 +483,13 @@ class InputDockTests(unittest.TestCase):
         self.assertIn("text = _stt_t2s(", seg)           # 出口真过 t2s
         self.assertIn('XIAOJU3_STT_MODEL", "small"', self.dash)  # small 档 env 可调
         self.assertIn("local_files_only=True", self.dash)  # 镜像超时回落本地缓存（2026-10-26 实锤）
-        self.assertIn("未检测到语音", seg)   # 静音 RMS 门+复读门双闸（生产实锤）
-        self.assertIn("np.sqrt(np.mean(audio ** 2))", self.dash)   # RMS 静音门
-        self.assertIn("_strip(text) in _strip(_STT_PROMPT)", self.dash)  # 引导词回声门
+        # —— 三轮：脱同步自愈+门误杀收窄（2026-10-26 生产实锤 11:37 序列）——
+        self.assertIn('"ok": True, "note": "已在录音中"', self.dash)   # start 幂等 200（防前端状态脱同步）
+        self.assertIn("rms < 0.003", self.dash)          # 静音门阈值放宽（队长口径：误吃说话宁可放宽）
+        self.assertIn('"[stt] stop: engine=', self.dash)  # 响度插桩进 dashboard 日志
+        self.assertIn("rms < 0.015", self.dash)          # 回声门收窄到低响度带（真说话结构性不可能被吃）
+        self.assertIn("环境太安静，没听清", self.dash)
+        self.assertIn("只有杂音，没听清", self.dash)
 
     def test_dock_css_family(self):
         for token in (".dock-btn {", ".input-dock-menu {",

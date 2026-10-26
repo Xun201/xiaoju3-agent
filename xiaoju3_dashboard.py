@@ -1086,9 +1086,10 @@ def _stt_t2s(text):
 @app.route("/api/stt/start", methods=["POST"])
 def api_stt_start():
     """开始录音（系统默认输入设备；sounddevice InputStream 后台回调采集，
-    pyaudio 兜底）。已在录/无麦克风/依赖缺失 → 人话错误不 500。"""
+    pyaudio 兜底）。幂等语义（2026-10-26 生产实锤：webview 响应迟滞时前端
+    连点重发，409 会让前端状态彻底脱同步）——已在录音中返回 200+note。"""
     if _STT["recording"]:
-        return jsonify({"code": 409, "error": "已在录音中"})
+        return jsonify({"code": 200, "data": {"ok": True, "note": "已在录音中"}})
     try:
         import sys as _sys
         deps = _stt_deps_path()
@@ -1156,21 +1157,31 @@ def api_stt_stop():
             return jsonify({"code": 200, "data": {"text": "", "note": f"无音频数据: {e}"}})
         if audio.size < 1600:   # <0.1s 视为误触
             return jsonify({"code": 200, "data": {"text": "", "note": "录音太短"}})
-        # 静音门（2026-10-26 生产实锤）：近静音喂给 whisper 会复读
-        # initial_prompt 尾巴（"请使用简体中文输出。"实锤）——RMS 过低直接
-        # 判无语音，不进模型
-        if float(np.sqrt(np.mean(audio ** 2))) < 0.005:
-            return jsonify({"code": 200, "data": {"text": "", "note": "未检测到语音"}})
+        # 静音门（2026-10-26 生产实锤：近静音喂 whisper 会复读 initial_prompt
+        # 尾巴）——RMS 阈值 0.005→0.003（队长口径：误吃说话宁可放宽）；响度
+        # 插桩进日志（dashboard_live log）供后续调阈值
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        print(f"[stt] stop: engine={_STT.get('engine')} sr={sr} "
+              f"dur={len(audio)/16000:.1f}s rms={rms:.4f}", flush=True)
+        if rms < 0.003:
+            return jsonify({"code": 200,
+                            "data": {"text": "", "note": "环境太安静，没听清"}})
         model = _stt_whisper()
         segments, info = model.transcribe(audio, language="zh", beam_size=1,
                                           initial_prompt=_STT_PROMPT)
         text = _stt_t2s(
             "".join(s.text.strip() for s in segments if s.text.strip()))
-        # 引导词复读门：静音门拦不住的底噪段会吐出引导词片段——剥标点后
-        # 是引导词子串即视为回声，丢弃（同一实锤的第二道闸）
+        # 引导词回声门（收窄版）：仅低响度带（rms<0.015，纯底噪区）才判回声
+        # ——真说话响度远高于此，结构性不可能被吃（2026-10-26 教训：旧版
+        # 全响度判回声，把"小橘帮我记个待办"这类⊆引导词的转写整句误杀）
         _strip = lambda s: re.sub(r"[，。？！、,.?!～~\s]", "", s)
-        if len(_strip(text)) >= 4 and _strip(text) in _strip(_STT_PROMPT):
-            return jsonify({"code": 200, "data": {"text": "", "note": "未检测到语音"}})
+        if (rms < 0.015 and len(_strip(text)) >= 4
+                and _strip(text) in _strip(_STT_PROMPT)):
+            print(f"[stt] echo-gate: quiet rms={rms:.4f} text={text[:40]}",
+                  flush=True)
+            return jsonify({"code": 200,
+                            "data": {"text": "", "note": "只有杂音，没听清"}})
+        print(f"[stt] stop ok: text_len={len(text)}", flush=True)
         return jsonify({"code": 200, "data": {"text": text}})
     finally:
         _stt_close_stream()   # 第二道保险：哪怕上面任何一步抛异常也已收口

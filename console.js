@@ -1116,22 +1116,34 @@
         const input = document.getElementById('chat-input');
         if (!mic || !input) return;
         let recording = false;
+        // 请求在飞标志（2026-10-26 生产实锤：webview 对 start 响应处理迟滞
+        // 时连点会让 recording 与后端脱同步——在飞期忽略连点+按后端应答
+        // 采纳状态，双保险自愈）
+        let busy = false;
         mic.addEventListener('click', function () {
+            if (busy) return;
             if (!recording) {
+                busy = true;
                 fetch('/api/stt/start', { method: 'POST' })
                     .then(res => res.json())
                     .then(d => {
+                        // 幂等语义：200 一律进录音态（含后端"已在录音中"
+                        // note——前端脱同步时自此对齐后端真相）
                         if (d.code === 200) {
                             recording = true;
                             mic.classList.add('recording');
                             mic.title = '录音中…点击停止';
-                            showToast('🎤 录音中，再点一次结束');
+                            showToast((d.data && d.data.note)
+                                ? '🎤 继续录音中，说完再点一次结束'
+                                : '🎤 录音中，再点一次结束');
                         } else {
                             showToast('❌ ' + (d.error || '录音启动失败'));
                         }
                     })
-                    .catch(() => showToast('❌ 录音服务不可达'));
+                    .catch(() => showToast('❌ 录音服务不可达'))
+                    .finally(function () { busy = false; });
             } else {
+                busy = true;
                 mic.classList.remove('recording');
                 mic.title = '语音输入（点击开始/停止）';
                 recording = false;
@@ -1146,11 +1158,16 @@
                             showToast('✅ 已识别填入，可修改后发送');
                         } else if (d.code === 200) {
                             showToast('（没听清内容——' + ((d.data || {}).note || '空结果') + '）');
+                        } else if ((d.error || '').indexOf('没有进行中的录音') >= 0) {
+                            // 后端无录音（如识别完成后又点了一次）——状态已
+                            // 对齐，轻提示不吓人
+                            showToast('（当前没有录音了，再点麦克风开始）');
                         } else {
                             showToast('❌ ' + (d.error || '识别失败'));
                         }
                     })
-                    .catch(() => showToast('❌ 识别请求失败'));
+                    .catch(() => showToast('❌ 识别请求失败'))
+                    .finally(function () { busy = false; });
             }
         });
     })();
