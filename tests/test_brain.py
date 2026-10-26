@@ -386,6 +386,28 @@ class HistoryContextCleanTests(unittest.TestCase):
         self.assertEqual(users[0]["content"], "这份附件讲什么")
         self.assertNotIn("很长内容", users[0]["content"])
 
+    def test_build_messages_folds_device_readout_answers(self):
+        """②刀扩展（2026-10-27 队长拍板）：历史 assistant 正文的设备记录
+        解读轮折叠成占位（真机实捕 10/10 命中污染轮零误伤）。"""
+        history = [
+            {"role": "user", "content": "你好"},
+            {"role": "assistant",
+             "content": "根据您提供的设备操作记录，以下是解析后的结果：control_ha_device → turn_on"},
+        ]
+        msgs = brain._build_messages("在吗", history)
+        asst = [m for m in msgs if m["role"] == "assistant"]
+        self.assertEqual(asst[0]["content"], "[历史设备操作解读已省略]")
+
+    def test_build_messages_keeps_normal_device_reply(self):
+        """正常设备执行回复（"已为你打开灯"形态）零误伤保留。"""
+        history = [
+            {"role": "user", "content": "把客厅灯打开"},
+            {"role": "assistant", "content": "好的，已为你打开客厅灯 ✅"},
+        ]
+        msgs = brain._build_messages("在吗", history)
+        asst = [m for m in msgs if m["role"] == "assistant"]
+        self.assertEqual(asst[0]["content"], "好的，已为你打开客厅灯 ✅")
+
     def test_build_messages_plain_history_untouched(self):
         """无标记历史零变化（回归保护：普通对话/普通 JSON 不误剥）。"""
         history = [

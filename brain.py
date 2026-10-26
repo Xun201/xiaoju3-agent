@@ -2075,6 +2075,22 @@ def _relationship_suffix(user_id):
 # （_take_doc_attachments 产物）若落历史会跨轮污染——user 侧防御性剥离。
 _THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
 _ATTACH_INJECT_MARK = "（以上为用户上传的附件全文"
+_DEVICE_READOUT_MARKS = ("操作记录", "turn_on")
+
+
+def _fold_stale_device_readouts(text):
+    """历史 assistant 正文折叠"设备操作记录解读轮"（2026-10-27 队长拍板第
+    ②刀扩展：隔夜控灯记录的解读回复留在历史里持续污染纯净闲聊——07:32
+    实锤复发）。判据=正文含"操作记录"或"turn_on"（真机实捕 10/10 命中
+    污染轮零误伤：正常设备执行轮回复是"已为你打开灯"形态，不含工具名/
+    记录字样；用户真聊设备话题或编程时可能误伤——该轮已在前端展示过，
+    折叠仅影响历史回放，取舍可接受）。折叠保留轮次结构。"""
+    if not text:
+        return text
+    for mark in _DEVICE_READOUT_MARKS:
+        if mark in text:
+            return "[历史设备操作解读已省略]"
+    return text
 
 
 def _strip_history_think_blocks(text):
@@ -2144,6 +2160,7 @@ def _build_messages(message, history, user_id=None):
             content = _strip_consumed_attachments(content)
         elif role == "assistant":
             content = _strip_history_think_blocks(content)
+            content = _fold_stale_device_readouts(content)
         if role == "system":
             for prefix in ("【前情提要】", "以下是关于用户的长期记忆",
                            "以下是最近的设备操作记录"):

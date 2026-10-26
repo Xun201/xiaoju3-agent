@@ -519,8 +519,11 @@ def _read_console_history():
         if not isinstance(m, dict):
             continue
         c = m.get("content") or ""
-        if m.get("role") == "assistant" and "<think>" in c:
-            m["content"] = brain._strip_history_think_blocks(c)
+        if m.get("role") == "assistant":
+            if "<think>" in c:
+                c = brain._strip_history_think_blocks(c)
+            c = brain._fold_stale_device_readouts(c)   # 正文解读轮折叠
+            m["content"] = c
         elif m.get("role") == "user" and "【附件 " in c:
             m["content"] = brain._strip_consumed_attachments(c)
     return history
