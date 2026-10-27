@@ -187,7 +187,7 @@ class TestQqChannelKeepsCq(_MainCase):
         resp = self.onebot({
             "post_type": "message", "message_type": "private",
             "self_id": "10000", "sender": {"user_id": 123},
-            "raw_message": "来个表情",
+            "raw_message": "转发一条消息",
         })
 
         self.assertEqual(resp.status_code, 200)
@@ -233,7 +233,7 @@ class TestThinkStrip(_MainCase):
         self.onebot({
             "post_type": "message", "message_type": "private",
             "self_id": "10000", "sender": {"user_id": 123},
-            "raw_message": "来个表情",
+            "raw_message": "转发一条消息",
         })
         self.assertEqual(self.napcat_payload()["message"],
                          "[CQ:image,file=file:///ws/表情包.jpg]")

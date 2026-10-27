@@ -281,20 +281,41 @@ def _strip_llm_pollution(text):
     return _cot_strip(text)
 
 
+def _strip_markdown(text):
+    """QQ 出口 Markdown 洗地机（2026-10-27 队长暴雷实锤）：QQ 不渲染
+    Markdown，**加粗**、- 列表、# 标题、`代码` 全部出戏——全剥为纯文本。"""
+    import re as _re
+    # 代码围栏整体剥离（内容保留，围栏标记消失）
+    text = _re.sub(r"```[\w]*\n?", "", text)
+    # 行内代码 backtick
+    text = _re.sub(r"`([^`]+)`", r"\1", text)
+    # 加粗 **text** / __text__
+    text = _re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = _re.sub(r"__(.+?)__", r"\1", text)
+    # 斜体 *text* / _text_（避免误伤：只在前后非空格时替换）
+    text = _re.sub(r"(?<!\s)\*([^*\s][^*]*)\*(?!\s)", r"\1", text)
+    # 标题标记（行首 # ## ###——# 在 QQ 纯文本中极少出现）
+    text = _re.sub(r"^#{1,6}\s+", "", text, flags=_re.MULTILINE)
+    return text
+
+
 # 消毒剥空兜底文案（修 B v2 修 3，2026-10-14 冒烟实锤：群聊轮裸 JSON 被全剥
 # → 回复空 → 零发送=对用户沉默；沉默≠诚实，#316 静默可解释同族）。
 SANITIZED_EMPTY_FALLBACK = "我不太确定该怎么处理这个请求——能再说一次吗？"
 
 
 def _sanitize_qq_reply(reply):
-    """QQ 出口消毒 + 沉默兜底（修 B v2 修 3）。
+    """QQ 出口消毒 + Markdown 洗地机 + 沉默兜底（修 B v2 修 3 + 2026-10-27）。
 
     - 消毒后有内容 → 原样返回（逐字节不变）；
     - 原始回复非空、消毒后被剥空（=模型吐了纯污染物）→ 返回诚实兜底文案，
       不再静默；
     - 原始回复本就为空 → 维持旧静默语义（非污染物路径零变化）。
+    - Markdown 洗地机（2026-10-27 队长暴雷）：**加粗/- 列表/# 标题/
+      ``` 围栏 全剥——QQ 不渲染 Markdown，满屏星号横杠极度出戏。
     """
     stripped = _strip_llm_pollution(reply)
+    stripped = _strip_markdown(stripped)
     if not stripped.strip() and str(reply or "").strip():
         return SANITIZED_EMPTY_FALLBACK
     return stripped
@@ -1086,6 +1107,24 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         persona_reply = _persona_play_reply(message)
         if persona_reply is not None:
             return persona_reply
+
+    # === 🖼️ 表情包指令硬拦截（2026-10-27 队长暴雷修复）：发表情/来图 →
+    # 绕模型直发本地图库随机 1 张（不经 smart_ask 零幻觉） ===
+    if source == 'qq' and not group_id:
+        _STICKER_CMD_RE = re.compile(
+            r"发.{0,4}(?:表情|图|梗图)|来.{0,4}(?:表情|图|梗图)"
+            r"|表情包.{0,4}(?:看看|来.|发)|给我.{0,4}(?:表情|图)")
+        if _STICKER_CMD_RE.search(message):
+            try:
+                from agent_state.plugins.qq_lifemate import express as _expr
+                path = _expr.pick_sticker()
+                if path:
+                    _expr.send_cq(f"[CQ:image,file=file:///{path}]")
+                    return "喏，给你～(=^･ω･^=)"
+                return "小橘的图库还在装修中，过两天再来看呀～"
+            except Exception as _e:
+                print(f"⚠️ [表情拦截] { _e }")
+                return "图库出了点小问题，主人稍等～"
 
     # === 🛡️ 发送图片指令（2026-10-02 权限重构：LV4 主人级专属） ===
     # #227 批 0 续：分派逻辑迁入 content_handler.send_image（领域第二件，
