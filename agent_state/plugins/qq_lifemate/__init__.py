@@ -25,10 +25,16 @@ import waker  # noqa: E402  （同目录 waker.py：数据层+唤醒线程，共
 
 def record_fact(key="", value="", **_):
     """固化长期记忆（第一指导原则）：值得记住的核心事实（喜欢吃什么、
-    讨厌什么、重要日子）写进 facts 表——模型在 QQ 对话中自己调用。"""
+    讨厌什么、重要日子）写进 facts 表——模型在 QQ 对话中自己调用。
+    value 落库前主人第一人称→第三人称转换（人格认知 Bug 修复）。"""
     key, value = str(key or "").strip(), str(value or "").strip()
     if not key or not value:
         return "❌ 要记的话请同时告诉我：记什么（key）和内容（value）。"
+    try:
+        from agent_state.state_manager import to_third_person_memory
+        value = to_third_person_memory(value)
+    except Exception:
+        pass
     db = waker._db()
     try:
         db.execute("INSERT INTO facts(key, value, ts) VALUES(?,?,?) "

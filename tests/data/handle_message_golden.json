@@ -178,7 +178,7 @@
       "assert_type": "contains_记住",
       "expected": {
         "resp_status": "ok",
-        "sent_reply": "好的，我记住了：我爱吃火锅（已存入长期记忆库）"
+        "sent_reply": "好的，我记住了：主人爱吃火锅（已存入长期记忆库）"
       }
     },
     {

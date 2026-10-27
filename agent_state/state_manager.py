@@ -766,3 +766,38 @@ def get_user_location():
 def clear_user_location():
     """清除用户位置记录（单例便捷封装）。"""
     return state_manager.clear_user_location()
+
+
+# ── 记忆人称转换（2026-10-27 人格认知 Bug 修复）：主人第一人称落库前转 ──
+# 第三人称——防止生命体/模型把主人的喜好念成"我…"（真机实锤：她把
+# "我最喜欢玩明日方舟"说成自己的设定）
+_P1_PATTERNS = (
+    ("我最喜欢", "主人最喜欢"),
+    ("我最爱", "主人最爱"),
+    ("我最讨厌", "主人最讨厌"),
+    ("我喜欢", "主人喜欢"),
+    ("我爱", "主人爱"),
+    ("我讨厌", "主人讨厌"),
+    ("我在玩", "主人在玩"),
+    ("我在用", "主人在用"),
+    ("我要", "主人要"),
+    ("我想", "主人想"),
+    ("我的", "主人的"),
+    ("我们是", "主人和小橘是"),
+)
+
+
+def to_third_person_memory(text):
+    """主人第一人称 → 第三人称（落库前调用）。只替换记忆语义里的"我"
+    常见句首/属格形态，避免通篇盲替误伤（引号内台词等仍可能漏——概率
+    可接受，替换方向语义安全）。非字符串原样返回。"""
+    if not isinstance(text, str) or not text:
+        return text
+    out = text
+    for a, b in _P1_PATTERNS:
+        out = out.replace(a, b)
+    # 行首/句首残留的独立"我"（"我昨天…"→"主人昨天…"）
+    if out.startswith("我"):
+        out = "主人" + out[1:]
+    out = out.replace("。我", "。主人").replace("，我", "，主人")
+    return out

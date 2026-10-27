@@ -219,6 +219,50 @@ class StickerParseHardeningTests(unittest.TestCase):
         self.assertIn("不许", note)
 
 
+class PersonConversionTests(unittest.TestCase):
+    """人称转换（人格认知 Bug 修复）：主人第一人称落库前转第三人称。"""
+
+    def test_to_third_person_basic(self):
+        from agent_state.state_manager import to_third_person_memory as t3
+        self.assertEqual(t3("我最喜欢玩明日方舟"), "主人最喜欢玩明日方舟")
+        self.assertEqual(t3("我喜欢在周末打游戏"), "主人喜欢在周末打游戏")
+        self.assertEqual(t3("我的账号是Lv60"), "主人的账号是Lv60")
+
+    def test_to_third_person_sentence_mid(self):
+        from agent_state.state_manager import to_third_person_memory as t3
+        self.assertEqual(
+            t3("周末打半天游戏，我的账号是Lv60"),
+            "周末打半天游戏，主人的账号是Lv60")
+
+    def test_to_third_person_non_first_person_untouched(self):
+        from agent_state.state_manager import to_third_person_memory as t3
+        self.assertEqual(t3("今天天气不错"), "今天天气不错")
+        self.assertEqual(t3(""), "")
+
+    def test_record_fact_converts_first_person(self):
+        """record_fact 落库前转换：value 的"我"变"主人"。"""
+        tmp = tempfile.mkdtemp(prefix="lm_person_")
+        waker.set_data_dir(tmp)
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "agent_state_plugins_qq_lifemate",
+                os.path.join(PLUGIN_SRC, "__init__.py"),
+                submodule_search_locations=[PLUGIN_SRC])
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mod
+            spec.loader.exec_module(mod)
+            mod.record_fact(key="喜欢的游戏", value="我最喜欢玩明日方舟")
+            db = waker._db()
+            v = db.execute("SELECT value FROM facts WHERE key='喜欢的游戏'"
+                           ).fetchone()[0]
+            db.close()
+            self.assertEqual(v, "主人最喜欢玩明日方舟")
+        finally:
+            waker.stop()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class PluginLoadContractTests(unittest.TestCase):
     """目录包装载契约（plugin_loader 六步生命周期）。"""
 

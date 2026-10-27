@@ -14,6 +14,8 @@ def test_remember_match_passes_content():
     reply = memory_handler.handle_remember(
         "记住我爱吃火锅", strip_cq_cb=lambda t: t,
         remember_cb=lambda c: (got.update({"c": c}), f"好的，我记住了：{c}")[1])
+    # 注意：人称转换发生在回调侧（main.handle_remember_command 落库前），
+    # 本用例 mock 回调，验证的是 handler 对原始 content 的透传
     assert reply == "好的，我记住了：我爱吃火锅"
     assert got["c"] == "我爱吃火锅"
 

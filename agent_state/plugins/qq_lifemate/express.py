@@ -102,25 +102,47 @@ def send_voice(text):
             pass
 
 
-# ────────────────────────── 表情包（情绪标签图库） ──────────────────────────
+# ────────────────────────── 表情包（三轨图库，2026-10-27） ──────────────────────────
+# base=只读精选底座 / user=队长上传 / cache=API 抓取经 GLM-4V 视觉质检
+# （≥7 分）的沉淀。发送优先级：base+user 随机 → cache → API 搜图（质检门）。
+
+STICKER_TIERS = ("base", "user", "cache")
+STICKER_API_ENABLED = True   # API 搜图总开关（False=只走本地三轨）
+QA_THRESHOLD = 7             # 视觉质检及格线（1-10 打分制，≥7 才入 cache+发送）
+QA_FAIL_RETRY = 1            # 质检不过的重搜次数（重搜仍不过=放弃本次表情）
+
+_QA_PROMPT = (
+    "这是一张用于二次元 AI 少女聊天的表情包。请按以下标准打 1-10 分并给出"
+    "一句话理由：10=极佳（可爱、清晰、非常契合二次元少女）；7-9=良好（正常"
+    "的搞笑/情绪图，画质不错）；4-6=一般（稍微有点老或模糊，勉强能用）；"
+    "1-3=极差（古早包浆图、猎奇辣眼睛、带广告、文字杂乱）。"
+    "输出格式严格为：分数数字 + 空格 + 一句话理由（例：8 画风可爱清晰）。"
+)
+
 
 def sticker_root():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "stickers")
 
 
 def pick_sticker(mood=""):
-    """按情绪标签挑表情（mood 目录优先，无匹配回退全库随机）。返回绝对
-    路径或 None（图库空）。"""
+    """三轨挑表情（base/user 优先，cache 次之）：轨内 mood 子目录优先→
+    轨根随机。unsorted/ 不进随机池（待人工/视觉分类）。返回绝对路径或
+    None（全轨空）。"""
     root = sticker_root()
-    if not os.path.isdir(root):
-        return None
-    candidates = []
-    mood_dir = os.path.join(root, (mood or "").strip().lower())
-    if mood and os.path.isdir(mood_dir):
-        candidates = _list_images(mood_dir)
-    if not candidates:
-        candidates = _list_images(root)
-    return random.choice(candidates) if candidates else None
+    mood = (mood or "").strip().lower()
+    for tier in STICKER_TIERS:
+        tier_dir = os.path.join(root, tier)
+        if not os.path.isdir(tier_dir):
+            continue
+        candidates = []
+        mood_dir = os.path.join(tier_dir, mood)
+        if mood and os.path.isdir(mood_dir):
+            candidates = _list_images(mood_dir)
+        if not candidates:
+            candidates = _list_images(tier_dir)
+        if candidates:
+            return random.choice(candidates)
+    return None
 
 
 def _list_images(directory):
@@ -199,9 +221,9 @@ def search_sticker(keyword, page=None):
     return None
 
 
-def stash_sticker(url, mood):
-    """异步下载沉淀到 stickers/<mood>/（图库随使用长大，API 断供时的
-    存量兜底——第一指导原则同构：表情也走记忆沉淀）。失败静默。"""
+def stash_sticker(url, mood, tier="cache"):
+    """异步下载沉淀（三轨制：API 质检通过→cache/<mood>/）。URL md5 去重，
+    失败静默。"""
     mood = (mood or "neutral").strip().lower() or "neutral"
 
     def _dl():
@@ -212,7 +234,7 @@ def stash_sticker(url, mood):
                 return
             ext = ".gif" if "gif" in r.headers.get("content-type", "") else (
                 ".jpg" if "jpeg" in r.headers.get("content-type", "") else ".png")
-            d = os.path.join(sticker_root(), mood)
+            d = os.path.join(sticker_root(), tier, mood)
             os.makedirs(d, exist_ok=True)
             import hashlib
             path = os.path.join(d, hashlib.md5(url.encode()).hexdigest()[:12] + ext)
@@ -226,14 +248,63 @@ def stash_sticker(url, mood):
     threading.Thread(target=_dl, daemon=True).start()
 
 
+def qa_score(image_path):
+    """GLM-4V 视觉质检（1-10 打分制，队长口径）：返回 (分数, 理由)。
+    解析失败默认 5 分（<7=不过）；视觉链异常返回 (0, 原因)。"""
+    try:
+        from vision_tools import vision_ask_image
+        ans = str(vision_ask_image(image_path, _QA_PROMPT) or "")
+    except Exception as e:
+        return 0, f"视觉链异常: {e}"
+    import re
+    m = re.search(r"([1-9]|10)", ans)
+    score = int(m.group(1)) if m else 5   # 解析失败按 5（<7 拒，宁缺毋滥）
+    reason = ans.strip()[:60]
+    return score, reason
+
+
+def _download_temp(url):
+    """图片 URL → 临时文件（质检用）。失败返回 None。"""
+    try:
+        import requests
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200 or not r.content:
+            return None
+        fd, path = tempfile.mkstemp(suffix=".img")
+        with os.fdopen(fd, "wb") as f:
+            f.write(r.content)
+        return path
+    except Exception:
+        return None
+
+
 def send_api_sticker(keyword, mood="neutral"):
-    """搜索→CQ:image URL 直发→异步沉淀。返回是否真发。"""
-    url = search_sticker(keyword)
-    if not url:
-        # API 双源失败：降级本地图库（自沉淀存量）
-        print("🦊 [express] API 双源失败，降级本地图库")
+    """API 搜图 + 视觉质检门（≥7 分才发+入 cache）：搜→下载→打分→
+    发送+沉淀；不过关重搜，重搜尽仍不过=放弃本次表情（宁缺毋滥）。
+    API 双源挂/总开关关 → 降级本地图库。返回是否真发。"""
+    if not STICKER_API_ENABLED:
         return send_sticker(mood)
-    ok = send_cq(f"[CQ:image,file={url}]")
-    if ok:
-        stash_sticker(url, mood)
-    return ok
+    mood = (mood or "neutral").strip().lower() or "neutral"
+    for attempt in range(1 + QA_FAIL_RETRY):
+        url = search_sticker(keyword)
+        if not url:
+            break   # 双源挂：走本地降级
+        tmp = _download_temp(url)
+        if tmp is None:
+            continue
+        try:
+            score, reason = qa_score(tmp)
+            print(f"🦊 [express] 质检 {keyword}#{attempt + 1}: {score} 分（{reason}）")
+            if score < QA_THRESHOLD:
+                continue   # 不过关：重搜
+            ok = send_cq(f"[CQ:image,file={url}]")
+            if ok:
+                stash_sticker(url, mood, tier="cache")
+            return ok
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    print("🦊 [express] 质检无合格图，降级本地图库")
+    return send_sticker(mood)

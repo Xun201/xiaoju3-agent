@@ -708,11 +708,14 @@ def handle_remember_command(content):
     打标 _memory_emotion_meta+落库 state_manager.save_memory 留本文件——
     纯本体无分派语义）。"""
     try:
-        tag, impact = _memory_emotion_meta(content)
-        state_manager.save_memory("user", content,
+        from agent_state.state_manager import to_third_person_memory
+        stored = to_third_person_memory(content)   # 人称转换（2026-10-27
+        # 人格认知 Bug：主人第一人称原样落库被念成"我…"）
+        tag, impact = _memory_emotion_meta(stored)
+        state_manager.save_memory("user", stored,
                                   emotion_tag=tag,
                                   emotional_impact=impact)
-        return f"好的，我记住了：{content}（已存入长期记忆库）"
+        return f"好的，我记住了：{stored}（已存入长期记忆库）"
     except Exception as e:
         return f"❌ 长期记忆保存失败：{e}"
 

@@ -971,7 +971,8 @@ class TestMemoryAndCompression(_MainCase):
         # 打标本体行为在 tests/test_memory_v2.py 覆盖
         with patch.object(main.state_manager, "save_memory") as save_mock,                 patch("mood.match_event", return_value=(None, None)),                 patch("mood.load_mood", side_effect=RuntimeError("isolated")):
             reply = main.handle_message('web', 'admin', None, "帮我记住我最爱的水果是苹果")
-        save_mock.assert_called_once_with("user", "我最爱的水果是苹果",
+        # 2026-10-27 人称转换：落库前"我最爱"→"主人最爱"
+        save_mock.assert_called_once_with("user", "主人最爱的水果是苹果",
                                           emotion_tag=None,
                                           emotional_impact=None)
         self.assertIn("苹果", reply)
@@ -981,7 +982,8 @@ class TestMemoryAndCompression(_MainCase):
     def test_remember_plain_prefix_also_works(self):
         with patch.object(main.state_manager, "save_memory") as save_mock,                 patch("mood.match_event", return_value=(None, None)),                 patch("mood.load_mood", side_effect=RuntimeError("isolated")):
             main.handle_message('web', 'admin', None, "记住我的快递地址是幸福路1号")
-        save_mock.assert_called_once_with("user", "我的快递地址是幸福路1号",
+        # 2026-10-27 人称转换："我的"→"主人的"
+        save_mock.assert_called_once_with("user", "主人的快递地址是幸福路1号",
                                           emotion_tag=None,
                                           emotional_impact=None)
 
