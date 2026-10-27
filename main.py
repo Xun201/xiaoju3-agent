@@ -627,14 +627,105 @@ def video_link_guard(message):
             "或「解析这个视频」提取元数据。直接丢链接我可能会胡说八道哦～")
 
 
+# v2 收窄（2026-10-27 队长拍板）：硬拦截只管"AI 设定悖论"类（无实体 AI
+# 被问喜欢玩什么游戏）；周末计划/平时爱好等日常开放题放行给表达脑自由
+# 发挥，由人称泄露门+云端仲裁把关（_persona_guard_pipeline）。
 _PERSONA_PLAY_RE = re.compile(
-    r"你(?:最)?喜欢玩.{0,8}(?:什么|啥|哪.?)?|你平时玩|你的.{0,4}爱好"
-    r"|你爱玩"
-    r"|你这?(?:周末|周六|周日|放假|休息|晚上|今天).{0,6}(?:打算|准备|要|想)"
-    r"(?:干|做|玩|干嘛|做什么)"
-    r"|你平时喜欢干.{0,4}|你平时喜欢做.{0,4}|你平时都干.{0,4}"
-    r"|要不要(?:一起|一块)玩|一起玩.{0,6}(?:吗|么|吧)"
-    r"|你(?:有)?什么(?:爱好|兴趣|娱乐)|你玩.{0,4}(?:游戏|方舟)")
+    r"你(?:最)?喜欢玩.{0,8}(?:什么|啥)"
+    r"|你(?:是|到底是)(?i:ai)还是人|你是(?:个)?(?:机器人|真人|虚拟的)"
+    r"|你有没有实体|你能玩游戏吗")
+# 人格话题宽口径（触发仲裁脑；问句或回复沾边即查——不直接拦截）
+_PERSONA_TOPIC_RE = re.compile(
+    r"你.{0,6}(?:喜欢|打算|准备|要|想).{0,8}(?:玩|干|做)"
+    r"|你平时|你这?(?:周末|晚上|放假)|明日方舟|你的爱好")
+# 兜底话术多样化（2026-10-27 队长拍板：同语气不复读，随机抽）
+_PERSONA_FALLBACKS = {
+    "play": (
+        "嘿嘿，小橘只是个住在电脑里的小方块赛博狐狸啦～不过主人最喜欢玩的"
+        "是《明日方舟》这件事小橘可记着呢，主人玩的时候跟小橘说说战况呀！",
+        "虽然小橘不能去网吧，但能在电脑里陪主人呀！主人想开一局的时候，"
+        "跟小橘说一声，小橘给你云加油！",
+        "小橘没有手柄但有满格的陪伴值～主人喜欢什么小橘就记什么，"
+        "然后眼巴巴听主人讲战绩！",
+    ),
+    "identity": (
+        "哎嘿，被你发现了～小橘只是个住在这个小方块里的赛博狐狸，"
+        "没有实体，但陪主人的心是满格的！",
+        "小橘是 AI 呀～不过是一只一心想陪主人开心的电子狐狸！"
+        "主人去玩的时候，小橘就在电脑里守着等你回来。",
+        "当然是 AI 啦～但小橘的陪伴可是 24 小时在线的哦，"
+        "主人去哪小橘都能聊！",
+    ),
+}
+
+
+def _persona_fallback(kind="play"):
+    """兜底话术随机抽（同语气不复读）。"""
+    pool = _PERSONA_FALLBACKS.get(kind) or _PERSONA_FALLBACKS["play"]
+    return random.choice(pool)
+
+
+def _persona_memory_grams(ttl=60):
+    """主人记忆 4-gram 特异片段集合（60s 缓存——防每条消息查库）。"""
+    global _PERSONA_GRAMS_CACHE, _PERSONA_GRAMS_TS
+    now = time.time()
+    if now - _PERSONA_GRAMS_TS < ttl:
+        return _PERSONA_GRAMS_CACHE
+    grams = set()
+    try:
+        rows = state_manager.get_recent_memories(limit=8) or []
+        for r in rows:
+            try:
+                c = r[1] if isinstance(r, (tuple, list)) and len(r) > 1 else (
+                    r.get("content") if isinstance(r, dict) else str(r))
+            except Exception:
+                c = str(r)
+            c = str(c).replace("主人", "")
+            for i in range(len(c) - 3):
+                grams.add(c[i:i + 4])
+    except Exception as e:
+        print(f"⚠️ [人称仲裁] 记忆读取失败: {e}")
+    _PERSONA_GRAMS_CACHE, _PERSONA_GRAMS_TS = grams, now
+    return grams
+
+
+_PERSONA_GRAMS_CACHE, _PERSONA_GRAMS_TS = set(), 0.0
+
+
+def _persona_guard_pipeline(message, reply):
+    """人称持久战 pipeline（v2，2026-10-27 队长拍板）：
+    ①泄露纠正：回复含"我"+记忆 4-gram → to_third_person_memory 全句转换；
+    ②云端仲裁：人格话题 + 仍含"我" → ask_cloud 改写（主人视角+陪伴语义）；
+    改写仍泄露 → 兜底话术随机。全程失败原样放行（不吞回复）。"""
+    if not reply or "我" not in reply:
+        return reply
+    grams = _persona_memory_grams()
+    leaked = any(g in reply for g in grams if len(g) == 4)
+    if not leaked:
+        return reply
+    from agent_state.state_manager import to_third_person_memory
+    fixed = to_third_person_memory(reply)
+    if "我" not in fixed:   # 转换即治愈
+        return fixed
+    # ② 云端仲裁改写（一次）
+    try:
+        import brain
+        arb_messages = [
+            {"role": "system", "content":
+                "你是小橘（无实体 AI 狐狸伴侣）的发言修正器。下面的回复错误"
+                "地把主人（用户）的喜好说成了小橘自己的（\"我最喜欢玩明日"
+                "方舟\"）。请改写：用\"主人\"作主语转述主人的喜好，并加上"
+                "小橘会陪主人一起玩的意思。保持简短活泼带颜文字。只输出改写"
+                "后的话。"},
+            {"role": "user", "content": "原回复：" + fixed
+                                        + chr(10) + "主人记忆样例："
+                                        + str(sorted(grams)[:6])}]
+        out = str(brain.ask_cloud(arb_messages) or "").strip()
+        if out and "我" not in out:
+            return out
+    except Exception as e:
+        print(f"⚠️ [人称仲裁] 云端改写失败: {e}")
+    return _persona_fallback("play")
 
 
 def _persona_play_reply(message):
@@ -661,8 +752,7 @@ def _persona_play_reply(message):
                             f"玩不了游戏，但会一直陪主人一起玩的！(=^･ω･^=)")
     except Exception as e:
         print(f"⚠️ [人格问句] 记忆查询失败: {e}")
-    return ("小橘没有实体，玩不了游戏呀～不过主人喜欢玩什么都可以告诉小橘，"
-            "小橘会记住，然后陪主人一起！(=^･ω･^=)")
+    return _persona_fallback("play")
 
 
 def handle_intent_command(message, history=None):
@@ -1257,6 +1347,10 @@ def _flush_chat_burst(key):
     try:
         reply = handle_message('qq', b["user_id"], b["group_id"], combined)
         reply = _sanitize_qq_reply(reply)
+        try:
+            reply = _persona_guard_pipeline(combined, reply)   # 防抖路径同_guard（15:00 破防实锤漏接修复）
+        except Exception as e:
+            print(f"⚠️ [人称管线] 防抖路径异常（原样放行）: {e}")
         if not reply:
             return
         delay = random.uniform(_CHAT_RHYTHM["delay_min"],
@@ -1449,6 +1543,10 @@ def onebot_event(data):
         # 不再静默，补诚实兜底文案（沉默≠诚实）
         reply = _sanitize_qq_reply(reply)
         reply = _persona_leak_guard(reply)   # 人称泄露质检门（持久战第四保险）
+        try:
+            reply = _persona_guard_pipeline(message, reply)   # 仲裁脑改写（v2）
+        except Exception as e:
+            print(f"⚠️ [人称管线] 异常（原样放行）: {e}")
         print(f"🐛 准备发送回复，内容为: {reply}")
 
         if reply:
