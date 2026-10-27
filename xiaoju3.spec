@@ -88,6 +88,7 @@ datas=[
         'psutil',
         'psutil._pswindows',
         'edge_tts',
+        'pyttsx3',   # qq_lifemate SAPI 离线语音兜底（#354 切片 b）
         'openai',
         'bs4',
         'flask_cors',

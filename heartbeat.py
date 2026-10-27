@@ -200,8 +200,14 @@ def notify_master(text):
         return False
     try:
         import requests
+        headers = {}
+        token = (os.environ.get("ONEBOT_TOKEN", "") or "").strip()
+        if token:   # NapCat access_token 校验（2026-10-27 真机 403 实锤——
+                    # 紧急豁免推送全程 403 静默失败，切片 b 对照实验抓出）
+            headers["Authorization"] = f"Bearer {token}"
         requests.post(f"{api}/send_private_msg",
-                      json={"user_id": owner, "message": text}, timeout=5)
+                      json={"user_id": owner, "message": text},
+                      headers=headers, timeout=5)
         print("📨 已推送 QQ 通知主人（紧急豁免）。")
         return True
     except Exception as e:

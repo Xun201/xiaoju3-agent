@@ -198,6 +198,15 @@ def wake_once(now_dt):
             return False
         if not send_qq(text):
             return False
+        # 表现力编排（切片 b）：文字已发出，按概率附加语音/表情（失败
+        # 静默降级——文字消息不受影响）
+        try:
+            import express
+            acts = express.maybe_express(text)
+            if acts:
+                print(f"🦊 [qq_lifemate] 表现力附加: {acts}")
+        except Exception as e:
+            print(f"🦊 [qq_lifemate] 表现力编排异常（不影响文字）: {e}")
         db.execute("INSERT INTO chat_log(role, content, ts, kind) "
                    "VALUES(?,?,?,?)",
                    ("assistant", text, now_str(), "proactive_wake"))
