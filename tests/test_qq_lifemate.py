@@ -263,6 +263,80 @@ class PersonConversionTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class MultiBrainTests(unittest.TestCase):
+    """多脑协作 MVP（design_multi_brain.md）：仲裁脑/降级模板/防脑回。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lm_mb_")
+        waker.set_data_dir(self.tmp)
+        self.now = datetime(2026, 10, 27, 14, 0, 0)
+
+    def tearDown(self):
+        waker.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_arbitrate_pass(self):
+        with patch("brain.ask_cloud", return_value="PASS"):
+            ok, why = waker.arbitrate_wake("主人最喜欢玩明日方舟啦", "主人的游戏")
+        self.assertTrue(ok)
+        self.assertEqual(why, "PASS")
+
+    def test_arbitrate_fail_on_leak(self):
+        with patch("brain.ask_cloud",
+                   return_value="FAIL:第一人称代入主人的记忆"):
+            ok, why = waker.arbitrate_wake("我最喜欢玩明日方舟", "主人的游戏")
+        self.assertFalse(ok)
+        self.assertIn("FAIL", why)
+
+    def test_arbitrate_cloud_down_is_fail(self):
+        """云端挂=FAIL（宁降级模板不赌 r1）。"""
+        with patch("brain.ask_cloud", side_effect=RuntimeError("断网")):
+            ok, why = waker.arbitrate_wake("嗨", "")
+        self.assertFalse(ok)
+        self.assertIn("仲裁异常", why)
+
+    def test_wake_once_fail_twice_falls_back_template(self):
+        """表达脑两次渲染均被仲裁否决→模板降级（人称 100% 安全）且发送。"""
+        with patch.object(waker, "generate_wake_text",
+                          return_value=("我最喜欢玩明日方舟", None)),              patch.object(waker, "arbitrate_wake",
+                          return_value=(False, "FAIL:抢戏")),              patch.object(waker, "send_qq", return_value=True) as sq:
+            self.assertTrue(waker.wake_once(self.now))
+        sent = sq.call_args[0][0]
+        self.assertIn("主人", sent)          # 模板含主人
+        self.assertNotIn("我最喜欢玩", sent)  # 绝不发抢戏文本
+        self.assertNotIn("明日方舟", sent)    # 模板不带记忆细节
+
+    def test_wake_once_pass_goes_through(self):
+        """仲裁 PASS：原文发送。"""
+        with patch.object(waker, "generate_wake_text",
+                          return_value=("主人最喜欢玩明日方舟啦，陪你玩", None)),              patch.object(waker, "arbitrate_wake", return_value=(True, "PASS")),              patch.object(waker, "send_qq", return_value=True) as sq:
+            self.assertTrue(waker.wake_once(self.now))
+        self.assertIn("主人最喜欢玩明日方舟啦", sq.call_args[0][0])
+
+    def test_send_qq_three_level_receipt(self):
+        """防脑回三级回执：200+retcode==0+message_id 才算真发。"""
+        import types
+        def _resp(status, body):
+            r = types.SimpleNamespace()
+            r.status_code = status
+            r.json = lambda: body
+            r.headers = {"content-type": "application/json"}
+            return r
+        with patch.dict(os.environ, {"XIAOJU3_OWNER_QQ": "123",
+                                     "ONEBOT_API_URL": "http://x",
+                                     "ONEBOT_TOKEN": ""}),              patch("requests.post") as post:
+            # 200 但 retcode!=0：假回执拒绝
+            post.return_value = _resp(200, {"retcode": 1, "status": "failed"})
+            self.assertFalse(waker.send_qq("hi"))
+            # 200+retcode 0+message_id：真发
+            post.return_value = _resp(200, {"retcode": 0,
+                                            "data": {"message_id": 777}})
+            self.assertTrue(waker.send_qq("hi"))
+            # 重试恰好 1 次+token header 缺省（env token 空）
+            self.assertEqual(post.call_count, 3)
+            self.assertNotIn("Authorization", post.call_args[1]["headers"])
+
+
 class PersonaLeakGuardTests(unittest.TestCase):
     """人称泄露质检门（持久战第四保险）：回复含"我"+记忆 4-gram→纠正。"""
 

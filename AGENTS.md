@@ -71,6 +71,11 @@
 - **文件交接总线**：_dev/SYNC_DEEPSEEK.md（ZCode 每次交付后写核心上下文/
   遗留 Bug/测试基线，供秘书审查）+ _dev/TASK_BUS.md（老板/秘书写新需求，
   ZCode 每次开工前先读）。两条纪律：开工先读 TASK_BUS；交付后必刷 SYNC。
+- **🚫 提交纪律红线（2026-10-27 红线事故固化）**：`git add -A` / `git add .`
+  **永久禁用**（396ec60 曾因此误推 470 私有文件）。提交必须明确指定文件或
+  仅用白名单目录；`_dev/` 已整体退出 git 历史（filter-repo+force push，
+  2026-10-27 队长授权）并被 .git/info/exclude 永久忽略——_dev 下文件只存
+  本地，永不入库。
 - **记忆总线**：Hindsight 127.0.0.1:9077（bank=xiaoju3-project）——
   DeepSeek 可经 HTTP 直读：GET /v1/default/banks/xiaoju3-project/memories/list?limit=N
   （GET 列条目；写入 POST 同路径。注意：列条目用 GET，POST 会 405）。

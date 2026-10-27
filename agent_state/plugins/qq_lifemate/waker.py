@@ -8,6 +8,7 @@ waker 复用——避免 importlib spec_from_file_location 包内相对导入的
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime
 
 # ── 拍板常量（2026-10-27 队长拍板 W1/W2；改动须过 tests/test_qq_lifemate.py） ──
@@ -31,6 +32,49 @@ QQ_PERSONA = (
     "\"我最喜欢玩明日方舟\"——绝不能把主人的记忆当成你自己的经历。"
     "【语言强制】严格使用纯简体中文回答，不要夹杂英文单词（专有名词除外）。"
 )
+
+# ── 多脑协作（design_multi_brain.md 2026-10-27 MVP） ──
+ARBITRATE_TIMEOUT = 30        # 仲裁脑云端短查询超时（秒）
+RENDER_TIMEOUT = 20           # 表达脑渲染超时预算（秒）
+FALLBACK_TEMPLATES = (
+    "主人~小橘在电脑里等你呢，{scene_hint}要不要跟我说说话呀？",
+    "嘿嘿，小橘刚刚还在想主人的事呢～{scene_hint}陪我聊两句嘛！",
+)
+
+_ARB_PROMPT = (
+    "你是质检员。下面是小橘 AI 伴侣要发给主人的一句话，以及主人的记忆"
+    "档案。质检三问：①小橘是否把主人的记忆/喜好说成了自己的（出现\"我最"
+    "喜欢玩\"等第一人称代入）？②是否夹杂英文或无实体 AI 不该说的话？"
+    "③是否在回应主人？三问全部通过回答 PASS，否则回答 FAIL:最短原因。"
+    "只输出 PASS 或 FAIL:原因。\n小橘的话：{text}\n"
+    "主人记忆档案：{facts}")
+
+
+def arbitrate_wake(text, facts_line):
+    """仲裁脑（云端短查询）：质检表达脑输出是否出戏。返回 (PASS, 原因)。
+    云端异常=FAIL（宁降级不赌 r1）。"""
+    try:
+        import brain
+        out = str(brain.ask_cloud([
+            {"role": "system", "content": "你是质检员，只输出 PASS 或 "
+                                          "FAIL:原因，极简。"},
+            {"role": "user", "content": _ARB_PROMPT.format(
+                text=text[:120], facts=facts_line[:200])}]) or "").strip()
+        if out.startswith("PASS"):
+            return True, "PASS"
+        return False, out[:80] or "FAIL"
+    except Exception as e:
+        return False, f"仲裁异常: {e}"
+
+
+def fallback_text(scene_action, now_dt):
+    """确定性降级话术（模板直出，人称 100% 安全——仲裁 FAIL 终点）。"""
+    hint = ""
+    if scene_action:
+        hint = f"你上次在{scene_action}，"
+    t = FALLBACK_TEMPLATES[now_dt.minute % len(FALLBACK_TEMPLATES)]
+    return t.format(scene_hint=hint)
+
 
 _WAKE_PROMPT = (
     "距上次和主人聊天已经有一段时间了，你想主动戳一下他。\n"
@@ -330,28 +374,65 @@ def generate_wake_text(scene_action, now_dt, db=None):
 
 
 def send_qq(text):
-    """发队长私聊。复用 heartbeat.notify_master（OneBot send_private_msg；
-    main 已 import heartbeat——宿主进程 sys.modules 命中零增量；owner QQ
-    未配置时 notify_master 返回 False 仅日志，不炸唤醒链）。"""
-    try:
-        from heartbeat import notify_master
-        return bool(notify_master(text))
-    except Exception as e:
-        print(f"🦊 [qq_lifemate] QQ 发送失败: {e}")
+    """发队长私聊（防脑回三级回执，2026-10-27 拍板）：HTTP 200 + retcode==0
+    + data.message_id 存在才算真实发送；失败重试 1 次；owner 未配置如实
+    False。绝不假装已发送。"""
+    api = (os.environ.get("ONEBOT_API_URL", "").strip()
+           or os.environ.get("NAPCAT_API_URL", "").strip()
+           or "http://127.0.0.1:3001").rstrip("/")
+    owner = (os.environ.get("XIAOJU3_OWNER_QQ", "") or "").strip()
+    if not owner:
+        print("🦊 [qq_lifemate] 未配置 XIAOJU3_OWNER_QQ，跳过发送。")
         return False
+    headers = {}
+    token = (os.environ.get("ONEBOT_TOKEN", "") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    for attempt in (1, 2):
+        try:
+            import requests
+            r = requests.post(f"{api}/send_private_msg",
+                              json={"user_id": owner, "message": text},
+                              headers=headers, timeout=8)
+            try:
+                body = r.json()
+            except Exception:
+                body = {}
+            if (r.status_code == 200 and body.get("retcode") == 0
+                    and (body.get("data") or {}).get("message_id")):
+                return True
+            print(f"🦊 [qq_lifemate] 发送回执失败(#{attempt}): "
+                  f"HTTP {r.status_code} {str(body)[:80]}")
+        except Exception as e:
+            print(f"🦊 [qq_lifemate] 发送异常(#{attempt}): {e}")
+        time.sleep(2)
+    return False
 
 
 def wake_once(now_dt):
     """单次唤醒尝试：读 scene → 生成 → 发送 → 落账。返回是否真发。"""
     db = _db()
     try:
-        generated = generate_wake_text(last_scene(db), now_dt, db=db)
-        if not generated:
-            return False
-        text, sticker_kw = generated
-        text = strip_prefix_noise(text)   # 格式红线兜底（切片 c）
+        facts_line = facts_digest(db)
+        text, sticker_kw = None, None
+        # ── 多脑流水线（design_multi_brain.md MVP）：表达脑渲染 → 仲裁脑
+        # 质检 → FAIL 重渲染一次 → 仍 FAIL 模板降级（人称 100% 安全） ──
+        for attempt in range(2):
+            generated = generate_wake_text(last_scene(db), now_dt, db=db)
+            if not generated:
+                break
+            text, sticker_kw = generated
+            text = strip_prefix_noise(text)   # 格式红线兜底（切片 c）
+            if not text:
+                continue
+            ok, why = arbitrate_wake(text, facts_line)
+            if ok:
+                break
+            print(f"🦊 [qq_lifemate] 仲裁否决（{why}）→ 重渲染")
+            text = None
         if not text:
-            return False
+            text = fallback_text(last_scene(db), now_dt)
+            sticker_kw = None   # 模板直出不带表情标注
         if not send_qq(text):
             return False
         # 表现力编排（切片 b）：文字已发出，按概率附加语音/表情（失败
