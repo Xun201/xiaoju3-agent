@@ -294,7 +294,7 @@ class HistoryApiTests(HistoryApiTestsBase):
     def test_get_history_structure(self):
         """GET 返回 {code, data:{messages:[...]}}，消息按落盘顺序返回。"""
         self._write_history([
-            {"role": "user", "content": "你好"},
+            {"role": "user", "content": "帮我看看今天的日程"},
             {"role": "assistant", "content": "你好呀~", "source": "🏠 本地"},
         ])
         payload = self.client.get("/api/history").get_json()
@@ -401,7 +401,7 @@ class ChatHistoryPersistenceTests(HistoryApiTestsBase):
         """成功问答：用户消息与回复（含 source）追加落盘。"""
         with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
             ms.return_value = ("你好呀，主人~", "🏠 本地")
-            resp = self.client.post("/api/chat", json={"message": "你好"})
+            resp = self.client.post("/api/chat", json={"message": "帮我看看今天的日程"})
 
         self.assertEqual(resp.status_code, 200)
         stored = _read_json_file(self.history_file)
@@ -463,7 +463,7 @@ class ChatApiTests(HistoryApiTestsBase):
         with mock.patch.object(dashboard, "smart_ask") as ms, _quiet():
             ms.return_value = ("你好呀，主人~", "🏠 本地")
             resp = self.client.post("/api/chat",
-                                    json={"message": "你好", "history": history})
+                                    json={"message": "帮我看看今天的日程", "history": history})
 
         self.assertEqual(resp.status_code, 200)
         payload = resp.get_json()
@@ -866,7 +866,7 @@ class OnebotWebhookMigratedTests(OnebotWebhookMigratedBase):
             resp = self.onebot({
                 "post_type": "message", "message_type": "private",
                 "self_id": "10000", "sender": {"user_id": 123},
-                "raw_message": "你好",
+                "raw_message": "帮我看看今天的日程",
             })
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
@@ -944,7 +944,7 @@ class OnebotWebhookMigratedTests(OnebotWebhookMigratedBase):
         with _quiet():
             resp = self.onebot({
                 "post_type": "message", "message_type": "private",
-                "sender": 12345, "raw_message": "你好",
+                "sender": 12345, "raw_message": "帮我看看今天的日程",
             })
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})

@@ -1247,6 +1247,28 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
                 return "喏，给你～(=^･ω･^=)"
             return _persona_fallback("play")
 
+    # === 💬 寒暄快速路由（2026-10-27 人称抢戏修复）：极短纯寒暄 →
+    # 本地回复池随机直出（零延迟零幻觉零 token，绕模型绕记忆绕多脑） ===
+    if source == 'qq' and not group_id:
+        _GREETING_RE = re.compile(
+            r"^(你好|在吗|早|早安|晚上好|午安|晚安|嗨|hi|hello|哈喽|"
+            r"来啦|我来啦|我回来了|我上线了)[\s!！。～~]*$",
+            re.IGNORECASE)
+        if _GREETING_RE.match(message.strip()):
+            import random as _rand_g
+            _GREETING_POOL = (
+                "在呢在呢～主人今天过得怎么样呀？(=^･ω･^=)",
+                "主人来啦！小橘等你好久了～(=^･ω･^=)",
+                "嘿嘿，主人终于上线了～小橘好想你！(=^･ω･^=)",
+                "主人好呀～今天想和小橘聊点什么呀？(=^･ω･^=)",
+                "嗯嗯，小橘在电脑里等着呢～主人今天辛苦啦！",
+                "主人回来啦！小橘的陪伴值充满了呢～(=^･ω･^=)",
+                "哟，主人来啦～今天想跟小橘分享什么呢？",
+                "嘿嘿，主人来陪小橘了呀～开心！(=^･ω･^=)",
+            )
+            _humanized_typing_delay(_GREETING_POOL[0])
+            return _rand_g.choice(_GREETING_POOL)
+
     # === 🛡️ 发送图片指令（2026-10-02 权限重构：LV4 主人级专属） ===
     # #227 批 0 续：分派逻辑迁入 content_handler.send_image（领域第二件，
     # Lv.4 门+存在性+workspace 校验+CQ 拼装随行；回调注入零 import main）
