@@ -38,3 +38,13 @@ main.py/brain.py/xiaoju3_dashboard.py .bak-20261027-strip；doc_ingest.py .bak-2
 - **坑**：目录包内 import 同目录模块=显式 sys.path 插入（spec_from_file_location 包内相对导入不可赌）；测试与插件必须共享同一 sys.modules 实例。
 - **唯一待办**：队长在 xiaoju3_data/.env 填 `XIAOJU3_OWNER_QQ=队长QQ号`（120 行现为空）→ 重启或 /plugin_reload 即活。
 - 测试 **2613+4**（+18：三闸/装载契约/工具行为/落账跨日重置）；回滚=删生产 qq_lifemate 目录+`git revert 0611e4d`。
+
+## 晚批③：侧栏拖宽 UI + 全局任务审查员草案（a476e0f 已推，生产车 a3016f82 三进程在线）
+
+- **侧栏拖拽调宽**（队长指令①）：把手 `#sidebar-resizer`=flex 兄弟节点 10px 宽配对负外边距 -5px×2=**净零布局位移**（部署前后版式分毫不动）；指针捕获拖拽+rAF 节流实时改 `.sidebar` 宽，夹紧 [300, 窗宽×55%]；hover/拖拽显狐毛橙把手条+col-resize 光标；双击把手=复位。持久化双通道：桌面形态 js_api `set_layout_pref`→agent_state/ui_pref.json（跨启动真源，localStorage 关窗即焚铁律）、浏览器形态 localStorage 降级；恢复以 ui_pref.json 为真源（pywebview api 轮询 3s 上限，未就绪=浏览器静默）。≤768px 抽屉态隐藏把手+清内联宽（宽度交还 CSS）；窗口缩放重夹紧；matchMedia 缺席（node 桩环境）静默不启用。
+- **后端**：QuitBridge 新增 `get_layout_pref`/`set_layout_pref`（读改写合并与 exit/dev 键互不覆盖；300-2000 合法落盘、0=删键复位、非法拒绝不污染文件）。
+- **测试**：+15 锚=**全仓 2681+4 全绿**；node 运行时烟雾 `_dev/smoke_sidebar_resize_20261027.js` **26/26**（真源码提取+Proxy CSSStyleDeclaration 桩驼峰/横线归一+矩形反映内联宽）；浏览器真拖拽 UI 冒烟三连过（320→420px 实时变宽+localStorage 落盘/刷新保持 420px/双击复位 320px）。
+- **坑两条**：①裸 `python -m http.server` 做 UI 冒烟=页面壳渲染但 console.js **404 全死**（index.html 引 `/console/console.js`，Flask 有 `/console/<file>`→仓库根映射，静态服务器没有）——假阳性排查绕远；正档烟雾服务器=`_dev/smoke_http_server_20261027.py`（translate_path 同款映射）。②streamcard 运行时烟雾桩无 `matchMedia`——新 IIFE 必须带环境守卫（`typeof window.matchMedia !== 'function'` 早退），否则全仓测试被连坐。
+- **部署**：build_exe.bat（车 2.1.0+本批）→包内容三层验证（`_internal/console.js`/`index.html` grep+PYZ `ZlibArchiveReader`——**方法名锚在 co_names 不在 co_consts**，docstring 锚在 consts）→VCRUNTIME 双锁再现（robocopy 12min 49 文件龟爬）→`deploy_shutil.py` 绕锁正档（1505 拷+26 同版保留+locked_diff=0+exe/console.js/index.html md5 双端 MATCH）→schtasks 双通道拉起（MSYS_NO_PATHCONV=1）→三进程全新 StartTime 23:29+health ok+`/console` 新 UI 验证（`/` 是旧版占位页，真控制台在 `/console`——验错路由会虚惊）。
+- **任务②（思维沉淀+架构草案）**：两概念确认在库（`_dev/thinking_notes.md:254`，2026-10-27 老板视频提炼，含 0.95^10 与独立视角两要点）；**全局任务审查员极简草案落盘 `_dev/design_global_task_reviewer.md`**：TaskLedger 会话账本+触发三则（T1 链长≥3/T2 工具族切换/T3 败后续）+一次云审（≤200字 prompt 要 JSON verdict）+规则兜底（云断不放大）+合法批量链保护+三步对抗论证（反转条件=误杀>5% 或超时>20% 降级单触发）；概念条目已加落点指针。**等老板/秘书拍板，未实施**。
+- **回滚**：index.html/console.js/desktop_launcher.py 各 `.bak-20261027-sbresize`；`git revert a476e0f`；生产旧 exe 无 .old（VCRUNTIME 双锁下回滚=重新构建上一提交 a476e0f^ 并重部署，或 `git stash` 期 dist 未删时用 dist 旧包——诚实挂账：本次部署未保留旧 exe 副本，回滚依赖 git revert+重建，约 5 分钟）。
