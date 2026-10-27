@@ -111,23 +111,36 @@
         .sidebar::-webkit-scrollbar-thumb:hover { background: rgba(31, 41, 55, 0.25); }
         /* ==================== 侧栏拖拽调宽把手（2026-10-27） ==================== */
         /* flex 兄弟节点（.sidebar 与 .chat-area 之间），宽 10px 配对负外边距
-           -5px×2=净零布局位移（今日版式分毫不动）；hover/拖拽显狐毛橙把手条，
-           光标 col-resize。拖拽/持久化逻辑在 console.js initSidebarResize
-           （双击复位；≤768px 抽屉态隐藏——抽屉无拖宽语义）。 */
+           -5px×2=净零布局位移；热区 10px 保证好抓。视觉=极细线（队长口径
+           2026-10-27 深夜，VSCode 交互）：::after 画 2px 垂直细线（上下 12px
+           呼吸位不顶窗沿），默认极淡灰、hover/拖拽亮狐毛橙。拖拽/持久化
+           逻辑在 console.js initSidebarResize（双击复位；≤768px 抽屉态
+           display:none 连 ::after 一起隐藏——抽屉无拖宽语义）。 */
         #sidebar-resizer {
             flex: 0 0 10px;
             align-self: stretch;
             margin: 12px -5px;
-            border-radius: 4px;
             background: transparent;
             cursor: col-resize;
             position: relative;
             z-index: 30;
             touch-action: none;
+        }
+        #sidebar-resizer::after {
+            content: "";
+            position: absolute;
+            top: 12px;
+            bottom: 12px;
+            left: 50%;
+            width: 2px;
+            transform: translateX(-50%);
+            border-radius: 1px;
+            background: rgba(31, 41, 55, 0.10);
             transition: background 0.15s ease;
         }
-        #sidebar-resizer:hover, #sidebar-resizer.dragging { background: rgba(217, 111, 43, 0.28); }
-        #sidebar-resizer.dragging { transition: none; }
+        #sidebar-resizer:hover::after, #sidebar-resizer.dragging::after {
+            background: rgba(217, 111, 43, 0.85);
+        }
         .panel-header {
             font-size: 18px;
             font-weight: 600;
@@ -1300,7 +1313,8 @@
     </div>
 
     <!-- 侧栏拖拽调宽把手（2026-10-27）：flex 兄弟节点占位，负外边距对冲自宽
-         （净零布局位移）；双击复位，拖拽实时改 .sidebar 宽并持久化 -->
+         （净零布局位移）；视觉=极细线（::after），双击复位，拖拽实时改
+         .sidebar 宽并持久化 -->
     <div id="sidebar-resizer" title="拖拽调节侧栏宽度（双击复位）"></div>
 
 <!-- 右侧聊天窗口 -->
