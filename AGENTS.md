@@ -76,6 +76,9 @@
   仅用白名单目录；`_dev/` 已整体退出 git 历史（filter-repo+force push，
   2026-10-27 队长授权）并被 .git/info/exclude 永久忽略——_dev 下文件只存
   本地，永不入库。
+- **🏷️ Release 命名规范（2026-10-27 队长拍板）**：只有大版本（X.0.0）
+  才叫 `vX.X.X 里程碑发布`；中/小版本（X.Y.0 / X.Y.Z）统一为
+  `小橘3号 vX.X.X`。绝不在中/小版本标题里加"里程碑发布"。
 - **记忆总线**：Hindsight 127.0.0.1:9077（bank=xiaoju3-project）——
   DeepSeek 可经 HTTP 直读：GET /v1/default/banks/xiaoju3-project/memories/list?limit=N
   （GET 列条目；写入 POST 同路径。注意：列条目用 GET，POST 会 405）。
