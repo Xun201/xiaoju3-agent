@@ -364,15 +364,15 @@ class HumanizedDelayAndEntityTests(unittest.TestCase):
         self.assertGreaterEqual(captured[-1], 1.5)
 
     def test_system_prompt_has_entity_rule(self):
-        """SYSTEM_PROMPT 含无实体设定（无法亲自旅行/亲手打游戏）。"""
+        """SYSTEM_PROMPT 含无实体设定（软化版：住在电脑里的 AI 狐狸）。"""
         content = prompts_mod.SYSTEM_PROMPT["content"]
-        self.assertIn("无实体与陪伴设定", content)
-        self.assertIn("无法亲自出门、旅行、亲手打游戏", content)
+        self.assertIn("住在电脑里的 AI 狐狸", content)
 
     def test_qq_persona_has_entity_rule(self):
-        """生命体 PERSONA 含无实体句（waker 源码锚）。"""
-        self.assertIn("无法亲自出门、旅行", waker.QQ_PERSONA)
-        self.assertIn("待在电脑里陪主人", waker.QQ_PERSONA)
+        """生命体 PERSONA 含无实体句（软化版：住在电脑里+没有实体）。"""
+        self.assertIn("住在主人的电脑里", waker.QQ_PERSONA)
+        self.assertIn("没有实体", waker.QQ_PERSONA)
+        self.assertIn("傲娇", waker.QQ_PERSONA)
 
 
 class PersonaLeakGuardTests(unittest.TestCase):

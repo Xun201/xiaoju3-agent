@@ -1227,8 +1227,24 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
                 _stk_path = os.path.join(_stk_dir,
                                          _rand.choice(_stk_imgs))
                 _humanized_typing_delay("发表情")
-                return (f"[CQ:image,file=file:///{_stk_path}]"
-                        "喏，给你～(=^･ω･^=)")
+                # 🔧 修复（2026-10-27）：CQ 码会被 _sanitize_qq_reply 剥掉，
+                # 改为直接调 OneBot API 用 Base64 段格式发图（100% 兼容）。
+                import base64 as _b64
+                with open(_stk_path, "rb") as _img_f:
+                    _img_b64 = _b64.b64encode(_img_f.read()).decode()
+                _api = (os.environ.get("ONEBOT_API_URL", "")
+                        or os.environ.get("NAPCAT_API_URL", "")
+                        or "http://127.0.0.1:3000").rstrip("/")
+                _tok = os.environ.get("ONEBOT_TOKEN", "").strip()
+                _hdrs = {}
+                if _tok:
+                    _hdrs["Authorization"] = f"Bearer {_tok}"
+                requests.post(f"{_api}/send_private_msg", json={
+                    "user_id": int(user_id),
+                    "message": [{"type": "image",
+                                 "data": {"file": f"base64://{_img_b64}"}}]},
+                    headers=_hdrs, timeout=15)
+                return "喏，给你～(=^･ω･^=)"
             return _persona_fallback("play")
 
     # === 🛡️ 发送图片指令（2026-10-02 权限重构：LV4 主人级专属） ===
