@@ -2242,6 +2242,117 @@
         sidebarToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
     }
 
+    // ==================== 7.2 侧栏拖拽调宽（2026-10-27） ====================
+    // 把手 #sidebar-resizer（index.html flex 兄弟节点，负外边距净零位移）：
+    // 指针捕获拖拽实时改 .sidebar 宽（rAF 节流不掉帧），松手持久化——桌面
+    // 形态 js_api set_layout_pref 存 ui_pref.json（跨启动唯一真源，
+    // localStorage 关窗即焚铁律），浏览器形态降级 localStorage。恢复以
+    // ui_pref.json 为真源（api 异步就绪轮询 3s 上限，未就绪=浏览器形态
+    // 静默走 localStorage）。双击复位；≤768px 抽屉态清内联宽（宽度交还
+    // CSS min(80vw,300px)）；窗口缩放时已拖宽度夹紧进当前窗口。
+    (function initSidebarResize() {
+        const sb = document.querySelector('.sidebar');
+        const handle = document.getElementById('sidebar-resizer');
+        // matchMedia 缺席=非浏览器 JS 环境（node 运行时烟雾桩等），静默不启用
+        if (!sb || !handle || typeof window.matchMedia !== 'function') return;
+        const LS_KEY = 'xiaoju3_sidebar_width';
+        const MIN_W = 300;                       // 下限同 .sidebar min-width:300px
+        const mqMobile = window.matchMedia('(max-width: 768px)');
+        let dragging = false, startX = 0, startW = 0, rafId = 0, pendingW = 0;
+
+        function maxW() { return Math.max(MIN_W + 60, Math.round(window.innerWidth * 0.55)); }
+        function clamp(w) { return Math.max(MIN_W, Math.min(maxW(), Math.round(w))); }
+        function applyWidth(w) {
+            sb.style.width = w + 'px';
+            sb.style.minWidth = w + 'px';        // 压过 CSS min-width，下限由 clamp 保证
+        }
+        function clearWidth() {
+            sb.style.removeProperty('width');
+            sb.style.removeProperty('min-width');
+        }
+        function savedWidth() {
+            let n = NaN;
+            try { n = parseInt(localStorage.getItem(LS_KEY), 10); } catch (e) { /* 隐私模式 */ }
+            return (n >= MIN_W && n <= 2000) ? n : 0;
+        }
+        function persist(w) {
+            try { localStorage.setItem(LS_KEY, String(w)); } catch (e) { /* 同上 */ }
+            const api = window.pywebview && window.pywebview.api;
+            if (api && typeof api.set_layout_pref === 'function') {
+                api.set_layout_pref(w).catch(function () {});
+            }
+        }
+        function syncViewport() {
+            if (mqMobile.matches) { clearWidth(); return; }
+            const m = /^(\d+)px$/.exec(sb.style.width || '');
+            if (m) applyWidth(clamp(parseInt(m[1], 10)));
+        }
+
+        handle.addEventListener('pointerdown', function (e) {
+            if (mqMobile.matches || e.button !== 0) return;
+            dragging = true;
+            startX = e.clientX;
+            startW = sb.getBoundingClientRect().width;
+            handle.classList.add('dragging');
+            document.body.style.cursor = 'col-resize';       // 拖出把手光标不闪断
+            document.body.style.userSelect = 'none';         // 防拖拽选中文本
+            try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 旧内核无捕获 */ }
+            e.preventDefault();
+        });
+        handle.addEventListener('pointermove', function (e) {
+            if (!dragging) return;
+            pendingW = clamp(startW + (e.clientX - startX));
+            if (!rafId) {
+                rafId = requestAnimationFrame(function () {
+                    rafId = 0;
+                    if (dragging) applyWidth(pendingW);
+                });
+            }
+        });
+        function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            const w = clamp(sb.getBoundingClientRect().width);
+            applyWidth(w);
+            persist(w);
+        }
+        handle.addEventListener('pointerup', endDrag);
+        handle.addEventListener('pointercancel', endDrag);
+        handle.addEventListener('dblclick', function () {
+            clearWidth();
+            try { localStorage.removeItem(LS_KEY); } catch (e) { /* 同上 */ }
+            const api = window.pywebview && window.pywebview.api;
+            if (api && typeof api.set_layout_pref === 'function') {
+                api.set_layout_pref(0).catch(function () {});   // 0=后端解释为删键复位
+            }
+        });
+        if (mqMobile.addEventListener) mqMobile.addEventListener('change', syncViewport);
+        else mqMobile.addListener(syncViewport);
+        window.addEventListener('resize', function () { if (!dragging) syncViewport(); });
+
+        restoreAndWatch();
+        function restoreAndWatch() {
+            const w = savedWidth();
+            if (w && !mqMobile.matches) applyWidth(clamp(w));
+            let tries = 0;
+            const t = setInterval(function () {
+                const api = window.pywebview && window.pywebview.api;
+                if (api && typeof api.get_layout_pref === 'function') {
+                    clearInterval(t);
+                    api.get_layout_pref().then(function (r) {
+                        const v = r && parseInt(r.sidebar_width, 10);
+                        if (v >= MIN_W && !mqMobile.matches) applyWidth(clamp(v));
+                    }).catch(function () {});
+                } else if (++tries > 20) {
+                    clearInterval(t);                // 浏览器形态：api 永不来，静默
+                }
+            }, 150);
+        }
+    })();
+
     // ==================== 7.5 终端记录标签页（对话窗口 / 终端记录切换） ====================
     // 终端记录入口（R3 后端契约承接）：标签栏切换对话窗口与终端记录两个内
     // 容区。终端记录经 GET /api/history?source=terminal 读取（后端契约：文件

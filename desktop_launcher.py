@@ -756,6 +756,32 @@ class QuitBridge:
         return {"ok": True, "unlocked": bool(cur.get("dev_unlocked")),
                 "mode_on": bool(cur.get("dev_mode_on"))}
 
+    def get_layout_pref(self):
+        """界面布局偏好（2026-10-27 侧栏拖宽）：sidebar_width=侧栏像素宽，
+        未设置返回 None（前端走 CSS 缺省 320px）。"""
+        data = _load_ui_pref(self._pref_path)
+        return {"sidebar_width": data.get("sidebar_width")}
+
+    def set_layout_pref(self, sidebar_width=None):
+        """写界面布局偏好（读改写合并，与 exit/dev 键互不覆盖）。
+        sidebar_width：300-2000 合法值落盘；0=删键复位（前端双击把手）；
+        None=只读回显不写。前端拖拽上限另受窗口宽约束，此处只防脏数据。"""
+        cur = _load_ui_pref(self._pref_path)
+        if sidebar_width is not None:
+            try:
+                w = int(sidebar_width)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid_width"}
+            if w == 0:
+                cur.pop("sidebar_width", None)
+            elif 300 <= w <= 2000:
+                cur["sidebar_width"] = w
+            else:
+                return {"ok": False, "error": "invalid_width"}
+            _save_ui_pref(cur, self._pref_path)
+            self._out(f"💾 侧栏宽度偏好已保存：{w if w else '复位'}")
+        return {"ok": True, "sidebar_width": cur.get("sidebar_width")}
+
     def pick_docs(self):
         """系统文件选择器（UI 三期上传入口，2026-10-26）：多选 TXT/PDF，
         返回绝对路径列表。前端拿路径 POST /api/doc_upload 直取 doc_ingest
