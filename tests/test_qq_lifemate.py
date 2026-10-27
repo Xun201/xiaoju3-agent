@@ -35,6 +35,8 @@ PLUGIN_SRC = os.path.join(PROJECT_ROOT, "agent_state", "plugins",
 if PLUGIN_SRC not in sys.path:
     sys.path.insert(0, PLUGIN_SRC)
 import waker  # noqa: E402
+import main as main_mod  # noqa: E402
+import prompts as prompts_mod  # noqa: E402
 
 
 class WakeGateTests(unittest.TestCase):
@@ -335,6 +337,42 @@ class MultiBrainTests(unittest.TestCase):
             # 重试恰好 1 次+token header 缺省（env token 空）
             self.assertEqual(post.call_count, 3)
             self.assertNotIn("Authorization", post.call_args[1]["headers"])
+
+
+class HumanizedDelayAndEntityTests(unittest.TestCase):
+    """拟人打字延迟 + 无实体设定约束（2026-10-27 队长验收补丁）。"""
+
+    def test_typing_delay_in_range(self):
+        """延迟按长度 1.5~4.5s（短回复≈2s 档，长回复≈4s 档）。"""
+        captured = []
+        with patch("time.sleep", side_effect=lambda s: captured.append(s)):
+            main_mod._humanized_typing_delay("短")
+            main_mod._humanized_typing_delay("长" * 200)
+        self.assertEqual(len(captured), 2)
+        for d in captured:
+            self.assertGreaterEqual(d, 1.5)
+            self.assertLessEqual(d, 4.5)
+        self.assertLess(captured[0], captured[1])   # 长回复延迟更长
+
+    def test_persona_play_reply_delayed(self):
+        """人格问句回复带拟人延迟（秒回人机感修复）。"""
+        captured = []
+        with patch.object(main_mod, "_PERSONA_GRAMS_CACHE", set()),              patch.object(main_mod, "state_manager") as sm,              patch("time.sleep", side_effect=lambda s: captured.append(s)):
+            sm.get_recent_memories = lambda limit=8: [("user", "主人最喜欢玩明日方舟")]
+            main_mod._persona_play_reply("你最喜欢玩什么游戏")
+        self.assertTrue(captured)
+        self.assertGreaterEqual(captured[-1], 1.5)
+
+    def test_system_prompt_has_entity_rule(self):
+        """SYSTEM_PROMPT 含无实体设定（无法亲自旅行/亲手打游戏）。"""
+        content = prompts_mod.SYSTEM_PROMPT["content"]
+        self.assertIn("无实体与陪伴设定", content)
+        self.assertIn("无法亲自出门、旅行、亲手打游戏", content)
+
+    def test_qq_persona_has_entity_rule(self):
+        """生命体 PERSONA 含无实体句（waker 源码锚）。"""
+        self.assertIn("无法亲自出门、旅行", waker.QQ_PERSONA)
+        self.assertIn("待在电脑里陪主人", waker.QQ_PERSONA)
 
 
 class PersonaLeakGuardTests(unittest.TestCase):

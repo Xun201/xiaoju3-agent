@@ -728,6 +728,19 @@ def _persona_guard_pipeline(message, reply):
     return _persona_fallback("play")
 
 
+def _humanized_typing_delay(reply):
+    """拟人打字延迟（2026-10-27 队长拍板）：按回复长度随机 1.5~4.5s——
+    秒回太人机，人类打字需要时间。仅用于拟人化直答路径（指令/工具即时
+    回复不受影响）。"""
+    import random as _random
+    base = 1.5 + min(2.0, len(str(reply or "")) * 0.02)
+    delay = min(4.5, base + _random.uniform(0, 1.0))
+    try:
+        time.sleep(delay)
+    except Exception:
+        pass
+
+
 def _persona_play_reply(message):
     """人格问句硬拦截（2026-10-27 人称抢戏终极修复）：问小橘"喜欢玩什么"
     类问题 → 直查 long_term 记忆拼回复，不经本地模型——r1 1.5B 对 system
@@ -748,11 +761,15 @@ def _persona_play_reply(message):
             if m:
                 game = m.group(1).strip("。！!～~ ")
                 if game:
-                    return (f"主人最喜欢玩的是《{game}》啦～小橘虽然没有实体"
+                    text = (f"主人最喜欢玩的是《{game}》啦～小橘虽然没有实体"
                             f"玩不了游戏，但会一直陪主人一起玩的！(=^･ω･^=)")
+                    _humanized_typing_delay(text)   # 硬拦截话术 2s+ 拟人延迟
+                    return text
     except Exception as e:
         print(f"⚠️ [人格问句] 记忆查询失败: {e}")
-    return _persona_fallback("play")
+    fallback = _persona_fallback("play")
+    _humanized_typing_delay(fallback)
+    return fallback
 
 
 def handle_intent_command(message, history=None):
