@@ -621,6 +621,39 @@ def video_link_guard(message):
             "或「解析这个视频」提取元数据。直接丢链接我可能会胡说八道哦～")
 
 
+_PERSONA_PLAY_RE = re.compile(
+    r"你(?:最)?喜欢玩.{0,8}(?:什么|啥|哪.?)?|你平时玩|你的.{0,4}爱好"
+    r"|你爱玩")
+
+
+def _persona_play_reply(message):
+    """人格问句硬拦截（2026-10-27 人称抢戏终极修复）：问小橘"喜欢玩什么"
+    类问题 → 直查 long_term 记忆拼回复，不经本地模型——r1 1.5B 对 system
+    人称红线遵从失败实锤（清历史+双 prompt 铁律仍"我最喜欢玩"抢戏）。
+    确定性话术=人称 100% 正确。返回 None=非此类问句，放行。"""
+    if not _PERSONA_PLAY_RE.search(str(message or "")):
+        return None
+    try:
+        rows = state_manager.get_recent_memories(limit=10) or []
+        for r in rows:
+            try:
+                c = r[1] if isinstance(r, (tuple, list)) and len(r) > 1 else (
+                    r.get("content") if isinstance(r, dict) else str(r))
+            except Exception:
+                c = str(r)
+            c = str(c)
+            m = re.search(r"主人最(?:喜欢|爱)玩(?:的)?(?:是)?\s*(.+)", c)
+            if m:
+                game = m.group(1).strip("。！!～~ ")
+                if game:
+                    return (f"主人最喜欢玩的是《{game}》啦～小橘虽然没有实体"
+                            f"玩不了游戏，但会一直陪主人一起玩的！(=^･ω･^=)")
+    except Exception as e:
+        print(f"⚠️ [人格问句] 记忆查询失败: {e}")
+    return ("小橘没有实体，玩不了游戏呀～不过主人喜欢玩什么都可以告诉小橘，"
+            "小橘会记住，然后陪主人一起！(=^･ω･^=)")
+
+
 def handle_intent_command(message, history=None):
     """意图路由直达（QQ/网页/控制台三通道共用，2026-10-05 自 _brain_reply
     抽出——控制台 #247 接线复用同一实现，防双份清单漂移）。
@@ -928,6 +961,13 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
         raw_message, message, user_id, group_id)
     if todo_reply is not None:
         return todo_reply
+
+    # === 🦊 人格问句硬拦截（2026-10-27 人称抢戏终极修复）：问小橘喜欢
+    # 玩什么 → 直查记忆确定性回复（不经本地模型，人称 100% 正确） ===
+    if source == 'qq':
+        persona_reply = _persona_play_reply(message)
+        if persona_reply is not None:
+            return persona_reply
 
     # === 🛡️ 发送图片指令（2026-10-02 权限重构：LV4 主人级专属） ===
     # #227 批 0 续：分派逻辑迁入 content_handler.send_image（领域第二件，
