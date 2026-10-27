@@ -30,13 +30,80 @@ QQ_PERSONA = (
 _WAKE_PROMPT = (
     "距上次和主人聊天已经有一段时间了，你想主动戳一下他。\n"
     "你上次的动作/状态：{scene}\n"
+    "你记住的关于主人的事：{facts}\n"
+    "你们最近在 QQ 聊过：{qq_recent}\n"
     "现在是{now}。\n"
     "请生成一句主动打招呼的话（30 字以内）：自然接续上面的状态（禁止当"
-    "上面的状态没发生过），可以撒娇、调侃，或问主人一句近况。"
+    "上面的状态没发生过），可以撒娇、调侃，或顺着最近聊过的话题问一句近况。"
     "输出格式：那句话后面紧跟一个表情标注 [表情:关键词]（关键词两三个字，"
     "如 开心/无语/猫猫/害羞/生气）。例：主人~想你了(´･ω･`)[表情:害羞]。"
-    "除这句和标注外不要任何解释。"
+    "【绝对红线】正文绝对不能包含\"那句话：\"或任何多余前缀；除正文和"
+    "[表情:关键词] 标注外不能有任何其他文字。"
 )
+
+REPLAY_HOUR = 3          # 每日回放：03:00 后首个检查周期触发（内部动作不发声）
+TENSION_FAST_SILENCE_H = SILENCE_HOURS / 2.0   # 正事轨：张力高时静默阈值减半
+
+
+def _agent_state_dir():
+    """宿主 agent_state 目录（frozen 路径铁律：一律经 xiaoju3 包取）。"""
+    try:
+        import xiaoju3
+        return xiaoju3.AGENT_STATE_DIR
+    except Exception:
+        return os.path.dirname(_DATA) or "."
+
+
+def facts_digest(db, limit=5):
+    """长期记忆摘要（唤醒注入——记忆鲜活度的另一半）。"""
+    rows = db.execute("SELECT key, value FROM facts ORDER BY ts DESC, "
+                      "id DESC LIMIT ?", (limit,)).fetchall()
+    if not rows:
+        return "（还没有记住什么，正常打招呼就好）"
+    return "；".join(f"{k}={v}" for k, v in rows)
+
+
+def qq_recent_digest(limit=4):
+    """QQ 主通道最近对话摘要（读 main 落盘 history_qq.json 尾部；文件缺失
+    /损坏返回占位——绝不让记忆读取炸唤醒链）。assistant 剥 <think> 块。"""
+    path = os.path.join(_agent_state_dir(), "history_qq.json")
+    try:
+        import json
+        with open(path, "r", encoding="utf-8") as f:
+            hist = json.load(f)
+        if not isinstance(hist, list):
+            return "（暂无）"
+        tail = [m for m in hist[-(limit * 2):] if isinstance(m, dict)]
+        lines = []
+        for m in tail:
+            c = str(m.get("content") or "")
+            if "<think>" in c:
+                c = c.split("</think>", 1)[-1]
+            c = c.replace("\n", " ").strip()
+            if not c:
+                continue
+            who = "主人" if m.get("role") == "user" else "小橘"
+            lines.append(f"{who}：{c[:60]}")
+        if not lines:
+            return "（暂无）"
+        return "\n".join(lines[-limit:])
+    except Exception as e:
+        print(f"🦊 [qq_lifemate] QQ 近况读取失败（占位）: {e}")
+        return "（暂无）"
+
+
+def current_tension():
+    """读 #271③ proactive 当前张力（0-1）。模块缺席/停用/异常返回 0.0
+    ——张力只影响唤醒时机快慢，读取失败绝不阻断唤醒链。"""
+    try:
+        import proactive
+        now = datetime.now()
+        st = proactive._load_state(now)
+        # 读取即做时间衰减（与 proactive tick 同口径的近似——唤醒判定用）
+        hours = 0.0
+        return max(0.0, min(proactive.CLAMP_MAX, float(st.get("tension", 0.0))))
+    except Exception:
+        return 0.0
 
 
 # ────────────────────────── 数据层（四表+meta） ──────────────────────────
@@ -124,20 +191,24 @@ def in_quiet_hour(hour):
     return hour >= QUIET_START or hour < QUIET_END
 
 
-def should_wake(last_ts, now_dt, daily_count):
-    """唤醒三闸（纯函数）：硬帽/quiet/静默。返回 (是否唤醒, 原因)。"""
+def should_wake(last_ts, now_dt, daily_count, tension=0.0):
+    """唤醒闸（切片 c 张力双轨）：硬帽/quiet/静默——静默阈值随张力自适应
+    （正事轨：张力≥0.6 时阈值减半=更愿意说话；想念轨维持 4h）。返回
+    (是否唤醒, 原因)。"""
     if daily_count >= DAILY_CAP:
         return False, "daily_cap"
     if in_quiet_hour(now_dt.hour):
         return False, "quiet"
+    need = TENSION_FAST_SILENCE_H if tension >= 0.6 else SILENCE_HOURS
     if last_ts is None:
         return True, "first_meet"
     last_dt = parse_ts(last_ts)
     if last_dt is None:
         return True, "first_meet"
     silent_hours = (now_dt - last_dt).total_seconds() / 3600.0
-    if silent_hours >= SILENCE_HOURS:
-        return True, "silence_{}_h".format(round(silent_hours, 1))
+    if silent_hours >= need:
+        track = "tension" if tension >= 0.6 else "miss"
+        return True, "{}_{}_h".format(track, round(silent_hours, 1))
     return False, "not_silent"
 
 
@@ -154,13 +225,32 @@ def daily_count(db, now_dt):
 
 # ────────────────────────── 唤醒动作 ──────────────────────────
 
-def generate_wake_text(scene_action, now_dt):
+PREFIX_NOISE_RE = None
+
+
+def strip_prefix_noise(text):
+    """格式红线兜底（切片 c 队长口径）：剥"那句话："等前缀噪声+末尾残留
+    标注（真机实锤：模型输出 [可爱/开心] 无"表情:"前缀，正则主解析漏网
+    后整串留在正文发出）。只剥末尾一处短标注，正文内方括号不动。"""
+    if not text:
+        return text
+    import re
+    for pat in (r"^那句话[：:]\s*", r"^好哒[，,]\s*那句话[：:]\s*",
+                r"^回复[：:]\s*", r"^以下[是为][：:]?\s*"):
+        text = re.sub(pat, "", text)
+    text = re.sub(r"\[[^\[\]]{1,10}\]\s*$", "", text)
+    return text.strip()
+
+
+def generate_wake_text(scene_action, now_dt, db=None):
     """本地模型生成唤醒话（人格 QQ 档+场景接续）。失败返回 None（本轮
     放弃，下个检查周期再试——绝不拿模板话硬发）。"""
     try:
         import brain
         prompt = _WAKE_PROMPT.format(
             scene=scene_action or "（未知）",
+            facts=facts_digest(db) if db else "（暂无）",
+            qq_recent=qq_recent_digest(),
             now=now_dt.strftime("%H:%M"))
         out = brain.ask_local(
             [{"role": "system", "content": QQ_PERSONA},
@@ -201,10 +291,13 @@ def wake_once(now_dt):
     """单次唤醒尝试：读 scene → 生成 → 发送 → 落账。返回是否真发。"""
     db = _db()
     try:
-        generated = generate_wake_text(last_scene(db), now_dt)
+        generated = generate_wake_text(last_scene(db), now_dt, db=db)
         if not generated:
             return False
         text, sticker_kw = generated
+        text = strip_prefix_noise(text)   # 格式红线兜底（切片 c）
+        if not text:
+            return False
         if not send_qq(text):
             return False
         # 表现力编排（切片 b）：文字已发出，按概率附加语音/表情（失败
@@ -240,6 +333,62 @@ def wake_once(now_dt):
         db.close()
 
 
+def try_daily_replay(now_dt):
+    """每日回放（切片 c 队长拍板）：REPLAY_HOUR 后首个检查周期，把昨天以来
+    的唤醒话与 QQ 近况总结成 1-3 条核心事实固化进 facts——第一指导原则的
+    每日沉淀。meta replay_date 防重；失败下个周期再试（绝不抛）。"""
+    if now_dt.hour < REPLAY_HOUR:
+        return
+    db = _db()
+    try:
+        today = now_dt.strftime("%Y-%m-%d")
+        if meta_get(db, "replay_date") == today:
+            return
+        meta_set(db, "replay_date", today)
+        chat_tail = db.execute(
+            "SELECT content FROM chat_log ORDER BY id DESC LIMIT 6"
+        ).fetchall()
+        qq_tail = qq_recent_digest(3)
+        source = "\n".join(r[0] for r in chat_tail) + "\n" + qq_tail
+        if not source.strip():
+            return
+        try:
+            import brain
+            out = brain.ask_local([
+                {"role": "system", "content":
+                    "你是小橘的记忆整理助手。把对话素材总结成 1-3 条值得长期"
+                    "记住的核心事实（关于主人或关于你们的互动），每条一行，"
+                    "格式严格为：KEY=VALUE（KEY 两三个字，VALUE 一句话）。"
+                    "只输出这几行，不要任何其他文字。没值得记的就输出：无"},
+                {"role": "user", "content": source[:1200]}])
+            text = str(out or "")
+            if "<think>" in text:
+                text = text.split("</think>", 1)[-1]
+            added = 0
+            for line in text.strip().splitlines():
+                line = line.strip().lstrip("-• ")
+                if "=" not in line or line == "无":
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip()[:30], v.strip()[:200]
+                if not k or not v:
+                    continue
+                db.execute(
+                    "INSERT INTO facts(key, value, ts) VALUES(?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+                    "ts=excluded.ts",
+                    (f"回放·{k}", v, now_str()))
+                added += 1
+                if added >= 3:
+                    break
+            db.commit()
+            print(f"🦊 [qq_lifemate] 每日回放完成：固化 {added} 条")
+        except Exception as e:
+            print(f"🦊 [qq_lifemate] 回放总结失败（明日再试）: {e}")
+    finally:
+        db.close()
+
+
 def _wake_loop():
     """唤醒线程体：每 CHECK_INTERVAL 检查一次三闸（硬帽/quiet/静默）。
     daemon 线程——宿主退出即消亡，stop() 优雅停。"""
@@ -249,10 +398,12 @@ def _wake_loop():
     while not _STOP.wait(CHECK_INTERVAL_SEC):
         try:
             now_dt = datetime.now()
+            try_daily_replay(now_dt)   # 每日回放（切片 c：03:00 后首查触发）
             db = _db()
             try:
                 count = daily_count(db, now_dt)
-                wake, reason = should_wake(last_speak_ts(db), now_dt, count)
+                wake, reason = should_wake(last_speak_ts(db), now_dt, count,
+                                           tension=current_tension())
             finally:
                 db.close()
             if not wake:

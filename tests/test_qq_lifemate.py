@@ -55,7 +55,9 @@ class WakeGateTests(unittest.TestCase):
         last = "2026-10-27 09:00:00"   # 5h 前
         wake, reason = waker.should_wake(last, self.now, 0)
         self.assertTrue(wake)
-        self.assertTrue(reason.startswith("silence_"))
+        # 切片 c 双轨：低张力=想念轨 miss_，高张力=正事轨 tension_
+        self.assertTrue(reason.startswith("miss_")
+                        or reason.startswith("tension_"))
 
     def test_quiet_hours_block(self):
         """W2：23:00-08:00 绝不唤醒（跨午夜两端+午夜本体）。"""
@@ -88,6 +90,95 @@ class WakeGateTests(unittest.TestCase):
         wake, reason = waker.should_wake("垃圾数据", self.now, 0)
         self.assertTrue(wake)
         self.assertEqual(reason, "first_meet")
+
+
+class SliceCTests(unittest.TestCase):
+    """切片 c：张力双轨/格式红线/facts 注入/每日回放。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lm_c_")
+        waker.set_data_dir(self.tmp)
+
+    def tearDown(self):
+        waker.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_tension_fast_track_halves_silence(self):
+        """张力≥0.6：静默阈值减半（正事轨）。"""
+        now = datetime(2026, 10, 27, 14, 0, 0)
+        last = "2026-10-27 11:30:00"   # 2.5h 前
+        wake, _ = waker.should_wake(last, now, 0, tension=0.0)
+        self.assertFalse(wake)
+        wake, reason = waker.should_wake(last, now, 0, tension=0.7)
+        self.assertTrue(wake)
+        self.assertTrue(reason.startswith("tension_"))
+
+    def test_tension_low_keeps_4h(self):
+        """张力低：维持 4h（想念轨不变）。"""
+        now = datetime(2026, 10, 27, 14, 0, 0)
+        last = "2026-10-27 12:00:00"   # 2h 前（<4h）
+        wake, _ = waker.should_wake(last, now, 0, tension=0.1)
+        self.assertFalse(wake)
+
+    def test_cap_and_quiet_still_win(self):
+        """硬帽与 quiet 优先于张力（帽/quiet 不因张力放行）。"""
+        now = datetime(2026, 10, 27, 23, 30, 0)
+        wake, reason = waker.should_wake(None, now, 0, tension=0.9)
+        self.assertFalse(wake)
+        self.assertEqual(reason, "quiet")
+
+    def test_strip_prefix_noise(self):
+        self.assertEqual(waker.strip_prefix_noise("那句话：主人好"),
+                         "主人好")
+        self.assertEqual(waker.strip_prefix_noise("回复：在呢"), "在呢")
+        self.assertEqual(waker.strip_prefix_noise("正常话"), "正常话")
+
+    def test_facts_digest(self):
+        db = waker._db()
+        db.execute("INSERT INTO facts(key, value, ts) VALUES(?,?,?)",
+                   ("喜欢的饮料", "热可可", "2026-10-27 10:00"))
+        db.commit()
+        d = waker.facts_digest(db)
+        db.close()
+        self.assertIn("喜欢的饮料=热可可", d)
+
+    def test_facts_digest_empty(self):
+        db = waker._db()
+        d = waker.facts_digest(db)
+        db.close()
+        self.assertIn("还没有记住", d)
+
+    def test_daily_replay_persists_facts(self):
+        """回放：LLM 总结行→facts 落库+meta 防重。"""
+        db = waker._db()
+        db.execute("INSERT INTO chat_log(role, content, ts, kind) "
+                   "VALUES('assistant','想你了','2026-10-27 10:00','w')")
+        db.commit()
+        db.close()
+        with patch("brain.ask_local",
+                   return_value="饮料=热可可\n心情=想主人\n无"):
+            waker.try_daily_replay(datetime(2026, 10, 28, 3, 10, 0))
+        db = waker._db()
+        n = db.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+        replays = db.execute("SELECT v FROM meta WHERE k='replay_date'"
+                             ).fetchall()
+        db.close()
+        self.assertEqual(n, 2)   # "无" 行不落
+        self.assertEqual(replays[0][0], "2026-10-28")
+
+    def test_daily_replay_once_per_day(self):
+        """同日二次检查不重复回放（meta 防重）。"""
+        with patch("brain.ask_local", return_value="a=b"):
+            waker.try_daily_replay(datetime(2026, 10, 28, 3, 10, 0))
+            with patch("brain.ask_local") as second:
+                waker.try_daily_replay(datetime(2026, 10, 28, 4, 10, 0))
+                second.assert_not_called()
+
+    def test_replay_before_hour_skipped(self):
+        """03:00 前不回放。"""
+        with patch("brain.ask_local") as a:
+            waker.try_daily_replay(datetime(2026, 10, 28, 2, 0, 0))
+            a.assert_not_called()
 
 
 class PluginLoadContractTests(unittest.TestCase):
