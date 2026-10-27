@@ -875,6 +875,106 @@ def handle_clear_command(source):
         save_memory([], MEMORY_FILE_QQ)
 
 
+# ── 智能算力调度（游戏模式检测，2026-10-27 队长拍板） ──
+_game_process_whitelist = []
+_game_mode_active = False
+_game_stop = threading.Event()
+_game_thread = None
+
+
+def _load_game_list():
+    global _game_process_whitelist
+    path = os.path.join(AGENT_STATE_DIR, "plugins", "qq_lifemate",
+                        "game_list.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            _game_process_whitelist = [
+                p.lower() for p in json.load(f).get("processes", [])]
+    except Exception:
+        _game_process_whitelist = []
+
+
+def _check_game_processes():
+    import psutil
+    hits = []
+    for proc in psutil.process_iter(["name"]):
+        try:
+            name = (proc.info["name"] or "").lower()
+            for w in _game_process_whitelist:
+                if w in name:
+                    hits.append(name)
+                    break
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return hits
+
+
+def _is_game_mode():
+    return _game_mode_active
+
+
+def _ollama_unload():
+    """keep_alive=0 卸载本地模型释放显存。"""
+    try:
+        requests.post(LOCAL_URL, json={
+            "model": LOCAL_MODEL, "keep_alive": 0, "messages": []}, timeout=5)
+        print("🎮 [game_mode] Ollama 模型已卸载（显存释放）")
+    except Exception as e:
+        print(f"🎮 [game_mode] Ollama 卸载失败: {e}")
+
+
+def _ollama_reload():
+    """keep_alive=-1 恢复本地模型常驻。"""
+    try:
+        requests.post(LOCAL_URL, json={
+            "model": LOCAL_MODEL, "keep_alive": -1, "messages": []}, timeout=5)
+        print("🎮 [game_mode] Ollama 模型已恢复")
+    except Exception:
+        pass
+
+
+def _game_monitor_loop():
+    """游戏进程监控主循环（5s 周期，3min 退出防抖）。"""
+    global _game_mode_active
+    game_gone_since = None
+    print("🎮 [game_mode] 监控启动（5s 扫描，防抖 3min）")
+    while not _game_stop.wait(5):
+        try:
+            hits = _check_game_processes()
+            now = time.time()
+            if hits and not _game_mode_active:
+                _game_mode_active = True
+                game_gone_since = None
+                print(f"🎮 [game_mode] 游戏启动 {hits[:2]} → 切游戏模式")
+                _ollama_unload()
+            elif not hits and _game_mode_active:
+                if game_gone_since is None:
+                    game_gone_since = now
+                elif now - game_gone_since >= 180:
+                    _game_mode_active = False
+                    game_gone_since = None
+                    print("🎮 [game_mode] 防抖 3min → 切回日常（Ollama 恢复）")
+                    _ollama_reload()
+            elif hits and _game_mode_active:
+                game_gone_since = None
+        except Exception as e:
+            print(f"🎮 [game_mode] 监控异常: {e}")
+
+
+def _start_game_monitor():
+    global _game_thread
+    _load_game_list()
+    if not _game_process_whitelist:
+        return   # 白名单空=不启动监控
+    if _game_thread is not None and _game_thread.is_alive():
+        return
+    _game_stop.clear()
+    _game_thread = threading.Thread(target=_game_monitor_loop, daemon=True,
+                                    name="game_mode_monitor")
+    _game_thread.start()
+    print("🎮 [game_mode] 监控线程已启动")
+
+
 def handle_remember_command(content):
     """记住xxx 本体（#227 批 B：正则匹配已迁 memory_handler.handle_remember，
     打标 _memory_emotion_meta+落库 state_manager.save_memory 留本文件——
@@ -1233,6 +1333,43 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             return gate_reply
         is_new_session = len(messages_qq) <= 1
         messages_qq.append({"role": "user", "content": message})
+
+        # === 🎮 游戏模式（智能算力调度 2026-10-27）：游戏运行时本地模型
+        # 卸载，所有非工具消息直发云端（省显存给游戏）。工具意图在意图
+        # 路由段已处理（handle_intent_command），到这里的一定是闲聊/问答 ===
+        if _is_game_mode():
+            try:
+                _ctx = "\n".join(
+                    m.get("content", "")[:100] for m in messages_qq[-6:]
+                    if isinstance(m, dict)
+                    and m.get("role") != "system")
+                _hdr = {"Authorization": f"Bearer {CLOUD_KEY}",
+                        "Content-Type": "application/json"}
+                _payload = {"model": CLOUD_MODEL,
+                            "messages": [
+                                {"role": "system", "content":
+                                    "你是小橘，一只住在主人电脑里的 AI 狐狸。"
+                                    "你没有实体，无法出门/旅行/亲手打游戏。"
+                                    "主人喜好的事用\"主人\"作主语。"
+                                    "纯简体中文，80 字内，活泼口语。"},
+                                {"role": "user", "content":
+                                    f"主人消息：{message}\n"
+                                    f"最近对话：\n{_ctx}\n请回复主人。"}],
+                            "stream": False, "temperature": 0.7}
+                _t0 = time.perf_counter()
+                _resp = requests.post(CLOUD_URL, headers=_hdr, json=_payload,
+                                      timeout=(10, 30))
+                _body = _resp.json()
+                reply = _body["choices"][0]["message"]["content"].strip()
+                if "<think>" in reply:
+                    reply = reply.split("</think>", 1)[-1].strip()
+                _tk = _body.get("usage", {}).get("total_tokens", "?")
+                print(f"🎮 [game_mode] 云端直回 {round(time.perf_counter()-_t0, 1)}s "
+                      f"tokens={_tk}: {reply[:60]}")
+                return reply
+            except Exception as _gm_e:
+                print(f"⚠️ [game_mode] 云端直回失败（走原链）: {_gm_e}")
+
         reply = _brain_reply('qq', message, messages_qq, user_key,
                              new_session=is_new_session)
         if not reply:
@@ -1644,6 +1781,12 @@ def start_background_services():
                              on_peer_recover=_on_peer_recover).watch_loop,
             daemon=True, name="xiaoju3-peer-watch").start()
         print(f"👀 [守望] 多设备互相守望已启动（对端：{'、'.join(peers)}）")
+
+    # 🎮 游戏模式监控（智能算力调度：白名单非空才启动）
+    try:
+        _start_game_monitor()
+    except Exception as _gm_e:
+        print(f"🎮 [game_mode] 启动失败（不影响）: {_gm_e}")
 
 
 # === 🧩 插件总线启动装载（#312 一期 D3）：main 完整初始化后扫描
