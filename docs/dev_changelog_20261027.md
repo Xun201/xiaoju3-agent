@@ -48,3 +48,9 @@ main.py/brain.py/xiaoju3_dashboard.py .bak-20261027-strip；doc_ingest.py .bak-2
 - **部署**：build_exe.bat（车 2.1.0+本批）→包内容三层验证（`_internal/console.js`/`index.html` grep+PYZ `ZlibArchiveReader`——**方法名锚在 co_names 不在 co_consts**，docstring 锚在 consts）→VCRUNTIME 双锁再现（robocopy 12min 49 文件龟爬）→`deploy_shutil.py` 绕锁正档（1505 拷+26 同版保留+locked_diff=0+exe/console.js/index.html md5 双端 MATCH）→schtasks 双通道拉起（MSYS_NO_PATHCONV=1）→三进程全新 StartTime 23:29+health ok+`/console` 新 UI 验证（`/` 是旧版占位页，真控制台在 `/console`——验错路由会虚惊）。
 - **任务②（思维沉淀+架构草案）**：两概念确认在库（`_dev/thinking_notes.md:254`，2026-10-27 老板视频提炼，含 0.95^10 与独立视角两要点）；**全局任务审查员极简草案落盘 `_dev/design_global_task_reviewer.md`**：TaskLedger 会话账本+触发三则（T1 链长≥3/T2 工具族切换/T3 败后续）+一次云审（≤200字 prompt 要 JSON verdict）+规则兜底（云断不放大）+合法批量链保护+三步对抗论证（反转条件=误杀>5% 或超时>20% 降级单触发）；概念条目已加落点指针。**等老板/秘书拍板，未实施**。
 - **回滚**：index.html/console.js/desktop_launcher.py 各 `.bak-20261027-sbresize`；`git revert a476e0f`；生产旧 exe 无 .old（VCRUNTIME 双锁下回滚=重新构建上一提交 a476e0f^ 并重部署，或 `git stash` 期 dist 未删时用 dist 旧包——诚实挂账：本次部署未保留旧 exe 副本，回滚依赖 git revert+重建，约 5 分钟）。
+
+## 深夜补丁：侧栏把手视觉改极细线（d4b6cd9 已推，生产车 a8820b17 三进程在线）
+
+- 队长口径"极细线（VSCode 交互）"：热区保持 10px 好抓不变，视觉改 `::after` 2px 垂直细线（上下 12px 呼吸位不顶窗沿），默认极淡灰 `rgba(31,41,55,.10)`、hover/拖拽亮狐毛橙 `rgba(217,111,43,.85)`；旧粗块背景形态删除并加锚禁回归（+2 锚=**全仓 2683+4**，node 烟雾 26/26 不变——JS 零改动）。
+- 抽屉态守卫完好（display:none 连 ::after 一起隐）。测试→构建→deploy_shutil（md5 三件 MATCH e3fb1307）→Run 键拉起→health ok+/console 细线 CSS 实锤，全链 ~6 分钟。
+- 回滚：`git revert d4b6cd9`+重建；index.html `.bak-20261027-thinline` 在案。
