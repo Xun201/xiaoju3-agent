@@ -1251,8 +1251,8 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
     # 本地回复池随机直出（零延迟零幻觉零 token，绕模型绕记忆绕多脑） ===
     if source == 'qq' and not group_id:
         _GREETING_RE = re.compile(
-            r"^(你好|在吗|早|早安|晚上好|午安|晚安|嗨|hi|hello|哈喽|"
-            r"来啦|我来啦|我回来了|我上线了)[\s!！。～~]*$",
+            r"^(在吗|早|早安|晚上好|午安|晚安|嗨|hi|hello|哈喽|"
+            r"来啦|我来啦|我回来了|我上线了)[\s!！。～~？?]*$",
             re.IGNORECASE)
         if _GREETING_RE.match(message.strip()):
             import random as _rand_g

@@ -165,7 +165,7 @@ class TestMergedHosting(_MainCase):
 
     def test_chat_route_removed(self):
         """POST /chat 旧版网页 API 不复活：返回 404。"""
-        resp = self.client.post("/chat", json={"message": "帮我看看今天的日程"})
+        resp = self.client.post("/chat", json={"message": "你好"})
         self.assertEqual(resp.status_code, 404)
 
     def test_onebot_get_not_allowed(self):
@@ -254,7 +254,7 @@ class TestOnebotEntry(_MainCase):
         resp = self.onebot({
             "post_type": "message", "message_type": "private",
             "self_id": "10000", "sender": {"user_id": 123},
-            "raw_message": "帮我看看今天的日程",
+            "raw_message": "你好",
         })
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
@@ -388,12 +388,12 @@ class TestOnebotLLOneBotTolerance(_MainCase):
         resp = self.onebot({
             "post_type": "message", "message_type": "private",
             "self_id": "10000", "sender": {"user_id": 123},
-            "message": [{"type": "text", "data": {"text": "帮我看看今天的日程"}}],
+            "message": [{"type": "text", "data": {"text": "你好"}}],
         })
         self.assertEqual(resp.status_code, 200)
         self.smart_ask.assert_called_once()
         args, _ = self.smart_ask.call_args
-        self.assertEqual(args[0], "帮我看看今天的日程")
+        self.assertEqual(args[0], "你好")
 
     def test_message_string_used_directly(self):
         """raw_message 缺失且 message 为字符串：直接使用。"""
@@ -448,7 +448,7 @@ class TestOnebotLLOneBotTolerance(_MainCase):
         resp = self.onebot({
             "message_type": "private",
             "self_id": "10000", "sender": {"user_id": 123},
-            "raw_message": "帮我看看今天的日程",
+            "raw_message": "你好",
         })
         self.assertEqual(resp.status_code, 200)
         self.smart_ask.assert_called_once()
@@ -457,7 +457,7 @@ class TestOnebotLLOneBotTolerance(_MainCase):
         """字段类型损坏（如 sender 为非字典）：不崩，统一返回 ok。"""
         resp = self.onebot({
             "post_type": "message", "message_type": "private",
-            "sender": 12345, "raw_message": "帮我看看今天的日程",
+            "sender": 12345, "raw_message": "你好",
         })
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
@@ -470,7 +470,7 @@ class TestOnebotLLOneBotTolerance(_MainCase):
             resp = self.onebot({
                 "post_type": "message", "message_type": "private",
                 "self_id": "10000", "sender": {"user_id": 123},
-                "raw_message": "帮我看看今天的日程",
+                "raw_message": "你好",
             })
         self.assertEqual(resp.get_json(), {"status": "ok", "retcode": 0})
         printed = "\n".join(str(c.args[0]) for c in print_mock.call_args_list
@@ -1191,7 +1191,7 @@ class TestRecentActionsInjection(_MainCase):
         args, _ = self.smart_ask.call_args
         self.assertEqual([m for m in args[1] if m.get("role") == "system"],
                          [main.SYSTEM_PROMPT])
-        self.assertEqual(args[0], "帮我看看今天的日程")   # 主链路照常走到 smart_ask
+        self.assertEqual(args[0], "你好")
 
     def test_injection_block_sits_right_after_system_prompt(self):
         self._seed_actions(["control_ha_device: light.a → turn_off"])
