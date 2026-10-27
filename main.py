@@ -631,12 +631,14 @@ def handle_intent_command(message, history=None):
     控制台客户端超大 payload）；未命中、路由异常或 dispatch 返回 ❌
     一律返回 None（调用方透传原 smart_ask 链路，绝不吞消息）。
     """
+    print(f"🐛 [意图入口] 收到: {str(message)[:30]!r}")
     guard = video_link_guard(message)
     if guard is not None:
         return guard   # 视频链接拦截（幻觉防线）：绝不落本地模型
     intent = None
     try:
         intent = route(_strip_cq(message))
+        print(f"🐛 [意图入口] route={'None' if intent is None else intent.name}")
     except Exception as e:
         print(f"⚠️ 意图路由异常，走正常对话: {e}")
     if intent is None:
@@ -653,6 +655,10 @@ def handle_intent_command(message, history=None):
         return None
     if dispatched and not (isinstance(dispatched, str) and dispatched.startswith("❌")):
         return str(dispatched)
+    if isinstance(dispatched, str) and dispatched.startswith("❌"):
+        # 2026-10-27：❌ 静默透传黑盒化——真机排障期临时日志（命中但失败
+        # 的意图与原因），稳定后可撤
+        print(f"⚠️ [意图路由] {intent.name} dispatch 失败: {dispatched[:120]}")
     return None
 
 

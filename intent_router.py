@@ -324,6 +324,9 @@ def route(message, context=None):
     规则未命中时按 env XIAOJU3_MODEL_ROUTE 决定是否走模型层兜底。
     """
     message = "" if message is None else str(message)
+    # 🐛 排障临时日志（2026-10-27）：route 规模+入串+外部表——稳定后撤
+    print(f"🐛 [route] 表={len(_COMPILED_PATTERNS)} 外部={len(external_intents)} "
+          f"入={message[:30]!r}")
     if message.strip():
         for entry, compiled in _COMPILED_PATTERNS:
             match = None

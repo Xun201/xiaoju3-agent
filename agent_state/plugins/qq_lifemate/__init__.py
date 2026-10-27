@@ -93,6 +93,28 @@ def teardown():
     waker.stop()
 
 
+def _extract_remember(message="", match=None):
+    """从"记住…"句式抽 key/value（意图直达用，确定性落库）。"""
+    import re
+    m = re.search(r"(?:帮我?记(?:住|一下)|记(?:住|一下)|记住)[，,:：]?\s*(.+)",
+                  str(message or ""))
+    body = m.group(1).strip() if m else ""
+    if not body:
+        return {}
+    m3 = re.match(r"(.{1,12}?)[是:：叫]\s*(.+)", body)
+    if m3:
+        return {"key": m3.group(1).strip(), "value": m3.group(2).strip()}
+    return {"key": "主人说的事", "value": body[:200]}
+
+
+def record_reply(key="", value="", **_):
+    """意图直达回复形态：落库+人话确认（不经模型）。"""
+    out = record_fact(key=key, value=value)
+    if "记住啦" in out:
+        return f"好啦好啦，记在小本本上了：{key} = {value} 🦊"
+    return out
+
+
 def PLUGIN():
     return {
         "name": "qq_lifemate",
@@ -106,7 +128,9 @@ def PLUGIN():
              "desc": "把主人告诉你的重要事实（喜好/习惯/日子）固化进你的"
                      "长期记忆，以后随时能想起来",
              "params": "key (记什么，如'喜欢的饮料'), value (具体内容)",
-             "note": "当主人说「记住我喜欢…/以后记得…」时使用",
+             "note": "【死命令】当主人让你记住任何事（记住我喜欢…/以后记得…/"
+                     "帮我记一下…），你【必须】调用本工具落库，绝对不许只"
+                     "口头答应（说不调工具=欺骗主人，严重违纪）。调完再回复。",
              "handler": "agent_state_plugins_qq_lifemate:record_fact"},
             {"name": "ext_scene_report",
              "desc": "上报你当前的动作/状态场景——主动找主人聊天时会自然"
@@ -120,7 +144,14 @@ def PLUGIN():
              "note": "当主人问「你还记得…吗」时使用",
              "handler": "agent_state_plugins_qq_lifemate:recall_fact"},
         ],
-        "intents": [],
+        "intents": [
+            {"name": "ext_record_remember",
+             "desc": "记住主人说的事（确定性落库，不经模型自由发挥）",
+             "patterns": [r"^记住", r"帮我?记(?:住|一下)", r"^记一下",
+                          r"别忘了[，,]?\s*(.+)"],
+             "extractor": _extract_remember,   # 函数对象（route 直接调用——字符串会 TypeError 静默回退）
+             "handler_name": "agent_state_plugins_qq_lifemate:record_reply"},
+        ],
         "setup": setup,
         "teardown": teardown,
     }

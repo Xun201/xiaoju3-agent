@@ -181,6 +181,44 @@ class SliceCTests(unittest.TestCase):
             a.assert_not_called()
 
 
+class StickerParseHardeningTests(unittest.TestCase):
+    """标注解析加固（真机 [可爱/开心] 漏网修复）+假承诺防线锚。"""
+
+    def test_mid_slash_annotation_extracted(self):
+        """中间 [可爱/开心]：提取首个词+剥除（真机漏网复现场景）。"""
+        c, kw = waker.extract_sticker_keyword("太开心了[可爱/开心]，希望你也开心！")
+        self.assertEqual(c, "太开心了，希望你也开心！")
+        self.assertEqual(kw, "可爱")
+
+    def test_plain_text_untouched(self):
+        c, kw = waker.extract_sticker_keyword("没有标注的普通话")
+        self.assertEqual(c, "没有标注的普通话")
+        self.assertIsNone(kw)
+
+    def test_strip_mid_emotion_annotation(self):
+        """strip 兜底：含情绪词的中间短标注剥除。"""
+        self.assertEqual(waker.strip_prefix_noise("太开心了[可爱/开心]，希望你也开心！"),
+                         "太开心了，希望你也开心！")
+
+    def test_record_fact_note_has_dead_order(self):
+        """假承诺防线锚：ext_record_fact note 必须含死命令（2026-10-27
+        真机实锤：模型口头'已存入'未调工具）。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "lm_note_check",
+            os.path.join(PROJECT_ROOT, "agent_state", "plugins",
+                         "qq_lifemate", "__init__.py"),
+            submodule_search_locations=[
+                os.path.join(PROJECT_ROOT, "agent_state", "plugins",
+                             "qq_lifemate")])
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        note = next(t["note"] for t in mod.PLUGIN()["tools"]
+                    if t["name"] == "ext_record_fact")
+        self.assertIn("必须", note)
+        self.assertIn("不许", note)
+
+
 class PluginLoadContractTests(unittest.TestCase):
     """目录包装载契约（plugin_loader 六步生命周期）。"""
 

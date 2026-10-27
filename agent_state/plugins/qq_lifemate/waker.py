@@ -30,7 +30,7 @@ QQ_PERSONA = (
 _WAKE_PROMPT = (
     "距上次和主人聊天已经有一段时间了，你想主动戳一下他。\n"
     "你上次的动作/状态：{scene}\n"
-    "你记住的关于主人的事：{facts}\n"
+    "你记住的关于主人的事：{facts}\n主记忆库里的主人画像：{main_mems}\n"
     "你们最近在 QQ 聊过：{qq_recent}\n"
     "现在是{now}。\n"
     "请生成一句主动打招呼的话（30 字以内）：自然接续上面的状态（禁止当"
@@ -52,6 +52,34 @@ def _agent_state_dir():
         return xiaoju3.AGENT_STATE_DIR
     except Exception:
         return os.path.dirname(_DATA) or "."
+
+
+def main_memory_digest(limit=5):
+    """主记忆库摘要（QQ"记住"链落 state_manager/long_term.db——与 facts
+    双库并存，唤醒注入两库同读，2026-10-27 真机实锤"明日方舟"在主库）。"""
+    try:
+        import main
+        sm = getattr(main, "state_manager", None)
+        rows = (sm.get_recent_memories(limit=limit) or []) if sm else []
+        out = []
+        for r in rows:
+            try:
+                if isinstance(r, dict):
+                    c = r.get("content")
+                elif hasattr(r, "keys"):
+                    c = r["content"]
+                elif isinstance(r, (tuple, list)) and len(r) > 1:
+                    c = r[1]   # (type/category, content, …) 列序实抓
+                else:
+                    c = str(r)
+            except Exception:
+                c = str(r)
+            if c:
+                out.append(str(c)[:60])
+        return "；".join(out) if out else "（主记忆库暂无）"
+    except Exception as e:
+        print(f"🦊 [qq_lifemate] 主记忆库读取失败（占位）: {e}")
+        return "（主记忆库暂无）"
 
 
 def facts_digest(db, limit=5):
@@ -225,7 +253,29 @@ def daily_count(db, now_dt):
 
 # ────────────────────────── 唤醒动作 ──────────────────────────
 
-PREFIX_NOISE_RE = None
+# 情绪词表（标注漏网扫描用——真机实锤：模型会输出 [可爱/开心] 无"表情:"
+# 前缀形态，主正则 miss 后整串留正文）
+STICKER_WORDS = ("开心", "可爱", "生气", "无语", "害羞", "猫猫", "委屈",
+                 "困困", "坏笑", "得意", "偷笑", "大哭", "惊讶", "疑惑",
+                 "摸鱼", "干饭", "蹭蹭", "贴贴")
+
+
+def extract_sticker_keyword(text):
+    """放宽版标注提取（真机 [可爱/开心] 漏网修复）：先认 [表情:X] 主形，
+    再扫任意 [..] 内含情绪词的短标注（词 A/词 B 形态取首个词）。返回
+    (剥除后文本, 关键词|None)。"""
+    import re
+    m = re.search(r"\[表情[:：]\s*([^\]\s]{1,8})\]", text)
+    if m:
+        return (text[:m.start()] + text[m.end():]).strip(), m.group(1).strip()
+    for mm in re.finditer(r"\[([^\[\]]{1,12})\]", text):
+        inner = mm.group(1)
+        hit = next((w for w in STICKER_WORDS if w in inner), None)
+        if hit:
+            cleaned = (text[:mm.start()] + text[mm.end():]).strip()
+            kw = inner.split("/")[0].strip() or hit
+            return cleaned, kw
+    return text, None
 
 
 def strip_prefix_noise(text):
@@ -239,6 +289,8 @@ def strip_prefix_noise(text):
                 r"^回复[：:]\s*", r"^以下[是为][：:]?\s*"):
         text = re.sub(pat, "", text)
     text = re.sub(r"\[[^\[\]]{1,10}\]\s*$", "", text)
+    for w in STICKER_WORDS:   # 含情绪词的短标注（任意位置）一律剥
+        text = re.sub(r"\[[^\[\]]{0,6}" + w + r"[^\[\]]{0,6}\]", "", text)
     return text.strip()
 
 
@@ -250,6 +302,7 @@ def generate_wake_text(scene_action, now_dt, db=None):
         prompt = _WAKE_PROMPT.format(
             scene=scene_action or "（未知）",
             facts=facts_digest(db) if db else "（暂无）",
+            main_mems=main_memory_digest(),
             qq_recent=qq_recent_digest(),
             now=now_dt.strftime("%H:%M"))
         out = brain.ask_local(
@@ -259,11 +312,7 @@ def generate_wake_text(scene_action, now_dt, db=None):
         text = str(out or "").strip()
         if "<think>" in text:   # 剥思考（R1 类模型），只要正文
             text = text.split("</think>", 1)[-1].strip()
-        sticker_kw = None
-        m = re.search(r"\[表情[:：]\s*([^\]\s]{1,8})\]", text)  # noqa: W605
-        if m:
-            sticker_kw = m.group(1).strip()
-            text = (text[:m.start()] + text[m.end():]).strip()
+        text, sticker_kw = extract_sticker_keyword(text)
         # 剥引号包裹（模型爱加；成对异侧引号同剥）
         pairs = {('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’"),
                  ("「", "」")}

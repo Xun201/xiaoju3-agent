@@ -59,6 +59,7 @@
 import glob
 import logging
 import os
+import sys
 import re
 import sqlite3
 import threading
@@ -85,6 +86,15 @@ from web_sanitize import sanitize_for_web  # Web 出口 CQ 码净化（QQ 通道
 from xiaoju3 import (AGENT_STATE_DIR, CLOUD_BALANCE_URL, CLOUD_KEY,
                      DASHBOARD_PORT, MAX_MESSAGES, TTS_VOICE,
                      XIAOJU3_VERSION)
+
+# 🐛 排障观测（2026-10-27）：stdout 行缓冲——live 日志实时落盘（此前块
+# 缓冲+多进程交错，意图路由 print 迟迟不现=观测盲区假象）。
+# windowed frozen 下 sys.stdout 可能为 None，守卫跳过（2026-10-27 崩启实锤）
+try:
+    if sys.stdout is not None:
+        sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 app = Flask(__name__)
 # 🛡️ 迁移守望探测端点（架构 §8，migration docstring 接入示例：一行注册；
