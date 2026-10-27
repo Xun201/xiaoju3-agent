@@ -263,6 +263,47 @@ class PersonConversionTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class PersonaLeakGuardTests(unittest.TestCase):
+    """人称泄露质检门（持久战第四保险）：回复含"我"+记忆 4-gram→纠正。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lm_leak_")
+        waker.set_data_dir(self.tmp)
+
+    def tearDown(self):
+        waker.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_leak_converted(self):
+        """回复"我最喜欢玩明日方舟"+记忆含该 4-gram→纠正为主人。"""
+        db = waker._db()
+        db.execute("INSERT INTO facts(key, value, ts) VALUES(?,?,?)",
+                   ("喜欢的游戏", "主人最喜欢玩明日方舟", "2026-10-27"))
+        db.commit()
+        db.close()
+        import main as main_mod
+        with patch.object(main_mod.state_manager, "get_recent_memories",
+                          return_value=[("user", "主人最喜欢玩明日方舟")]):
+            out = main_mod._persona_leak_guard("我最喜欢玩明日方舟好玩！")
+        self.assertEqual(out, "主人最喜欢玩明日方舟好玩！")
+
+    def test_no_leak_untouched(self):
+        """无记忆命中（"我最喜欢蓝色"vs 记忆"主人喜欢猫"）：零误伤。"""
+        import main as main_mod
+        with patch.object(main_mod.state_manager, "get_recent_memories",
+                          return_value=[("user", "主人喜欢猫")]):
+            out = main_mod._persona_leak_guard("我最喜欢蓝色")
+        self.assertEqual(out, "我最喜欢蓝色")
+
+    def test_no_wo_untouched(self):
+        """回复不含"我"：直接放行。"""
+        import main as main_mod
+        with patch.object(main_mod.state_manager, "get_recent_memories",
+                          return_value=[("user", "主人喜欢猫")]):
+            out = main_mod._persona_leak_guard("主人喜欢猫呢")
+        self.assertEqual(out, "主人喜欢猫呢")
+
+
 class PluginLoadContractTests(unittest.TestCase):
     """目录包装载契约（plugin_loader 六步生命周期）。"""
 
