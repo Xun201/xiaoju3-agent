@@ -1109,22 +1109,27 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             return persona_reply
 
     # === 🖼️ 表情包指令硬拦截（2026-10-27 队长暴雷修复）：发表情/来图 →
-    # 绕模型直发本地图库随机 1 张（不经 smart_ask 零幻觉） ===
+    # 直扫本地图库随机 1 张（不经插件 import，frozen 安全） ===
     if source == 'qq' and not group_id:
         _STICKER_CMD_RE = re.compile(
             r"发.{0,4}(?:表情|图|梗图)|来.{0,4}(?:表情|图|梗图)"
             r"|表情包.{0,4}(?:看看|来.|发)|给我.{0,4}(?:表情|图)")
         if _STICKER_CMD_RE.search(message):
-            try:
-                from agent_state.plugins.qq_lifemate import express as _expr
-                path = _expr.pick_sticker()
-                if path:
-                    _expr.send_cq(f"[CQ:image,file=file:///{path}]")
-                    return "喏，给你～(=^･ω･^=)"
-                return "小橘的图库还在装修中，过两天再来看呀～"
-            except Exception as _e:
-                print(f"⚠️ [表情拦截] { _e }")
-                return "图库出了点小问题，主人稍等～"
+            import random as _rand
+            _stk_dir = os.path.join(AGENT_STATE_DIR, "plugins",
+                                    "qq_lifemate", "stickers", "user")
+            _stk_imgs = []
+            if os.path.isdir(_stk_dir):
+                _stk_imgs = [f for f in os.listdir(_stk_dir)
+                             if f.lower().endswith(
+                                 (".png", ".jpg", ".gif", ".webp"))]
+            if _stk_imgs:
+                _stk_path = os.path.join(_stk_dir,
+                                         _rand.choice(_stk_imgs))
+                _humanized_typing_delay("发表情")
+                return (f"[CQ:image,file=file:///{_stk_path}]"
+                        "喏，给你～(=^･ω･^=)")
+            return _persona_fallback("play")
 
     # === 🛡️ 发送图片指令（2026-10-02 权限重构：LV4 主人级专属） ===
     # #227 批 0 续：分派逻辑迁入 content_handler.send_image（领域第二件，
