@@ -11,11 +11,12 @@
 import os
 import random
 import tempfile
+import threading
 
 # 表现力概率（低频拟人；改动须过 tests/test_qq_lifemate_express.py 契约锚）
 VOICE_PROB = 0.30
 STICKER_PROB = 0.25
-EDGE_VOICE = "zh-CN-XiaoxiaoNeural"   # 人类少女音（dashboard 同款表内）
+EDGE_VOICE = "zh-CN-XiaoyiNeural"    # 晓伊：更活泼元气（2026-10-27 队长拍板换档）
 
 
 def _onebot_api():
@@ -156,3 +157,83 @@ def maybe_express(text_sent, mood="neutral", rng=None):
         if send_sticker(mood):
             acts.append("sticker")
     return "+".join(acts)
+
+
+# ────────────────── 表情搜索（切片 b+：主源小尘+备选慕名+自沉淀） ──────────────────
+
+_SEARCH_XCVTS = "https://api.xcvts.cn/api/img/qqbqbss"       # 主源（QQ 官方 gtimg 源）
+_SEARCH_MUMING = "https://xiaoapi.cn/v1/meme.php"             # 备选（独立封装站）
+
+# mood → 关键词回退映射（模型标注解析失败时兜底）
+MOOD_KEYWORDS = {"neutral": "猫猫", "happy": "开心", "angry": "生气",
+                 "sad": "委屈", "shy": "害羞", "sleepy": "困"}
+
+
+def search_sticker(keyword, page=None):
+    """按关键词搜表情图 URL：主源小尘（sticker_url）→ 备选慕名（img_url）。
+    page 随机化由调用方传（1/2 页随机避免每次同一张）。失败返回 None。"""
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return None
+    pg = page or random.randint(1, 2)
+    try:
+        import requests
+        r = requests.get(_SEARCH_XCVTS, params={"msg": keyword, "page": pg},
+                         timeout=10)
+        items = (r.json() or {}).get("data") or []
+        urls = [x.get("sticker_url") for x in items if x.get("sticker_url")]
+        if urls:
+            return random.choice(urls)
+    except Exception as e:
+        print(f"🦊 [express] 主源搜索失败（转备选）: {e}")
+    try:
+        import requests
+        r = requests.get(_SEARCH_MUMING, params={"msg": keyword, "page": pg},
+                         timeout=10)
+        items = (r.json() or {}).get("data") or []
+        urls = [x.get("img_url") for x in items if x.get("img_url")]
+        if urls:
+            return random.choice(urls)
+    except Exception as e:
+        print(f"🦊 [express] 备选源也失败: {e}")
+    return None
+
+
+def stash_sticker(url, mood):
+    """异步下载沉淀到 stickers/<mood>/（图库随使用长大，API 断供时的
+    存量兜底——第一指导原则同构：表情也走记忆沉淀）。失败静默。"""
+    mood = (mood or "neutral").strip().lower() or "neutral"
+
+    def _dl():
+        try:
+            import requests
+            r = requests.get(url, timeout=15)
+            if r.status_code != 200 or not r.content:
+                return
+            ext = ".gif" if "gif" in r.headers.get("content-type", "") else (
+                ".jpg" if "jpeg" in r.headers.get("content-type", "") else ".png")
+            d = os.path.join(sticker_root(), mood)
+            os.makedirs(d, exist_ok=True)
+            import hashlib
+            path = os.path.join(d, hashlib.md5(url.encode()).hexdigest()[:12] + ext)
+            if os.path.exists(path):
+                return   # 已沉淀过（URL md5 去重）
+            with open(path, "wb") as f:
+                f.write(r.content)
+        except Exception as e:
+            print(f"🦊 [express] 沉淀失败（静默）: {e}")
+
+    threading.Thread(target=_dl, daemon=True).start()
+
+
+def send_api_sticker(keyword, mood="neutral"):
+    """搜索→CQ:image URL 直发→异步沉淀。返回是否真发。"""
+    url = search_sticker(keyword)
+    if not url:
+        # API 双源失败：降级本地图库（自沉淀存量）
+        print("🦊 [express] API 双源失败，降级本地图库")
+        return send_sticker(mood)
+    ok = send_cq(f"[CQ:image,file={url}]")
+    if ok:
+        stash_sticker(url, mood)
+    return ok

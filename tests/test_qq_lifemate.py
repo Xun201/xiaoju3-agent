@@ -200,7 +200,7 @@ class WakeOnceAccountingTests(unittest.TestCase):
 
     def test_wake_once_writes_log_and_counts(self):
         with patch.object(waker, "generate_wake_text",
-                          return_value="主人~想你了 (´･ω･`)"), \
+                          return_value=("主人~想你了 (´･ω･`)", "害羞")), \
              patch.object(waker, "send_qq", return_value=True):
             now = datetime(2026, 10, 27, 14, 0, 0)
             self.assertTrue(waker.wake_once(now))
@@ -219,7 +219,7 @@ class WakeOnceAccountingTests(unittest.TestCase):
 
     def test_daily_count_resets_next_day(self):
         with patch.object(waker, "generate_wake_text",
-                          return_value="嗨"), \
+                          return_value=("嗨", None)), \
              patch.object(waker, "send_qq", return_value=True):
             waker.wake_once(datetime(2026, 10, 27, 14, 0, 0))
         db = waker._db()
@@ -232,7 +232,7 @@ class WakeOnceAccountingTests(unittest.TestCase):
     def test_wake_once_send_fail_no_count(self):
         """发送失败不计次不写账（下轮重试）。"""
         with patch.object(waker, "generate_wake_text",
-                          return_value="嗨"), \
+                          return_value=("嗨", None)), \
              patch.object(waker, "send_qq", return_value=False):
             self.assertFalse(waker.wake_once(datetime(2026, 10, 27, 14, 0, 0)))
         db = waker._db()
@@ -245,10 +245,10 @@ class WakeOnceAccountingTests(unittest.TestCase):
         self.assertEqual(cnt, 0)
 
     def test_generate_wake_text_strips_think_and_quotes(self):
-        """生成清洗：剥 <think>+剥引号包裹。"""
+        """生成清洗：剥 <think>+剥引号包裹；返回 (话, 表情关键词|None)。"""
         with patch("brain.ask_local", return_value="<think>思考</think>“想你了”"):
             self.assertEqual(waker.generate_wake_text("在待命", self._now()),
-                             "想你了")
+                             ("想你了", None))
 
     @staticmethod
     def _now():

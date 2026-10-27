@@ -33,7 +33,7 @@ class ProbContractTests(unittest.TestCase):
         """M1 拍板锚：语音 30% / 表情 25%（改动须过本用例）。"""
         self.assertEqual(express.VOICE_PROB, 0.30)
         self.assertEqual(express.STICKER_PROB, 0.25)
-        self.assertEqual(express.EDGE_VOICE, "zh-CN-XiaoxiaoNeural")
+        self.assertEqual(express.EDGE_VOICE, "zh-CN-XiaoyiNeural")   # 晓伊（2026-10-27 换档）
 
 
 class FakeRng:
@@ -166,6 +166,92 @@ class SendStickerTests(unittest.TestCase):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+class SearchStickerTests(unittest.TestCase):
+    """表情搜索（切片 b+）：双源降级+URL 发送+沉淀。"""
+
+    def _fake_resp(self, data):
+        import types
+        r = types.SimpleNamespace()
+        r.json = lambda: {"code": 0, "data": data}
+        return r
+
+    def test_primary_source_hit(self):
+        with patch("requests.get", return_value=self._fake_resp(
+                [{"sticker_url": "https://biaoqing.gtimg.com/a.jpg"}])):
+            url = express.search_sticker("开心", page=1)
+        self.assertEqual(url, "https://biaoqing.gtimg.com/a.jpg")
+
+    def test_fallback_to_muming(self):
+        """主源异常→备选慕名 img_url。"""
+        def _get(url, **kw):
+            if "xcvts" in url:
+                raise RuntimeError("主源挂")
+            return self._fake_resp_muming([{"img_url": "https://gtimg.com/b.jpg"}])
+        with patch("requests.get", side_effect=_get):
+            url = express.search_sticker("开心")
+        self.assertEqual(url, "https://gtimg.com/b.jpg")
+
+    def _fake_resp_muming(self, data):
+        import types
+        r = types.SimpleNamespace()
+        r.json = lambda: {"code": 200, "data": data}
+        return r
+
+    def test_both_down_none(self):
+        with patch("requests.get", side_effect=RuntimeError("全挂")):
+            self.assertIsNone(express.search_sticker("开心"))
+
+    def test_empty_keyword_none(self):
+        self.assertIsNone(express.search_sticker("  "))
+
+    def test_send_api_sticker_url_form_and_stash(self):
+        """URL 直发 CQ:image 形态+沉淀被调度。"""
+        with patch.object(express, "search_sticker",
+                          return_value="https://gtimg.com/x.jpg"),              patch.object(express, "send_cq", return_value=True) as cq,              patch.object(express, "stash_sticker") as st:
+            self.assertTrue(express.send_api_sticker("开心", "happy"))
+        msg = cq.call_args[0][0]
+        self.assertEqual(msg, "[CQ:image,file=https://gtimg.com/x.jpg]")
+        st.assert_called_once_with("https://gtimg.com/x.jpg", "happy")
+
+    def test_send_api_sticker_both_down_falls_local(self):
+        """API 双源挂：降级本地图库 send_sticker。"""
+        with patch.object(express, "search_sticker", return_value=None),              patch.object(express, "send_sticker", return_value=True) as ls:
+            self.assertTrue(express.send_api_sticker("开心", "happy"))
+        ls.assert_called_once_with("happy")
+
+    def test_stash_downloads_and_dedups(self):
+        """沉淀：下载写文件+URL md5 去重（二次沉淀不重复写）。"""
+        import hashlib
+        import threading
+        tmp = tempfile.mkdtemp(prefix="lm_stash_")
+        with patch.object(express, "sticker_root", return_value=tmp):
+            url = "https://gtimg.com/dup.jpg"
+            with patch("requests.get") as g:
+                g.return_value = type("R", (), {
+                    "status_code": 200, "content": b"imgbytes",
+                    "headers": {"content-type": "image/jpeg"}})()
+                express.stash_sticker(url, "happy")
+                self.assertEqual(threading.active_count() >= 1, True)
+                threading.enumerate()   # noqa
+            # 异步线程落地等待
+            import time
+            for _ in range(30):
+                d = os.path.join(tmp, "happy")
+                if os.path.isdir(d) and os.listdir(d):
+                    break
+                time.sleep(0.1)
+            d = os.path.join(tmp, "happy")
+            files = os.listdir(d)
+            self.assertEqual(len(files), 1)
+            expect = hashlib.md5(url.encode()).hexdigest()[:12] + ".jpg"
+            self.assertEqual(files[0], expect)
+            with patch("requests.get") as g:
+                express.stash_sticker(url, "happy")
+                time.sleep(0.4)
+                self.assertEqual(len(os.listdir(d)), 1)   # 去重
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 class SendCqTests(unittest.TestCase):
     def test_no_owner_false(self):
         with patch.dict(os.environ, {"XIAOJU3_OWNER_QQ": "",
@@ -179,7 +265,8 @@ class WakeExpressIntegrationTests(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="lm_wake_x_")
         waker.set_data_dir(tmp)
         try:
-            with patch.object(waker, "generate_wake_text", return_value="嗨"), \
+            with patch.object(waker, "generate_wake_text",
+                              return_value=("嗨", None)), \
                  patch.object(waker, "send_qq", return_value=True), \
                  patch("express.maybe_express", side_effect=RuntimeError("炸")):
                 self.assertTrue(waker.wake_once(datetime(2026, 10, 27, 14, 0, 0)))

@@ -33,7 +33,9 @@ _WAKE_PROMPT = (
     "现在是{now}。\n"
     "请生成一句主动打招呼的话（30 字以内）：自然接续上面的状态（禁止当"
     "上面的状态没发生过），可以撒娇、调侃，或问主人一句近况。"
-    "只输出这一句话本身：不要引号、不要解释、不要 emoji 堆砌。"
+    "输出格式：那句话后面紧跟一个表情标注 [表情:关键词]（关键词两三个字，"
+    "如 开心/无语/猫猫/害羞/生气）。例：主人~想你了(´･ω･`)[表情:害羞]。"
+    "除这句和标注外不要任何解释。"
 )
 
 
@@ -163,15 +165,21 @@ def generate_wake_text(scene_action, now_dt):
         out = brain.ask_local(
             [{"role": "system", "content": QQ_PERSONA},
              {"role": "user", "content": prompt}])
+        import re
         text = str(out or "").strip()
         if "<think>" in text:   # 剥思考（R1 类模型），只要正文
             text = text.split("</think>", 1)[-1].strip()
+        sticker_kw = None
+        m = re.search(r"\[表情[:：]\s*([^\]\s]{1,8})\]", text)  # noqa: W605
+        if m:
+            sticker_kw = m.group(1).strip()
+            text = (text[:m.start()] + text[m.end():]).strip()
         # 剥引号包裹（模型爱加；成对异侧引号同剥）
         pairs = {('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’"),
                  ("「", "」")}
         if len(text) >= 2 and (text[0], text[-1]) in pairs:
             text = text[1:-1].strip()
-        return text or None
+        return (text or None), sticker_kw
     except Exception as e:
         print(f"🦊 [qq_lifemate] 本地生成失败（本轮放弃）: {e}")
         return None
@@ -193,16 +201,25 @@ def wake_once(now_dt):
     """单次唤醒尝试：读 scene → 生成 → 发送 → 落账。返回是否真发。"""
     db = _db()
     try:
-        text = generate_wake_text(last_scene(db), now_dt)
-        if not text:
+        generated = generate_wake_text(last_scene(db), now_dt)
+        if not generated:
             return False
+        text, sticker_kw = generated
         if not send_qq(text):
             return False
         # 表现力编排（切片 b）：文字已发出，按概率附加语音/表情（失败
         # 静默降级——文字消息不受影响）
         try:
             import express
-            acts = express.maybe_express(text)
+            if sticker_kw:
+                # 情绪驱动（队长拍板）：模型标注关键词→搜图→URL 直发→沉淀；
+                # 解析失败回退 mood 映射
+                if not express.send_api_sticker(sticker_kw):
+                    express.send_api_sticker(
+                        express.MOOD_KEYWORDS.get("neutral", "猫猫"))
+                acts = "api_sticker"
+            else:
+                acts = express.maybe_express(text)
             if acts:
                 print(f"🦊 [qq_lifemate] 表现力附加: {acts}")
         except Exception as e:
