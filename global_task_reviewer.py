@@ -105,6 +105,7 @@ class TaskState:
     """单会话任务状态（纯内存，进程亡即清——审查员无记忆惩罚权）。"""
     orig_request: str = ""
     chain: list = field(default_factory=list)
+    falsify: str = ""   # 证伪条件（云审 CONTINUE 时收集；工具失败=疑似命中）
 
 
 class TaskLedger:
@@ -144,6 +145,16 @@ class TaskLedger:
             self.start_task(session_key, orig_request)
         else:
             st.orig_request = str(orig_request or "")
+
+    def set_falsify(self, session_key, condition):
+        """登记当前任务的证伪条件（云审 CONTINUE 时收集）。"""
+        st = self._tasks.get(session_key)
+        if st is not None:
+            st.falsify = str(condition or "")
+
+    def get_falsify(self, session_key):
+        st = self._tasks.get(session_key)
+        return st.falsify if st else ""
 
     def chain_summary(self, session_key, limit=8):
         """执行链紧凑摘要（影子日志/云端 verdict 输入）：`tool(ok)/tool(FAIL)`。"""
@@ -232,8 +243,35 @@ class TaskLedger:
 
 DEFAULT_RULE_VERDICT = (
     "你是任务审查员。给出：①用户的原始请求 ②已执行的工具链 ③拟执行的下一步。"
-    "判断下一步是否仍在完成原始请求：是→输出 CONTINUE；偏离→输出 ABORT。"
-    "只输出 CONTINUE 或 ABORT，不要解释。")
+    "判断下一步是否仍在完成原始请求：偏离→输出 ABORT。"
+    "仍在正轨→第一行输出 CONTINUE，第二行输出\"证伪条件：\"开头的一句话——"
+    "回答：出现什么结果，就说明我们当前的计划完全错了？（证伪思维：先说清"
+    "被推翻的标准，再继续走）。只输出这两行，不要解释。")
+
+
+def rule_verdict_ex(orig_request, chain_summary, next_tool, cloud_chat_fn=None,
+                    sys_prompt=None):
+    """rule_verdict 的证伪扩展版：返回 (verdict, falsify_condition)。
+    CONTINUE 时解析第二行"证伪条件："（云端没给=空串，不影响主流程）。
+    失败/超时 → ("CONTINUE", "")（宁放行不空谈，兜底同 rule_verdict）。
+    自持云调用：rule_verdict 会 upper 全文只回 CONTINUE/ABORT，证伪行被
+    丢弃无法复用。"""
+    if cloud_chat_fn is None:
+        return "CONTINUE", ""
+    prompt = (f"原始请求：{orig_request}\n已执行链：{chain_summary}\n"
+              f"拟执行：{next_tool}")
+    try:
+        out = str(cloud_chat_fn(
+            [{"role": "system",
+              "content": sys_prompt or DEFAULT_RULE_VERDICT},
+             {"role": "user", "content": prompt}]) or "").strip()
+    except Exception:
+        return "CONTINUE", ""
+    if out.upper().startswith("ABORT"):
+        return "ABORT", ""
+    m = re.search(r"证伪条件[:：]\s*(.+)", out)
+    falsify = m.group(1).strip()[:120] if m else ""
+    return "CONTINUE", falsify
 
 
 def rule_verdict(orig_request, chain_summary, next_tool, cloud_chat_fn=None,

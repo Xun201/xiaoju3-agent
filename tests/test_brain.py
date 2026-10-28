@@ -4703,3 +4703,35 @@ class ThinkLabelNormalizeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShadowFalsifyTests(unittest.TestCase):
+    """证伪机制影子接线（2026-10-28）：失败+证伪条件激活 → INTERRUPT 标记日志。"""
+
+    def test_falsify_hit_logs_interrupt(self):
+        brain._reviewer_ledger.start_task("fz", "req")
+        brain._reviewer_ledger.set_falsify("fz", "返回空就推翻计划")
+        try:
+            with mock.patch.object(brain, "_reviewer_shadow_on",
+                                   return_value=True):
+                with mock.patch("builtins.print") as mp:
+                    brain._reviewer_record("fz", "web_search", {}, ok=False)
+            printed = " ".join(str(c.args[0]) for c in mp.call_args_list
+                               if c.args)
+        finally:
+            brain._reviewer_ledger.evict("fz")
+        self.assertIn("FALSIFY", printed)
+        self.assertIn("INTERRUPT", printed)
+
+    def test_failure_without_falsify_no_mark(self):
+        brain._reviewer_ledger.start_task("fz2", "req")
+        try:
+            with mock.patch.object(brain, "_reviewer_shadow_on",
+                                   return_value=True):
+                with mock.patch("builtins.print") as mp:
+                    brain._reviewer_record("fz2", "web_search", {}, ok=False)
+            printed = " ".join(str(c.args[0]) for c in mp.call_args_list
+                               if c.args)
+        finally:
+            brain._reviewer_ledger.evict("fz2")
+        self.assertNotIn("FALSIFY", printed)

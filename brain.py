@@ -1515,7 +1515,8 @@ def reset_tool_fuse(session_key=None):
 # 队长拍板口径：**只观察不拦截**——触发三则命中后只打日志收数据，绝不
 # 返回 false 打断执行；观察几天评估误判率后再决定是否开真拦截。
 # 开关：XIAOJU3_REVIEWER_SHADOW_MODE（缺省 1=开；置 0 完全旁路零开销）。
-from global_task_reviewer import TaskLedger, rule_verdict  # noqa: E402
+from global_task_reviewer import (TaskLedger, rule_verdict,  # noqa: E402
+                                   rule_verdict_ex)
 
 _reviewer_ledger = TaskLedger(max_sessions=256)
 
@@ -1559,17 +1560,21 @@ def _reviewer_observe(session_key, tool_name, tool_args):
             action = "PASS"
         elif os.environ.get("XIAOJU3_REVIEWER_SHADOW_CLOUD", "0") in \
                 ("1", "true", "True"):
-            verdict = rule_verdict(
+            verdict, falsify = rule_verdict_ex(
                 _reviewer_ledger.orig_request_of(session_key),
                 _reviewer_ledger.chain_summary(session_key),
                 f"{tool_name} {str(tool_args or {})[:120]}",
                 cloud_chat_fn=ask_cloud)
+            _reviewer_ledger.set_falsify(session_key, falsify)
             action = "INTERRUPT" if verdict == "ABORT" else "PASS"
         else:
             verdict = "SHADOW(影子期不调云)"
             action = "PASS"
+        falsify_active = _reviewer_ledger.get_falsify(session_key)
+        falsify_tag = (f", Falsify: {falsify_active[:80]}" if falsify_active
+                       else "")
         return (f"🛡️[影子审查] Trigger: {trigger}, Reason: {reason}, "
-                f"Action: {action}, Verdict: {verdict}, "
+                f"Action: {action}, Verdict: {verdict}{falsify_tag}, "
                 f"Chain: {_reviewer_ledger.chain_summary(session_key)[:120]}")
     except Exception as e:
         return (f"🛡️[影子审查] Trigger: ERR, Reason: {str(e)[:60]}, "
@@ -1584,6 +1589,15 @@ def _reviewer_record(session_key, tool_name, tool_args, ok):
     try:
         _reviewer_ledger.record(session_key, tool_name,
                                 args=str(tool_args or {}), ok=bool(ok))
+        # 证伪机制（2026-10-28 吸收白帽挖洞思维）：账本存有证伪条件且本步
+        # 工具失败 → 打 INTERRUPT 疑似命中标记（影子模式只记日志不拦截，
+        # 人工比对证伪条件后拍板）
+        if not ok:
+            falsify = _reviewer_ledger.get_falsify(session_key)
+            if falsify:
+                print(f"🛡️[影子审查] Trigger: FALSIFY, "
+                      f"Reason: 疑似命中证伪条件（人工核）, Action: INTERRUPT, "
+                      f"Condition: {falsify[:80]}, Tool: {tool_name}")
     except Exception:
         pass
 

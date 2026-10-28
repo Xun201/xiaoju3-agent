@@ -137,3 +137,10 @@
 - **幽灵超时**：worker 交付后立即 cancel 看门狗+换代；看门狗先建后起 worker（竞态消除）。回归锚=交付后 wd.finished 必 set。
 - **数据源根因二次修正（昨晚误判纠正）**：生产日志铁证 `LibNotFoundError: mini_racer.dll`——PyInstaller 不收 py_mini_racer 的 dll/dat 数据文件。修=当场补生产 _internal+spec `_mr_datas` 动态收集根治+cninfo 恢复实证。"IP 限流"为误判（当日空表+异常被吞的叠加假象）。
 - 全仓 2838+5 全绿（+2）；生产 e9e999bc 三进程 18:53；回滚锚 .bak-20261028-ghost。
+
+## 夜批⑯：证伪思维入核+待办库大清洗（生产 exe c59287d3 19:22 三进程在线）
+
+- **证伪思维（白帽挖洞思维吸收）**：①`rule_verdict_ex` 云审 CONTINUE 必附"证伪条件：出现什么结果就说明计划完全错了"→存 TaskState.falsify+进影子日志 Falsify 字段；②工具失败且证伪条件激活→`Trigger: FALSIFY, Action: INTERRUPT`（疑似命中仅日志，人工核）；③QQ_CLOUD_SYSTEM【诚实红线（先想败局）】+【未验证】标注。8 锚含拒绝分支结构证明。
+- **待办库大清洗（备份 todos.db.bak-20261028-clean）**：斩僵尸 10（软著/AIC/已收官，注"自动销账"）+去水分 55（backlog/远期/挂起→P3；自我声明排期级回写；剩余 P0 逐条定性→P2 bug 排队 25/P3 战略远期 33）+立真核 4（#359 小米灯 P0/#360 影子观察 P1/#361 选股二源 P1/#357 PyAV 提级 P2）。**P0 89→2、P3 2→56、pending 101→94**。全量清单入 SYNC 附录+_dev/todos_export_20261028_clean.md。
+- 测试坑两录：mock 秒完成断言过严二犯；patch 目标须随重构更新（rule_verdict→rule_verdict_ex，旧目标空转=真调云端花钱）。
+- 全仓 2844+5 全绿（+8）；生产 c59287d3 三进程 19:22；回滚锚 .bak-20261028-falsify。

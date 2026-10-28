@@ -174,3 +174,104 @@ class QualityGuardTests(unittest.TestCase):
         self.g.add_rule("禁词测试", r"万万不能说")
         v = self.g.audit("这句话里有万万不能说的词。")
         self.assertTrue(any(n == "禁词测试" for n, _, _ in v))
+
+
+class QualityGuardEdgeTests(unittest.TestCase):
+    """质量门边界补强（2026-10-28 长程批任务 3a：严丝合缝）。"""
+
+    def setUp(self):
+        from global_task_reviewer import QualityGuard
+        self.g = QualityGuard()
+
+    def test_empty_and_none_text(self):
+        self.assertEqual(self.g.audit(""), [])
+        self.assertEqual(self.g.audit(None), [])
+
+    def test_multiple_rules_one_hit_each(self):
+        text = ("综上所述这是个好东西。如果还有其他问题需要帮助，"
+                "请随时告诉我！")
+        v = self.g.audit(text)
+        names = [n for n, _, _ in v]
+        self.assertIn("AI 味总结", names)
+        self.assertIn("套话收尾", names)
+        # 每规则只记一处（审计定位用，不刷屏）
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_severity_passthrough_custom_rule(self):
+        self.g.add_rule("硬禁词", r"机密词", severity="abort")
+        v = self.g.audit("这句话含机密词请处理")
+        self.assertIn(("硬禁词", "abort"), [(n, s) for n, s, _ in v])
+
+    def test_echo_below_threshold_not_flagged(self):
+        # 首句与原话重合不足 0.8：只复述部分关键词不算复读
+        v = self.g.audit("你问的是天气和心情两件事呢。",
+                         user_msg="你今天心情怎么样")
+        self.assertNotIn("复读原话", [n for n, _, _ in v])
+
+    def test_echo_ignores_punctuation(self):
+        # 原话带标点/空格照样命中（判据先去标点）
+        v = self.g.audit("你今天心情怎么样？挺好的喵。",
+                         user_msg="你，今天！心情怎么样？？？")
+        self.assertTrue(any(n == "复读原话" for n, _, _ in v))
+
+    def test_rules_instances_isolated(self):
+        from global_task_reviewer import QualityGuard, DEFAULT_QUALITY_RULES
+        base_len = len(DEFAULT_QUALITY_RULES)
+        g2 = QualityGuard()
+        self.g.add_rule("临时规则", r"XYZZY")
+        self.assertEqual(len(g2.rules), base_len)      # 他实例不受染
+        self.assertEqual(len(DEFAULT_QUALITY_RULES), base_len)  # 默认表不受染
+
+    def test_long_text_first_sentence_echo(self):
+        # 复读判定只看首句——首句复读即报，后续正文不影响
+        text = ("你今天心情怎么样？另外今天天气不错，花也开了，"
+                "适合出门走走看看风景什么的。")
+        v = self.g.audit(text, user_msg="你今天心情怎么样")
+        self.assertTrue(any(n == "复读原话" for n, _, _ in v))
+
+    def test_empty_user_msg_skips_echo(self):
+        self.assertEqual(
+            [n for n, _, _ in self.g.audit("你今天心情怎么样？")],
+            [])
+
+
+class FalsifyTests(unittest.TestCase):
+    """证伪思维（2026-10-28 吸收白帽挖洞思维）：先说清被推翻的标准再走。"""
+
+    def setUp(self):
+        from global_task_reviewer import TaskLedger
+        self.led = TaskLedger()
+        self.led.start_task("f1", "原始请求")
+
+    def test_rule_verdict_ex_parses_falsify(self):
+        from global_task_reviewer import rule_verdict_ex
+        out = {}
+        def cloud(prompt):
+            out["prompt"] = prompt
+            return "CONTINUE\n证伪条件：如果连续两次返回空数据就说明接口选错了"
+        verdict, falsify = rule_verdict_ex("req", "chain", "next",
+                                           cloud_chat_fn=cloud)
+        self.assertEqual(verdict, "CONTINUE")
+        self.assertIn("空数据", falsify)
+        self.assertIn("证伪条件", out["prompt"][0]["content"])  # system 段带证伪问法
+
+    def test_abort_has_no_falsify(self):
+        from global_task_reviewer import rule_verdict_ex
+        verdict, falsify = rule_verdict_ex(
+            "req", "chain", "next", cloud_chat_fn=lambda p: "ABORT")
+        self.assertEqual(verdict, "ABORT")
+        self.assertEqual(falsify, "")
+
+    def test_cloud_fail_returns_continue_empty(self):
+        from global_task_reviewer import rule_verdict_ex
+        def boom(p):
+            raise RuntimeError("云端挂")
+        verdict, falsify = rule_verdict_ex("req", "chain", "next",
+                                           cloud_chat_fn=boom)
+        self.assertEqual(verdict, "CONTINUE")
+        self.assertEqual(falsify, "")
+
+    def test_ledger_falsify_store_and_read(self):
+        self.led.set_falsify("f1", "返回空就推翻")
+        self.assertEqual(self.led.get_falsify("f1"), "返回空就推翻")
+        self.assertEqual(self.led.get_falsify("nope"), "")

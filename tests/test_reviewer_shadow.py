@@ -67,8 +67,8 @@ class ShadowObserveTests(unittest.TestCase):
                                    ok=True)
         with mock.patch.dict(os.environ,
                              {"XIAOJU3_REVIEWER_SHADOW_CLOUD": "1"}):
-            with mock.patch.object(brain, "rule_verdict",
-                                   return_value="ABORT"):
+            with mock.patch.object(brain, "rule_verdict_ex",
+                                   return_value=("ABORT", "")):
                 log = brain._reviewer_observe("ut", "web_search",
                                               {"query": "天气"})
         self.assertIsInstance(log, str)
@@ -111,7 +111,7 @@ class ShadowObserveTests(unittest.TestCase):
                                    ok=True)
         with mock.patch.dict(os.environ,
                              {"XIAOJU3_REVIEWER_SHADOW_CLOUD": "1"}):
-            with mock.patch.object(brain, "rule_verdict",
+            with mock.patch.object(brain, "rule_verdict_ex",
                                    side_effect=RuntimeError("云端炸了")):
                 log = brain._reviewer_observe("ut", "web_search",
                                               {"query": "x"})
