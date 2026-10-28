@@ -714,21 +714,43 @@ def _local_extract_lite(message):
         return None
 
 
-def _qq_cloud_chat_reply(message, messages_qq):
-    """QQ 闲聊/问答云端直回（多脑重组核心）：核心人格 Prompt+记忆（询问
-    族完整注入）+小脑速记 → DeepSeek 全权生成。返回 None=云端不可用/失败
-    （调用方回退旧链兜底）。总开关 XIAOJU3_QQ_CLOUD_TAKEOVER（默认 1=开；
-    测试态 conftest 置 0 强制回退旧链，保证断言确定性）。"""
+def _owner_title(user_id):
+    """称呼动态绑定（2026-10-28 认主漏洞修复）：owner=XIAOJU3_OWNER_NICKNAME
+    （缺省'主人'，可自定义专属昵称）；非 owner='朋友'。XIAOJU3_OWNER_QQ 未
+    配置时保守按 owner（兼容单主人现状，避免误把队长当访客）。"""
+    owner = (os.environ.get("XIAOJU3_OWNER_QQ", "") or "").strip()
+    nick = (os.environ.get("XIAOJU3_OWNER_NICKNAME", "") or "").strip() or "主人"
+    if not owner:
+        return nick
+    return nick if str(user_id or "").strip() == owner else "朋友"
+
+
+def _qq_cloud_chat_reply(message, messages_qq, user_id=""):
+    """QQ 闲聊/问答云端直回（多脑重组核心）：核心人格 Prompt（称呼按
+    sender 身份动态绑定，访客不泄露主人记忆）+记忆（询问族完整注入）+
+    小脑速记 → DeepSeek 全权生成。返回 None=云端不可用/失败（调用方回退
+    旧链兜底）。总开关 XIAOJU3_QQ_CLOUD_TAKEOVER（默认 1=开；测试态
+    conftest 置 0 强制回退旧链，保证断言确定性）。"""
     if os.environ.get("XIAOJU3_QQ_CLOUD_TAKEOVER", "1") != "1":
         return None
     key = CLOUD_KEY or ""
     if not key:
         return None
-    base = [prompts.QQ_CLOUD_SYSTEM] + [
+    title = _owner_title(user_id)
+    is_owner = title != "朋友"
+    sys_prompt = dict(prompts.QQ_CLOUD_SYSTEM)
+    sys_prompt["content"] = prompts.QQ_CLOUD_SYSTEM["content"].format(
+        user_title=title)
+    if not is_owner:
+        sys_prompt["content"] += "\n" + prompts.QQ_GUEST_DIRECTIVE
+    base = [sys_prompt] + [
         m for m in messages_qq[1:]
         if isinstance(m, dict) and m.get("role") in ("user", "assistant")
     ][-8:]
-    msgs = _inject_long_term_memories(base)     # 询问族完整塞入（失忆硬逻辑）
+    if is_owner:
+        msgs = _inject_long_term_memories(base)  # 询问族完整塞入（失忆硬逻辑）
+    else:
+        msgs = base   # 访客零注入：主人记忆一个字都不给（泄露硬防线）
     user_content = str(message or "")
     lite = _local_extract_lite(message)
     if lite:
@@ -1624,7 +1646,7 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             reply = _brain_reply('qq', message, messages_qq, user_key,
                                  new_session=is_new_session)
         else:
-            reply = _qq_cloud_chat_reply(message, messages_qq)
+            reply = _qq_cloud_chat_reply(message, messages_qq, user_id=user_id)
             if reply is None:
                 reply = _brain_reply('qq', message, messages_qq, user_key,
                                      new_session=is_new_session)

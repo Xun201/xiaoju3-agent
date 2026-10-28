@@ -155,3 +155,43 @@ class HardGuardTests(unittest.TestCase):
             "你今天心情怎么样？希望今天能有不一样的小发现。",
             user_msg="你今天心情怎么样")
         self.assertNotIn("你今天心情怎么样？", r)
+
+
+class OwnerTitleBindingTests(unittest.TestCase):
+    """称呼动态绑定（2026-10-28 认主漏洞修复）：owner=主人/专属昵称，
+    非 owner=朋友+访客死命令+零记忆注入。"""
+
+    def test_owner_title_mapping(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {
+                "XIAOJU3_OWNER_QQ": "3779888268",
+                "XIAOJU3_OWNER_NICKNAME": ""}):
+            self.assertEqual(main._owner_title("3779888268"), "主人")
+            self.assertEqual(main._owner_title("999999"), "朋友")
+            self.assertEqual(main._owner_title(""), "朋友")
+        # 未配置 OWNER_QQ：保守按 owner（兼容单主人现状）
+        with mock.patch.dict(os.environ, {"XIAOJU3_OWNER_QQ": ""}):
+            self.assertEqual(main._owner_title("12345"), "主人")
+        # 专属昵称
+        with mock.patch.dict(os.environ, {
+                "XIAOJU3_OWNER_QQ": "3779888268",
+                "XIAOJU3_OWNER_NICKNAME": "队长"}):
+            self.assertEqual(main._owner_title("3779888268"), "队长")
+
+    def test_prompts_template_and_guest_directive(self):
+        src = _read("prompts.py")
+        self.assertIn("{user_title}", src)
+        self.assertIn("QQ_GUEST_DIRECTIVE", src)
+        self.assertIn("严禁透露主人的任何", src)
+    def test_guest_directive_content(self):
+        import prompts
+        gd = prompts.QQ_GUEST_DIRECTIVE
+        self.assertIn("严禁称呼对方为主人", gd)
+        self.assertIn("严禁透露主人的任何记忆", gd)
+        # 模板可格式化且访客死命令独立于模板
+        c = prompts.QQ_CLOUD_SYSTEM["content"].format(user_title="朋友")
+        self.assertIn("称对方朋友", c)
+        self.assertNotIn("严禁称呼对方为主人", c)   # 死命令不在基础模板里
+
+
