@@ -1967,6 +1967,80 @@ def _send_reply_segments(user_id, group_id, reply, post=None, sleep_fn=None):
 
 
 # ================= QQ大门（业务体；HTTP 视图宿主于 :5003） =================
+# ================= 选股强拦截（QQ 通道专用，2026-10-28 真机惨败抢救） =================
+# 根因：QQ 通道不走意图路由（intents 仅 web/控制台），"帮我选股"落进闲聊
+# 被云端拒绝/教百度。扳手原则：重任务用最确定的代码路由接管——触发词命中
+# 即短路（防抖/大脑/1.5B 全部绕开），秒回提示+后台线程跑流水线+主动推送。
+_STOCK_TRIGGER_RE = re.compile(r"选股|国企股|行业景气度|(股票|行业).{0,4}(筛选|扫描)")
+_STOCK_ACK_TEXT = ("收到！小橘这就去拉数据跑模型，大概需要二三十秒，"
+                   "主人稍等片刻哦~（如果太慢小橘会挨骂的）")
+_STOCK_SCAN_LOCK = threading.Lock()
+
+
+# ================= Token 防刷守卫（2026-10-28："2的50次方烧光token"实锤） =================
+# 策略三层：①幂运算钓饵硬逻辑直算（Python pow 零 token，比 LLM 准）；
+# ②超长纯文本消息截断 500 字（含 CQ 的媒体消息不动——截断会破码）；
+# ③Prompt 端"严禁冗长数学推导"（QQ_CLOUD_SYSTEM 硬约束行）。
+_MATH_BAIT_RE = re.compile(r"(\d{1,15})\s*的\s*(\d{1,5})\s*次方")
+_MSG_LEN_CAP = 500
+
+
+def _math_bait_reply(text):
+    """幂运算钓饵直算：命中"N的M次方"→ 本地 pow 直接回（零 token 零延迟）。
+    结果 >200 位只报位数与量级（防回复爆炸）。非幂运算返回 None 正常放行。"""
+    m = _MATH_BAIT_RE.search(str(text or ""))
+    if not m:
+        return None
+    import math
+    base, exp = int(m.group(1)), int(m.group(2))
+    if base <= 1:
+        val = str(base ** min(exp, 64))
+        return (f"算都不用算～{base} 的 {exp} 次方 = {val}。"
+                "这种小把戏还想烧小橘的 token？哼～")
+    digits = int(exp * math.log10(base)) + 1
+    if digits <= 200:
+        val = str(base ** exp)
+        return (f"算都不用算～{base} 的 {exp} 次方 = {val}。"
+                "这种小把戏还想烧小橘的 token？哼～")
+    lead = 10 ** ((exp * math.log10(base)) % 1)
+    expo = int(exp * math.log10(base))
+    return (f"{base} 的 {exp} 次方是一个 {digits} 位数（约 {lead:.3f}"
+            f"×10^{expo}）。完整数值有 {digits} 位，发出去尾巴都要打完啦，"
+            "小橘就不当打字机了哦～")
+
+
+def _stock_screen_reply_qq():
+    """插件 QQ 纯文本入口（插件总线模块名；生产启动时装载后可达）。"""
+    import importlib
+    mod = importlib.import_module("agent_state_plugins_stock_assistant")
+    return mod.stock_screen_text()
+
+
+def _stock_intercept_respond(user_id, group_id):
+    """秒回提示 + 后台线程扫描 + 主动推送。返回工作线程（测试 join 用）。
+    并发防抖：上一轮还在跑则只回提示不再起线程（缓存好结果不重复算）。"""
+    _send_reply_segments(user_id, group_id, _STOCK_ACK_TEXT)
+    if _STOCK_SCAN_LOCK.locked():
+        _send_reply_segments(user_id, group_id,
+                             "（上一轮扫描还在跑，主人稍等，结果马上到~）")
+        return None
+
+    def _worker():
+        with _STOCK_SCAN_LOCK:
+            try:
+                reply = _stock_screen_reply_qq()
+            except Exception as e:
+                reply = f"❌ 选股扫描挂了：{type(e).__name__}，主人稍后再试一次吧"
+        try:
+            _send_reply_segments(user_id, group_id, reply)
+        except Exception as e:
+            print(f"📈 [选股] 结果推送失败: {e}")
+
+    t = threading.Thread(target=_worker, daemon=True, name="stock-scan")
+    t.start()
+    return t
+
+
 def _rebuild_raw_message(data):
     """raw_message 缺失/为空时从 message 字段重建文本（LLOneBot 兼容）。
 
@@ -2071,6 +2145,21 @@ def onebot_event(data):
         # 拟人节奏（2026-10-12）：纯文字闲聊入防抖桶延迟回复；工具意图/
         # 媒体/指令即时处理。开关关或非闲聊 → 原同步路径。
         _nc_text = _strip_cq(raw_message or "").strip()
+        # 📈 选股强拦截（2026-10-28 真机惨败抢救）：QQ 通道不走意图路由，
+        # 触发词命中即短路（防抖/大脑/1.5B 全绕开）——秒回+后台扫描推送。
+        # 仅私聊生效（群聊误触劫持风险），命中即 return 不入桶。
+        if (not group_id) and _STOCK_TRIGGER_RE.search(_nc_text):
+            _stock_intercept_respond(user_id, group_id)
+            return {"status": "ok", "retcode": 0}
+        # 💰 Token 防刷：幂运算钓饵硬逻辑直算（不进大脑）+ 超长纯文本截断
+        math_reply = _math_bait_reply(_nc_text)
+        if math_reply:
+            _send_reply_segments(user_id, group_id, math_reply)
+            return {"status": "ok", "retcode": 0}
+        plain = str(raw_message or "")
+        if len(_nc_text) > _MSG_LEN_CAP and _nc_text == plain.strip():
+            raw_message = _nc_text[:_MSG_LEN_CAP] + \
+                "…（消息太长，小橘只看了前 500 字哦）"
         if _chat_rhythm_enabled() and _is_chat_like(raw_message or "", _nc_text):
             _enqueue_chat_burst(user_id, group_id, _nc_text)
             return {"status": "ok", "retcode": 0}

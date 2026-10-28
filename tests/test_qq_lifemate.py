@@ -663,3 +663,23 @@ class LeakAndPersonaTests(unittest.TestCase):
     def test_enforce_persona_empty(self):
         self.assertEqual(waker.enforce_persona(""), "")
         self.assertIsNone(waker.enforce_persona(None))
+
+
+class WakeNaturalToneTests(unittest.TestCase):
+    """唤醒语感自然化（2026-10-28 夜："小橘想主人了"+"在干嘛"表情割裂实锤）：
+    死命令废除，prompt 改自然日常问候+文字与表情内容连贯。"""
+
+    def _read_waker(self):
+        with open(os.path.join(PLUGIN_SRC, "waker.py"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_natural_greeting_prompt(self):
+        src = self._read_waker()
+        self.assertIn("像真人发消息", src)
+        self.assertIn("主人在干嘛呀，小橘想你了", src)   # 自然例句
+        self.assertIn("文字要和表情包内容连贯", src)     # 连贯性死命令
+
+    def test_forced_missing_sentence_banned(self):
+        src = self._read_waker()
+        self.assertNotIn("人称铁律", src)  # 旧死命令段已废
+        self.assertNotIn("人称铁律", src)

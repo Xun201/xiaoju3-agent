@@ -325,6 +325,38 @@ def policy_summary(industry_names, chat_fn=None):
 
 # ── 入口（工具/意图共用） ──
 
+def build_text(results):
+    """QQ 纯文本形态（QQ 不渲染 Markdown 表格——竖线出戏）。"""
+    lines = []
+    for r in results:
+        head = f"【{r['行业']}】净利润约 {r['净利润亿']} 亿"
+        if r["rows"]:
+            lines.append(head)
+            for row in r["rows"]:
+                lines.append(f"  · {row['公司']}（{row['代码']}）"
+                             f"现价 {row['现价']} 元｜实控人：{row['实控人']}")
+        else:
+            lines.append(head + f"：{r.get('note') or '无符合条件标的'}")
+    return "\n".join(lines)
+
+
+def stock_screen_text(message="", **kwargs):
+    """QQ 通道入口（强拦截用）：同 stock_screen_reply 但输出纯文本形态。"""
+    try:
+        results = _cached("pipeline_full", lambda: scan_pipeline(log=_dbg),
+                          ttl=CACHE_TTL)
+    except Exception as e:
+        return (f"❌ 选股扫描失败：{type(e).__name__}（数据源暂不可用，"
+                "请稍后再试）")
+    try:
+        policy = policy_summary([r["行业"] for r in results])
+    except Exception:
+        policy = "（政策面获取失败，可稍后重试）"
+    text = build_text(results)
+    return (f"📊 净利润 top10 行业 × 国企 5-20 元筛选\n\n【政策面】\n{policy}"
+            f"\n\n【筛选结果】\n{text}\n\n{COMPLIANCE}")
+
+
 def stock_screen_reply(message="", **kwargs):
     """ext_stock_screen / 意图路由共用入口：全量扫描+政策面+合规声明。"""
     try:
@@ -362,8 +394,7 @@ def selftest():
     assert "无（金融行业" in md
     js = build_json(fake_results)
     assert "甲电力" in js
-    # 合规声明必须出现在最终输出
-    out = stock_screen_reply.__doc__  # 占位：真实输出在集成测试覆盖
+    # 合规声明强制（QQ 纯文本/Markdown 双形态输出在 test_stock_assistant 覆盖）
     assert COMPLIANCE.startswith("⚠️")
     # SOE 启发式（一期校准回归）
     assert _is_soe("绵阳市国有资产监督管理委员会")[0]
