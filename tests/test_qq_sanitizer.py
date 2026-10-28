@@ -130,5 +130,43 @@ class IntegrationHooksTests(unittest.TestCase):
         self.assertLess(i_translate, i_append)
 
 
+class RoleNamePrefixTests(unittest.TestCase):
+    """角色名前缀剥（2026-10-28 队长真机实锤"小橘：主人…"）：^ 只剥开头，
+    正文中间"小橘："不碰（队长口径）；纯标签剥空→沉默兜底。"""
+
+    def test_wake_shape_stripped(self):
+        """截图实锤形态：唤醒消息开头"小橘： "剥净。"""
+        self.assertEqual(
+            main._sanitize_qq_reply("小橘： 主人，你最近喜欢《明日方舟》吗？"),
+            "主人，你最近喜欢《明日方舟》吗？")
+
+    def test_variant_labels_stripped(self):
+        for raw, want in (("Bot: hello", "hello"),
+                          ("AI：你好呀", "你好呀"),
+                          ("助手: 在的", "在的"),
+                          ("assistant：好的", "好的")):
+            self.assertEqual(main._strip_role_name_prefix(raw), want)
+
+    def test_middle_not_touched(self):
+        """正文中间的"小橘："不剥（只剥开头）。"""
+        self.assertEqual(main._sanitize_qq_reply("我喜欢说小橘：三个字"),
+                         "我喜欢说小橘：三个字")
+        self.assertEqual(main._strip_role_name_prefix("我叫小橘：这是我名字"),
+                         "我叫小橘：这是我名字")
+
+    def test_no_colon_not_stripped(self):
+        """无冒号不算标签（防误伤"AI很有趣"这类开头）。"""
+        self.assertEqual(main._strip_role_name_prefix("AI很有趣"), "AI很有趣")
+
+    def test_pure_label_falls_back(self):
+        """纯标签被剥空 → 诚实兜底文案（非静默）。"""
+        self.assertEqual(main._sanitize_qq_reply("小橘："),
+                         main.SANITIZED_EMPTY_FALLBACK)
+
+    def test_clean_reply_untouched(self):
+        self.assertEqual(main._sanitize_qq_reply("周末想和主人一起玩"),
+                         "周末想和主人一起玩")
+
+
 if __name__ == "__main__":
     unittest.main()

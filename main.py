@@ -303,6 +303,16 @@ def _strip_markdown(text):
 # → 回复空 → 零发送=对用户沉默；沉默≠诚实，#316 静默可解释同族）。
 SANITIZED_EMPTY_FALLBACK = "我不太确定该怎么处理这个请求——能再说一次吗？"
 
+# 角色名标签（2026-10-28 队长真机实锤：回复/唤醒开头带"小橘：主人…"——
+# 模型复读注入材料轮次格式）。^ 锚定只剥开头一次；正文中间的"小橘："不碰。
+_ROLE_PREFIX_RE = re.compile(
+    r"^(?:小橘子|小橘|[Bb]ot|AI|助手|[Aa]ssistant)\s*[：:]\s*")
+
+
+def _strip_role_name_prefix(text):
+    """剥开头角色名标签（"小橘：/Bot:/AI:"等），只剥开头一处不误伤正文。"""
+    return _ROLE_PREFIX_RE.sub("", str(text or ""), count=1)
+
 
 def _sanitize_qq_reply(reply):
     """QQ 出口消毒 + Markdown 洗地机 + 沉默兜底（修 B v2 修 3 + 2026-10-27）。
@@ -313,8 +323,10 @@ def _sanitize_qq_reply(reply):
     - 原始回复本就为空 → 维持旧静默语义（非污染物路径零变化）。
     - Markdown 洗地机（2026-10-27 队长暴雷）：**加粗/- 列表/# 标题/
       ``` 围栏 全剥——QQ 不渲染 Markdown，满屏星号横杠极度出戏。
+    - 角色名前缀剥（2026-10-28）：开头"小橘："等标签剥除，正文中间不动。
     """
     stripped = _strip_llm_pollution(reply)
+    stripped = _strip_role_name_prefix(stripped)
     stripped = _strip_markdown(stripped)
     if not stripped.strip() and str(reply or "").strip():
         return SANITIZED_EMPTY_FALLBACK

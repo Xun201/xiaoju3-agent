@@ -129,6 +129,22 @@ class SliceCTests(unittest.TestCase):
         self.assertFalse(wake)
         self.assertEqual(reason, "quiet")
 
+    def test_strip_role_name_prefix(self):
+        """角色名标签（2026-10-28 唤醒实锤）：waker 出口同样剥开头标签。"""
+        self.assertEqual(waker.strip_prefix_noise("小橘： 主人最近好吗"),
+                         "主人最近好吗")
+        self.assertEqual(waker.strip_prefix_noise("Bot: 嗨"), "嗨")
+        self.assertEqual(waker.strip_prefix_noise("正文说小橘：三个字"),
+                         "正文说小橘：三个字")
+
+    def test_qq_recent_digest_quote_format(self):
+        """注入侧引述式（根治①）：行格式="X说过：「…」"而非轮次标签
+        "X：…"——防 r1 复读"小橘："进正文。"""
+        import inspect
+        src = inspect.getsource(waker.qq_recent_digest)
+        self.assertIn("说过：「", src)
+        self.assertNotIn('f"{who}：{c', src)
+
     def test_strip_prefix_noise(self):
         self.assertEqual(waker.strip_prefix_noise("那句话：主人好"),
                          "主人好")
