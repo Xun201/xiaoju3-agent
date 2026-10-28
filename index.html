@@ -408,6 +408,8 @@
         /* 气泡卡片化：轻阴影（令牌化） */
         .bot-message {
             align-self: flex-start;
+            margin-left: 0;
+            margin-right: auto;   /* 铁律：AI 气泡死贴左侧，与头像对齐 */
             background-color: var(--color-card);
             color: #1f2937;                     /* 黑白灰极简（2026-10-25 队长拍板）：AI 正文深灰近黑，加粗/标题随容器继承，绝无蓝调 */
             border: 1px solid var(--color-border);
@@ -683,13 +685,19 @@
         .md-table tbody tr:nth-child(even) {
             background: rgba(0, 0, 0, 0.02);
         }
-        /* 行内代码（2026-10-28）：灰底等宽，修复 `xxx` 裸奔导致的长短不一 */
+        /* 行内代码+标题（2026-10-28）：灰底等宽+标题加粗 */
         .md-code {
             background: rgba(0, 0, 0, 0.06);
             border-radius: 4px;
             padding: 1px 5px;
             font-family: Consolas, Menlo, "Courier New", monospace;
             font-size: 12px;
+        }
+
+        .md-heading {
+            font-size: 14px;
+            font-weight: 700;
+            margin: 8px 0 4px;
         }
         /* 内容错开淡入（UI 微操）：仅历史回放批渲染/系统消息挂 .msg-enter，
            流式输出的思维链与正文绝不挂此类——保持连续 */

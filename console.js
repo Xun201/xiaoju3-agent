@@ -681,10 +681,12 @@
             .replace(/\[CQ:[^\]]*\]/g, '');
     }
     function renderRich(text) {
-        // 行内代码（2026-10-28 总线/工具回复实锤：`control_ha_device` 裸奔
-        // 出戏）：转义后把 `xxx` 包成灰底等宽 <code>；无反引号零开销直通
+        // 行内代码+粗体+标题（2026-10-28 三轮实锤：`xxx`/**bold**/### heading
+        // 裸奔出戏）：转义后按序解析，零注入面
         return renderCQFace(escapeHtml(text))
             .replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>')
+            .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/^#{1,4}\s+(.+)$/gm, '<b class="md-heading">$1</b>')
             .replace(/\n/g, '<br>');
     }
 
@@ -1565,6 +1567,27 @@
                 console.error('UI 事件渲染失败', e);   // 单事件失败不拆连接
             }
         });
+        // 📊 总线进度推送（选股扫描中间态实时可见）
+        es.addEventListener('bus_progress', function (ev) {
+            try {
+                const d = JSON.parse(ev.data);
+                if (d.text) {
+                    const history = document.getElementById('chat-history');
+                    if (!history) return;
+                    // 找最后一个 bus 气泡，追加状态行（或创建新的）
+                    let target = history.querySelector('.bus-progress-line:last-of-type');
+                    if (!target) {
+                        target = document.createElement('div');
+                        target.className = 'bus-progress-line';
+                        target.style.cssText = 'font-size:12px;color:#9ca3af;'
+                            + 'padding:2px 0;';
+                        history.appendChild(target);
+                    }
+                    target.textContent = '⏳ ' + d.text;
+                    history.scrollTop = history.scrollHeight;
+                }
+            } catch (e) { console.error('进度渲染失败', e); }
+        });
         // 🚌 总线异步推送（切片 a：选股等强拦截任务的结果气泡，控制台侧）
         es.addEventListener('bus_reply', function (ev) {
             try {
@@ -1675,7 +1698,7 @@
             ? `<div class="source-badge">大脑来源：${escapeHtml(source)}</div>`
             : '';
         botMsg.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:5px;">
+            <div style="display:flex; flex-direction:column; gap:3px;">
                 <div class="bubble-content">${renderRichTables(reply)}</div>
                 ${sourceBadge}
                 <div class="msg-tools">

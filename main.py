@@ -2213,9 +2213,21 @@ def _stock_intercept_respond(reply, meta=None):
         nonlocal _wd
         global _STOCK_SCAN_GEN
         channel = (meta or {}).get("channel", "console")
+
+        def _progress(text):
+            """阶段进度推送：控制台走 ui_events 气泡实时更新。"""
+            try:
+                import ui_events
+                ui_events.publish("bus_progress", text=text,
+                                  source="📊 选股进度")
+            except Exception:
+                pass
+
         with _STOCK_SCAN_LOCK:
             try:
+                _progress("🔍 正在获取行业净利润排名（巨潮）…")
                 reply_text = _stock_screen_result_for(channel)
+                _progress("✅ 获取成功，正在组装研报…")
             except Exception as e:
                 reply_text = f"❌ 选股扫描挂了：{type(e).__name__}，主人稍后再试一次吧"
         if my_gen != _STOCK_SCAN_GEN:

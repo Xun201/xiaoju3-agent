@@ -192,3 +192,11 @@
 - **反驳权 2 条落档**（_dev/design_persona_four_dim.md）：①C 策略/D 雷区应累积不应覆写（队长"覆盖旧"只对 A tags 合理）②全量注入会吃 token → 每维 cap 5 条。
 - **总线正式接线**：CommandBus 类（register/dispatch）+选股/幂运算拦截器首批注册+QQ/控制台双适配层+bus_reply SSE 气泡（前端监听）。QQ/控制台一次拦截全端生效。
 - 全仓 2876+5 全绿；生产 317914fb 三进程在跑 2.2.1。
+
+## 深夜批㉕：控制台 UI 三修（左对齐+md 渲染+进度推送）+Release 资产同步
+
+- Bug 1 贴左：.bot-message 加 margin-left:0+margin-right:auto 铁律；内层 flex gap 5→3px。
+- Bug 2 markdown：renderRich 加 **bold**→strong+### heading→b.md-heading。
+- Bug 3 进度：main worker 推 bus_progress SSE→前端监听追加状态行（选股扫描中间态实时可见）。
+- Release v2.2.1 资产 clobber 同步（含全部 UI 修复）。
+- 全仓 2876+5 全绿；生产 468b7bfa 三进程在跑。
