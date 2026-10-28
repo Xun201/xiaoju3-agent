@@ -42,6 +42,54 @@ _TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _loaded = {}
 # 拒载详情（#348 三期诊断）：[{name, source, reason}]，plugin_debug 消费
 _rejected = []
+# 禁用集（2026-10-28 插件管理面板）：持久化于 plugins 目录，reload 时跳过
+# 装载+汇聚剔除——禁用粒度=整个插件（工具/意图/后台线程全停）。
+import json as _json
+_DISABLED = set()
+
+
+def _disabled_file():
+    return os.path.join(external_dir(), "plugins_enabled.json")
+
+
+def _load_disabled():
+    global _DISABLED
+    try:
+        with open(_disabled_file(), encoding="utf-8") as f:
+            _DISABLED = set(_json.load(f).get("disabled", []))
+    except Exception:
+        _DISABLED = set()
+
+
+def _save_disabled():
+    try:
+        with open(_disabled_file(), "w", encoding="utf-8") as f:
+            _json.dump({"disabled": sorted(_DISABLED)}, f,
+                       ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def is_enabled(name):
+    """插件当前是否启用（禁用名单=停用 + 未装载默认启用）。"""
+    return name not in _DISABLED
+
+
+def disabled_plugins():
+    """禁用名单（管理面板渲染"已禁用"区，供重新启用）。"""
+    return sorted(_DISABLED)
+
+
+def set_enabled(name, enabled):
+    """启停插件：更新持久禁用集 + 原子整体换装（reload_all 首行即卸载，
+    汇聚落账经 R1-a 动态刷新即时生效——白名单/意图/派生全链同步）。"""
+    if enabled:
+        _DISABLED.discard(name)
+    else:
+        _DISABLED.add(name)
+    _save_disabled()
+    reload_all()
+    return is_enabled(name)
 
 
 def external_dir():
@@ -175,6 +223,7 @@ def load_all():
     单插件任何一步失败：跳过+审计，不影响其他插件与主程序（隔离①）。
     返回 (loaded_count, skipped_count)。"""
     unload_all()
+    _load_disabled()
     seen = set()
     ok = fail = 0
     tools_acc, intents_acc = [], []
@@ -206,6 +255,10 @@ def load_all():
             _rejected.append({"name": name, "source": path,
                               "reason": "无 PLUGIN 声明"})
             _audit(f"{name} 无 PLUGIN 声明，跳过")
+            fail += 1
+            continue
+        if plugin.get("name") in _DISABLED:
+            _audit(f"{name} 已禁用（面板停用），跳过装载")
             fail += 1
             continue
         errs = _validate(plugin, path, seen)

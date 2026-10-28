@@ -1261,6 +1261,26 @@ def api_stt_stop():
         _stt_close_stream()   # 第二道保险：哪怕上面任何一步抛异常也已收口
 
 
+@app.route("/api/plugins/toggle", methods=["POST"])
+def api_plugins_toggle():
+    """插件启停开关（插件管理面板，2026-10-28）：{name, enabled} →
+    plugin_loader.set_enabled（持久禁用集+原子换装，工具白名单/意图即时
+    同步）。权限口径与既有 /api POST 族一致（本机/局域网信任域）。"""
+    body = request.get_json(silent=True) or {}
+    name = str(body.get("name") or "").strip()
+    enabled = bool(body.get("enabled"))
+    if not name:
+        return jsonify({"ok": False, "error": "name 必填"}), 400
+    try:
+        import plugin_loader
+        plugin_loader.set_enabled(name, enabled)
+        return jsonify({"ok": True, "name": name, "enabled": enabled,
+                        "loaded": sorted(plugin_loader.loaded_plugins()),
+                        "rejected": plugin_loader.rejected_plugins()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/plugins")
 def api_plugins():
     """插件/技能清单+上下文标签聚合（UI 一期输入扩展栏消费，2026-10-25）。
@@ -1282,8 +1302,10 @@ def api_plugins():
             {"name": p["plugin"].get("name"),
              "version": str(p["plugin"].get("version", "")),
              "desc": str(p["plugin"].get("desc", "")),
-             "tools": len(p["plugin"].get("tools") or [])}
+             "tools": len(p["plugin"].get("tools") or []),
+             "enabled": plugin_loader.is_enabled(p["plugin"].get("name"))}
             for p in plugin_loader.loaded_plugins().values()]
+        data["disabled"] = plugin_loader.disabled_plugins()
     except Exception:
         pass
     try:

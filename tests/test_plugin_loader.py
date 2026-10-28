@@ -201,3 +201,57 @@ class PluginLoaderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PluginDisableTests(PluginLoaderTests):
+    """启停开关（2026-10-28 插件管理面板）：禁用集持久化+装载跳过+原子换装。
+    继承父类 tmp 目录/_write/清场设施。"""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="xj3_plug_dis_")
+        self._orig_dir = plugin_loader.external_dir
+        patch.object(plugin_loader, "external_dir",
+                     lambda: self._tmp).start()
+        self._orig_dis = plugin_loader._DISABLED
+        plugin_loader._DISABLED = set()
+        tool_registry.external_tools[:] = []
+        tools.refresh_derived()
+        intent_router.register_external_intents([])
+
+    def tearDown(self):
+        patch.stopall()
+        plugin_loader._DISABLED = self._orig_dis
+        plugin_loader._loaded.clear()
+        tool_registry.external_tools[:] = []
+        tools.refresh_derived()
+        intent_router.register_external_intents([])
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_disable_unloads_and_blocks_reload(self):
+        self._write("ttest.py", DICE)
+        plugin_loader.load_all()
+        self.assertIn("ext_ttest_ping", tools.TOOL_WHITELIST)
+        # 停用：原子换装，工具白名单即时收缩（返回值=切换后的新状态）
+        self.assertFalse(plugin_loader.set_enabled("ttest", False))
+        self.assertNotIn("ext_ttest_ping", tools.TOOL_WHITELIST)
+        self.assertNotIn("ttest", plugin_loader.loaded_plugins())
+        self.assertFalse(plugin_loader.is_enabled("ttest"))
+        # 持久化落盘（重启不回弹）
+        self.assertIn("ttest", plugin_loader.disabled_plugins())
+        # 再 load_all（模拟重启）：禁用插件跳过装载
+        plugin_loader.load_all()
+        self.assertNotIn("ext_ttest_ping", tools.TOOL_WHITELIST)
+        # 重新启用：即时换装恢复
+        self.assertTrue(plugin_loader.set_enabled("ttest", True))
+        self.assertIn("ext_ttest_ping", tools.TOOL_WHITELIST)
+        self.assertIn("ttest", plugin_loader.loaded_plugins())
+
+    def test_disabled_file_persisted(self):
+        self._write("ttest.py", DICE)
+        plugin_loader.load_all()
+        plugin_loader.set_enabled("ttest", False)
+        import json
+        data = json.load(open(plugin_loader._disabled_file(),
+                              encoding="utf-8"))
+        self.assertIn("ttest", data["disabled"])

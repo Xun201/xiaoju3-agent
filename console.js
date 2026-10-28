@@ -4173,6 +4173,90 @@
             .catch(function () { body.textContent = '记忆读取失败'; });
     }
 
+    // 🔌 插件管理面板（2026-10-28 一期）：列表+独立启停开关（POST toggle
+    // → loader 原子换装即时生效）；禁用区单独渲染（可重新启用）。操作反馈
+    // 即时（toast+重拉清单），不触碰核心后台进程。
+    function loadPluginsManageInto(body) {
+        body.textContent = '加载中…';
+        fetch('/api/plugins').then(function (r) { return r.json(); })
+            .then(function (d) {
+                body.textContent = '';
+                const wrap = document.createElement('div');
+                const mkRow = function (p, enabled) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex;align-items:center;'
+                        + 'gap:10px;padding:7px 0;border-bottom:1px dashed '
+                        + 'var(--color-border,#e0e4ec);';
+                    const info = document.createElement('div');
+                    info.style.cssText = 'flex:1;min-width:0;';
+                    info.innerHTML = '🧩 <b>' + escapeHtml(p.name) + '</b>'
+                        + ' <span class="dp-sub">v' + escapeHtml(p.version || '')
+                        + ' · 工具 ' + (p.tools || 0) + '</span><br>'
+                        + '<span class="dp-sub">' + escapeHtml(p.desc || '')
+                        + '</span>';
+                    const badge = document.createElement('span');
+                    badge.style.cssText = 'font-size:11px;padding:2px 8px;'
+                        + 'border-radius:10px;'
+                        + (enabled ? 'background:#e6f6ea;color:#1a7f37;'
+                                   : 'background:#f0f0f2;color:#888;');
+                    badge.textContent = enabled ? '已启用' : '已停用';
+                    const btn = document.createElement('button');
+                    btn.className = 'btn btn-small';
+                    btn.textContent = enabled ? '停用' : '启用';
+                    btn.addEventListener('click', function () {
+                        btn.disabled = true;
+                        btn.textContent = '切换中…';
+                        fetch('/api/plugins/toggle', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({name: p.name,
+                                                  enabled: !enabled})
+                        }).then(function (r) { return r.json(); })
+                          .then(function (j) {
+                              if (j.ok) {
+                                  showToast('插件 ' + p.name + ' 已'
+                                            + (j.enabled ? '启用' : '停用'));
+                              } else {
+                                  showToast('切换失败：' + (j.error || '未知'));
+                              }
+                              loadPluginsManageInto(body);   // 重拉即时反馈
+                          })
+                          .catch(function () {
+                              showToast('切换请求失败');
+                              loadPluginsManageInto(body);
+                          });
+                    });
+                    row.appendChild(info);
+                    row.appendChild(badge);
+                    row.appendChild(btn);
+                    return row;
+                };
+                (d.plugins || []).forEach(function (p) {
+                    wrap.appendChild(mkRow(p, true));
+                });
+                (d.disabled || []).forEach(function (name) {
+                    wrap.appendChild(mkRow({name: name, version: '',
+                                            desc: '（停用中：工具/意图/后台'
+                                                  + '线程全部停摆）', tools: 0},
+                                           false));
+                });
+                if (!(d.plugins || []).length && !(d.disabled || []).length) {
+                    wrap.innerHTML = '<div class="dp-sub">暂无外部插件</div>';
+                }
+                const tip = document.createElement('div');
+                tip.className = 'dp-sub';
+                tip.style.marginTop = '8px';
+                tip.textContent = '停用=卸载插件（工具/意图/后台线程全停，'
+                                + '持久化重启不回弹）；启用=即时换装。'
+                                + '拒绝载入：'
+                                + ((d.plugins || []).length ? '' : '见上方')
+                                + (d.disabled || []).length + ' 项禁用中。';
+                wrap.appendChild(tip);
+                body.appendChild(wrap);
+            })
+            .catch(function () { body.textContent = '清单获取失败'; });
+    }
+
     function loadHaDevicesInto(body) {
         body.textContent = '加载中…（HA 可达约需 1-10s）';
         fetch('/api/ha/devices').then(function (r) { return r.json(); })
@@ -4279,8 +4363,8 @@
                 closeToolsPanel();
                 switchChatTab('settings');
             }));
-        g3.appendChild(buildToolCard('插件管理', '官方插件启停（Phase 2 / #312）',
-            function () { showToast('Phase 2 上线'); }));
+        g3.appendChild(buildToolCard('插件管理', '外部插件启停（停用即卸载，重启用即时换装）',
+            function () { toggleToolBody('tool-plugins-body', loadPluginsManageInto); }));
         note('面板骨架批 1：监控三类中「主动性监控」可用；其余卡片为占位。');
     }
 

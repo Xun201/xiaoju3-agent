@@ -144,3 +144,10 @@
 - **待办库大清洗（备份 todos.db.bak-20261028-clean）**：斩僵尸 10（软著/AIC/已收官，注"自动销账"）+去水分 55（backlog/远期/挂起→P3；自我声明排期级回写；剩余 P0 逐条定性→P2 bug 排队 25/P3 战略远期 33）+立真核 4（#359 小米灯 P0/#360 影子观察 P1/#361 选股二源 P1/#357 PyAV 提级 P2）。**P0 89→2、P3 2→56、pending 101→94**。全量清单入 SYNC 附录+_dev/todos_export_20261028_clean.md。
 - 测试坑两录：mock 秒完成断言过严二犯；patch 目标须随重构更新（rule_verdict→rule_verdict_ex，旧目标空转=真调云端花钱）。
 - 全仓 2844+5 全绿（+8）；生产 c59287d3 三进程 19:22；回滚锚 .bak-20261028-falsify。
+
+## 深夜批⑰：插件管理面板一期+三大未来架构设计稿（生产 exe 7b93f541 19:5x 三进程在线）
+
+- **"插件装配点不开"根因**：🧰 工具面板"插件管理"卡=占位 toast（点了弹"Phase 2 上线"字样，无面板）——修复=接真面板。底部 🧩 插件清单按钮本通（fetch /api/plugins+popover）。
+- **面板一期全链**：loader `_DISABLED` 持久禁用集（plugins_enabled.json）+load_all 跳过+set_enabled/is_enabled/disabled_plugins+reload_all 原子换装（R1-a 动态刷新即时生效）；dashboard GET 加 enabled/disabled 字段+POST /api/plugins/toggle；console.js 真面板（已启用/已停用两区+逐插件启停+toast+重拉）。粒度=整插件（含后台线程，teardown 走卸载链）。
+- **三大架构设计稿** _dev/design_multiterminal_future.md：统一总线（Channel→Bus→Handler+QQ 链白名单渐进接意图）/算力调度（能力注册+任务契约+三态诚实回复+心跳即信号）/手机端（A=Capacitor 壳+Ntfy；B=离线降级子集为主选；总线为前置）。
+- 全仓 2856+5 全绿（+12）；生产 7b93f541 三进程+/api/plugins 活体验证（5 插件 enabled）；回滚锚 .bak-20261028-panel。

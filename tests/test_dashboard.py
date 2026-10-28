@@ -49,6 +49,7 @@ mock 注意：所有 patch 均走 context manager / start+addCleanup（结束即
 进程中共存。
 """
 import contextlib
+import plugin_loader
 import glob
 import io
 import json
@@ -3097,3 +3098,33 @@ class PersonaCardRoutesTests(unittest.TestCase):
             self.assertEqual(
                 self.client.post("/api/persona/manual_mode",
                                  json={"mode": "banter"}).status_code, 403)
+
+
+class PluginsToggleApiTests(unittest.TestCase):
+    """插件启停端点（2026-10-28 插件管理面板）：toggle 回环+GET 字段。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_toggle_roundtrip_and_get_fields(self):
+        with mock.patch.object(plugin_loader, "set_enabled",
+                               return_value=False) as mset,                 mock.patch.object(plugin_loader, "loaded_plugins",
+                                  return_value={}),                 mock.patch.object(plugin_loader, "disabled_plugins",
+                                  return_value=["ttest"]):
+            resp = self.client.post("/api/plugins/toggle", json={
+                "name": "ttest", "enabled": False})
+            self.assertEqual(resp.status_code, 200)
+            body = resp.get_json()
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["name"], "ttest")
+            self.assertFalse(body["enabled"])
+            mset.assert_called_once_with("ttest", False)
+
+            data = self.client.get("/api/plugins").get_json()["data"]
+            self.assertIn("disabled", data)
+            self.assertIn("ttest", data["disabled"])
+
+    def test_toggle_requires_name(self):
+        resp = self.client.post("/api/plugins/toggle", json={})
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json()["ok"])
