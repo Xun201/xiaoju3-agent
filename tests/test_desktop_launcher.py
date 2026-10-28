@@ -994,3 +994,46 @@ class TestWebView2ArgsMinimizeWhiteFix:
         assert "CalculateNativeWinOcclusion" in src
         # setdefault 语义保持（env 可覆盖，追加不是替换用户值）
         assert 'os.environ.setdefault(\n    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"' in src
+
+
+import json  # noqa: E402  (SaveUiPrefRetryTests 本地补)
+from unittest.mock import patch
+
+
+class SaveUiPrefRetryTests(unittest.TestCase):
+    """2026-10-28 巡检实锤回归：三进程共享 ui_pref.json，os.replace 撞
+    占用 WinError 32 → retry×3 指数退避；全败如实抛最后一次。"""
+
+    def test_retry_succeeds_after_transient_lock(self):
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def flaky(src, dst):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise PermissionError(32, "另一个程序正在使用此文件")
+            return real_replace(src, dst)
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            p = os.path.join(tmpdir, "ui_pref.json")
+            with patch("time.sleep"):
+                with patch("os.replace", side_effect=flaky):
+                    launcher._save_ui_pref({"sidebar_w": 300}, path=p)
+            self.assertEqual(calls["n"], 3)
+            self.assertEqual(json.load(open(p, encoding="utf-8")),
+                             {"sidebar_w": 300})
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_retry_exhausted_raises_last_error(self):
+        tmpdir = tempfile.mkdtemp()
+        try:
+            p = os.path.join(tmpdir, "ui_pref.json")
+            with patch("time.sleep"):
+                with patch("os.replace",
+                           side_effect=PermissionError(32, "locked")):
+                    with self.assertRaises(PermissionError):
+                        launcher._save_ui_pref({"a": 1}, path=p)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)

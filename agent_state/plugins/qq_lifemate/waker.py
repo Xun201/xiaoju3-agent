@@ -95,7 +95,9 @@ _WAKE_PROMPT = (
     "请生成一句主动打招呼的话（30 字以内）：自然接续上面的状态（禁止当"
     "上面的状态没发生过），可以撒娇、调侃，或顺着最近聊过的话题问一句近况。"
     "输出格式：那句话后面紧跟一个表情标注 [表情:关键词]（关键词两三个字，"
-    "如 开心/无语/猫猫/害羞/生气）。例：主人~想你了(´･ω･`)[表情:害羞]。"
+    "如 开心/无语/猫猫/害羞/生气）。例：主人~小橘想你了(´･ω･`)[表情:害羞]。"
+    "【人称铁律】必须自称\"小橘\"（不用\"我\"），称对方\"主人\"——如\"小橘"
+    "想主人了\"；全文不得出现裸\"[表情]\"（标注必须带关键词）。"
     "【绝对红线】正文绝对不能包含\"那句话：\"或任何多余前缀，也绝不能以"
     "\"小橘：\"等角色名开头——上面 QQ 记录里的\"小橘说过：「…」只是记忆"
     "引述格式，不是要你说的话；除正文和[表情:关键词] 标注外不能有任何"
@@ -327,11 +329,14 @@ STICKER_WORDS = ("开心", "可爱", "生气", "无语", "害羞", "猫猫", "�
 def extract_sticker_keyword(text):
     """放宽版标注提取（真机 [可爱/开心] 漏网修复）：先认 [表情:X] 主形，
     再扫任意 [..] 内含情绪词的短标注（词 A/词 B 形态取首个词）。返回
-    (剥除后文本, 关键词|None)。"""
+    (剥除后文本, 关键词|None)。裸 [表情]（无冒号无关键词，2026-10-28
+    真机泄漏实锤）也剥除——不知道情绪就交 maybe_express 概率路径。"""
     import re
     m = re.search(r"\[表情[:：]\s*([^\]\s]{1,8})\]", text)
     if m:
         return (text[:m.start()] + text[m.end():]).strip(), m.group(1).strip()
+    # 裸 [表情]/[表情 ] 等无关键词形态：剥除不留正文（三堵之一）
+    text = re.sub(r"\[表情\s*\]", "", text)
     for mm in re.finditer(r"\[([^\[\]]{1,12})\]", text):
         inner = mm.group(1)
         hit = next((w for w in STICKER_WORDS if w in inner), None)
@@ -343,9 +348,9 @@ def extract_sticker_keyword(text):
 
 
 def strip_prefix_noise(text):
-    """格式红线兜底（切片 c 队长口径）：剥"那句话："等前缀噪声+末尾残留
-    标注（真机实锤：模型输出 [可爱/开心] 无"表情:"前缀，正则主解析漏网
-    后整串留在正文发出）。只剥末尾一处短标注，正文内方括号不动。"""
+    """格式红线兜底（切片 c 队长口径）：剥"那句话："等前缀噪声+[表情]
+    全形态标注（任意位置，2026-10-28 三堵）+末尾残留短标注。正文内其他
+    方括号不动。"""
     if not text:
         return text
     import re
@@ -358,10 +363,27 @@ def strip_prefix_noise(text):
                 r"^[Bb]ot[：:]\s*", r"^AI[：:]\s*",
                 r"^助手[：:]\s*", r"^[Aa]ssistant[：:]\s*"):
         text = re.sub(pat, "", text)
+    # [表情...] 全形态任意位置剥（2026-10-28 三堵之二：裸 [表情] 中段
+    # 残留曾直发 QQ 成纯文本；主解析失败时这里是最后防线）
+    text = re.sub(r"\[表情[^\[\]]{0,10}\]", "", text)
     text = re.sub(r"\[[^\[\]]{1,10}\]\s*$", "", text)
     for w in STICKER_WORDS:   # 含情绪词的短标注（任意位置）一律剥
         text = re.sub(r"\[[^\[\]]{0,6}" + w + r"[^\[\]]{0,6}\]", "", text)
     return text.strip()
+
+
+def enforce_persona(text):
+    """人称强制（2026-10-28 队长拍板"小橘想主人了"）：唤醒话必须是小橘
+    第一人称口吻。窄映射两则防误伤：①"我想你"→"小橘想你"；②全文无
+    "小橘"自称时，句首无主语的"想主人/想你"前补"小橘"。其余口吻交给
+    _WAKE_PROMPT 铁律+仲裁脑（三层，此处是确定性兜底）。"""
+    import re
+    if not text:
+        return text
+    text = text.replace("我想你", "小橘想你")
+    if "小橘" not in text:
+        text = re.sub(r"(?<![\w])想(主人|你)", r"小橘想\1", text)
+    return text
 
 
 def generate_wake_text(scene_action, now_dt, db=None):
@@ -444,6 +466,7 @@ def wake_once(now_dt):
                 break
             text, sticker_kw = generated
             text = strip_prefix_noise(text)   # 格式红线兜底（切片 c）
+            text = enforce_persona(text)      # 人称强制（小橘想主人了）
             if not text:
                 continue
             ok, info = arbitrate_wake(text, facts_line)
@@ -455,6 +478,7 @@ def wake_once(now_dt):
                 # 不再审（单向否决已终结，防循环）
                 rescue = strip_prefix_noise(str(info)[len("REWRITE:"):].strip())
                 if rescue:
+                    rescue = enforce_persona(rescue)
                     text, sticker_kw = extract_sticker_keyword(rescue)
                     print(f"🦊 [qq_lifemate] 仲裁否决→云端重写采纳: {text[:40]}")
                     break

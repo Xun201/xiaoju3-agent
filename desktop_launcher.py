@@ -646,13 +646,25 @@ def _load_ui_pref(path=None):
 
 def _save_ui_pref(data, path=None):
     """写 UI 偏好（tmp+replace 原子写；目录惰性创建）。#264 B2c 泛化：
-    接收全量 dict（调用方负责读改写合并，避免多特性互覆盖）。"""
+    接收全量 dict（调用方负责读改写合并，避免多特性互覆盖）。replace
+    带 retry（2026-10-28 巡检实锤：三进程共享 ui_pref.json，桌面窗写
+    replace 时撞后端正读→WinError 32，侧栏宽度保存偶发丢失）——
+    3 次×指数退避（50/100/200ms），全败抛最后一次异常（调用方自决）。"""
     p = path or _ui_pref_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f)
-    os.replace(tmp, p)
+    last_err = None
+    for delay in (0.05, 0.1, 0.2):
+        try:
+            os.replace(tmp, p)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(delay)
+    os.replace(tmp, p)   # 末次不放异常差：失败就如实抛
+
 
 
 def _kill_napcat_all(out=None, psutil_mod=None, wait_procs=None):

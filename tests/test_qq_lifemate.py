@@ -618,3 +618,48 @@ class WakeOnceAccountingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeakAndPersonaTests(unittest.TestCase):
+    """2026-10-28 三堵+人称强制：裸 [表情] 纯文本泄漏真机实锤的回归网。"""
+
+    def test_bare_sticker_extracted_clean(self):
+        text, kw = waker.extract_sticker_keyword("主人~小橘想你了[表情]")
+        self.assertNotIn("[表情]", text)
+        self.assertIn("小橘想你了", text)
+        self.assertIsNone(kw)   # 无关键词→交 maybe_express 概率路径
+
+    def test_bare_sticker_midtext_stripped(self):
+        out = waker.strip_prefix_noise("小橘想主人了[表情]喵～")
+        self.assertNotIn("[表情]", out)
+        self.assertIn("喵", out)
+
+    def test_sticker_with_keyword_still_works(self):
+        text, kw = waker.extract_sticker_keyword("在呢[表情:害羞]")
+        self.assertEqual(text, "在呢")
+        self.assertEqual(kw, "害羞")
+
+    def test_strip_sticker_with_keyword_anywhere(self):
+        out = waker.strip_prefix_noise("想你了[表情:猫猫]今天")
+        self.assertNotIn("表情", out)
+        self.assertIn("今天", out)
+
+    def test_enforce_persona_wode_to_xiaoju(self):
+        self.assertEqual(waker.enforce_persona("我想你了主人"),
+                         "小橘想你了主人")
+
+    def test_enforce_persona_prefix_missing_subject(self):
+        self.assertEqual(waker.enforce_persona("主人~想你啦"),
+                         "主人~小橘想你啦")
+
+    def test_enforce_persona_keeps_existing_xiaoju(self):
+        self.assertEqual(waker.enforce_persona("小橘想主人了"),
+                         "小橘想主人了")
+
+    def test_enforce_persona_no_forced_insert(self):
+        # 无想念语义时不强插自称（口吻交给 prompt+仲裁脑）
+        self.assertEqual(waker.enforce_persona("主人最近好吗"), "主人最近好吗")
+
+    def test_enforce_persona_empty(self):
+        self.assertEqual(waker.enforce_persona(""), "")
+        self.assertIsNone(waker.enforce_persona(None))

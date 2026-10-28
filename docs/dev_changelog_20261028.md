@@ -59,3 +59,13 @@
 - **修复**：①称呼改 `{user_title}` 动态注入，`_owner_title(user_id)` 比对 sender 与 `XIAOJU3_OWNER_QQ`：owner=`XIAOJU3_OWNER_NICKNAME`（缺省"主人"，**支持自定义专属昵称**）；非 owner="朋友"②非 owner 追加 `QQ_GUEST_DIRECTIVE` 死命令（严禁称呼主人/礼貌距离/**严禁透露主人的任何记忆、喜好、位置、作息**）③**访客零记忆注入**（泄露硬防线：不注入则无从泄露）④OWNER_QQ 未配置保守按 owner（兼容单主人现状）。旧 smart_ask 兜底链+工具链称呼挂账（工具层 LV 门禁兜底安全）。
 - +3 锚=**全仓 2710+4 全绿**；函数级双场景验证（owner 称主人+记忆注入/访客称朋友+死命令+零注入）。
 - 回滚：`git revert 2e0edfe`+重建；prompts.py/main.py `.bak-20261028-ownertitle` 在案。
+
+## 长程批⑥：队长离机静默施工·两修部署+审查员落地+上下文原型（生产 exe ed790c2c 13:46 三进程在线）
+
+- **任务 2-1 ui_pref 落盘竞态修复（已部署）**：午批巡检实锤 WinError 32（三进程共享 ui_pref.json，os.replace 撞占用；10-27 侧栏拖宽批 set_layout_pref 高频写踩响，队长宽度偏好可能丢过一次）→ desktop_launcher.py `_save_ui_pref` 加 retry×3×指数退避（50/100/200ms）全败如实抛（产品级通用修，非本机特调）。
+- **任务 2-2 唤醒 [表情] 泄漏三堵+人称强制（已部署）**：waker.py 三处漏网堵死（extract 剥裸 `[表情]`/strip 任意位置剥全形态/情绪词表补位），新增 `enforce_persona`（"我想你"→"小橘想你"+句首无主语"想主人/想你"前补"小橘"），_WAKE_PROMPT 例句补"小橘"自称+人称铁律行（"小橘想主人了"）。waker 插件同步生产 md5 双端一致。
+- **部署全链**：PyInstaller 重建→taskkill（MSYS_NO_PATHCONV=1 老坑再踩再录）→deploy_shutil（copied=2/kept_same=1529/locked=0，exe md5 ed790c2c 双端 MATCH）→插件同步→schtasks 拉起→三进程 13:46 全新+health ok+PYZ 嵌套 code object 终验过。回滚锚=`F:\XUNandxiaoju3\xiaoju3.exe.bak-20261028-leakfix`。
+- **任务 1 上下文解药（_dev，未接线）**：`_dev/design_context_multitable.md`（现状=compress_context 条数驱动 Token 失明；三策略对抗论证裁决=递归摘要主干+Token 双阈值+RAG 兜底）+ask_deepseek 秘书会诊（同判，留痕 514 tokens 2.63s）+`_dev/context_manager_prototype.py`（estimate_tokens 零依赖启发式+70% 触发+递归压缩前情提要单份不增殖，自测 7/7）。
+- **任务 3-1 审查员质量门边界跑满**：+8 锚（多规则并存每规则一hit/severity 透传/复读阈值 0.8 边界/标点免疫/实例隔离/长文首句/空入参）→32 锚全绿。
+- **任务 3-2 PyAV 真视频无 ffmpeg 验证**：rabbit320（h264+AAC）→16k/mono/7.8s/124267 帧 PASS；两真片无音轨样本顺带验证报错路径；素材源实测=test-videos/filesamples 可达但可能无音轨、google 域 SSL 拦、mdn.github.io 全绿。
+- **测试基线 2745+4 全绿**（较午批 +11：lifemate 9+launcher 2）；坑库 #47/#48+工程事实五条入 Hindsight；SYNC_DEEPSEEK 第五次刷新。
