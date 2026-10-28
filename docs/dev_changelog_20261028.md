@@ -185,3 +185,10 @@
 - **版本倒挂修复**：v2.1.1 Release+tag 删除（版本从 2.2.0 倒退系误发）→ 重发 **v2.2.1**（版本单源 xiaoju3.py 已升）。Release：https://github.com/Xun201/xiaoju3-agent/releases/tag/v2.2.1
 - **新号保命模式**：QQ 日限 40 条（超限静默到次日）+ 最小间隔 3-6s + 选股 QQ 屏蔽引导去控制台；conftest 第四哨兵（XIAOJU3_QQ_SAFE_MODE=0 测试态）。
 - 生产车已部署 version=2.2.1 三进程在跑。
+
+## 深夜批㉔：四维人格沉淀库（A/B/C/D 肌肉记忆）+ ControlBus 总线正式接线
+
+- **四维人格**：summary_facts 扩展 extract_persona（JSON 四维：tags/traits/strategies/taboos）+ persist_persona（A tags 覆写，B/C/D 累积追加 cap 10 FIFO）+ read_persona_for_injection（每维最近 5 条组装【你对她本能的认知】）+ brain._inject_persona_profile 注入 _build_messages 时间块后。compress_context 成功路径自动触发。
+- **反驳权 2 条落档**（_dev/design_persona_four_dim.md）：①C 策略/D 雷区应累积不应覆写（队长"覆盖旧"只对 A tags 合理）②全量注入会吃 token → 每维 cap 5 条。
+- **总线正式接线**：CommandBus 类（register/dispatch）+选股/幂运算拦截器首批注册+QQ/控制台双适配层+bus_reply SSE 气泡（前端监听）。QQ/控制台一次拦截全端生效。
+- 全仓 2876+5 全绿；生产 317914fb 三进程在跑 2.2.1。

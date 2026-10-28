@@ -2255,6 +2255,20 @@ def _strip_consumed_attachments(text):
     return user_part or "[历史附件内容已省略]"
 
 
+def _inject_persona_profile(messages):
+    """四维人格注入（2026-10-28 深夜，"肌肉记忆"落地）：从 long_term.db 的
+    persona_profile 类读取事实标签/性格特质/策略/雷区，组装为
+    【你对她本能的认知】system 块注入。空/异常→原样返回不崩溃。"""
+    try:
+        from plugins.summary_facts import read_persona_for_injection
+        text = read_persona_for_injection()
+        if text and text.strip():
+            messages.append({"role": "system", "content": text})
+    except Exception:
+        pass
+    return messages
+
+
 def _build_messages(message, history, user_id=None):
     """组装模型消息：system 提示词置顶 + 历史 + 本条用户消息。
 
@@ -2318,6 +2332,10 @@ def _build_messages(message, history, user_id=None):
     # 之后（index 1）；后续 _inject_location_context 会把【主人位置】插到
     # 时间块之前，最终顺序恒为【主人位置】紧跟【当前时间】
     messages = _inject_time_context(messages)
+    # 🧠 四维人格注入（2026-10-28 深夜，"肌肉记忆"落地）：从 persona_profile
+    # 读事实标签/特质/策略/雷区，组装【你对她本能的认知】system 块。
+    # 紧跟时间上下文，在位置/家电注入之前——语境层级=身份认知>环境上下文。
+    messages = _inject_persona_profile(messages)
     return messages
 
 
