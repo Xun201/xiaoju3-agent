@@ -2146,7 +2146,11 @@ def console_cloud_chat(message, history=None):
     """控制台闲聊云端直答（2026-10-28 队长拍板"本地毒话术根除"）：控制台
     非工具意图的普通对话直连云端大脑（与 QQ 接管同构）——本地小脑只保留
     工具场景，闲聊不再经过 r1（"建议您联网"类幻觉生成面物理消失）。
-    返回 None=云端不可用/失败（调用方回退 smart_ask 旧链兜底）。"""
+    返回 None=云端不可用/失败（调用方回退 smart_ask 旧链兜底）。
+    门控=XIAOJU3_QQ_CLOUD_TAKEOVER（与 QQ 接管共用同一开关——都是"云
+    端接管"概念；conftest 置 0 让测试走旧链）。"""
+    if os.environ.get("XIAOJU3_QQ_CLOUD_TAKEOVER", "1") != "1":
+        return None
     key = CLOUD_KEY or ""
     if not key:
         return None
@@ -2163,16 +2167,19 @@ def console_cloud_chat(message, history=None):
     if lite:
         user_content = f"[小脑速记] {lite}；主人说：{user_content}"
     msgs = msgs + [{"role": "user", "content": user_content}]
+    headers = {"Authorization": f"Bearer {key}",
+               "Content-Type": "application/json"}
     try:
         r = requests.post(CLOUD_URL, json={
             "model": CLOUD_MODEL, "messages": msgs, "stream": False,
-            "temperature": 0.7}, timeout=(5, 60))
+            "temperature": 0.7}, headers=headers, timeout=(5, 60))
         body = r.json()
         content = str(body.get("choices", [{}])[0].get("message", {})
                       .get("content", "")).strip()
         return content or None
     except Exception as e:
-        print(f"⚠️ [控制台云端直答] 失败（回退旧链）: {type(e).__name__}")
+        print(f"⚠️ [控制台云端直答] 失败（回退旧链）: {type(e).__name__}: "
+              f"{str(e)[:80]}")
         return None
 
 

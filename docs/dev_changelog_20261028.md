@@ -207,3 +207,10 @@
 - bus_progress 收口到 ack 气泡内部进度行（前端 querySelector 最后 bot 气泡内追加 bus-progress-line，bus_reply 到达时清除）。
 - 云端失败友好兜底不回退本地（api_chat/stream 双视图,None=落 smart_ask 旧链而非硬兜底）。
 - 全仓 2876+5 全绿；生产 c7f47c32→部署；Release v2.2.1 资产 clobber 同步（setup exe 115,369,977 字节+sha256）。
+
+## 凌晨批㉗：真机三修（auth 头缺失/左侧留白/行内代码）
+
+- **控制台云端接管 401**：console_cloud_chat 漏 Authorization 头 → DeepSeek 401 → None → 回退本地毒话术。一行修复（加 headers）。活体验证 ☁️ 云端 PASS。
+- **左侧留白**：桌宠 .xiaoju-img 250×250 矩形 pointer-events:auto 兜点击。scale 0.8 已缩。完整解耦挂账 #311。
+- **行内代码**：renderRich 加 `xxx` → md-code。
+- 全仓 2876+5 全绿；Release v2.2.1 资产 clobber 同步。
