@@ -282,6 +282,46 @@ def _strip_llm_pollution(text):
     return _cot_strip(text)
 
 
+# 动作旁白剥离（2026-10-28 队长语感微调出口兜底）：prompt 死命令之外的
+# 硬拦截。判据演化实录（两轮金样本误伤教训）：①"含CJK即剥"误杀 help_menu
+# （本地优先 / 云端兜底）；②"纯CJK即剥"误杀（明天下午）（天气请带城市
+# 区县）——正则形状判据到头了，最终定案=**有界词表**：内容纯 CJK 且
+# 命中【身体部位】词或以【姿态动词】开头才剥。宁漏勿误，词表可扩充。
+_STAGE_BODY_RE = re.compile(
+    r"尾巴|耳朵|爪|脖子|肩|腰|背|头|眼|嘴|鼻|脸|手|脚|腿|肚皮|皮毛|胡须")
+_STAGE_STANCE_RE = re.compile(
+    r"^(趴|蹲|躺|凑|扑|蜷|缩|瘫|蹦|蹭|伸|眯|瞪|嗅|挠|甩|踮|依偎|盘)")
+
+
+def _is_stage_action(inner):
+    """纯 CJK 短语且含身体部位词 / 姿态动词开头 → 动作旁白。"""
+    if not inner or len(inner) > 12:
+        return False
+    if not re.fullmatch(r"[\u4e00-\u9fff]+", inner):
+        return False
+    return bool(_STAGE_BODY_RE.search(inner) or _STAGE_STANCE_RE.match(inner))
+
+
+_STAGE_ACTION_RE = re.compile(
+    r"[（(]([\u4e00-\u9fff]{1,12})[）)]"
+    r"|\[([\u4e00-\u9fff]{1,12})\]"
+    r"|[＊*]([\u4e00-\u9fff]{1,12})[＊*]")
+
+
+def _strip_stage_directions(text):
+    """剥 (摇尾巴)/*耳朵一竖*/[扑倒]/（趴在屏幕边）类动作旁白（出口兜底，
+    判据见上方词表注释）。"""
+    s = str(text or "")
+    if not s:
+        return s
+
+    def _repl(m):
+        inner = m.group(1) or m.group(2) or m.group(3) or ""
+        return "" if _is_stage_action(inner) else m.group(0)
+
+    return _STAGE_ACTION_RE.sub(_repl, s)
+
+
 def _strip_markdown(text):
     """QQ 出口 Markdown 洗地机（2026-10-27 队长暴雷实锤）：QQ 不渲染
     Markdown，**加粗**、- 列表、# 标题、`代码` 全部出戏——全剥为纯文本。"""
@@ -412,6 +452,7 @@ def _sanitize_qq_reply(reply, user_msg=""):
     stripped = _strip_llm_pollution(reply)
     stripped = _strip_role_name_prefix(stripped)
     stripped = _strip_markdown(stripped)
+    stripped = _strip_stage_directions(stripped)
     stripped = _hard_guard_reply(stripped, user_msg)
     if not stripped.strip() and str(reply or "").strip():
         return SANITIZED_EMPTY_FALLBACK

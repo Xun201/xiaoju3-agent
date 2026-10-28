@@ -195,3 +195,62 @@ class OwnerTitleBindingTests(unittest.TestCase):
         self.assertNotIn("严禁称呼对方为主人", c)   # 死命令不在基础模板里
 
 
+
+
+class StageDirectionStripTests(unittest.TestCase):
+    """动作旁白出口硬拦截（2026-10-28 队长语感微调）：剥 (摇尾巴)/
+    *耳朵一竖*/[扑倒] 只留文字；颜文字（零 CJK）与带数字备注保留。"""
+
+    def test_paren_action_stripped(self):
+        out = main._strip_stage_directions(
+            "(尾巴晃了晃) 主人想吃苹果呀，小橘也想吃！")
+        self.assertEqual(out, " 主人想吃苹果呀，小橘也想吃！")
+
+    def test_fullwidth_paren_and_bracket(self):
+        out = main._strip_stage_directions("（趴在屏幕边）主人回来啦[扑倒]")
+        self.assertEqual(out, "主人回来啦")
+
+    def test_asterisk_action_stripped(self):
+        out = main._strip_stage_directions("*耳朵一竖*你说什么？")
+        self.assertEqual(out, "你说什么？")
+
+    def test_kaomoji_preserved(self):
+        s = "在呢喵 (´･ω･`) 主人～"
+        self.assertEqual(main._strip_stage_directions(s), s)
+
+    def test_kaomoji_with_emoji_brackets_preserved(self):
+        s = "好🤭(๑•̀́)ก✧"
+        self.assertEqual(main._strip_stage_directions(s), s)
+
+    def test_numeric_note_preserved(self):
+        s = "去看（第2集）了喵"
+        self.assertEqual(main._strip_stage_directions(s), s)
+
+    def test_sanitize_chain_integration(self):
+        out = main._sanitize_qq_reply(
+            "(摇尾巴)哼，不分给你！")
+        self.assertEqual(out, "哼，不分给你！")
+
+    def test_prompt_has_stage_direction_ban(self):
+        src = _read("prompts.py")
+        self.assertIn("严禁任何动作/神态旁白", src)
+        self.assertIn("(尾巴晃了晃)", src)   # 错误示范锚
+        self.assertIn("哼，不分给我我就要闹了", src)   # 正确示范锚
+
+
+class StageDirectionNarrowGuardTests(unittest.TestCase):
+    """收紧判据回归（金样本 help_menu 误伤教训）：带分隔的说明注记保留。"""
+
+    def test_help_menu_annotation_preserved(self):
+        s = "· 直接聊天：双脑问答（本地优先 / 云端兜底）"
+        self.assertEqual(main._strip_stage_directions(s), s)
+
+    def test_keyword_rule(self):
+        # 有界词表：身体部位/姿态动词才剥；其余注记一律保留（宁漏勿误）
+        self.assertEqual(main._strip_stage_directions("(扑倒)啊"), "啊")
+        self.assertEqual(main._strip_stage_directions("(摇了摇尾巴)嗯"), "嗯")
+        self.assertEqual(main._strip_stage_directions("（趴在窗边）呀"), "呀")
+        for kept in ("（明天下午）见", "(OTZ)", "（第2集）", "[app]",
+                     "（笑）", "· 双脑问答（本地优先 / 云端兜底）",
+                     "联网搜索（天气请带城市区县）"):
+            self.assertEqual(main._strip_stage_directions(kept), kept)
