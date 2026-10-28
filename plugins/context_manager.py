@@ -18,12 +18,16 @@ import re
 #: 【前情提要】system 条目识别锚（与 brain._SUMMARY_PREFIX / main 落盘口径一致）
 SUMMARY_ANCHOR = "【前情提要】"
 
-#: Token 预算三参（环境变量可调）：默认窗口 4096 = 链上最弱脑（本地小模型
-#: 汇总轮 num_ctx）的安全口径；纯云端部署可拉到 65536
+#: Token 预算三参（环境变量可调）：
+#: - 本地窗口 4096 = 链上最弱脑（本地小模型 num_ctx）的安全口径
+#: - 云端窗口 32000 = deepseek-chat 64k 预留 50% 余量（秘书会诊：4096 对
+#:   纯云端过保守→长对话频繁压缩致"记忆断片"，2026-10-28 二轮上车）
 WINDOW_ENV = "XIAOJU3_CONTEXT_WINDOW_TOKENS"
+WINDOW_CLOUD_ENV = "XIAOJU3_CONTEXT_WINDOW_CLOUD"
 RATIO_ENV = "XIAOJU3_CONTEXT_BUDGET_RATIO"
 HARD_CAP_ENV = "XIAOJU3_CONTEXT_HARD_MSG_CAP"
 DEFAULT_WINDOW = 4096
+DEFAULT_WINDOW_CLOUD = 32000
 DEFAULT_RATIO = 0.70
 DEFAULT_HARD_CAP = 120      # 保险丝：估算再失明，120 条也必压
 
@@ -44,7 +48,11 @@ def _env_float(name, default):
         return default
 
 
-def context_window_tokens():
+def context_window_tokens(engine=None):
+    """按服务引擎取窗口：cloud=32000（DeepSeek 64k 预留余量）/ local=4096
+    （最弱脑安全口径）/ None=未知引擎保守按本地。"""
+    if engine == "cloud":
+        return _env_int(WINDOW_CLOUD_ENV, DEFAULT_WINDOW_CLOUD)
     return _env_int(WINDOW_ENV, DEFAULT_WINDOW)
 
 
@@ -68,18 +76,21 @@ def estimate_tokens(messages):
     return total
 
 
-def over_token_budget(messages, window_tokens=None, threshold=None):
-    """Token 预算门：估算水位 ≥ 阈值（缺省 70%）→ 需要压缩。"""
-    window = context_window_tokens() if window_tokens is None else window_tokens
+def over_token_budget(messages, engine=None, threshold=None):
+    """Token 预算门：估算水位 ≥ 阈值（缺省 70%）→ 需要压缩。engine 决定
+    窗口口径（cloud=32000 / local|None=4096）。"""
+    window = (context_window_tokens("cloud") if engine == "cloud"
+              else context_window_tokens())
     ratio = budget_ratio() if threshold is None else threshold
     if window <= 0:
         return False
     return estimate_tokens(messages) / window >= ratio
 
 
-def should_compress(messages):
-    """压缩触发总判定（调用方唯一入口）：Token 预算超 **或** 条数硬帽。"""
-    if over_token_budget(messages):
+def should_compress(messages, engine=None):
+    """压缩触发总判定（调用方唯一入口）：Token 预算超 **或** 条数硬帽。
+    engine：本轮服务引擎（"cloud"/"local"/None）——动态窗口口径。"""
+    if over_token_budget(messages, engine=engine):
         return True
     return len(messages or []) > hard_msg_cap()
 

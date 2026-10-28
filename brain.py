@@ -1675,6 +1675,11 @@ def _compress_history(messages, session_key="default"):
     硬帽当保险丝防估算失明）——条数触发退役。旧消息浓缩为递归前情提要
     （【前情提要】system 条目，旧的并入新的）+ 最近 10 条明细。
 
+    动态窗口（2026-10-28 二轮，秘书会诊修正）：engine=CLOUD_KEY 缺席→
+    "local"（4096）/ 在位→"cloud"（32000）——多脑重组后云端即全历史主脑
+    （QQ 通道恒云端），按配置即可判定；控制台 high 档本地路径的窗口溢出
+    是 batch 前既有行为（ollama 静默截头），非本门引入，硬帽+env 兜底。
+
     - 压缩结果按 (session_key, 旧消息段指纹) 持久化缓存：指纹相同直接复用
       （避免每轮重复压缩），历史变化（新增消息使指纹变化）自动失效重压；
     - compress_context 抛异常 / 返回降级摘要（双脑不可用）→ 回退既有硬截断
@@ -1682,7 +1687,8 @@ def _compress_history(messages, session_key="default"):
     - 历史未超预算 / 插件缺席 → 原样返回，零额外开销。
     """
     from plugins.context_manager import should_compress
-    if not should_compress(messages):
+    engine = "local" if not CLOUD_KEY else "cloud"
+    if not should_compress(messages, engine=engine):
         return messages
     # 🕐 【当前时间】块（_build_messages 注入，位于 index 1）不参与压缩：
     # 摘出后原位保留——长对话压缩不能把时间上下文吞掉

@@ -76,3 +76,10 @@
 - **任务 2 审查员影子模式上车（只观察不拦截）**：brain 模块级 `_reviewer_ledger`（max_sessions=256 FIFO 驱逐）；`_reviewer_touch`（每消息刷新不清链——单轮单工具架构下链必须跨轮累积才有数据）+`_reviewer_observe`（execute_tool 前过门）+`_reviewer_record`（执行后记账 ❌=FAIL）接进 smart_ask 与 smart_ask_stream 双入口。日志格式 `🛡️[影子审查] Trigger/Reason/Action/Verdict/Chain`。**默认不调云**（全仓测试实锤修正：跨轮账本下 T2 跳族在"天气→开灯"正常序列即命中，逐次调云=普通聊天逐次 +2-3s；触发频率+账本上下文本身就是误判率数据），真 verdict 需 XIAOJU3_REVIEWER_SHADOW_CLOUD=1。开关 XIAOJU3_REVIEWER_SHADOW_MODE 缺省 1，置 0 三函数全旁路。绝不 return false 打断。
 - **顺藤修雷**：main._PUNCT_RE 的 ASCII 直引号把 raw 串截成两段拼接（后半段非 raw 产生 SyntaxWarning，正则侥幸能跑）——全角引号一体修复。
 - **测试 +33 锚 = 全仓 2778+4 全绿**：Token 门/递归/重载边界/门级（brain+main）/账本累积/影子三锁死（只观察/开关旁路/默认不调云）。部署五证=md5 fd5542ed 双端 MATCH+三进程 14:29 全新+health ok+PYZ 7 锚（token_env/递归/影子三函数/开关串/import）+回滚锚 xiaoju3.exe.bak-20261028-shadowctx。
+
+## 二轮批⑧：动态窗口+RAG 兜底原型+影子报告脚本（静默优化批）
+
+- **任务 1 动态上下文窗口（秘书会诊修正落地）**：`context_window_tokens(engine)` 分叉——cloud=32000（DeepSeek 64k 预留 50% 余量，`XIAOJU3_CONTEXT_WINDOW_CLOUD` 可调）/ local=4096 / 未知=保守按本地。brain 判定口径=CLOUD_KEY 缺席→local / 在位→cloud（多脑重组后云端即全历史主脑，QQ 通道恒云端；控制台 high 档本地路径窗口溢出为 batch 前既有行为，硬帽+env 兜底，如实挂账）。main 落盘侧恒 cloud 口径（防磁盘无界增长用宽口径，本地路径由 brain 按请求门保护）。效果=云端长对话压缩触发点从 ~2.8k tokens 拉到 ~22k，"记忆断片"窗口大幅推迟。
+- **任务 2 RAG 兜底原型**：`_dev/summary_to_memory.py`——compress 摘要时从被压旧段提取关键事实（主人偏好/计划/约定，第三人称 KEY=VALUE ≤5 条，双脑降级链+注入式 chat_fn）→ 写 long_term.db（category=summary_facts，最近 50 条精确去重）→ 未来 recall/Hindsight 可检索找回。`on_compress` 上车点就绪（毕业接线=compress_context 摘要成功后一行调用，失败静默绝不拖垮主链）。自测 4/4（临时库，零碰真实库）。未接主链等拍板。
+- **任务 3 影子日志收集脚本**：`_dev/shadow_report.py`——扫生产 logs 的 🛡️[影子审查] 行，按 Trigger/Action 聚合+高置信（T1/T3）与误报倾向（T2 跨轮跳族）分级输出+开真拦截门槛建议。自测过（合成 fixture 3 行）；真跑基线=近 3 天 0 触发（影子门上线 40 分钟，无漂移形态属正常）。脚本两修：T-SIDE 连字符断 \w+、Verdict 含逗号截断——自测当场抓当场修。
+- 测试：既有 9 锚适配（接线类测试用 cloud 窗口=1 强制触发，阈值测试归 test_context_budget）+动态窗口新锚 3=**全仓 2781+4 全绿**。

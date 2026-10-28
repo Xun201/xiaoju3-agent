@@ -208,11 +208,34 @@ class TokenBudgetTests(unittest.TestCase):
     def test_over_token_budget_explicit(self):
         from plugins.context_manager import over_token_budget
         hist = [{"role": "user", "content": "汉" * 40}]   # 40+4=44
-        self.assertTrue(over_token_budget(hist, window_tokens=60,
-                                          threshold=0.70))   # 44/60≈0.73
-        self.assertFalse(over_token_budget(hist, window_tokens=100,
-                                           threshold=0.70))
-        self.assertFalse(over_token_budget(hist, window_tokens=0))
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_TOKENS": "60"}):
+            self.assertTrue(over_token_budget(hist, threshold=0.70))  # 44/60≈0.73
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_TOKENS": "100"}):
+            self.assertFalse(over_token_budget(hist, threshold=0.70))
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_TOKENS": "0"}):
+            self.assertFalse(over_token_budget(hist))
+
+    def test_dynamic_window_by_engine(self):
+        # 动态窗口（2026-10-28 二轮）：cloud=32000 / local=4096，env 均可覆盖
+        from plugins.context_manager import (context_window_tokens,
+                                             over_token_budget)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("XIAOJU3_CONTEXT_WINDOW_TOKENS", None)
+            os.environ.pop("XIAOJU3_CONTEXT_WINDOW_CLOUD", None)
+            self.assertEqual(context_window_tokens("cloud"), 32000)
+            self.assertEqual(context_window_tokens("local"), 4096)
+            self.assertEqual(context_window_tokens(None), 4096)  # 未知=保守
+        hist = [{"role": "user", "content": "汉" * 300}]   # 304 tokens
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_BUDGET_RATIO": "0.7"}):
+            # 304/4096≈0.074：同一段历史 local 不压
+            self.assertFalse(over_token_budget(hist, engine="local"))
+            # cloud 窗口更大更不压——边界改用小 env 验证分叉
+        with mock.patch.dict(os.environ, {
+                "XIAOJU3_CONTEXT_WINDOW_TOKENS": "400",
+                "XIAOJU3_CONTEXT_WINDOW_CLOUD": "800",
+                "XIAOJU3_CONTEXT_BUDGET_RATIO": "0.7"}):
+            self.assertTrue(over_token_budget(hist, engine="local"))   # 304/400=0.76
+            self.assertFalse(over_token_budget(hist, engine="cloud"))  # 304/800=0.38
 
     def test_should_compress_hard_cap(self):
         from plugins.context_manager import should_compress

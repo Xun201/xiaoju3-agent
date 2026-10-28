@@ -43,6 +43,8 @@ class BrainCompressGateTests(unittest.TestCase):
         # 30 条超短消息：旧条数口径（>20）必压；Token 门下水位极低不动
         msgs = [{"role": "system", "content": "sys"}] + _tiny(30)
         with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_TOKENS":
+                                          "100000",
+                                          "XIAOJU3_CONTEXT_WINDOW_CLOUD":
                                           "100000"}):
             with mock.patch.object(brain, "ask_local",
                                    side_effect=AssertionError("不该调用")):
@@ -54,7 +56,7 @@ class BrainCompressGateTests(unittest.TestCase):
         msgs = ([{"role": "system", "content": "sys"}]
                 + [{"role": "user", "content": "【当前时间】12:00"},
                    * _fat(6), * _tiny(10)])
-        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_TOKENS":
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_CLOUD":
                                           "500"}):
             with mock.patch.object(brain, "ask_local",
                                    return_value="测试摘要内容"):
@@ -69,7 +71,7 @@ class BrainCompressGateTests(unittest.TestCase):
     def test_hard_cap_forces_compress_even_under_budget(self):
         # 130 条超短消息：Token 水位低，但硬帽保险丝必压
         msgs = [{"role": "system", "content": "sys"}] + _tiny(130)
-        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_TOKENS":
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_CLOUD":
                                           "1000000"}):
             with mock.patch.object(brain, "ask_local",
                                    return_value="硬帽摘要"):
@@ -89,7 +91,7 @@ class MainCompressGateTests(unittest.TestCase):
     def test_under_budget_no_compression(self):
         msgs = [{"role": "user", "content": "短"} for _ in range(25)]
         saved = {}
-        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_TOKENS":
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_CLOUD":
                                           "100000"}):
             with mock.patch.object(main_mod, "save_memory",
                                    side_effect=lambda m, f: saved.update(
@@ -101,7 +103,7 @@ class MainCompressGateTests(unittest.TestCase):
         msgs = ([{"role": "system", "content": "sys"}]
                 + _fat(6) + _tiny(10))
         saved = {}
-        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_TOKENS":
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_CLOUD":
                                           "500"}):
             with mock.patch.object(
                     brain, "ask_local", return_value="落盘侧摘要"):
@@ -117,3 +119,31 @@ class MainCompressGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class DynamicEngineWindowTests(unittest.TestCase):
+    """动态窗口（2026-10-28 二轮，秘书会诊）：按服务引擎分叉窗口口径。"""
+
+    def test_no_cloud_key_uses_local_window(self):
+        # CLOUD_KEY 缺席 → engine=local：大历史在 4096 口径下必压
+        msgs = [{"role": "system", "content": "sys"}] + _fat(3) + _tiny(10)
+        with mock.patch.object(brain, "CLOUD_KEY", ""):
+            with mock.patch.dict(os.environ, {
+                    "XIAOJU3_CONTEXT_WINDOW_TOKENS": "500"}):
+                with mock.patch.object(brain, "ask_local",
+                                       return_value="本地口径摘要"):
+                    out = brain._compress_history(msgs, "ut9")
+        self.assertIsNot(out, msgs)
+
+    def test_cloud_key_ignores_local_window(self):
+        # CLOUD_KEY 在位 → engine=cloud：同历史在 cloud 窗口下不压（云端
+        # 32000 宽口径——本地窗口 env 不再误伤云端长对话）
+        msgs = [{"role": "system", "content": "sys"}] + _fat(3) + _tiny(10)
+        with mock.patch.object(brain, "CLOUD_KEY", "sk-test"):
+            with mock.patch.dict(os.environ, {
+                    "XIAOJU3_CONTEXT_WINDOW_TOKENS": "500",
+                    "XIAOJU3_CONTEXT_WINDOW_CLOUD": "100000"}):
+                with mock.patch.object(brain, "ask_local",
+                                       side_effect=AssertionError("不该调用")):
+                    out = brain._compress_history(msgs, "ut10")
+        self.assertIs(out, msgs)
+

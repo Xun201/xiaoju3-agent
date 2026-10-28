@@ -841,7 +841,10 @@ def _compress_and_save(messages, filepath):
     纯截断。"""
     try:
         from plugins.context_manager import should_compress
-        if should_compress(messages):
+        # 落盘侧恒按云端口径（engine="cloud"）塑形共享历史：本地路径由
+        # brain._compress_history 的按请求门保护（engine 按配置判定），
+        # 落盘压缩只是防磁盘无界增长，取宽口径减少无谓的摘要调用
+        if should_compress(messages, engine="cloud"):
             compressed = compress_context(messages, max_messages=0)
         else:
             compressed = messages

@@ -2912,6 +2912,13 @@ class ContextCompressionWiringTests(unittest.TestCase):
                                os.path.join(self.tmpdir, "context_summary.json"))
         cp.start()
         self.addCleanup(cp.stop)
+        # Token 预算门（2026-10-28 动态窗口）：本类测"接线"而非"触发阈值"，
+        # cloud 窗口压到 1 让任意非空历史必超预算（触发阈值归
+        # test_context_budget 管）
+        ep = mock.patch.dict(os.environ,
+                             {"XIAOJU3_CONTEXT_WINDOW_CLOUD": "1"})
+        ep.start()
+        self.addCleanup(ep.stop)
         tp = mock.patch.object(brain, "_resolve_tier", return_value="high")
         tp.start()
         self.addCleanup(tp.stop)
@@ -4377,9 +4384,11 @@ class TimeContextTests(unittest.TestCase):
         for i in range(25):
             history.append({"role": "user", "content": f"历史消息{i}"})
             history.append({"role": "assistant", "content": f"回复{i}"})
-        with mock.patch("plugins.context_manager.compress_context",
-                        return_value=[{"role": "system",
-                                       "content": "【前情提要】测试摘要"}]), \
+        with mock.patch.dict(os.environ, {"XIAOJU3_CONTEXT_WINDOW_CLOUD":
+                                          "1"}), \
+                mock.patch("plugins.context_manager.compress_context",
+                           return_value=[{"role": "system",
+                                          "content": "【前情提要】测试摘要"}]), \
                 mock.patch.object(brain, "_resolve_tier", return_value="high"), \
                 mock.patch.object(brain, "USER_CITY", "长沙"), \
                 mock.patch.object(brain, "USER_DISTRICT", ""), \

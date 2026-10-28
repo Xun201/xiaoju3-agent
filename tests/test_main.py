@@ -932,9 +932,12 @@ class TestMemoryAndCompression(_MainCase):
         self.addCleanup(p.stop)
 
     def test_compression_adds_summary_to_history_head(self):
-        """超过 20 条：旧消息浓缩为前情提要并入历史头部（QQ/网页同路径）。"""
+        """超预算：旧消息浓缩为前情提要并入历史头部（QQ/网页同路径）。
+        cloud 窗口压到 1 强制触发（触发阈值本身归 test_context_budget 管）。"""
         self._prefill_web(25)
-        with patch("brain.ask_local", return_value="测试前情提要摘要"):
+        with patch("brain.ask_local", return_value="测试前情提要摘要"), \
+                patch.dict(os.environ,
+                           {"XIAOJU3_CONTEXT_WINDOW_CLOUD": "1"}):
             main.handle_message('web', 'admin', None, "新消息")
 
         # 内存通道历史含前情提要（置顶提示词之后）
