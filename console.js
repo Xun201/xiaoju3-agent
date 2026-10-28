@@ -1567,26 +1567,28 @@
                 console.error('UI 事件渲染失败', e);   // 单事件失败不拆连接
             }
         });
-        // 📊 总线进度推送（选股扫描中间态实时可见）
+        // 📊 总线进度推送：更新当前 ack 气泡内部的进度小字（不飘不插独立 div）
         es.addEventListener('bus_progress', function (ev) {
             try {
                 const d = JSON.parse(ev.data);
-                if (d.text) {
-                    const history = document.getElementById('chat-history');
-                    if (!history) return;
-                    // 找最后一个 bus 气泡，追加状态行（或创建新的）
-                    let target = history.querySelector('.bus-progress-line:last-of-type');
-                    if (!target) {
-                        target = document.createElement('div');
-                        target.className = 'bus-progress-line';
-                        target.style.cssText = 'font-size:12px;color:#9ca3af;'
-                            + 'padding:2px 0;';
-                        history.appendChild(target);
-                    }
-                    target.textContent = '⏳ ' + d.text;
-                    history.scrollTop = history.scrollHeight;
+                if (!d.text) return;
+                const history = document.getElementById('chat-history');
+                if (!history) return;
+                // 找最后一个 bot 气泡内的进度行（有则更新/无则追加在 badge 下方）
+                const bubbles = history.querySelectorAll('.message.bot-message');
+                const last = bubbles[bubbles.length - 1];
+                if (!last) return;
+                let pl = last.querySelector('.bus-progress-line');
+                if (!pl) {
+                    pl = document.createElement('div');
+                    pl.className = 'bus-progress-line';
+                    pl.style.cssText = 'font-size:11px;color:#9ca3af;margin-top:2px;';
+                    const inner = last.querySelector('.bubble-content');
+                    if (inner) inner.appendChild(pl);
                 }
-            } catch (e) { console.error('进度渲染失败', e); }
+                pl.textContent = '⏳ ' + d.text;
+                history.scrollTop = history.scrollHeight;
+            } catch (e) { /* 进度渲染失败不致命 */ }
         });
         // 🚌 总线异步推送（切片 a：选股等强拦截任务的结果气泡，控制台侧）
         es.addEventListener('bus_reply', function (ev) {
@@ -1595,6 +1597,9 @@
                 if (d.reply) {
                     const history = document.getElementById('chat-history');
                     if (!history) return;
+                    // 清掉之前可能残留的进度行
+                    history.querySelectorAll('.bus-progress-line').forEach(
+                        function (el) { el.remove(); });
                     appendBotMessage(d.reply, d.source || '📣 总线', '');
                     history.scrollTop = history.scrollHeight;
                 }
@@ -2606,7 +2611,7 @@
         inner.style.cssText = 'display:flex; flex-direction:column; gap:5px;';
         const bubble = document.createElement('div');
         bubble.className = 'bubble-content';
-        bubble.innerHTML = renderRich(parts.body);
+        bubble.innerHTML = renderRichTables(parts.body);
         inner.appendChild(bubble);
         botEl.appendChild(inner);
         if (parts.think !== null) {

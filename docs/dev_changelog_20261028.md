@@ -200,3 +200,10 @@
 - Bug 3 进度：main worker 推 bus_progress SSE→前端监听追加状态行（选股扫描中间态实时可见）。
 - Release v2.2.1 资产 clobber 同步（含全部 UI 修复）。
 - 全仓 2876+5 全绿；生产 468b7bfa 三进程在跑。
+
+## 深夜批㉖：四 Bug 终修（表格渲染升级+进度收口+云端接管+宽度链）+ Release 资产同步
+
+- renderRich 加粗体/标题/行内代码三合一（md-code/md-heading CSS）；流式+终端+聊天三处渲染口全升 renderRichTables；宽度链 min-width:0 全链+overflow-x 气泡内滑动。
+- bus_progress 收口到 ack 气泡内部进度行（前端 querySelector 最后 bot 气泡内追加 bus-progress-line，bus_reply 到达时清除）。
+- 云端失败友好兜底不回退本地（api_chat/stream 双视图,None=落 smart_ask 旧链而非硬兜底）。
+- 全仓 2876+5 全绿；生产 c7f47c32→部署；Release v2.2.1 资产 clobber 同步（setup exe 115,369,977 字节+sha256）。

@@ -427,7 +427,7 @@ class TerminalTabTests(unittest.TestCase):
         section = self._tab_section()
         self.assertIn("splitThinkBlock(msg.content)", section)
         self.assertIn("buildThinkLiveBlock(parts.think)", section)
-        self.assertIn("renderRich(parts.body)", section)
+        self.assertIn("renderRichTables(parts.body)", section)
 
 
 # ---------------------------------------------------------------------------
