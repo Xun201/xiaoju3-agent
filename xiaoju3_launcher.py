@@ -393,6 +393,62 @@ def prune_dashboard_logs(keep=LOG_KEEP, log_dir=None):
     return kept_total, removed_total
 
 
+class _RotatingStream:
+    """10MB 自动轮转日志流（防爆盘 2026-10-28）：写前查大小，超限顺序位移
+    （base→.1→.2，最多保留 3 份）。stdout/stderr 代用品——write/flush/
+    close/reconfigure/isatty/writable 透传，reconfigure 供 dashboard 行
+    缓冲设置。单进程独占单文件（per-launch 时间戳档），零共写竞争。"""
+
+    MAX_BYTES = 10 * 1024 * 1024
+    KEEP = 3
+
+    def __init__(self, path):
+        self._path = path
+        self._file = open(path, "a", buffering=1,
+                          encoding="utf-8", errors="replace")
+
+    def _rotate_if_needed(self):
+        try:
+            if self._file.tell() < self.MAX_BYTES:
+                return
+            self._file.close()
+            for i in range(self.KEEP - 2, 0, -1):   # .2→.3 无（KEEP-1 份位移）
+                src = f"{self._path}.{i}"
+                dst = f"{self._path}.{i + 1}"
+                if os.path.exists(src):
+                    os.replace(src, dst)
+            os.replace(self._path, f"{self._path}.1")
+        except OSError:
+            pass    # 轮转失败不致命：继续追加（最坏单文件超限，下轮再试）
+        try:
+            self._file = open(self._path, "a", buffering=1,
+                              encoding="utf-8", errors="replace")
+        except OSError:
+            pass    # 重开失败：保留旧句柄继续写（静默兜底）
+
+    def write(self, s):
+        self._rotate_if_needed()
+        return self._file.write(s)
+
+    def flush(self):
+        self._file.flush()
+
+    def close(self):
+        self._file.close()
+
+    def reconfigure(self, **kw):
+        try:
+            self._file.reconfigure(**kw)
+        except Exception:
+            pass
+
+    def isatty(self):
+        return False
+
+    def writable(self):
+        return True
+
+
 def _redirect_stdio(role):
     """frozen 入口重定向（方案步 3，B 路线）：stdout/stderr → 角色专属日志。
 
@@ -401,6 +457,8 @@ def _redirect_stdio(role):
       sys.stdout 为 None 与子进程 stdio=DEVNULL 两类丢失一并兜住；行缓冲把
       硬杀丢面压到半行，进程退出由解释器统一 flush。三进程各写各档
       （timestamped_log_path 前缀族），零共写。
+      防爆盘（2026-10-28）：流带 10MB 自动轮转（顺序位移保留 3 份）——
+      常驻运行数月单文件不再无界膨胀。
     - 非 frozen：空操作返回 None——控制台 print 照旧上屏，restart_clean.bat
       的进程外重定向（fd 层）照旧生效，行为逐字节不变。
     返回日志路径（非 frozen 返回 None）。
@@ -411,8 +469,7 @@ def _redirect_stdio(role):
     try:
         # exe 首跑目录可能尚无 xiaoju3_data/（数据根惰性创建不覆盖日志路径）
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        stream = open(log_path, "a", buffering=1,
-                      encoding="utf-8", errors="replace")
+        stream = _RotatingStream(log_path)
     except OSError:
         # 重定向失败绝不影响启动主流程（与 prune 同口径）：退化为不重定向
         return None

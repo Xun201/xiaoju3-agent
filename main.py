@@ -1975,34 +1975,42 @@ _STOCK_TRIGGER_RE = re.compile(r"选股|国企股|行业景气度|(股票|行业
 _STOCK_ACK_TEXT = ("收到！小橘这就去拉数据跑模型，大概需要二三十秒，"
                    "主人稍等片刻哦~（如果太慢小橘会挨骂的）")
 _STOCK_SCAN_LOCK = threading.Lock()
+_STOCK_SCAN_GEN = 0            # 代际：超时/换代后旧结果作废（防雪崩·45s 硬限制）
+_STOCK_SCAN_STARTED = 0.0
+_STOCK_SCAN_TIMEOUT = 45
+_STOCK_WATCHDOG = None         # 看门狗 Timer（新触发取消旧的，防泄漏）
+# 防误伤：疑问/对比句式（"选股和基金的区别"）不劫持，交大模型正常回答
+_STOCK_QUESTION_RE = re.compile(
+    r"的区别|是什么|什么意思|怎么样|哪个好|对比|有哪些|和基金|和股票")
 
 
-# ================= Token 防刷守卫（2026-10-28："2的50次方烧光token"实锤） =================
-# 策略三层：①幂运算钓饵硬逻辑直算（Python pow 零 token，比 LLM 准）；
-# ②超长纯文本消息截断 500 字（含 CQ 的媒体消息不动——截断会破码）；
-# ③Prompt 端"严禁冗长数学推导"（QQ_CLOUD_SYSTEM 硬约束行）。
-_MATH_BAIT_RE = re.compile(r"(\d{1,15})\s*的\s*(\d{1,5})\s*次方")
+# ================= Token 防刷守卫（2026-10-28 三次重构：跨架构算力防 DoS） =================
+# 绝对红线：指数>100 或底数>10^9 → **绝不调用 pow**（本地/云端/任何环境
+# 都不被恶意输入卡死——超大幂运算是 CPU/内存 DoS 面）。M≤100 且 N≤10^9
+# 才本地快速 pow，只回"计算结果：xxx"。纯代码拦截，无环境假设。
+# Prompt 端兜底（无前置拦截器的纯云路径）：QQ_CLOUD_SYSTEM 复杂数学直接拒绝。
+_MATH_BAIT_RE = re.compile(r"(\d{1,15})\s*的\s*(\d{1,7})\s*次方")
+_POW_EXP_CAP = 100
+_POW_BASE_CAP = 10 ** 9
 _MSG_LEN_CAP = 500
+_MATH_REFUSE_TEXT = "这个数字太大啦，小橘的算盘打不动了，主人换个问题吧~"
+
+
+def _safe_pow(base, exp):
+    """有界幂运算（测试锚点：拒绝分支绝不调用本函数）。"""
+    return base ** exp
 
 
 def _math_bait_reply(text):
-    """幂运算钓饵直算：命中"N的M次方"→ 本地 pow 直接回（零 token 零延迟）。
-    回复极简客观（队长拍板：防刷是阻断成本不是表演，禁嘲讽/质问/傲娇）。
-    结果 >200 位只报位数与量级（防回复爆炸）。非幂运算返回 None 正常放行。"""
+    """幂运算守卫：M≤100 且 N≤10^9 → 本地快速 pow 回"计算结果：xxx"；
+    超界 → 直接拒绝（不计算、不发云端）。非幂运算返回 None 正常放行。"""
     m = _MATH_BAIT_RE.search(str(text or ""))
     if not m:
         return None
-    import math
     base, exp = int(m.group(1)), int(m.group(2))
-    if base <= 1:
-        return f"计算结果：{base ** min(exp, 64)}"
-    digits = int(exp * math.log10(base)) + 1
-    if digits <= 200:
-        return f"计算结果：{base ** exp}"
-    lead = 10 ** ((exp * math.log10(base)) % 1)
-    expo = int(exp * math.log10(base))
-    return (f"计算结果：{base} 的 {exp} 次方是一个 {digits} 位数"
-            f"（约 {lead:.3f}×10^{expo}）")
+    if exp > _POW_EXP_CAP or base > _POW_BASE_CAP:
+        return _MATH_REFUSE_TEXT
+    return f"计算结果：{_safe_pow(base, exp)}"
 
 
 def _stock_screen_reply_qq():
@@ -2014,12 +2022,25 @@ def _stock_screen_reply_qq():
 
 def _stock_intercept_respond(user_id, group_id):
     """秒回提示 + 后台线程扫描 + 主动推送。返回工作线程（测试 join 用）。
-    并发防抖：上一轮还在跑则只回提示不再起线程（缓存好结果不重复算）。"""
+
+    防雪崩三闸（2026-10-28）：①同一时间仅 1 个扫描（锁+在跑提示）；
+    ②45s 看门狗——超时发提示并代际+1 作废旧结果（僵死线程自然消亡，
+    晚到结果静默丢弃）；③推送只走 ONEBOT 单向发送，**不写会话历史**
+    （延迟回复不得打断用户正常聊天流，防竞态污染上下文）。"""
+    global _STOCK_SCAN_GEN, _STOCK_SCAN_STARTED, _STOCK_WATCHDOG
     _send_reply_segments(user_id, group_id, _STOCK_ACK_TEXT)
-    if _STOCK_SCAN_LOCK.locked():
+    now = time.time()
+    if (_STOCK_SCAN_LOCK.locked()
+            and now - _STOCK_SCAN_STARTED <= _STOCK_SCAN_TIMEOUT):
         _send_reply_segments(user_id, group_id,
                              "（上一轮扫描还在跑，主人稍等，结果马上到~）")
         return None
+    # 首轮，或旧扫描已超 45s（视为僵死）→ 代际+1 作废旧结果，放行新一轮
+    if _STOCK_WATCHDOG is not None:
+        _STOCK_WATCHDOG.cancel()
+    _STOCK_SCAN_GEN += 1
+    my_gen = _STOCK_SCAN_GEN
+    _STOCK_SCAN_STARTED = now
 
     def _worker():
         with _STOCK_SCAN_LOCK:
@@ -2027,6 +2048,9 @@ def _stock_intercept_respond(user_id, group_id):
                 reply = _stock_screen_reply_qq()
             except Exception as e:
                 reply = f"❌ 选股扫描挂了：{type(e).__name__}，主人稍后再试一次吧"
+        if my_gen != _STOCK_SCAN_GEN:
+            print("📈 [选股] 结果作废（已超时换代，单向推送不补发）")
+            return
         try:
             _send_reply_segments(user_id, group_id, reply)
         except Exception as e:
@@ -2034,6 +2058,20 @@ def _stock_intercept_respond(user_id, group_id):
 
     t = threading.Thread(target=_worker, daemon=True, name="stock-scan")
     t.start()
+
+    def _watchdog():
+        global _STOCK_SCAN_GEN
+        if _STOCK_SCAN_GEN == my_gen:   # 45s 内未出结果：提示+作废晚到结果
+            _STOCK_SCAN_GEN += 1
+            try:
+                _send_reply_segments(
+                    user_id, group_id,
+                    "（扫描超时了，数据源可能不太舒服，主人稍后再试试~）")
+            except Exception:
+                pass
+    _STOCK_WATCHDOG = threading.Timer(_STOCK_SCAN_TIMEOUT, _watchdog)
+    _STOCK_WATCHDOG.daemon = True
+    _STOCK_WATCHDOG.start()
     return t
 
 
@@ -2143,8 +2181,10 @@ def onebot_event(data):
         _nc_text = _strip_cq(raw_message or "").strip()
         # 📈 选股强拦截（2026-10-28 真机惨败抢救）：QQ 通道不走意图路由，
         # 触发词命中即短路（防抖/大脑/1.5B 全绕开）——秒回+后台扫描推送。
-        # 仅私聊生效（群聊误触劫持风险），命中即 return 不入桶。
-        if (not group_id) and _STOCK_TRIGGER_RE.search(_nc_text):
+        # 仅私聊生效（群聊误触劫持风险）；疑问/对比句式豁免（防误伤：
+        # "选股和基金的区别"是知识问答不是指令），命中即 return 不入桶。
+        if ((not group_id) and _STOCK_TRIGGER_RE.search(_nc_text)
+                and not _STOCK_QUESTION_RE.search(_nc_text)):
             _stock_intercept_respond(user_id, group_id)
             return {"status": "ok", "retcode": 0}
         # 💰 Token 防刷：幂运算钓饵硬逻辑直算（不进大脑）+ 超长纯文本截断
