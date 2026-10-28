@@ -1978,6 +1978,59 @@ def _send_reply_segments(user_id, group_id, reply, post=None, sleep_fn=None):
 
 
 # ================= QQ大门（业务体；HTTP 视图宿主于 :5003） =================
+# ================= 新号保命模式（2026-10-28 深夜，Lv.2 账号实锤收紧） =================
+# 队长真机核等级=Lv.2（成长加速 0）——极端高危新号/死号，旧参数（日限 300、
+# 被动 1-2.5s）对本等级太激进极易秒封。三闸收紧：①日限 40 条（超=静默
+# 停止回复到第二天，防连续发送拦截）②被动回复最小间隔 3-6s 随机
+# ③QQ 通道屏蔽选股等重拉取指令（回引导去控制台）。等级上去后
+# XIAOJU3_QQ_SAFE_MODE=0 解锁旧参数。
+_QQ_DAILY_LIMIT = 40
+_QQ_MIN_INTERVAL = (3.0, 6.0)
+_QQ_DAILY = {"date": "", "count": 0}
+_QQ_LAST_REPLY = 0.0
+_QQ_SAFE_STOCK_REFUSAL = ("小橘等级太低，怕被封号，请去控制台找我玩哦~"
+                          "（选股功能在控制台全速可用）")
+
+
+def _qq_safe_mode_on():
+    return os.environ.get("XIAOJU3_QQ_SAFE_MODE", "1") == "1"
+
+
+def _qq_daily_exceeded():
+    """当日被动回复已达软限（Lv.2 保命：40 条）→ 静默停止回复到第二天。"""
+    if not _qq_safe_mode_on():
+        return False
+    today = time.strftime("%Y-%m-%d")
+    if _QQ_DAILY["date"] != today:
+        _QQ_DAILY["date"] = today
+        _QQ_DAILY["count"] = 0
+    return _QQ_DAILY["count"] >= _QQ_DAILY_LIMIT
+
+
+def _qq_daily_bump():
+    today = time.strftime("%Y-%m-%d")
+    if _QQ_DAILY["date"] != today:
+        _QQ_DAILY["date"] = today
+        _QQ_DAILY["count"] = 0
+    _QQ_DAILY["count"] += 1
+
+
+def _qq_pace_reply():
+    """被动回复最小间隔（保命模式 3-6s 随机；非保命不垫）。"""
+    global _QQ_LAST_REPLY
+    if not _qq_safe_mode_on():
+        return
+    import random as _random
+    gap = _random.uniform(*_QQ_MIN_INTERVAL)
+    elapsed = time.time() - _QQ_LAST_REPLY
+    if elapsed < gap:
+        try:
+            time.sleep(gap - elapsed)
+        except Exception:
+            pass
+    _QQ_LAST_REPLY = time.time()
+
+
 # ================= 选股强拦截（QQ 通道专用，2026-10-28 真机惨败抢救） =================
 # 根因：QQ 通道不走意图路由（intents 仅 web/控制台），"帮我选股"落进闲聊
 # 被云端拒绝/教百度。扳手原则：重任务用最确定的代码路由接管——触发词命中
@@ -2300,11 +2353,22 @@ def onebot_event(data):
         # 拟人节奏（2026-10-12）：纯文字闲聊入防抖桶延迟回复；工具意图/
         # 媒体/指令即时处理。开关关或非闲聊 → 原同步路径。
         _nc_text = _strip_cq(raw_message or "").strip()
+        # 🛡️ 新号保命模式（Lv.2 账号收紧，2026-10-28 深夜）：
+        # ①日限 40 条超限 → 静默停止回复（不回不报，防连续发送拦截）
+        if (not group_id) and _qq_daily_exceeded():
+            return {"status": "ok", "retcode": 0}
+        # ②QQ 通道屏蔽选股等重拉取指令（回引导去控制台，防高频封号）
+        if ((not group_id) and _qq_safe_mode_on()
+                and _STOCK_TRIGGER_RE.search(_nc_text)
+                and not _STOCK_QUESTION_RE.search(_nc_text)):
+            _send_reply_segments(user_id, group_id, _QQ_SAFE_STOCK_REFUSAL)
+            return {"status": "ok", "retcode": 0}
         # 🚌 统一指令分发总线（切片 a，2026-10-28）：QQ 适配层——强拦截
         # 任务（选股/幂运算钓饵）命中即短路（防抖/大脑/1.5B 全绕开）。
         # 判定语义（群聊豁免/疑问豁免/算力帽）在总线拦截器内，通道无关；
         # 防抖/拟人节奏等通道特性留在本适配层，不进总线。
-        _bus_reply = lambda s: _send_reply_segments(user_id, group_id, s)
+        _bus_reply = lambda s: (_qq_pace_reply(), _qq_daily_bump(),
+                                _send_reply_segments(user_id, group_id, s))[2]
         if CommandBus.dispatch(_nc_text, _bus_reply,
                                {"channel": "qq", "user_id": user_id,
                                 "group_id": group_id}):
@@ -2331,6 +2395,9 @@ def onebot_event(data):
 
         if reply:
             try:
+                # 🛡️ 保命模式：最小间隔垫底 + 日限计数（LV.2 新号收紧）
+                _qq_pace_reply()
+                _qq_daily_bump()
                 # 打字机（#227 后续批）：开关开且长回复 → 分段连发；关/短
                 # → 单发与既有行为逐字节一致
                 _send_reply_segments(user_id, group_id, reply)

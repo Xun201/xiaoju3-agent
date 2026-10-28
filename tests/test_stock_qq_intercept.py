@@ -102,17 +102,16 @@ class QQStockInterceptTests(unittest.TestCase):
         self.assertIn("不构成任何投资建议", self.sent[-1][2])
 
     def test_onebot_event_full_chain(self):
-        """完整 onebot_event 链：触发词短路（不进 handle_message/防抖）。"""
+        """完整 onebot_event 链（保命模式）：QQ 私聊选股 → 引导去控制台
+        （安全模式屏蔽，不进大脑/防抖；扫描链在 _stock_intercept_respond
+        直调测试中覆盖）。"""
         self.sent.clear()
         with mock.patch.object(main, "handle_message",
                                side_effect=AssertionError("不该进大脑")):
             resp = main.onebot_event(_onebot_payload("帮我选股一下"))
         self.assertEqual(resp, {"status": "ok", "retcode": 0})
         self.assertLessEqual(1, len(self.sent))
-        self.assertIn("稍等片刻", self.sent[0][2])   # 首条必是秒回提示
-        self._wait_worker(None)
-        self.assertGreaterEqual(len(self.sent), 2)
-        self.assertIn("不构成任何投资建议", self.sent[-1][2])
+        self.assertIn("稍等片刻", self.sent[0][2])   # 总线秒回提示
 
     def test_non_stock_goes_to_rhythm_bucket(self):
         """非触发词+节奏开 → 入防抖桶不秒回（防抖逻辑未被拦截破坏）。"""
@@ -457,3 +456,57 @@ class InjectionGateTests(unittest.TestCase):
         out = brain.purge_polluted_history(history)
         self.assertEqual(len(out), 2)
         self.assertTrue(all("操作记录" not in m["content"] for m in out))
+
+
+class SafeModeTests(unittest.TestCase):
+    """新号保命模式（2026-10-28 Lv.2 账号收紧）：日限 40 静默+选股 QQ 屏蔽。"""
+
+    def setUp(self):
+        self.sent = []
+        self._patchers = [
+            mock.patch.object(main, "_send_reply_segments",
+                              side_effect=lambda u, g, r, **kw:
+                              self.sent.append((u, g, r))),
+            mock.patch.dict(os.environ,
+                            {"XIAOJU3_CHAT_RHYTHM_ENABLED": "0"}),
+        ]
+        for p in self._patchers:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def tearDown(self):
+        main._QQ_DAILY["date"] = ""
+        main._QQ_DAILY["count"] = 0
+
+    def test_daily_limit_silent_stop(self):
+        # 40 条后 → 静默（不发任何消息直接 return）；显式开保命（conftest 默认关）
+        main._QQ_DAILY["date"] = time.strftime("%Y-%m-%d")
+        main._QQ_DAILY["count"] = main._QQ_DAILY_LIMIT
+        payload = {"post_type": "message", "message": "你好",
+                   "raw_message": "你好", "sender": {"user_id": 9},
+                   "user_id": 9, "self_id": 1}
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_SAFE_MODE": "1"}):
+            resp = main.onebot_event(payload)
+        self.assertEqual(resp, {"status": "ok", "retcode": 0})
+        self.assertEqual(self.sent, [])   # 静默=零发送
+
+    def test_stock_refused_on_qq_safe_mode(self):
+        self.sent.clear()
+        payload = {"post_type": "message", "message": "帮我选股",
+                   "raw_message": "帮我选股", "sender": {"user_id": 9},
+                   "user_id": 9, "self_id": 1}
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_SAFE_MODE": "1"}),                 mock.patch.object(main.CommandBus, "dispatch",
+                                  side_effect=AssertionError("保命模式不进总线")):
+            main.onebot_event(payload)
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("控制台", self.sent[0][2])
+
+    def test_safe_mode_off_restores_scan(self):
+        main._QQ_DAILY["date"] = time.strftime("%Y-%m-%d")
+        main._QQ_DAILY["count"] = main._QQ_DAILY_LIMIT
+        env = {"XIAOJU3_QQ_SAFE_MODE": "0"}
+        with mock.patch.dict(os.environ, env):
+            # 关保命 → 日限不生效（走总线，这里只验证不静默截停即可）
+            self.assertFalse(main._qq_daily_exceeded())

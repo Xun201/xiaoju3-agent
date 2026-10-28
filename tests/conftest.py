@@ -21,3 +21,4 @@ import os
 os.environ.setdefault("XIAOJU3_PLUGIN_AUTOLOAD", "0")
 os.environ["XIAOJU3_QQ_CLOUD_TAKEOVER"] = "0"
 os.environ.setdefault("XIAOJU3_SUMMARY_FACTS_ENABLED", "0")
+os.environ.setdefault("XIAOJU3_QQ_SAFE_MODE", "0")   # 保命模式测试态关——日限计数器跨测试累积会静默吞掉全部 QQ 消息
