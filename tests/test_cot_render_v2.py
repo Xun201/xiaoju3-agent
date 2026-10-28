@@ -145,8 +145,9 @@ class PetOnlineRegressionTests(unittest.TestCase):
         """desktop-pet.js 重新挂载：去掉 HTML 注释后（浏览器实际加载面）
         存在指向 desktop-pet.js 的 script 标签；console.js 仍正常加载。"""
         stripped = _strip_html_comments(self.index_html)
-        self.assertIsNotNone(re.search(r"<script[^>]*desktop-pet\.js", stripped))
-        self.assertIn('<script src="/console/desktop-pet.js"></script>', stripped)
+        # 桌宠动态引导契约（默认关）：bootstrap 按 /api/pet_pref 决定注入
+        self.assertIsNotNone(re.search(r"/api/pet_pref", stripped))
+        self.assertIsNotNone(re.search(r"desktop-pet\.js", stripped))
         self.assertIn('<script src="/console/console.js"></script>', stripped)
 
     def test_mount_comment_updated_to_regression(self):

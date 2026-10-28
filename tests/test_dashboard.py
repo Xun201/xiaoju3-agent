@@ -1006,8 +1006,9 @@ class ServingTests(unittest.TestCase):
         resp = self.client.get("/console")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
+        # 桌宠动态引导（默认关）：bootstrap 引用 desktop-pet.js 且带版本参数
         self.assertRegex(
-            html, r'<script src="/console/desktop-pet\.js(\?v=\d+)"></script>')
+            html, r"s\.src = '/console/desktop-pet\.js\?v=\d+';")
         self.assertNotIn("<!-- <script src=\"/console/desktop-pet.js\">", html)
 
     def test_mascot_asset_served(self):
@@ -2227,7 +2228,7 @@ class ConsoleCacheBustingTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
         self.assertIn("console.js?v=", html)
-        self.assertIn("desktop-pet.js?v=", html)
+        self.assertIn("desktop-pet.js?v=", html)   # 动态引导引用同样带版本
 
     def test_version_changes_when_file_mtime_changes(self):
         resp1 = self.client.get("/console")
@@ -3175,3 +3176,42 @@ class CommandBusConsoleTests(unittest.TestCase):
                                     json={"message": "今天心情怎么样"})
         body = resp.get_json()
         self.assertEqual(body["data"]["reply"], "闲聊回复")
+
+
+class PetPrefApiTests(unittest.TestCase):
+    """桌宠开关端点（2026-10-28 默认关）：GET 缺席=False/POST 读改写原子。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+        self._tmp = tempfile.mkdtemp(prefix="xj3_petpref_")
+        p = mock.patch.object(xiaoju3, "AGENT_STATE_DIR", self._tmp)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_default_off_when_absent(self):
+        data = self.client.get("/api/pet_pref").get_json()["data"]
+        self.assertFalse(data["enabled"])
+
+    def test_post_roundtrip(self):
+        r1 = self.client.post("/api/pet_pref", json={"enabled": True})
+        self.assertTrue(r1.get_json()["data"]["enabled"])
+        r2 = self.client.get("/api/pet_pref").get_json()["data"]
+        self.assertTrue(r2["enabled"])
+        r3 = self.client.post("/api/pet_pref", json={"enabled": False})
+        self.assertFalse(r3.get_json()["data"]["enabled"])
+
+    def test_write_preserves_other_keys(self):
+        import json
+        with open(os.path.join(self._tmp, "ui_pref.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"exit": "ask", "layout": {"w": 300}}, f)
+        self.client.post("/api/pet_pref", json={"enabled": True})
+        with open(os.path.join(self._tmp, "ui_pref.json"),
+                  encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertTrue(data["desktop_pet_enabled"])
+        self.assertEqual(data["exit"], "ask")   # 既有键不丢

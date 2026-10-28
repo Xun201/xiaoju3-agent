@@ -641,31 +641,39 @@
             font-weight: 600;
             text-wrap: pretty;   /* UI 微操：正文断行优化（防末行孤字，流式连续不断行错开） */
         }
-        /* Markdown 表格（2026-10-28 总线选股清单）：边框/表头底色/内边距；
-           overflow-x 防超宽表撑爆气泡；表格与前后文本留呼吸间距 */
+        /* Markdown 表格（2026-10-28 总线选股清单；二轮精修学豆包）：圆角
+           容器+浅边框+overflow-x 横向滑动（只在容器内滑，不撑爆气泡）；
+           表格与前后文本留呼吸间距 */
         .md-table-wrap {
             overflow-x: auto;
             margin: 10px 0 8px;
             max-width: 100%;
+            border: 1px solid var(--color-border, #d8dee8);
+            border-radius: 10px;
+            background: var(--color-card, #fff);
         }
         .md-table {
             border-collapse: collapse;
             font-size: 12px;
             font-weight: 400;   /* 覆盖 bot 气泡加粗，表格回到正文权重 */
             min-width: 60%;
+            margin: 0;
         }
         .md-table th, .md-table td {
-            border: 1px solid var(--color-border, #d8dee8);
-            padding: 5px 10px;
+            border-bottom: 1px solid var(--color-border, #e5e9f0);
+            border-right: 1px solid var(--color-border, #e5e9f0);
+            padding: 6px 12px;
             text-align: left;
             white-space: nowrap;
         }
+        .md-table th:last-child, .md-table td:last-child { border-right: none; }
+        .md-table tbody tr:last-child td { border-bottom: none; }
         .md-table thead th {
-            background: var(--color-card, #f3f5f9);
+            background: var(--color-bg, #eef1f6);
             font-weight: 600;
         }
         .md-table tbody tr:nth-child(even) {
-            background: rgba(0, 0, 0, 0.025);
+            background: rgba(0, 0, 0, 0.02);
         }
         /* 内容错开淡入（UI 微操）：仅历史回放批渲染/系统消息挂 .msg-enter，
            流式输出的思维链与正文绝不挂此类——保持连续 */
@@ -1470,7 +1478,21 @@
          test_dashboard.py 桌宠规格组与 test_pet_desktop.py）；
          最小化=桌宠缩球（球跟桌宠原位），控制台永不缩。
          2026-10-01 的下线注释档见 git 历史。 -->
-    <script src="/console/desktop-pet.js"></script>
+    <!-- 桌宠开关（2026-10-28 队长拍板默认关）：按 ui_pref.desktop_pet_enabled
+         动态注入脚本——关=不渲染狐狸零开销；GET /api/pet_pref 失败亦不渲染
+         （浏览器/桌面窗双形态同源）。设置开关在 🧰 工具面板"桌面宠物"卡。 -->
+    <script>
+    (function () {
+        fetch('/api/pet_pref').then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (!(j && j.data && j.data.enabled)) return;   // 默认关
+                const s = document.createElement('script');
+                s.src = '/console/desktop-pet.js';
+                document.body.appendChild(s);
+            })
+            .catch(function () { /* 预取失败=不渲染（默认关） */ });
+    })();
+    </script>
     <div id="tools-overlay" hidden>
         <!-- 小工具面板（MAA 式收纳）：内容由 console.js 动态构建；
              覆盖主区域+左栏（全屏 overlay），返回按钮退出 -->

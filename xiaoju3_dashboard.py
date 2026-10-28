@@ -218,6 +218,9 @@ def console():
 
     html = html.replace('src="/console/desktop-pet.js"',
                         f'src="/console/desktop-pet.js?v={_mtime_ver("desktop-pet.js")}"')
+    # 桌宠动态引导（2026-10-28 默认关）：js 赋值形态的引用同样带版本参数
+    html = html.replace("s.src = '/console/desktop-pet.js';",
+                        f"s.src = '/console/desktop-pet.js?v={_mtime_ver('desktop-pet.js')}';")
     html = html.replace('src="/console/console.js"',
                         f'src="/console/console.js?v={_mtime_ver("console.js")}"')
     return html
@@ -1259,6 +1262,50 @@ def api_stt_stop():
         return jsonify({"code": 200, "data": {"text": text}})
     finally:
         _stt_close_stream()   # 第二道保险：哪怕上面任何一步抛异常也已收口
+
+
+@app.route("/api/pet_pref", methods=["GET"])
+def api_pet_pref_get():
+    """桌宠开关读取（2026-10-28 队长拍板默认关）：ui_pref.json 的
+    desktop_pet_enabled 字段，缺席=False。前端启动据此决定是否注入
+    desktop-pet.js（关=不渲染狐狸零开销）。只读，失败给默认关。"""
+    import json as _json
+    import os as _os
+    import xiaoju3 as _x3
+    enabled = False
+    try:
+        path = _os.path.join(_x3.AGENT_STATE_DIR, "ui_pref.json")
+        with open(path, encoding="utf-8") as f:
+            enabled = bool(_json.load(f).get("desktop_pet_enabled", False))
+    except Exception:
+        enabled = False
+    return jsonify({"code": 200, "data": {"enabled": enabled}})
+
+
+@app.route("/api/pet_pref", methods=["POST"])
+def api_pet_pref_set():
+    """桌宠开关写入：ui_pref.json 读改写（tmp+replace 原子落盘）。与桌面
+    进程的 set_layout_pref 共享文件——两侧都低频用户操作，读改写竞态窗口
+    极小可接受（写法与 desktop_launcher._save_ui_pref 同口径）。"""
+    import json as _json
+    import os as _os
+    import xiaoju3 as _x3
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get("enabled"))
+    path = _os.path.join(_x3.AGENT_STATE_DIR, "ui_pref.json")
+    try:
+        data = {}
+        if _os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                data = _json.load(f)
+        data["desktop_pet_enabled"] = enabled
+        tmp = path + ".pettmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False, indent=1)
+        _os.replace(tmp, path)
+        return jsonify({"code": 200, "data": {"enabled": enabled}})
+    except Exception as e:
+        return jsonify({"code": 500, "error": str(e)}), 500
 
 
 @app.route("/api/plugins/toggle", methods=["POST"])

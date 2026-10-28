@@ -4324,6 +4324,53 @@
             .catch(function () { body.textContent = '清单获取失败'; });
     }
 
+    // 🐾 桌宠开关（2026-10-28 队长拍板默认关）：ui_pref.desktop_pet_enabled
+    // → /api/pet_pref GET/POST；切换后刷新页面生效（脚本按配置动态注入）。
+    function loadPetToggleInto(body) {
+        body.textContent = '读取中…';
+        fetch('/api/pet_pref').then(function (r) { return r.json(); })
+            .then(function (j) {
+                const enabled = !!(j.data && j.data.enabled);
+                body.textContent = '';
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:10px;';
+                const info = document.createElement('div');
+                info.style.cssText = 'flex:1;';
+                info.innerHTML = '🐾 <b>启用桌面宠物</b><br>'
+                    + '<span class="dp-sub">狐狸挂件（右下角）。默认关闭；'
+                    + '切换后刷新页面生效。</span>';
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-small';
+                btn.textContent = enabled ? '关闭' : '开启';
+                btn.addEventListener('click', function () {
+                    btn.disabled = true;
+                    btn.textContent = '保存中…';
+                    fetch('/api/pet_pref', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({enabled: !enabled})
+                    }).then(function (r) { return r.json(); })
+                      .then(function (j2) {
+                          if (j2.code === 200) {
+                              showToast('桌宠已' + (!enabled ? '开启'
+                                      : '关闭') + '，刷新页面后生效');
+                          } else {
+                              showToast('保存失败');
+                          }
+                          loadPetToggleInto(body);
+                      })
+                      .catch(function () {
+                          showToast('保存失败');
+                          loadPetToggleInto(body);
+                      });
+                });
+                row.appendChild(info);
+                row.appendChild(btn);
+                body.appendChild(row);
+            })
+            .catch(function () { body.textContent = '读取失败'; });
+    }
+
     function loadHaDevicesInto(body) {
         body.textContent = '加载中…（HA 可达约需 1-10s）';
         fetch('/api/ha/devices').then(function (r) { return r.json(); })
@@ -4432,6 +4479,8 @@
             }));
         g3.appendChild(buildToolCard('插件管理', '外部插件启停（停用即卸载，重启用即时换装）',
             function () { toggleToolBody('tool-plugins-body', loadPluginsManageInto); }));
+        g3.appendChild(buildToolCard('桌面宠物', '桌宠开关（默认关；切换后刷新页面生效）',
+            function () { toggleToolBody('tool-pet-body', loadPetToggleInto); }));
         note('面板骨架批 1：监控三类中「主动性监控」可用；其余卡片为占位。');
     }
 
