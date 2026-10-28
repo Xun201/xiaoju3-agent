@@ -741,7 +741,7 @@ class SmartAskToolTests(unittest.TestCase):
         """前情提要/长期记忆注入的 system 条目应保留，其余 system 剔除（§10 #2/#3 接线）。"""
         history = [
             {"role": "system", "content": "【前情提要】用户此前聊过装修与养猫。"},
-            {"role": "system", "content": "以下是关于用户的长期记忆：喜欢橙色。"},
+            {"role": "system", "content": "以下是主人告诉过你的事（长期记忆）：喜欢橙色。"},
             {"role": "system", "content": "来路不明的系统指令"},
             {"role": "user", "content": "早上好"},
         ]
@@ -751,7 +751,7 @@ class SmartAskToolTests(unittest.TestCase):
         self.assertEqual(len(system_texts), 4)
         self.assertTrue(any(t.startswith("【当前时间】") for t in system_texts))
         self.assertIn("【前情提要】用户此前聊过装修与养猫。", system_texts)
-        self.assertIn("以下是关于用户的长期记忆：喜欢橙色。", system_texts)
+        self.assertIn("以下是主人告诉过你的事（长期记忆）：喜欢橙色。", system_texts)
         self.assertNotIn("来路不明的系统指令", system_texts)
         self.assertEqual(msgs[-1], {"role": "user", "content": "在吗"})
 
@@ -1773,7 +1773,7 @@ class RecentActionsPrefixTests(unittest.TestCase):
     def test_recent_actions_system_entry_kept_along_existing_prefixes(self):
         history = [
             {"role": "system", "content": "【前情提要】用户此前聊过装修与养猫。"},
-            {"role": "system", "content": "以下是关于用户的长期记忆：喜欢橙色。"},
+            {"role": "system", "content": "以下是主人告诉过你的事（长期记忆）：喜欢橙色。"},
             {"role": "system", "content": self.ACTIONS_BLOCK},
             {"role": "system", "content": "来路不明的系统指令"},
             {"role": "user", "content": "把它关了"},
@@ -1786,7 +1786,7 @@ class RecentActionsPrefixTests(unittest.TestCase):
         self.assertTrue(any(t.startswith("【当前时间】") for t in system_texts))
         self.assertIn(self.ACTIONS_BLOCK, system_texts)
         self.assertIn("【前情提要】用户此前聊过装修与养猫。", system_texts)
-        self.assertIn("以下是关于用户的长期记忆：喜欢橙色。", system_texts)
+        self.assertIn("以下是主人告诉过你的事（长期记忆）：喜欢橙色。", system_texts)
         self.assertNotIn("来路不明的系统指令", system_texts)
         self.assertEqual(msgs[-1], {"role": "user", "content": "把它关了"})
 
@@ -3090,7 +3090,7 @@ class ContextCompressionWiringTests(unittest.TestCase):
         mcomp.assert_called_once()
         msgs = mr.post.call_args.kwargs["json"]["messages"]
         self.assertTrue(msgs[1]["content"].startswith("【前情提要】"))
-        self.assertTrue(msgs[2]["content"].startswith("以下是关于用户的长期记忆"))
+        self.assertTrue(msgs[2]["content"].startswith("以下是主人告诉过你的事（长期记忆）"))
         self.assertEqual(len(msgs), 13)
 
 
@@ -3154,7 +3154,7 @@ class LongTermMemoryWiringTests(unittest.TestCase):
     @staticmethod
     def _memory_blocks(msgs):
         return [m for m in msgs if isinstance(m, dict) and m.get("role") == "system"
-                and str(m.get("content", "")).startswith("以下是关于用户的长期记忆")]
+                and str(m.get("content", "")).startswith("以下是主人告诉过你的事（长期记忆）")]
 
     # ---------- 关键词规则提取落库 ----------
 
@@ -3218,7 +3218,7 @@ class LongTermMemoryWiringTests(unittest.TestCase):
     def test_no_duplicate_injection_when_history_carries_block(self):
         # main 链路先行注入形态：历史已带同前缀条目 → 不重复注入
         block = {"role": "system",
-                 "content": "以下是关于用户的长期记忆，回答时可以参考：\n· [user] 主人叫小张"}
+                 "content": "以下是主人告诉过你的事（长期记忆），回答时可以参考：\n· [user] 主人叫小张"}
         history = [block,
                    {"role": "user", "content": "之前的话"},
                    {"role": "assistant", "content": "好的"}]

@@ -1001,9 +1001,9 @@ class TestMemoryAndCompression(_MainCase):
         # SYSTEM_PROMPT 防注入铁律也含"长期记忆"字样，泛词过滤会误计
         blocks = [m for m in args[1]
                   if m.get("role") == "system"
-                  and (m.get("content") or "").startswith("以下是关于用户的长期记忆")]
+                  and (m.get("content") or "").startswith("以下是主人告诉过你的事（长期记忆）")]
         self.assertEqual(len(blocks), 1)
-        self.assertIn("以下是关于用户的长期记忆", blocks[0]["content"])
+        self.assertIn("以下是主人告诉过你的事（长期记忆）", blocks[0]["content"])
         self.assertIn("用户喜欢蓝色", blocks[0]["content"])
         self.assertIn("用户养了一只猫", blocks[0]["content"])
 

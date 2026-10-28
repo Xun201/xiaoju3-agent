@@ -328,7 +328,7 @@ class SwitchAndConsumerTests(MemoryV2TestBase):
         mrecall.assert_not_called()  # 开关关：不进召回通道
         self.assertEqual(len(msgs), 3)
         self.assertTrue(msgs[1]["content"].startswith(
-            "以下是关于用户的长期记忆"))
+            "以下是主人告诉过你的事（长期记忆）"))
         self.assertIn("[preference] 我喜欢蓝色", msgs[1]["content"])
 
     def test_v2_on_same_block_format(self):
