@@ -1979,9 +1979,11 @@ _STOCK_SCAN_GEN = 0            # 代际：超时/换代后旧结果作废（防�
 _STOCK_SCAN_STARTED = 0.0
 _STOCK_SCAN_TIMEOUT = 45
 _STOCK_WATCHDOG = None         # 看门狗 Timer（新触发取消旧的，防泄漏）
-# 防误伤：疑问/对比句式（"选股和基金的区别"）不劫持，交大模型正常回答
+# 防误伤：疑问/对比句式（真机实锤"选股和买基金有什么区别"——"有什么区别"
+# 不含"的区别"三连字！词表按真实语料校准：去"的"前缀+队长词表全覆盖），
+# 命中即放行给大模型，不劫持。
 _STOCK_QUESTION_RE = re.compile(
-    r"的区别|是什么|什么意思|怎么样|哪个好|对比|有哪些|和基金|和股票")
+    r"区别|是什么|什么意思|怎么样|哪个好|对比|有哪些|怎么买|科普|和基金|和股票")
 
 
 # ================= Token 防刷守卫（2026-10-28 三次重构：跨架构算力防 DoS） =================
@@ -2043,6 +2045,8 @@ def _stock_intercept_respond(user_id, group_id):
     _STOCK_SCAN_STARTED = now
 
     def _worker():
+        nonlocal _wd
+        global _STOCK_SCAN_GEN
         with _STOCK_SCAN_LOCK:
             try:
                 reply = _stock_screen_reply_qq()
@@ -2055,9 +2059,11 @@ def _stock_intercept_respond(user_id, group_id):
             _send_reply_segments(user_id, group_id, reply)
         except Exception as e:
             print(f"📈 [选股] 结果推送失败: {e}")
-
-    t = threading.Thread(target=_worker, daemon=True, name="stock-scan")
-    t.start()
+        # 结果（成功/失败）已交付：立即解除看门狗+换代——防"幽灵超时"
+        # （真机实锤：快速失败回后 45s Timer 仍开火，凭空弹"扫描超时了"）
+        if _wd is not None:
+            _wd.cancel()
+        _STOCK_SCAN_GEN += 1
 
     def _watchdog():
         global _STOCK_SCAN_GEN
@@ -2069,9 +2075,13 @@ def _stock_intercept_respond(user_id, group_id):
                     "（扫描超时了，数据源可能不太舒服，主人稍后再试试~）")
             except Exception:
                 pass
-    _STOCK_WATCHDOG = threading.Timer(_STOCK_SCAN_TIMEOUT, _watchdog)
-    _STOCK_WATCHDOG.daemon = True
-    _STOCK_WATCHDOG.start()
+    # 看门狗先建、worker 后起（mock 瞬时完成也不存在"还没建就跑完"竞态）
+    _wd = threading.Timer(_STOCK_SCAN_TIMEOUT, _watchdog)
+    _wd.daemon = True
+    _STOCK_WATCHDOG = _wd
+    t = threading.Thread(target=_worker, daemon=True, name="stock-scan")
+    t.start()
+    _wd.start()
     return t
 
 

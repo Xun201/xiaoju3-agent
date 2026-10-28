@@ -323,6 +323,30 @@ class HardeningTests(unittest.TestCase):
         # 晚到结果作废：超时提示后不再补发结果
         self.assertEqual(texts.count(FAKE_RESULT), 0, texts)
 
+    def test_realworld_question_not_intercepted(self):
+        """真机实锤回归：'有什么区别'不含'的区别'三连——旧词表漏拦。"""
+        with mock.patch.object(main, "handle_message",
+                               return_value="区别是……") as hm:
+            main.onebot_event(
+                _onebot_payload("选股和买基金有什么区别"))
+        hm.assert_called_once()
+        for _, _, r in self.sent:
+            self.assertNotIn("二三十秒", r)
+
+    def test_ghost_watchdog_defused_after_delivery(self):
+        """幽灵超时回归：结果交付后看门狗必须被解除（45s 后不再开火）。"""
+        self.sent.clear()
+        th = main._stock_intercept_respond(123, None)
+        if th is not None:
+            th.join(5)
+        deadline = time.time() + 5
+        while main._STOCK_SCAN_LOCK.locked() and time.time() < deadline:
+            time.sleep(0.05)
+        wd = main._STOCK_WATCHDOG
+        self.assertIsNotNone(wd)
+        self.assertTrue(wd.finished.is_set(),
+                        "结果交付后看门狗必须已解除（防幽灵超时）")
+
     def test_injection_redline_in_prompt(self):
         import prompts
         content = prompts.QQ_CLOUD_SYSTEM["content"]

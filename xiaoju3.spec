@@ -31,6 +31,20 @@ pw_datas, pw_binaries, pw_hiddenimports = collect_all('playwright')
 # yt_dlp 内部 extractor 惰性动态 import，静态分析漏致 frozen import 崩）
 ytdlp_datas, ytdlp_binaries, ytdlp_hiddenimports = collect_all('yt_dlp')
 
+# py_mini_racer 原生库收录（akshare 巨潮接口 JS 加密依赖，2026-10-28 夜）：
+# PyInstaller 只收 Python 模块不收 mini_racer.dll/icudtl.dat 数据文件——
+# 生产 frozen 扫描报 LibNotFoundError 实锤。构建环境缺包=空表不炸
+# （工具侧诚实降级为依赖提示，不炸构建）。
+try:
+    import py_mini_racer as _pmr
+    import os as _os
+    _mr_dir = _os.path.dirname(_pmr.__file__)
+    _mr_datas = [(_os.path.join(_mr_dir, _f), "py_mini_racer")
+                 for _f in _os.listdir(_mr_dir)
+                 if _f.endswith((".dll", ".dat"))]
+except Exception:
+    _mr_datas = []
+
 a = Analysis(
     ['desktop_launcher.py'],
 pathex=[],
@@ -45,7 +59,7 @@ datas=[
     ('mood_tone.json', '.'),           # #271① M2 语气映射表（缺它 M2 静默失效）
     ('persona_expressions.json', '.'), # #271 批3 模式表现表（缺它 mode_suffix 空串路径=静默失效，mood_tone 同类教训）
     ('settings_tiers.json', '.'),      # #264 B1 分档表（缺它面板 items 全空——20261010 晚真机实锤，与上述两文件同类教训）
-] + pw_datas + ytdlp_datas + [
+] + pw_datas + ytdlp_datas + _mr_datas + [
     # ── Tcl/Tk 9 脚本库 zip（UI 三期截图遮罩 tkinter 运行依赖，2026-10-26）：
     #    Tk9 新 zipfs 布局——PyInstaller 6.22 hook 只收 DLL/_tkinter.pyd 不收
     #    lib*.zip（实锤：dist 全查无 init.tcl/zip），缺它 tk.Tk() 报 Can't
