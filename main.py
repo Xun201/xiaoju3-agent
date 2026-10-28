@@ -77,7 +77,8 @@ import prompts   # 属性访问（#312 R1-a：插件 reload 后 prompts.SYSTEM_P
 SYSTEM_PROMPT = prompts.SYSTEM_PROMPT   # 兼容导出（测试夹具 patch main.SYSTEM_PROMPT 依赖；refresh 同步重绑）
 from tools import execute_tool, get_recent_actions
 
-from xiaoju3 import (AGENT_STATE_DIR, CHILD_LOCK_ENABLED,
+from xiaoju3 import (AGENT_STATE_DIR, CHILD_LOCK_ENABLED, CLOUD_KEY,
+                     CLOUD_MODEL, CLOUD_URL,
                      ONEBOT_API_URL, ONEBOT_TOKEN, TRIGGER_WORDS,
                      WORKSPACE)
 
@@ -669,6 +670,95 @@ def _inject_long_term_memories(history):
     if history and isinstance(history[0], dict) and history[0].get("role") == "system":
         return [history[0], block] + list(history[1:])
     return [block] + list(history)
+
+
+# ================= 多脑重组（2026-10-28 队长拍板：小脑是分担不是负担） =================
+# 本地 1.5B 三轮真机证伪（贴皮/爹味/失忆/建议联网复读），彻底剥夺其对话
+# 生成权：QQ 闲聊/问答由云端全权生成，本地小脑降级为尽力而为的信息提取
+# （超时/失败静默，绝不阻塞主链）。实时信息族（天气/新闻等需工具的）仍走
+# 原 smart_ask 链（云端直回无工具能力，诚实守卫）。
+# 需大脑族（云端直回守卫，2026-10-28 金样本"开灯"实锤）：命中即走原
+# smart_ask 全链（工具循环/搜索/实时）；词族=实时+家电(#249 口径)+待办
+# 记账+设备系统。零命中=纯闲聊 → 云端全权生成。族级判据，扳手合规。
+_NEED_BRAIN_RE = re.compile(
+    r"天气|新闻|价格|股价|汇率|比分|最新|几度|多少度|现在几点|搜一?下|搜搜"
+    r"|搜索|查一下|百度|谷歌"
+    r"|灯|开关|插座|窗帘|空调|传感器|加湿器|调温|温度"
+    r"|待办|记账|花了|电子书|导出|分享链接"
+    r"|重启|截屏|截图|手机|屏幕|点击")
+
+
+def _local_extract_lite(message):
+    """本地小脑尽力提取（降级岗位）：把用户消息压成一行情绪/实体 JSON，
+    给云端当速记上下文。≤3s 连接+6s 读超时，任何失败返回 None（静默——
+    小脑缺席时云端拿原始消息照样干活，绝不拖垮主链）。"""
+    try:
+        small = os.environ.get("LOCAL_MODEL_SMALL", "qwen2.5:1.5b")
+        payload = {
+            "model": small,
+            "messages": [
+                {"role": "system", "content":
+                    "把用户消息压缩成一行 JSON：{\"emotion\":\"情绪词\","
+                    "\"entities\":[\"实体\"]}。只输出 JSON 本体，不要解释。"},
+                {"role": "user", "content": str(message or "")[:200]}],
+            "stream": False, "keep_alive": -1,
+            "options": {"temperature": 0.1, "num_predict": 80}}
+        r = requests.post(LOCAL_URL, json=payload, timeout=(3, 6))
+        body = r.json()
+        content = str(body.get("message", {}).get("content", "")).strip()
+        if "<think>" in content:
+            content = content.split("</think>", 1)[-1].strip()
+        m = re.search(r"\{[^{}]*\}", content, re.S)
+        return m.group(0) if m else None
+    except Exception:
+        return None
+
+
+def _qq_cloud_chat_reply(message, messages_qq):
+    """QQ 闲聊/问答云端直回（多脑重组核心）：核心人格 Prompt+记忆（询问
+    族完整注入）+小脑速记 → DeepSeek 全权生成。返回 None=云端不可用/失败
+    （调用方回退旧链兜底）。总开关 XIAOJU3_QQ_CLOUD_TAKEOVER（默认 1=开；
+    测试态 conftest 置 0 强制回退旧链，保证断言确定性）。"""
+    if os.environ.get("XIAOJU3_QQ_CLOUD_TAKEOVER", "1") != "1":
+        return None
+    key = CLOUD_KEY or ""
+    if not key:
+        return None
+    base = [prompts.QQ_CLOUD_SYSTEM] + [
+        m for m in messages_qq[1:]
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+    ][-8:]
+    msgs = _inject_long_term_memories(base)     # 询问族完整塞入（失忆硬逻辑）
+    user_content = str(message or "")
+    lite = _local_extract_lite(message)
+    if lite:
+        user_content = f"[小脑速记] {lite}；主人说：{user_content}"
+    msgs = msgs + [{"role": "user", "content": user_content}]
+    try:
+        t0 = time.perf_counter()
+        r = requests.post(
+            CLOUD_URL,
+            headers={"Authorization": f"Bearer {key}",
+                     "Content-Type": "application/json"},
+            json={"model": CLOUD_MODEL, "messages": msgs, "stream": False,
+                  "temperature": 0.7, "max_tokens": 300},
+            timeout=(10, 30))
+        body = r.json()
+        content = body["choices"][0]["message"]["content"]
+        # 类型门：content 必须是非空 str（Mock/畸形/空响应一律回退旧链，
+        # 绝不让垃圾载体流出去——2026-10-28 金样本/单测桩实锤）
+        if not isinstance(content, str) or not content.strip():
+            return None
+        reply = content.strip()
+        if "<think>" in reply:
+            reply = reply.split("</think>", 1)[-1].strip()
+        tk = body.get("usage", {}).get("total_tokens", "?")
+        print(f"🧠 [云端直回] {round(time.perf_counter() - t0, 1)}s "
+              f"tokens={tk}: {reply[:60]}")
+        return reply or None
+    except Exception as e:
+        print(f"⚠️ [云端直回] 失败（回退旧链）: {e}")
+        return None
 
 
 _RECENT_ACTIONS_TTL_HOURS = 6.0    # 6h 窗：隔夜记录已脱语境（10-27 实锤：
@@ -1526,14 +1616,31 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
             except Exception as _gm_e:
                 print(f"⚠️ [game_mode] 云端直回失败（走原链）: {_gm_e}")
 
-        reply = _brain_reply('qq', message, messages_qq, user_key,
-                             new_session=is_new_session)
+        # === 🧠 多脑重组（2026-10-28 队长拍板：小脑是分担不是负担） ===
+        # 本地 1.5B 剥夺对话生成权（三轮真机证伪），闲聊/问答云端全权生成；
+        # 实时信息族（天气/新闻等需工具）仍走原 smart_ask 链（云端直回无
+        # 工具能力，诚实守卫）；云端失败回退旧链兜底。
+        if _NEED_BRAIN_RE.search(message):
+            reply = _brain_reply('qq', message, messages_qq, user_key,
+                                 new_session=is_new_session)
+        else:
+            reply = _qq_cloud_chat_reply(message, messages_qq)
+            if reply is None:
+                reply = _brain_reply('qq', message, messages_qq, user_key,
+                                     new_session=is_new_session)
         if not reply:
             reply = "抱歉，我脑袋突然卡壳了，请再说一遍吧。"
         # 落盘消毒前置（2026-10-28 二次会诊）：history=未来 few-shot，落盘
         # 必须是消毒后正文——崩坏回复原文落盘曾致复读/缝合污染连续两轮复发
         # （10-27 清空一次、10-28 再清）。调用方出口消毒仍在（幂等）。
         reply = _sanitize_qq_reply(reply, user_msg=message)
+        if (reply == SANITIZED_EMPTY_FALLBACK and CLOUD_KEY
+                and not _NEED_BRAIN_RE.search(message)):
+            # 护栏盲区兜底（2026-10-28 二次会诊遗留）：本地产物被护栏剃光时
+            # 不发兜底客套话，升级云端救一次（失败才落兜底文案）
+            rescue = _qq_cloud_chat_reply(message, messages_qq)
+            if rescue:
+                reply = rescue
         messages_qq.append({"role": "assistant", "content": reply})
         _compress_and_save(messages_qq, MEMORY_FILE_QQ)
         state_manager.save_conversation("qq", messages_qq)

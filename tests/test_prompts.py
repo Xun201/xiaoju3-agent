@@ -225,8 +225,10 @@ class PromptsTests(unittest.TestCase):
         self.assertIn("【防幻觉硬性约束】", self.content)
         self.assertIn(
             "如果你对某个专有名词、人名、组织、事件不确定或没有把握", self.content)
-        self.assertIn("我不太确定，建议你联网搜索一下", self.content)
-        self.assertIn("我的知识库可能没有这个信息", self.content)
+        self.assertIn("这个我不太确定", self.content)
+        self.assertIn("禁止输出\"建议您联网\"\"建议你搜索一下\"之类的模板客套话", self.content)
+        self.assertNotIn("建议你联网搜索一下", self.content)
+        self.assertNotIn("建议你联网搜索一下", self.content)
         self.assertIn("严禁编造", self.content)
 
     def test_anti_hallucination_factual_questions_rule(self):
