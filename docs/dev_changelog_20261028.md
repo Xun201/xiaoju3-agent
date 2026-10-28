@@ -99,3 +99,12 @@
 - **任务 2 炒股插件一期侦察（队长三层逻辑：行业筛选/政策匹配LLM/个股过滤）**：`_dev/stock_data_test.py` 三路全通且**零东财依赖**——①行业盈利排名=巨潮 stock_industry_pe_ratio_cninfo（净利润-静态，120 行业 top10 实出：货币金融 15694 亿/计算机 3106 亿…）②行业成分+现价=新浪 stock_sector_spot/detail（new_jdhy 家电 37 只带价）③实控人=巨潮 stock_hold_control_cninfo（5596 行）+名称启发式。管道全链跑通：家电国企 5-20 元→**澳柯玛 5.84/四川长虹 5.96**（青岛市/绵阳市国资委），Markdown+JSON 双形态封装就绪。
 - **🟡 词表校准活教训**：'国资'二字在'国有资产'中**不连续**（国-有-资），连续 bigram 永远漏掉最常见国资委全称——启发式词表必须在真数据上校准（初版 0 命中→修后 809 家）。
 - **数据源黑名单**：东财 push2 对本 IP 频控封锁（反复重试疑似重置计时，全程未解）——二期严禁实时拉东财；新浪 hq.sinajs.cn 裸调 403 需 Referer（本项目绕开）。插件骨架 agent_state/plugins/stock_assistant.py（tools=[] 零生产行为）docstring 已刷新新矩阵。
+
+## 夜批⑪：炒股插件二期全量组装（生产 exe fd544182 17:25 三进程在线）
+
+- **第一步 全量行业扫描**：`scan_pipeline` = 巨潮 PE 表净利润 top10（当日空表自动回退 7 天找最近交易日）→ 新浪板块映射（确定性覆盖表 10 条+2 字前缀模糊兜底，缺失行业诚实记"无"）→ 每行业国企/集体+5-20 元过滤（市值取大 cap3）→ Markdown+JSON 双形态。真跑战报：**10 行业 30 只全命中**（中信银行/华泰证券/中国石油/国投电力…实控人列全真国资）。
+- **第二步 政策匹配（云端，不用本地小脑）**：`policy_summary` 直调 brain.ask_cloud（DeepSeek），prompt 按队长口径（无明确政策如实说——酒类实测答"近期无明确政策"）。修 ModuleNotFoundError=插件独立跑形态补 repo 根 path 引导。
+- **第三步 插件化+意图+合规**：PLUGIN 契约 v0.2.0（工具 ext_stock_screen）+ intent_router 新增 stock_screen 意图（触发词：选股/国企股/行业景气度/股票筛选，**置于表首**——"查一下国企股名单"曾被 web_search 抢路由）+输出末尾硬编码合规声明。生产全路径模拟 PASS：load_all 装载 5/0→route 命中→dispatch→49 行回复（合规压尾 True）。
+- **依赖自足**：akshare 装入 _deps（dev+prod 双端，1.1GB 磁盘零 exe 增量；同 numpy 2.5.4 与 ctranslate2 零冲突）；setup 钩子 sys.path 注入+缺席诚实降级。
+- **锚与坑**：+14 锚（SOE 回归/映射双路径/cap3/无标注/合规强制/意图路由/契约）。坑三录：①巨潮当日数据未出（回退找最近交易日）②Python 3.14 把常量 list 优化成 tuple 存 co_consts——PYZ 递归走查必须下钻 tuple ③东财频控疑似重试重置封锁计时（黑名单维持）。
+- 全仓 **2811+4 全绿**；部署五证=md5 fd544182 双端+三进程 17:25+health ok+PYZ 触发模式 tuple 下钻实证+回滚锚 .bak-20261028-stock。

@@ -143,6 +143,24 @@ def _extract_todo_text(message, match):
 
 INTENT_PATTERNS = [
     {
+        # 炒股辅助（2026-10-28 二期）：三层选股流水线（盈利行业 top10 ×
+        # 国企 5-20 元 × 政策面）。handler 走插件总线模块名（插件装载后才
+        # 存在——缺席时 dispatch 转中文 ❌，不炸主链）；冷启动约 20s（数据
+        # 源限速），输出必带合规声明（插件内硬编码）。
+        "name": "stock_screen",
+        "desc": "炒股辅助：净利润 top10 行业 × 国企/集体 5-20 元筛选 × 政策面",
+        "patterns": [
+            r"选股",
+            r"国企股",
+            r"(查|看|筛).{0,6}(国企|国资).{0,4}(股|票|名单)",
+            r"行业景气度",
+            r"(股票|行业).{0,4}(筛选|扫描)",
+        ],
+        "extractor": _extract_noargs,
+        "handler_name": ("agent_state_plugins_stock_assistant:"
+                         "stock_screen_reply"),
+    },
+    {
         "name": "export_ebook",
         "desc": "把对话/聊天记录导出成电子书（EPUB）",
         "patterns": [
