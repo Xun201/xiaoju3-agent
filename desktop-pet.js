@@ -100,7 +100,7 @@
             position: fixed;
             right: 0;
             bottom: 0;
-            --pet-scale: 1;
+            --pet-scale: 0.8;   /* 防遮挡止血：默认缩 20%（面积 -36%），拖拽/吸附机制不变 */
             --pet-base: calc(250px * var(--pet-scale));
             --u: calc(var(--pet-base) / 1026);
             width: var(--pet-base);

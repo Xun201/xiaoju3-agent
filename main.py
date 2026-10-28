@@ -2078,6 +2078,16 @@ def _stock_screen_reply_qq():
     return mod.stock_screen_text()
 
 
+def _stock_screen_result_for(channel):
+    """按通道取选股结果形态：QQ=纯文本（不渲染表格）；控制台=Markdown
+    表格（前端 renderRichTables 渲染成真表）。"""
+    import importlib
+    mod = importlib.import_module("agent_state_plugins_stock_assistant")
+    if (channel or "") == "qq":
+        return mod.stock_screen_text()
+    return mod.stock_screen_reply()
+
+
 def _stock_intercept_respond(reply, meta=None):
     """秒回提示 + 后台线程扫描 + 主动推送。reply=通道无关发送器
     （str→通道发；QQ=_send_reply_segments 闭包，控制台=ack+ui_events）。
@@ -2104,9 +2114,10 @@ def _stock_intercept_respond(reply, meta=None):
     def _worker():
         nonlocal _wd
         global _STOCK_SCAN_GEN
+        channel = (meta or {}).get("channel", "console")
         with _STOCK_SCAN_LOCK:
             try:
-                reply_text = _stock_screen_reply_qq()
+                reply_text = _stock_screen_result_for(channel)
             except Exception as e:
                 reply_text = f"❌ 选股扫描挂了：{type(e).__name__}，主人稍后再试一次吧"
         if my_gen != _STOCK_SCAN_GEN:

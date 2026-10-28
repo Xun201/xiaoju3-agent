@@ -158,3 +158,10 @@
 - **双适配层**：QQ=onebot_event 旧内联拦截换 dispatch（5 行）；控制台=/api/chat 首段 dispatch+ack 秒回（不落历史）+异步结果 ui_events "bus_reply" 事件（console.js 新监听 appendBotMessage 气泡）。
 - **生产活体验证**：POST /api/chat 帮我选股 → 📣 总线秒回原文 PASS（真实扫描同进程执行）。
 - 全仓 2861+5 全绿（+5：总线契约 3+控制台适配 2）；测试迁移新签名+坑三录（正则量词边界/词表连续字/外层 except 吞异常）。
+
+## 深夜批⑲：表格渲染+桌宠止血+2.1.1 双产物（生产 exe c19fc419 三进程 20:3x，version=2.1.1）
+
+- **表格渲染**：console.js renderRichTables（表块识别→escapeHtml 单元格→HTML table）替换 appendBotMessage 主渲染口；CSS=.md-table-wrap overflow-x+边框/表头底色/斑马纹。总线选股控制台形态升级=md 表格变体（按通道取结果：QQ 纯文本/控制台表格）。
+- **桌宠止血**：--pet-scale 默认 1→0.8；pointer-events 实态确认（root none+img auto，气泡层 none）；完整解耦（独立透明窗口 per-pixel 点击）挂账 #311。
+- **2.1.1 双产物**：dist/xiaoju3-2.1.1-setup.exe 115,356,417 字节；onedir 部署生产（version 实报 2.1.1+dll 随包）。
+- 全仓 2861+5 全绿。

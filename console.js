@@ -684,6 +684,59 @@
         return renderCQFace(escapeHtml(text)).replace(/\n/g, '<br>');
     }
 
+    // ==================== Markdown 表格渲染（2026-10-28，总线选股清单实锤） ====================
+    // 总线选股结果/未来插件产出含 markdown 表格（|---| 特征），原 renderRich
+    // 只做转义+换行 → 竖线乱码。这里把连续表格行解析成 HTML <table>，其余
+    // 文本块原样 renderRich。纯转义渲染，无注入面（单元格走 escapeHtml）。
+    function isTableSeparatorLine(line) {
+        const t = line.trim();
+        return /^\|[\s:|-]+\|$/.test(t) && t.indexOf('-') !== -1;
+    }
+
+    function isTableRowLine(line) {
+        const t = line.trim();
+        return t.startsWith('|') && t.endsWith('|') && t.length >= 2;
+    }
+
+    function buildTableHtml(headerCells, bodyRows) {
+        const th = headerCells.map(function (c) {
+            return '<th>' + escapeHtml(c.trim()) + '</th>';
+        }).join('');
+        const trs = bodyRows.map(function (row) {
+            const tds = row.map(function (c) {
+                return '<td>' + escapeHtml(c.trim()) + '</td>';
+            }).join('');
+            return '<tr>' + tds + '</tr>';
+        }).join('');
+        return '<div class="md-table-wrap"><table class="md-table">'
+            + '<thead><tr>' + th + '</tr></thead>'
+            + '<tbody>' + trs + '</tbody></table></div>';
+    }
+
+    function renderRichTables(text) {
+        const lines = String(text || '').split('\n');
+        const out = [];
+        let i = 0;
+        while (i < lines.length) {
+            // 表块识别：当前行是表行，且下一行是 |---| 分隔行
+            if (i + 1 < lines.length && isTableRowLine(lines[i])
+                    && isTableSeparatorLine(lines[i + 1])) {
+                const header = lines[i].trim().replace(/^\||\|$/g, '').split('|');
+                i += 2;
+                const bodyRows = [];
+                while (i < lines.length && isTableRowLine(lines[i])) {
+                    bodyRows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|'));
+                    i += 1;
+                }
+                out.push(buildTableHtml(header, bodyRows));
+            } else {
+                out.push(renderRich(lines[i]));
+                i += 1;
+            }
+        }
+        return out.join('\n');
+    }
+
     // ==================== 2.5 思维链（<think> 块 / 裸 [思考]/[计划] 标记）解析与折叠卡片 ====================
     // 契约（2026-10-01 全对话强制包装口径）：brain.smart_ask 对所有自然语言
     // 回复一律包装 <think>...</think> 块——工具流程用原生 [思考]/[计划] 或
@@ -1614,7 +1667,7 @@
             : '';
         botMsg.innerHTML = `
             <div style="display:flex; flex-direction:column; gap:5px;">
-                <div class="bubble-content">${renderRich(reply)}</div>
+                <div class="bubble-content">${renderRichTables(reply)}</div>
                 ${sourceBadge}
                 <div class="msg-tools">
                     <span class="tool-btn" onclick="copyText(this)" title="复制">
