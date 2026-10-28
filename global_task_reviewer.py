@@ -110,24 +110,53 @@ class TaskState:
 class TaskLedger:
     """会话账本：记录每个会话的原始请求与工具执行链，供触发三则判定。
 
-    纯内存 dict；会话结束/超时由调用方 evict（骨架期不做后台线程）。
+    纯内存 dict；max_sessions 上限 FIFO 驱逐防膨胀（2026-10-28 影子模式
+    上车：链跨轮按会话累积——单轮单工具架构下逐消息清链永远攒不出数据）。
     """
 
     def __init__(self, chain_len_trigger=CHAIN_LEN_TRIGGER,
                  semantic_trigger=SEMANTIC_DISTANCE_TRIGGER,
                  side_effect_roots=SIDE_EFFECT_ROOTS,
-                 family_keywords=None):
+                 family_keywords=None, max_sessions=256):
         self.chain_len_trigger = chain_len_trigger
         self.semantic_trigger = semantic_trigger
         self.side_effect_roots = tuple(side_effect_roots)
         self.family_keywords = family_keywords or FAMILY_KEYWORDS
+        self.max_sessions = max(1, int(max_sessions))
         self._tasks = {}
 
     # ── 记账 ──
 
     def start_task(self, session_key, orig_request):
         """新一轮用户请求：覆盖式登记原始请求并清空旧链。"""
+        if (len(self._tasks) >= self.max_sessions
+                and session_key not in self._tasks):
+            oldest = next(iter(self._tasks))   # dict 有序：逐出最早会话
+            self._tasks.pop(oldest, None)
         self._tasks[session_key] = TaskState(orig_request=str(orig_request or ""))
+
+    def touch(self, session_key, orig_request):
+        """更新原始请求但**不清链**（影子模式跨轮累积口径）：会话已有账本
+        时只刷新 orig_request（批量保护/云端 verdict 用最新请求语义）；
+        无账本则等价 start_task。"""
+        st = self._tasks.get(session_key)
+        if st is None:
+            self.start_task(session_key, orig_request)
+        else:
+            st.orig_request = str(orig_request or "")
+
+    def chain_summary(self, session_key, limit=8):
+        """执行链紧凑摘要（影子日志/云端 verdict 输入）：`tool(ok)/tool(FAIL)`。"""
+        st = self._tasks.get(session_key)
+        if not st:
+            return ""
+        tail = st.chain[-limit:]
+        return "/".join(f"{e.tool}({'FAIL' if not e.ok else 'ok'})"
+                        for e in tail)
+
+    def orig_request_of(self, session_key):
+        st = self._tasks.get(session_key)
+        return st.orig_request if st else ""
 
     def record(self, session_key, tool, args="", ok=True):
         """工具执行后记一笔（调用方在执行点顺手调，零额外成本）。"""

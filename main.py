@@ -320,7 +320,7 @@ def _strip_role_name_prefix(text):
 # 全部为模式级通用规则（扳手原则：无任何具体句子/游戏名硬编码）。
 # 秘书二次会诊 8 条清单落地，其中"含游戏名剔句"泛化为书名号实体差集。
 
-_PUNCT_RE = re.compile(r"[，。！？、；：""''（）《》\[\]\s,.!?;:()]+")
+_PUNCT_RE = re.compile(r"[，。！？、；：“”‘’（）《》\[\]\s,.!?;:()]+")
 _EVAL_CORPUS_RE = re.compile(
     r"体会到[^。；]*重要性|深刻体会|不仅[^。；]*也让我"
     r"|培养了[^。；]*(?:精神|能力)|团队合作和策略")
@@ -835,10 +835,16 @@ def _inject_recent_actions(history):
 
 
 def _compress_and_save(messages, filepath):
-    """前情提要压缩落盘（架构 §10 #2）：>20 条时把旧消息浓缩为 ≤50 字前情提要
-    并入历史头部；仍保留 50 条硬上限；压缩失败（双脑不可用）回退纯截断。"""
+    """前情提要压缩落盘（架构 §10 #2，2026-10-28 Token 预算门上车）：触发
+    判定=Token 预算超（估算超窗口 70%）或条数硬帽保险丝——旧"按条数 >20"
+    触发退役。压缩为递归前情提要并入历史头部；压缩失败（双脑不可用）回退
+    纯截断。"""
     try:
-        compressed = compress_context(messages)
+        from plugins.context_manager import should_compress
+        if should_compress(messages):
+            compressed = compress_context(messages, max_messages=0)
+        else:
+            compressed = messages
         if compressed is not messages:
             summary = compressed[1].get("content", "") if len(compressed) > 1 else ""
             if ("【前情提要】" in summary and "⚠️" not in summary

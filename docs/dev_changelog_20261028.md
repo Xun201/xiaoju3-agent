@@ -69,3 +69,10 @@
 - **任务 3-1 审查员质量门边界跑满**：+8 锚（多规则并存每规则一hit/severity 透传/复读阈值 0.8 边界/标点免疫/实例隔离/长文首句/空入参）→32 锚全绿。
 - **任务 3-2 PyAV 真视频无 ffmpeg 验证**：rabbit320（h264+AAC）→16k/mono/7.8s/124267 帧 PASS；两真片无音轨样本顺带验证报错路径；素材源实测=test-videos/filesamples 可达但可能无音轨、google 域 SSL 拦、mdn.github.io 全绿。
 - **测试基线 2745+4 全绿**（较午批 +11：lifemate 9+launcher 2）；坑库 #47/#48+工程事实五条入 Hindsight；SYNC_DEEPSEEK 第五次刷新。
+
+## 上车牌⑦：上下文 Token 门+审查员影子模式（生产 exe fd5542ed 14:29 三进程在线）
+
+- **任务 1 Token 预算门上车（队长最高优先级）**：触发判定从"按条数 >20"退役为 `should_compress`=Token 估算超窗口 70%（`estimate_tokens` 零依赖启发式：CJK≈1/字+ASCII≈0.3/字符+4/条）**或**条数硬帽 120 保险丝（防估算失明）。三参全环境变量可调（XIAOJU3_CONTEXT_WINDOW_TOKENS 缺省 4096=链上最弱脑安全口径 / BUDGET_RATIO 0.70 / HARD_MSG_CAP 120）。compress_context 升级**递归摘要**：旧【前情提要】并入再浓缩（≤100 字），条目单份不增殖；头部归位处理重载历史形态（落盘剥 system 后 [0] 即提要条目——推演出并堵死）。brain._compress_history 与 main._compress_and_save 双侧同门。
+- **任务 2 审查员影子模式上车（只观察不拦截）**：brain 模块级 `_reviewer_ledger`（max_sessions=256 FIFO 驱逐）；`_reviewer_touch`（每消息刷新不清链——单轮单工具架构下链必须跨轮累积才有数据）+`_reviewer_observe`（execute_tool 前过门）+`_reviewer_record`（执行后记账 ❌=FAIL）接进 smart_ask 与 smart_ask_stream 双入口。日志格式 `🛡️[影子审查] Trigger/Reason/Action/Verdict/Chain`。**默认不调云**（全仓测试实锤修正：跨轮账本下 T2 跳族在"天气→开灯"正常序列即命中，逐次调云=普通聊天逐次 +2-3s；触发频率+账本上下文本身就是误判率数据），真 verdict 需 XIAOJU3_REVIEWER_SHADOW_CLOUD=1。开关 XIAOJU3_REVIEWER_SHADOW_MODE 缺省 1，置 0 三函数全旁路。绝不 return false 打断。
+- **顺藤修雷**：main._PUNCT_RE 的 ASCII 直引号把 raw 串截成两段拼接（后半段非 raw 产生 SyntaxWarning，正则侥幸能跑）——全角引号一体修复。
+- **测试 +33 锚 = 全仓 2778+4 全绿**：Token 门/递归/重载边界/门级（brain+main）/账本累积/影子三锁死（只观察/开关旁路/默认不调云）。部署五证=md5 fd5542ed 双端 MATCH+三进程 14:29 全新+health ok+PYZ 7 锚（token_env/递归/影子三函数/开关串/import）+回滚锚 xiaoju3.exe.bak-20261028-shadowctx。

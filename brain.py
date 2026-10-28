@@ -1511,6 +1511,83 @@ def reset_tool_fuse(session_key=None):
     tool_fuse.reset(session_key)
 
 
+# ==================== 全局任务审查员·影子模式（2026-10-28 上车） ====================
+# 队长拍板口径：**只观察不拦截**——触发三则命中后只打日志收数据，绝不
+# 返回 false 打断执行；观察几天评估误判率后再决定是否开真拦截。
+# 开关：XIAOJU3_REVIEWER_SHADOW_MODE（缺省 1=开；置 0 完全旁路零开销）。
+from global_task_reviewer import TaskLedger, rule_verdict  # noqa: E402
+
+_reviewer_ledger = TaskLedger(max_sessions=256)
+
+
+def _reviewer_shadow_on():
+    return os.environ.get("XIAOJU3_REVIEWER_SHADOW_MODE", "1") not in \
+        ("0", "false", "False", "off")
+
+
+def _reviewer_touch(session_key, message):
+    """每条用户消息到达时刷新会话账本（不清链——单轮单工具架构下链要
+    跨轮累积才有数据；orig_request 保持最新语义供批量保护/云端 verdict）。"""
+    if not _reviewer_shadow_on():
+        return
+    try:
+        _reviewer_ledger.touch(session_key, message)
+    except Exception:
+        pass
+
+
+def _reviewer_observe(session_key, tool_name, tool_args):
+    """执行工具前过影子审查门。返回 None=未触发/未开（调用方零动作）；
+    返回日志串（调用方 print）。内部只观察：无论 verdict 如何不改变主链
+    控制流。
+
+    云端 verdict 策略（2026-10-28 全仓测试实锤修正）：影子期**默认不调云**
+    （跨轮账本下 T2 跳族在"天气→开灯"正常序列即命中，逐次调云=普通聊天
+    逐次加 2-3s 延迟+token）——触发频率+账本上下文本身就是误判率数据；
+    需要真 verdict 时开 XIAOJU3_REVIEWER_SHADOW_CLOUD=1。T-SIDE（首次
+    高副作用）任何情况下都不发云——它是"过目"启发式而非漂移证据。"""
+    if not _reviewer_shadow_on():
+        return None
+    try:
+        need, reason = _reviewer_ledger.should_review(
+            session_key, tool_name, str(tool_args or ""))
+        if not need:
+            return None
+        trigger = reason.split(":", 1)[0]
+        if trigger == "T-SIDE":
+            verdict = "CONTINUE(本地口径:首次副作用过目,不发云)"
+            action = "PASS"
+        elif os.environ.get("XIAOJU3_REVIEWER_SHADOW_CLOUD", "0") in \
+                ("1", "true", "True"):
+            verdict = rule_verdict(
+                _reviewer_ledger.orig_request_of(session_key),
+                _reviewer_ledger.chain_summary(session_key),
+                f"{tool_name} {str(tool_args or {})[:120]}",
+                cloud_chat_fn=ask_cloud)
+            action = "INTERRUPT" if verdict == "ABORT" else "PASS"
+        else:
+            verdict = "SHADOW(影子期不调云)"
+            action = "PASS"
+        return (f"🛡️[影子审查] Trigger: {trigger}, Reason: {reason}, "
+                f"Action: {action}, Verdict: {verdict}, "
+                f"Chain: {_reviewer_ledger.chain_summary(session_key)[:120]}")
+    except Exception as e:
+        return (f"🛡️[影子审查] Trigger: ERR, Reason: {str(e)[:60]}, "
+                "Action: PASS")
+
+
+def _reviewer_record(session_key, tool_name, tool_args, ok):
+    """工具执行后记账（成功/失败都记，❌=False）。静默吞异常——审查员
+    自身故障绝不放大成主链故障。"""
+    if not _reviewer_shadow_on():
+        return
+    try:
+        _reviewer_ledger.record(session_key, tool_name,
+                                args=str(tool_args or {}), ok=bool(ok))
+    except Exception:
+        pass
+
+
 # ============================ 会话记忆（§4） ============================
 
 def load_memory(filepath):
@@ -1542,6 +1619,9 @@ def save_memory(history, filepath):
 
 # 压缩触发阈值 / 压缩时保留的最近明细条数（与 plugins.context_manager.
 # compress_context 的 max_messages / keep_recent 契约一致）
+# ⚠️ COMPRESS_THRESHOLD 已退役（2026-10-28 Token 预算门上车）：触发判定
+# 改 plugins.context_manager.should_compress（Token 70% + 条数硬帽保险丝），
+# 此常量仅留兼容（外部/测试可能引用），不再参与判定。
 COMPRESS_THRESHOLD = 20
 COMPRESS_KEEP_RECENT = 10
 
@@ -1590,17 +1670,19 @@ def _save_summary_cache(cache):
 
 
 def _compress_history(messages, session_key="default"):
-    """前情提要压缩接线（§10 #2）：历史 >20 条 → 旧消息浓缩为约 50 字
-    前情提要（【前情提要】system 条目）+ 最近 10 条明细，替换"长历史原样
-    直送"的硬截断口径。
+    """前情提要压缩接线（§10 #2，2026-10-28 Token 预算门上车）：触发判定
+    从"按条数 >20"升级为 **Token 预算门**（估算超窗口 70% 才压；另留条数
+    硬帽当保险丝防估算失明）——条数触发退役。旧消息浓缩为递归前情提要
+    （【前情提要】system 条目，旧的并入新的）+ 最近 10 条明细。
 
     - 压缩结果按 (session_key, 旧消息段指纹) 持久化缓存：指纹相同直接复用
       （避免每轮重复压缩），历史变化（新增消息使指纹变化）自动失效重压；
     - compress_context 抛异常 / 返回降级摘要（双脑不可用）→ 回退既有硬截断
       口径（消息原样直送），绝不崩溃；
-    - 历史不足阈值 / 插件缺席 → 原样返回，零额外开销。
+    - 历史未超预算 / 插件缺席 → 原样返回，零额外开销。
     """
-    if len(messages) <= COMPRESS_THRESHOLD:
+    from plugins.context_manager import should_compress
+    if not should_compress(messages):
         return messages
     # 🕐 【当前时间】块（_build_messages 注入，位于 index 1）不参与压缩：
     # 摘出后原位保留——长对话压缩不能把时间上下文吞掉
@@ -1625,7 +1707,7 @@ def _compress_history(messages, session_key="default"):
         try:
             from plugins.context_manager import compress_context
             compressed = compress_context(list(messages),
-                                          max_messages=COMPRESS_THRESHOLD,
+                                          max_messages=0,
                                           keep_recent=COMPRESS_KEEP_RECENT)
         except Exception as e:
             print(f"⚠️ 前情提要压缩失败，回退既有截断口径: {e}")
@@ -2209,6 +2291,7 @@ def _smart_ask_impl(message, history=None, session_key="default",
     可按通道区分，缺省共用 "default"）。
     """
     message = "" if message is None else str(message)
+    _reviewer_touch(session_key, message)   # 🛡️ 影子审查：会话账本刷新
 
     # 🧠 长期记忆关键词提取（§10 #3）：命中"我喜欢/请记住…"等规则先落库，
     # SQLite 异常静默跳过，绝不影响本轮对话
@@ -2454,6 +2537,10 @@ def _smart_ask_impl(message, history=None, session_key="default",
                             print(f"📍 [搜索] 指代消解: "
                                   f"{raw_query} → {located}")
                             tool_args["query"] = located
+                    _shadow = _reviewer_observe(session_key, tool_name,
+                                                tool_args)
+                    if _shadow:
+                        print(_shadow)
                     tool_result = execute_tool(
                         tool_name, tool_args, permission_manager,
                         credentials={"memory_context": _memory_fence_active(messages),
@@ -2463,6 +2550,8 @@ def _smart_ask_impl(message, history=None, session_key="default",
                     # 口径返回：[CoT] 日志已打印，走下方 ❌ 硬拦截路径保证
                     # <think> 包装完整，绝不把裸 CoT 原文漏成普通回复
                     tool_result = f"❌ 工具执行异常: {tool_err}"
+                _reviewer_record(session_key, tool_name, tool_args,
+                                 ok=not str(tool_result).startswith("❌"))
                 print(f"📄 结果: {tool_result[:200]}...")
 
                 # ⛔ 防死循环硬拦截：被拒（❌ 开头）的工具结果不再喂回模型重试，
@@ -2700,6 +2789,7 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
     当前不接 dashboard。
     """
     message = "" if message is None else str(message)
+    _reviewer_touch(session_key, message)   # 🛡️ 影子审查：会话账本刷新
 
     def _emit(event):
         if on_event is not None:
@@ -2851,6 +2941,10 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
                             thinking, LOCATION_ASK_REPLY)
                         _emit({"type": "answer", "delta": LOCATION_ASK_REPLY})
                         return reply, "📍 询问位置"
+                    _shadow = _reviewer_observe(session_key, tool_name,
+                                                tool_args)
+                    if _shadow:
+                        print(_shadow)
                     tool_result = execute_tool(
                         tool_name, tool_args, permission_manager,
                         credentials={"memory_context": _memory_fence_active(messages),
@@ -2859,6 +2953,8 @@ def _smart_ask_stream_impl(message, history=None, session_key="default",
                     reply = _wrap_think(
                         thinking, _strip_bare_cot(str(e)))
                     return reply, label
+                _reviewer_record(session_key, tool_name, tool_args,
+                                 ok=not str(tool_result).startswith("❌"))
                 if str(tool_result).startswith("❌"):
                     # ⛔ 防死循环硬拦截（与同步版 brain.py 同口径）：
                     # 被拒结果不喂回模型，直接作为本轮回答；连续被拒触发熔断
