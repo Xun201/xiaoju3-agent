@@ -314,20 +314,104 @@ def _strip_role_name_prefix(text):
     return _ROLE_PREFIX_RE.sub("", str(text or ""), count=1)
 
 
-def _sanitize_qq_reply(reply):
-    """QQ 出口消毒 + Markdown 洗地机 + 沉默兜底（修 B v2 修 3 + 2026-10-27）。
+# ================= 硬逻辑护栏（2026-10-28 二次会诊，1.5B 出口后置处理） =================
+# 背景：纯 Prompt 治不住 1.5B（两轮真机复测证伪），出口加确定性后置处理。
+# 全部为模式级通用规则（扳手原则：无任何具体句子/游戏名硬编码）。
+# 秘书二次会诊 8 条清单落地，其中"含游戏名剔句"泛化为书名号实体差集。
+
+_PUNCT_RE = re.compile(r"[，。！？、；：""''（）《》\[\]\s,.!?;:()]+")
+_EVAL_CORPUS_RE = re.compile(
+    r"体会到[^。；]*重要性|深刻体会|不仅[^。；]*也让我"
+    r"|培养了[^。；]*(?:精神|能力)|团队合作和策略")
+_PREACH_RE = re.compile(
+    r"^(?:你应该|建议你|希望你能|记得要|要记得|别忘了|温馨提示)")
+_ROLE_SELF_FIX_RE = re.compile(r"主人(完全)?记得自己(喜欢|爱)")
+_GAME_TAG_RE = re.compile(r"《[^》]{1,20}》")
+# 记忆询问族（记忆注入降权门+书名号剔句豁免共用判据）
+_MEM_ASK_RE = re.compile(r"还?记得|喜欢什么|爱好|兴趣|了解我|我是谁")
+
+
+def _sentences(text):
+    """粗切句（保留标点尾巴）。"""
+    parts = re.split(r"(?<=[。！？!?；;])", str(text or ""))
+    return [p for p in parts if p and p.strip()]
+
+
+def _hard_guard_reply(text, user_msg=""):
+    """QQ 出口硬护栏：1.5B 输出的确定性后置处理（秘书二次会诊 8 条）。
+
+    R1 首句复读剔除（首句与用户输入去标点重合率 ≥0.8）/ R2 评测腔剔句 /
+    R3 书名号硬扯剔句（回复提《X》但用户本轮没提且非记忆询问——书名号是
+    通用标记，零词表）/ R4 说教句剔除 / R5 人称缝合修正（高频型映射）/
+    R6 长度压缩（>2 句留 2 句，>80 字截到句号）。空兜底由外层
+    SANITIZED_EMPTY_FALLBACK 承担。剔除动作全部打日志（阈值可观察回调）。
+    多行结构豁免（金样本实锤补丁）：菜单/列表类结构化输出（≥3 行）不是
+    闲聊产物，句级护栏不适用——崩坏回复均为单段，效力不受影响。
+    """
+    s = str(text or "").strip()
+    if not s:
+        return s
+    # 系统协议文本豁免（金样本 approve 实锤补丁）：<think> 工具包装产物与
+    # ❌ 开头的拒绝/错误文案不是 1.5B 闲聊产物，句级护栏不适用。
+    if s.startswith("<think>") or s.startswith("❌"):
+        return s
+    if s.count("\n") >= 2:
+        return s
+    sents = _sentences(s)
+
+    umsg = str(user_msg or "")
+    if umsg and sents:
+        u = _PUNCT_RE.sub("", umsg)
+        f = _PUNCT_RE.sub("", sents[0])
+        if u and f:
+            overlap = sum(1 for ch in f if ch in u) / max(len(f), 1)
+            if overlap >= 0.8:
+                print(f"🛡️ [硬护栏] 首句复读剔除（重合 {overlap:.0%}）: "
+                      f"{sents[0].strip()[:40]}")
+                sents = sents[1:]
+
+    ask_mem = bool(_MEM_ASK_RE.search(umsg))
+    game_tags = set(_GAME_TAG_RE.findall(umsg))
+    kept = []
+    for sent in sents:
+        if _EVAL_CORPUS_RE.search(sent):
+            print(f"🛡️ [硬护栏] 评测腔剔句: {sent.strip()[:40]}")
+            continue
+        tags = _GAME_TAG_RE.findall(sent)
+        if (umsg and tags and not ask_mem and not set(tags) & game_tags):
+            print(f"🛡️ [硬护栏] 记忆硬扯剔句: {sent.strip()[:40]}")
+            continue
+        if _PREACH_RE.search(sent.strip()):
+            print(f"🛡️ [硬护栏] 说教句剔除: {sent.strip()[:40]}")
+            continue
+        kept.append(sent)
+    s = "".join(kept).strip()
+
+    s = _ROLE_SELF_FIX_RE.sub(r"小橘记得主人\2", s)
+
+    sents = _sentences(s)
+    if len(sents) > 2:
+        s = "".join(sents[:2])
+    if len(s) > 80:
+        cut = s.rfind("。", 0, 80)
+        s = s[:cut + 1] if cut >= 20 else s[:80]
+    return s.strip()
+
+
+def _sanitize_qq_reply(reply, user_msg=""):
+    """QQ 出口消毒 + 硬护栏 + Markdown 洗地机 + 沉默兜底。
 
     - 消毒后有内容 → 原样返回（逐字节不变）；
     - 原始回复非空、消毒后被剥空（=模型吐了纯污染物）→ 返回诚实兜底文案，
       不再静默；
     - 原始回复本就为空 → 维持旧静默语义（非污染物路径零变化）。
-    - Markdown 洗地机（2026-10-27 队长暴雷）：**加粗/- 列表/# 标题/
-      ``` 围栏 全剥——QQ 不渲染 Markdown，满屏星号横杠极度出戏。
-    - 角色名前缀剥（2026-10-28）：开头"小橘："等标签剥除，正文中间不动。
+    - user_msg=本轮用户消息（硬护栏的复读检测/书名号差集用；缺省时这两条
+      跳过——历史落盘等场景无本轮消息，幂等）。
     """
     stripped = _strip_llm_pollution(reply)
     stripped = _strip_role_name_prefix(stripped)
     stripped = _strip_markdown(stripped)
+    stripped = _hard_guard_reply(stripped, user_msg)
     if not stripped.strip() and str(reply or "").strip():
         return SANITIZED_EMPTY_FALLBACK
     return stripped
@@ -520,7 +604,18 @@ def _inject_long_term_memories(history):
     """长期记忆注入（架构 §10 #3）：进入 smart_ask 前取长期记忆——
     V2 开=三乘子召回 recall_memories（查询=末条用户消息，#297 批 1）；
     关/异常=最近 3 条旧通道。以认领式前缀（"以下是主人告诉过你的事（长期
-    记忆）"，2026-10-28 会诊改）拼入系统上下文；空则不拼。"""
+    记忆）"，2026-10-28 会诊改）拼入系统上下文；空则不拼。
+
+    记忆降权门（2026-10-28 二次会诊）：仅当末条用户消息命中记忆询问族
+    （记得/喜欢什么/爱好…）才注入——1.5B 控不住记忆素材（真机两轮实锤：
+    闲聊也硬扯偏好），闲聊宁可无记忆也不给缝合素材。"""
+    last_user = ""
+    for m in reversed(history or []):
+        if isinstance(m, dict) and m.get("role") == "user":
+            last_user = str(m.get("content") or "")
+            break
+    if last_user and not _MEM_ASK_RE.search(last_user):
+        return history   # 非记忆询问族：不注入偏好素材（降权门）
     rows = None
     if _memory_v2_enabled():
         try:
@@ -1435,6 +1530,10 @@ def handle_message(source, user_id, group_id, message, self_qq=None):
                              new_session=is_new_session)
         if not reply:
             reply = "抱歉，我脑袋突然卡壳了，请再说一遍吧。"
+        # 落盘消毒前置（2026-10-28 二次会诊）：history=未来 few-shot，落盘
+        # 必须是消毒后正文——崩坏回复原文落盘曾致复读/缝合污染连续两轮复发
+        # （10-27 清空一次、10-28 再清）。调用方出口消毒仍在（幂等）。
+        reply = _sanitize_qq_reply(reply, user_msg=message)
         messages_qq.append({"role": "assistant", "content": reply})
         _compress_and_save(messages_qq, MEMORY_FILE_QQ)
         state_manager.save_conversation("qq", messages_qq)
@@ -1605,7 +1704,7 @@ def _flush_chat_burst(key):
         return
     try:
         reply = handle_message('qq', b["user_id"], b["group_id"], combined)
-        reply = _sanitize_qq_reply(reply)
+        reply = _sanitize_qq_reply(reply, user_msg=combined)
         try:
             reply = _persona_guard_pipeline(combined, reply)   # 防抖路径同_guard（15:00 破防实锤漏接修复）
         except Exception as e:
@@ -1800,7 +1899,7 @@ def onebot_event(data):
         # 🧠 QQ 消息保持干净（#322 F1）：消毒 <think> XML + 方括号 [think]/
         # [plan] 变体 + 幻觉 action JSON（全剥）；修 B v2 修 3：全剥后为空
         # 不再静默，补诚实兜底文案（沉默≠诚实）
-        reply = _sanitize_qq_reply(reply)
+        reply = _sanitize_qq_reply(reply, user_msg=raw_message or "")
         reply = _persona_leak_guard(reply)   # 人称泄露质检门（持久战第四保险）
         try:
             reply = _persona_guard_pipeline(message, reply)   # 仲裁脑改写（v2）

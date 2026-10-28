@@ -44,26 +44,34 @@ FALLBACK_TEMPLATES = (
 )
 
 _ARB_PROMPT = (
-    "你是质检员。下面是小橘 AI 伴侣要发给主人的一句话，以及主人的记忆"
-    "档案。质检三问：①小橘是否把主人的记忆/喜好说成了自己的（出现\"我最"
-    "喜欢玩\"等第一人称代入）？②是否夹杂英文或无实体 AI 不该说的话？"
-    "③是否在回应主人？三问全部通过回答 PASS，否则回答 FAIL:最短原因。"
-    "只输出 PASS 或 FAIL:原因。\n小橘的话：{text}\n"
+    "你是质检员兼救场员。下面是小橘 AI 伴侣要发给主人的一句话，以及主人的"
+    "记忆档案。质检三问：①是否复读主人的原话，或把主人的记忆/喜好说成自己"
+    "的（人称缝合，如\"主人完全记得\"与\"我\"混用）？②是否有爹味说教"
+    "（\"遵守规定\"\"注意\"\"建议你\"）或百科评测腔（\"体会到…重要性\"）？"
+    "③是否强行塞入主人偏好（主人没问却聊某游戏/某事物）？三问全部通过→"
+    "只回答 PASS。任何一问不过→只回答 REWRITE:，冒号后直接输出你自己重写"
+    "的替代回复（50 字以内，小橘的口吻：简短、口语、可爱，不复读、不说教、"
+    "不硬塞记忆）。\n"
+    "小橘的话：{text}\n"
     "主人记忆档案：{facts}")
 
 
 def arbitrate_wake(text, facts_line):
-    """仲裁脑（云端短查询）：质检表达脑输出是否出戏。返回 (PASS, 原因)。
+    """仲裁脑（云端短查询）：质检+一票否决（2026-10-28 队长架构诊断——
+    本地草稿被污染时剥夺云端的"润色权"，改"一票否决+亲自重写"）。返回
+    (True, 'PASS') 或 (False, 原因) 或 (False, 'REWRITE:替代文案')。
     云端异常=FAIL（宁降级不赌 r1）。"""
     try:
         import brain
         out = str(brain.ask_cloud([
             {"role": "system", "content": "你是质检员，只输出 PASS 或 "
-                                          "FAIL:原因，极简。"},
+                                          "REWRITE:替代文案，极简。"},
             {"role": "user", "content": _ARB_PROMPT.format(
                 text=text[:120], facts=facts_line[:200])}]) or "").strip()
         if out.startswith("PASS"):
             return True, "PASS"
+        if out.startswith("REWRITE:"):
+            return False, out
         return False, out[:80] or "FAIL"
     except Exception as e:
         return False, f"仲裁异常: {e}"
@@ -438,10 +446,19 @@ def wake_once(now_dt):
             text = strip_prefix_noise(text)   # 格式红线兜底（切片 c）
             if not text:
                 continue
-            ok, why = arbitrate_wake(text, facts_line)
+            ok, info = arbitrate_wake(text, facts_line)
             if ok:
                 break
-            print(f"🦊 [qq_lifemate] 仲裁否决（{why}）→ 重渲染")
+            if str(info).startswith("REWRITE:"):
+                # 一票否决+云端亲自重写（2026-10-28 架构诊断）：本地草稿被
+                # 污染时不再让本地重渲染（大概率还崩），用云端替代文案；
+                # 不再审（单向否决已终结，防循环）
+                rescue = strip_prefix_noise(str(info)[len("REWRITE:"):].strip())
+                if rescue:
+                    text, sticker_kw = extract_sticker_keyword(rescue)
+                    print(f"🦊 [qq_lifemate] 仲裁否决→云端重写采纳: {text[:40]}")
+                    break
+            print(f"🦊 [qq_lifemate] 仲裁否决（{info[:40]}）→ 重渲染")
             text = None
         if not text:
             text = fallback_text(last_scene(db), now_dt)

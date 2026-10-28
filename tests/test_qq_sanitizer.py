@@ -122,7 +122,7 @@ class IntegrationHooksTests(unittest.TestCase):
     def test_qq_output_hook(self):
         src = open(os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "main.py"), encoding="utf-8").read()
-        self.assertIn("reply = _sanitize_qq_reply(reply)", src)
+        self.assertIn("reply = _sanitize_qq_reply(reply, user_msg=", src)
         self.assertNotIn("reply = _strip_llm_pollution(reply)", src)
         # 翻译发生在 QQ 进 brain 前（messages_qq.append 之前）
         i_translate = src.index("message = _translate_cq_for_brain(raw_message)")

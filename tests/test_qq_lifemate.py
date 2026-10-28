@@ -129,6 +129,24 @@ class SliceCTests(unittest.TestCase):
         self.assertFalse(wake)
         self.assertEqual(reason, "quiet")
 
+    def test_arbitrate_veto_rewrite(self):
+        """仲裁一票否决（2026-10-28 架构诊断）：Prompt 含 REWRITE 三态+
+        剥夺润色权死命令；流程接云端重写分支。"""
+        import inspect as _inspect
+        from unittest import mock as _mock
+        src = _inspect.getsource(waker)
+        self.assertIn("REWRITE:", src)
+        self.assertIn("质检员兼救场员", src)
+        self.assertIn("强行塞入主人偏好", src)
+        ok, info = waker.arbitrate_wake.__doc__ and (False, "") or (False, "")
+        # 行为级：mock 云端返回 REWRITE 文案 → (False, 'REWRITE:...')
+        with _mock.patch("brain.ask_cloud",
+                                return_value="REWRITE:主人～小橘在呢喵"):
+            ok, info = waker.arbitrate_wake("崩坏草稿", "facts")
+        self.assertFalse(ok)
+        self.assertTrue(info.startswith("REWRITE:"))
+        self.assertIn("主人～小橘在呢喵", info)
+
     def test_strip_role_name_prefix(self):
         """角色名标签（2026-10-28 唤醒实锤）：waker 出口同样剥开头标签。"""
         self.assertEqual(waker.strip_prefix_noise("小橘： 主人最近好吗"),
@@ -382,7 +400,8 @@ class HumanizedDelayAndEntityTests(unittest.TestCase):
     def test_system_prompt_has_entity_rule(self):
         """SYSTEM_PROMPT 含无实体设定（软化版：住在电脑里的 AI 狐狸）。"""
         content = prompts_mod.SYSTEM_PROMPT["content"]
-        self.assertIn("住在电脑里的 AI 狐狸", content)
+        self.assertIn("住在主人的电脑里", content)
+        self.assertIn("电子狐狸伴侣", content)
 
     def test_qq_persona_has_entity_rule(self):
         """生命体 PERSONA 含无实体句（软化版：住在电脑里+没有实体）。"""

@@ -994,7 +994,7 @@ class TestMemoryAndCompression(_MainCase):
         with patch.object(main.state_manager, "get_recent_memories",
                           return_value=[("user", "用户喜欢蓝色"),
                                         ("user", "用户养了一只猫")]) as mem_mock:
-            main.handle_message('web', 'admin', None, "今天穿什么好")
+            main.handle_message('web', 'admin', None, "你还记得我喜欢什么吗")
         mem_mock.assert_called_once_with(3)
         args, _ = self.smart_ask.call_args
         # #297 后过滤器用精确前缀（消费方 brain/main 的去重守卫同判据）——
@@ -1196,7 +1196,7 @@ class TestRecentActionsInjection(_MainCase):
     def test_injection_block_sits_right_after_system_prompt(self):
         self._seed_actions(["control_ha_device: light.a → turn_off"])
         main.state_manager.save_memory("user", "用户喜欢蓝色")
-        main.handle_message('web', 'admin', None, "关掉它")
+        main.handle_message('web', 'admin', None, "你还记得我喜欢什么吗")
         args, _ = self.smart_ask.call_args
         hist = args[1]
         self.assertEqual(hist[0], main.SYSTEM_PROMPT)
@@ -2191,7 +2191,8 @@ class TestSanitizeQqReply(unittest.TestCase):
         """接线锚：直接路径与拟人节奏冲刷两点均走 _sanitize_qq_reply。"""
         import inspect
         src = inspect.getsource(main)
-        self.assertEqual(src.count("_sanitize_qq_reply("), 3)  # def+两调用点
+        # def+三出口（直路径/拟人冲刷/落盘消毒前置，2026-10-28 落盘=few-shot 必干净）
+        self.assertEqual(src.count("_sanitize_qq_reply("), 4)
         self.assertNotIn("reply = _strip_llm_pollution(reply)", src)  # 旧直调退役
 
 
