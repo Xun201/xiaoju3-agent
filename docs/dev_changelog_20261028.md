@@ -83,3 +83,11 @@
 - **任务 2 RAG 兜底原型**：`_dev/summary_to_memory.py`——compress 摘要时从被压旧段提取关键事实（主人偏好/计划/约定，第三人称 KEY=VALUE ≤5 条，双脑降级链+注入式 chat_fn）→ 写 long_term.db（category=summary_facts，最近 50 条精确去重）→ 未来 recall/Hindsight 可检索找回。`on_compress` 上车点就绪（毕业接线=compress_context 摘要成功后一行调用，失败静默绝不拖垮主链）。自测 4/4（临时库，零碰真实库）。未接主链等拍板。
 - **任务 3 影子日志收集脚本**：`_dev/shadow_report.py`——扫生产 logs 的 🛡️[影子审查] 行，按 Trigger/Action 聚合+高置信（T1/T3）与误报倾向（T2 跨轮跳族）分级输出+开真拦截门槛建议。自测过（合成 fixture 3 行）；真跑基线=近 3 天 0 触发（影子门上线 40 分钟，无漂移形态属正常）。脚本两修：T-SIDE 连字符断 \w+、Verdict 含逗号截断——自测当场抓当场修。
 - 测试：既有 9 锚适配（接线类测试用 cloud 窗口=1 强制触发，阈值测试归 test_context_budget）+动态窗口新锚 3=**全仓 2781+4 全绿**。
+
+## 收官批⑨：RAG 兜底接线+静默维护期开启（生产 exe f3904106 16:16 三进程在线）
+
+- **任务 1 RAG 兜底正式上车**：核心从 _dev 原型毕业=生产模块 `plugins/summary_facts.py`（extract_facts/persist_facts/on_compress+selftest）；compress_context **双脑成功路径**后接线（FAILED_MARKS 同口径判定，降级摘要零沉淀防污染记忆库）；失败静默绝不拖垮主链；开关 XIAOJU3_SUMMARY_FACTS_ENABLED 缺省开+conftest 第三哨兵（测试态=0 零碰真实 long_term.db）。6 新锚含"降级零沉淀"与"门闸关闭零写入"实证；_dev/summary_to_memory.py 变薄壳（毕业不留尾巴）。
+- **任务 2 收尾**：全案总结 `_dev/context_and_reviewer_summary.md` 落盘（三桌架构+影子审查员+配置速查+评估流程+回滚链+单日时间线）；STATE.md 生产车段置顶刷新；SYNC 第八刷。
+- **任务 3 转静默维护期**：架构级挂账清空（剩小米灯物理动作归队长）。维护动作=定期全仓基线+shadow_report 拉影子报告，日志异常漂移才上报秘书。
+- 自测抓雷一枚：selftest 复用已写入目录致去重拦截（去重本身是正确行为）——分目录断言修正。
+- 全仓 **2787+4 全绿**（+6）；部署五证=md5 f3904106 双端+三进程 16:16+health ok+PYZ（plugins.summary_facts 在包）+回滚锚 .bak-20261028-rag。

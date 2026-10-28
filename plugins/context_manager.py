@@ -18,6 +18,9 @@ import re
 #: 【前情提要】system 条目识别锚（与 brain._SUMMARY_PREFIX / main 落盘口径一致）
 SUMMARY_ANCHOR = "【前情提要】"
 
+#: 双脑不可用降级摘要标记（与 brain._COMPRESS_FAILED_MARKS 同口径）
+FAILED_MARKS = ("由于系统原因", "⚠️")
+
 #: Token 预算三参（环境变量可调）：
 #: - 本地窗口 4096 = 链上最弱脑（本地小模型 num_ctx）的安全口径
 #: - 云端窗口 32000 = deepseek-chat 64k 预留 50% 余量（秘书会诊：4096 对
@@ -161,6 +164,15 @@ def compress_context(messages, max_messages=20, keep_recent=10,
     except Exception as e:
         print(f"⚠️ 摘要生成失败，直接截断旧记忆: {e}")
         summary = "（由于系统原因，早期对话记忆已丢失）"
+
+    # RAG 兜底第三层（2026-10-28 上车）：仅在双脑**成功**路径沉淀事实——
+    # 降级摘要本身不可靠，防污染记忆库；提取/落库失败静默，绝不拖垮主链
+    if not any(mark in str(summary) for mark in FAILED_MARKS):
+        try:
+            from plugins.summary_facts import on_compress as _facts_on
+            _facts_on(old_messages)
+        except Exception:
+            pass
 
     print(f"✅ 记忆压缩完成！摘要：{summary[:50]}...")
 
