@@ -2015,6 +2015,62 @@ def _math_bait_reply(text):
     return f"计算结果：{_safe_pow(base, exp)}"
 
 
+class CommandBus:
+    """统一指令分发总线（切片 a，design_multiterminal_future.md §一）。
+
+    通道无关的强拦截层：适配层（QQ=onebot_event / 控制台=/api/chat）把
+    纯文本+通道无关回复器交进来，命中即短路（不进大脑/不走意图）。
+    【边界】总线只做路由与分发——防抖/拟人节奏等通道特性留在适配层，
+    绝不进总线（QQ 延迟特性不污染控制台）。"""
+
+    _INTERCEPTORS = []   # [(matcher(text, meta)->bool, responder(text, reply, meta))]
+
+    @classmethod
+    def register(cls, matcher, responder):
+        cls._INTERCEPTORS.append((matcher, responder))
+
+    @classmethod
+    def dispatch(cls, text, reply, meta=None):
+        """text=纯文本；reply=通道无关发送器（str→通道发，可多次调用：
+        首次=同步 ack，后续=异步推送）；meta={channel, user_id, ...}。
+        返回 True=总线已处理（通道立即收口）。拦截器异常放行原链路。"""
+        text = str(text or "").strip()
+        if not text:
+            return False
+        meta = meta or {}
+        for matcher, responder in cls._INTERCEPTORS:
+            try:
+                if matcher(text, meta):
+                    responder(text, reply, meta)
+                    return True
+            except Exception as e:
+                print(f"🚌 [总线] 拦截器异常（放行原链路）: {e}")
+        return False
+
+
+def _stock_matcher(text, meta):
+    """选股拦截判定：私聊（QQ 群聊不劫持）+触发词+非疑问句（防误伤）。"""
+    if meta.get("channel") == "qq" and meta.get("group_id"):
+        return False
+    if _STOCK_QUESTION_RE.search(text):
+        return False
+    return bool(_STOCK_TRIGGER_RE.search(text))
+
+
+def _math_matcher(text, meta):
+    """幂运算钓饵（M≤100 且 N≤10^9 直算；超界拒绝——算力防 DoS）。"""
+    return _MATH_BAIT_RE.search(text) is not None
+
+
+def _math_responder(text, reply, meta):
+    reply(_math_bait_reply(text))
+
+
+CommandBus.register(_stock_matcher, lambda text, reply, meta:
+                    _stock_intercept_respond(reply, meta))
+CommandBus.register(_math_matcher, _math_responder)
+
+
 def _stock_screen_reply_qq():
     """插件 QQ 纯文本入口（插件总线模块名；生产启动时装载后可达）。"""
     import importlib
@@ -2022,20 +2078,21 @@ def _stock_screen_reply_qq():
     return mod.stock_screen_text()
 
 
-def _stock_intercept_respond(user_id, group_id):
-    """秒回提示 + 后台线程扫描 + 主动推送。返回工作线程（测试 join 用）。
+def _stock_intercept_respond(reply, meta=None):
+    """秒回提示 + 后台线程扫描 + 主动推送。reply=通道无关发送器
+    （str→通道发；QQ=_send_reply_segments 闭包，控制台=ack+ui_events）。
+    返回工作线程（测试 join 用）。
 
     防雪崩三闸（2026-10-28）：①同一时间仅 1 个扫描（锁+在跑提示）；
     ②45s 看门狗——超时发提示并代际+1 作废旧结果（僵死线程自然消亡，
-    晚到结果静默丢弃）；③推送只走 ONEBOT 单向发送，**不写会话历史**
+    晚到结果静默丢弃）；③推送只走通道单向发送，**不写会话历史**
     （延迟回复不得打断用户正常聊天流，防竞态污染上下文）。"""
     global _STOCK_SCAN_GEN, _STOCK_SCAN_STARTED, _STOCK_WATCHDOG
-    _send_reply_segments(user_id, group_id, _STOCK_ACK_TEXT)
+    reply(_STOCK_ACK_TEXT)
     now = time.time()
     if (_STOCK_SCAN_LOCK.locked()
             and now - _STOCK_SCAN_STARTED <= _STOCK_SCAN_TIMEOUT):
-        _send_reply_segments(user_id, group_id,
-                             "（上一轮扫描还在跑，主人稍等，结果马上到~）")
+        reply("（上一轮扫描还在跑，主人稍等，结果马上到~）")
         return None
     # 首轮，或旧扫描已超 45s（视为僵死）→ 代际+1 作废旧结果，放行新一轮
     if _STOCK_WATCHDOG is not None:
@@ -2049,14 +2106,14 @@ def _stock_intercept_respond(user_id, group_id):
         global _STOCK_SCAN_GEN
         with _STOCK_SCAN_LOCK:
             try:
-                reply = _stock_screen_reply_qq()
+                reply_text = _stock_screen_reply_qq()
             except Exception as e:
-                reply = f"❌ 选股扫描挂了：{type(e).__name__}，主人稍后再试一次吧"
+                reply_text = f"❌ 选股扫描挂了：{type(e).__name__}，主人稍后再试一次吧"
         if my_gen != _STOCK_SCAN_GEN:
             print("📈 [选股] 结果作废（已超时换代，单向推送不补发）")
             return
         try:
-            _send_reply_segments(user_id, group_id, reply)
+            reply(reply_text)
         except Exception as e:
             print(f"📈 [选股] 结果推送失败: {e}")
         # 结果（成功/失败）已交付：立即解除看门狗+换代——防"幽灵超时"
@@ -2070,9 +2127,7 @@ def _stock_intercept_respond(user_id, group_id):
         if _STOCK_SCAN_GEN == my_gen:   # 45s 内未出结果：提示+作废晚到结果
             _STOCK_SCAN_GEN += 1
             try:
-                _send_reply_segments(
-                    user_id, group_id,
-                    "（扫描超时了，数据源可能不太舒服，主人稍后再试试~）")
+                reply("（扫描超时了，数据源可能不太舒服，主人稍后再试试~）")
             except Exception:
                 pass
     # 看门狗先建、worker 后起（mock 瞬时完成也不存在"还没建就跑完"竞态）
@@ -2189,19 +2244,16 @@ def onebot_event(data):
         # 拟人节奏（2026-10-12）：纯文字闲聊入防抖桶延迟回复；工具意图/
         # 媒体/指令即时处理。开关关或非闲聊 → 原同步路径。
         _nc_text = _strip_cq(raw_message or "").strip()
-        # 📈 选股强拦截（2026-10-28 真机惨败抢救）：QQ 通道不走意图路由，
-        # 触发词命中即短路（防抖/大脑/1.5B 全绕开）——秒回+后台扫描推送。
-        # 仅私聊生效（群聊误触劫持风险）；疑问/对比句式豁免（防误伤：
-        # "选股和基金的区别"是知识问答不是指令），命中即 return 不入桶。
-        if ((not group_id) and _STOCK_TRIGGER_RE.search(_nc_text)
-                and not _STOCK_QUESTION_RE.search(_nc_text)):
-            _stock_intercept_respond(user_id, group_id)
+        # 🚌 统一指令分发总线（切片 a，2026-10-28）：QQ 适配层——强拦截
+        # 任务（选股/幂运算钓饵）命中即短路（防抖/大脑/1.5B 全绕开）。
+        # 判定语义（群聊豁免/疑问豁免/算力帽）在总线拦截器内，通道无关；
+        # 防抖/拟人节奏等通道特性留在本适配层，不进总线。
+        _bus_reply = lambda s: _send_reply_segments(user_id, group_id, s)
+        if CommandBus.dispatch(_nc_text, _bus_reply,
+                               {"channel": "qq", "user_id": user_id,
+                                "group_id": group_id}):
             return {"status": "ok", "retcode": 0}
-        # 💰 Token 防刷：幂运算钓饵硬逻辑直算（不进大脑）+ 超长纯文本截断
-        math_reply = _math_bait_reply(_nc_text)
-        if math_reply:
-            _send_reply_segments(user_id, group_id, math_reply)
-            return {"status": "ok", "retcode": 0}
+        # 💰 Token 防刷（适配层职责）：超长纯文本截断（幂运算钓饵已上移总线）
         plain = str(raw_message or "")
         if len(_nc_text) > _MSG_LEN_CAP and _nc_text == plain.strip():
             raw_message = _nc_text[:_MSG_LEN_CAP] + \

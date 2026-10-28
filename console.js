@@ -1508,6 +1508,20 @@
                 console.error('UI 事件渲染失败', e);   // 单事件失败不拆连接
             }
         });
+        // 🚌 总线异步推送（切片 a：选股等强拦截任务的结果气泡，控制台侧）
+        es.addEventListener('bus_reply', function (ev) {
+            try {
+                const d = JSON.parse(ev.data);
+                if (d.reply) {
+                    const history = document.getElementById('chat-history');
+                    if (!history) return;
+                    appendBotMessage(d.reply, d.source || '📣 总线', '');
+                    history.scrollTop = history.scrollHeight;
+                }
+            } catch (e) {
+                console.error('总线事件渲染失败', e);   // 单事件失败不拆连接
+            }
+        });
         es.onerror = function () { /* EventSource 原生自动重连，无需处理 */ };
     })();
 

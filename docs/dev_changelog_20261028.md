@@ -151,3 +151,10 @@
 - **面板一期全链**：loader `_DISABLED` 持久禁用集（plugins_enabled.json）+load_all 跳过+set_enabled/is_enabled/disabled_plugins+reload_all 原子换装（R1-a 动态刷新即时生效）；dashboard GET 加 enabled/disabled 字段+POST /api/plugins/toggle；console.js 真面板（已启用/已停用两区+逐插件启停+toast+重拉）。粒度=整插件（含后台线程，teardown 走卸载链）。
 - **三大架构设计稿** _dev/design_multiterminal_future.md：统一总线（Channel→Bus→Handler+QQ 链白名单渐进接意图）/算力调度（能力注册+任务契约+三态诚实回复+心跳即信号）/手机端（A=Capacitor 壳+Ntfy；B=离线降级子集为主选；总线为前置）。
 - 全仓 2856+5 全绿（+12）；生产 7b93f541 三进程+/api/plugins 活体验证（5 插件 enabled）；回滚锚 .bak-20261028-panel。
+
+## 深夜批⑱：总线切片 a——硬拦截通道无关化（生产 exe 91fdb027 20:0x 三进程在线）
+
+- **CommandBus**（main.py）：register/dispatch 轻量双方法；拦截器异常放行原链路；总线只做路由分发（防抖/拟人节奏留适配层——设计稿红线）。首批拦截器：选股（私聊豁免群聊+疑问豁免+触发词）、幂运算（算力帽）。
+- **双适配层**：QQ=onebot_event 旧内联拦截换 dispatch（5 行）；控制台=/api/chat 首段 dispatch+ack 秒回（不落历史）+异步结果 ui_events "bus_reply" 事件（console.js 新监听 appendBotMessage 气泡）。
+- **生产活体验证**：POST /api/chat 帮我选股 → 📣 总线秒回原文 PASS（真实扫描同进程执行）。
+- 全仓 2861+5 全绿（+5：总线契约 3+控制台适配 2）；测试迁移新签名+坑三录（正则量词边界/词表连续字/外层 except 吞异常）。

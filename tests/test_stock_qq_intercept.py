@@ -93,7 +93,7 @@ class QQStockInterceptTests(unittest.TestCase):
 
     def test_private_trigger_immediate_ack_and_async_push(self):
         self.sent.clear()
-        th = main._stock_intercept_respond(123, None)
+        th = main._stock_intercept_respond(lambda s: self.sent.append((123, None, s)), {"channel": "qq", "user_id": 123})
         self.assertLessEqual(1, len(self.sent))
         self.assertIn("二三十秒", self.sent[0][2])   # 首条必是秒回提示
         self._wait_worker(th)
@@ -140,10 +140,10 @@ class QQStockInterceptTests(unittest.TestCase):
         with mock.patch.object(self.mod, "stock_screen_text",
                                side_effect=lambda **kw: (
                                    gate.wait(5), FAKE_RESULT)[1]):
-            th1 = main._stock_intercept_respond(123, None)
+            th1 = main._stock_intercept_respond(lambda s: self.sent.append((123, None, s)), {"channel": "qq", "user_id": 123})
             time.sleep(0.2)                     # 确保 th1 已持锁
             self.assertTrue(main._STOCK_SCAN_LOCK.locked())
-            th2 = main._stock_intercept_respond(123, None)
+            th2 = main._stock_intercept_respond(lambda s: self.sent.append((123, None, s)), {"channel": "qq", "user_id": 123})
             self.assertIsNone(th2, "在跑时不得起第二线程")
             self.assertTrue(any("还在跑" in r for _, _, r in self.sent))
             gate.set()
@@ -152,6 +152,42 @@ class QQStockInterceptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommandBusTests(unittest.TestCase):
+    """总线切片 a（2026-10-28）：通道无关强拦截层契约。"""
+
+    def test_dispatch_order_and_fallback(self):
+        calls = []
+        bus = main.CommandBus
+        old = list(bus._INTERCEPTORS)
+        try:
+            bus._INTERCEPTORS[:] = [
+                (lambda t, m: False, lambda t, r, m: calls.append("A")),
+                (lambda t, m: True, lambda t, r, m: calls.append("B")),
+                (lambda t, m: True, lambda t, r, m: calls.append("C")),
+            ]
+            handled = bus.dispatch("任意", lambda s: None, {})
+            self.assertTrue(handled)
+            self.assertEqual(calls, ["B"])   # 首个命中即收口，不再走 C
+        finally:
+            bus._INTERCEPTORS[:] = old
+
+    def test_dispatch_exception_falls_through(self):
+        bus = main.CommandBus
+        old = list(bus._INTERCEPTORS)
+        try:
+            bus._INTERCEPTORS[:] = [
+                (lambda t, m: 1 / 0, lambda t, r, m: calls.append("X"))]
+            calls = []
+            handled = bus.dispatch("任意", lambda s: None, {})
+            self.assertFalse(handled)          # 拦截器异常放行原链路
+            self.assertEqual(calls, [])
+        finally:
+            bus._INTERCEPTORS[:] = old
+
+    def test_dispatch_empty_text(self):
+        self.assertFalse(main.CommandBus.dispatch("", lambda s: None, {}))
 
 
 class TokenGuardTests(QQStockInterceptTests):   # 继承 setUp（sent 捕获+节奏 env）
@@ -310,7 +346,7 @@ class HardeningTests(unittest.TestCase):
                 mock.patch.object(self.mod, "stock_screen_text",
                                   side_effect=lambda **kw: (
                                       gate.wait(5), FAKE_RESULT)[1]):
-            th = main._stock_intercept_respond(123, None)
+            th = main._stock_intercept_respond(lambda s: self.sent.append((123, None, s)), {"channel": "qq", "user_id": 123})
             deadline = time.time() + 5
             while len(self.sent) < 2 and time.time() < deadline:
                 time.sleep(0.05)
@@ -336,7 +372,7 @@ class HardeningTests(unittest.TestCase):
     def test_ghost_watchdog_defused_after_delivery(self):
         """幽灵超时回归：结果交付后看门狗必须被解除（45s 后不再开火）。"""
         self.sent.clear()
-        th = main._stock_intercept_respond(123, None)
+        th = main._stock_intercept_respond(lambda s: self.sent.append((123, None, s)), {"channel": "qq", "user_id": 123})
         if th is not None:
             th.join(5)
         deadline = time.time() + 5
@@ -360,7 +396,7 @@ class HardeningTests(unittest.TestCase):
         hist_file = os.path.join(tempfile.gettempdir(), "_hist_probe.json")
         with open(hist_file, "w", encoding="utf-8") as f:
             _json.dump([], f)
-        th = main._stock_intercept_respond(123, None)
+        th = main._stock_intercept_respond(lambda s: self.sent.append((123, None, s)), {"channel": "qq", "user_id": 123})
         self._wait = th
         if th is not None:
             th.join(5)

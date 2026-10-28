@@ -1794,6 +1794,31 @@ def api_chat():
         if not user_msg:
             return jsonify({"code": 400, "error": "消息不能为空"})
 
+        # 🚌 统一指令分发总线（切片 a，2026-10-28）：控制台适配层——强拦截
+        # 任务（选股/幂运算钓饵）秒回提示+后台推送（ui_events 气泡），与
+        # QQ 通道同源同语义（design_multiterminal_future.md §一）。总线只
+        # 做路由分发；ack 为瞬态提示不落历史，结果走气泡推送。
+        _bus_state = {"ack": None}
+
+        def _bus_reply(text):
+            if _bus_state["ack"] is None:
+                _bus_state["ack"] = text
+            else:
+                try:
+                    import ui_events
+                    ui_events.publish("bus_reply", reply=text,
+                                      source="📣 总线")
+                except Exception:
+                    pass
+
+        if main.CommandBus.dispatch(str(user_msg), _bus_reply,
+                                    {"channel": "console"}):
+            return jsonify({
+                "code": 200,
+                "data": {"reply": sanitize_for_web(_bus_state["ack"] or ""),
+                         "source": "📣 总线"}
+            })
+
         # 📍 位置指令（2026-10-02 隐私口径）：与 QQ 通道同一处理逻辑
         # （system_handler.location_command；命中即系统消息返回，不进大脑）
         location_reply = system_handler.location_command(user_msg)

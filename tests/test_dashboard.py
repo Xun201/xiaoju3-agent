@@ -50,6 +50,7 @@ mock 注意：所有 patch 均走 context manager / start+addCleanup（结束即
 """
 import contextlib
 import plugin_loader
+import ui_events
 import glob
 import io
 import json
@@ -3128,3 +3129,49 @@ class PluginsToggleApiTests(unittest.TestCase):
         resp = self.client.post("/api/plugins/toggle", json={})
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(resp.get_json()["ok"])
+
+
+class CommandBusConsoleTests(unittest.TestCase):
+    """总线切片 a·控制台适配（2026-10-28）：/api/chat 强拦截秒回+结果推送。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_console_stock_dispatch_returns_ack(self):
+        """控制台发'帮我选股'：总线命中→秒回提示（不进 smart_ask/历史），
+        异步结果经 ui_events bus_reply 事件推送（前端气泡）。"""
+        published = []
+        captured = {}
+
+        def fake_dispatch(text, reply, meta=None):
+            captured["text"] = text
+            reply("收到！小橘这就去拉数据跑模型，大概需要二三十秒，"
+                  "主人稍等片刻哦~（如果太慢小橘会挨骂的）")
+            return True
+
+        with mock.patch.object(main.CommandBus, "dispatch",
+                               side_effect=fake_dispatch),                 mock.patch.object(dashboard, "smart_ask",
+                                  side_effect=AssertionError("不该进大脑")),                 mock.patch.object(ui_events, "publish",
+                                  side_effect=lambda t, **kw:
+                                  published.append((t, kw))):
+            # 模拟异步结果推送（真实链=worker 跑完调 reply 第二次）
+            captured_reply = None
+
+            def probe(text, reply, meta=None):
+                fake_dispatch(text, reply, meta)
+                reply("【假结果】")
+            resp = self.client.post("/api/chat", json={"message": "帮我选股"})
+        body = resp.get_json()
+        self.assertEqual(body["code"], 200)
+        self.assertIn("二三十秒", body["data"]["reply"])
+        self.assertEqual(body["data"]["source"], "📣 总线")
+
+    def test_console_normal_chat_not_intercepted(self):
+        """普通闲聊：总线不命中→照常进 smart_ask（行为不变）。"""
+        with mock.patch.object(main.CommandBus, "dispatch",
+                               return_value=False),                 mock.patch.object(dashboard, "smart_ask",
+                                  return_value=("闲聊回复", "测试")):
+            resp = self.client.post("/api/chat",
+                                    json={"message": "今天心情怎么样"})
+        body = resp.get_json()
+        self.assertEqual(body["data"]["reply"], "闲聊回复")
