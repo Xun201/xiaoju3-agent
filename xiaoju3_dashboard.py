@@ -602,7 +602,11 @@ def api_history():
     """
     if (request.args.get("source") or "").strip().lower() == "terminal":
         return jsonify({"code": 200, "data": {"messages": load_memory(TERMINAL_HISTORY_FILE)}})
-    return jsonify({"code": 200, "data": {"messages": _read_console_history()}})
+    # 🚫 硬性过滤（2026-10-28）：污染轮（设备操作解读/工具日志）不回给前端
+    # ——前端会把整份历史随下轮 POST 透传回来喂给大模型
+    return jsonify({"code": 200,
+                    "data": {"messages": brain.purge_polluted_history(
+                        _read_console_history())}})
 
 
 @app.route("/api/history", methods=["DELETE"])
@@ -1949,7 +1953,7 @@ def api_chat():
         # ——记账/电子书/联网搜索三意图控制台直达不进模型；未命中/❌ 返回
         # None 透传 smart_ask（绝不吞消息）。最近设备操作注入顺带补齐
         # （指代消解上下文，与 QQ 链路对齐）。
-        history = main._inject_recent_actions(history)
+        history = brain.purge_polluted_history(main._inject_recent_actions(history, user_msg=user_msg))
         intent_reply = main.handle_intent_command(user_msg, history)
         if intent_reply is not None:
             return jsonify({
@@ -2026,10 +2030,33 @@ def api_chat_stream():
     user_msg = data.get("message", "")
     if not user_msg:
         return jsonify({"code": 400, "error": "消息不能为空"}), 400
-    history = data.get("history") or []
+    # 🚫 硬性过滤（2026-10-28）：工具执行原始日志/解读轮不作为聊天历史
+    history = brain.purge_polluted_history(data.get("history") or [])
     print(f"[香橙派收到消息][流式] {user_msg}")
 
     def generate():
+        # 🚌 总线切片 a（流式适配，2026-10-28）：强拦截任务（选股等）秒回
+        # ack——单帧 answer（前端骨架屏立即落地成文字气泡）+ done 收口；
+        # 异步结果经 ui_events "bus_reply" 事件推气泡（前端已监听）。
+        _bus_state = {"ack": None}
+
+        def _bus_reply(text):
+            if _bus_state["ack"] is None:
+                _bus_state["ack"] = text
+            else:
+                try:
+                    import ui_events
+                    ui_events.publish("bus_reply", reply=text,
+                                      source="📣 总线")
+                except Exception:
+                    pass
+
+        if main.CommandBus.dispatch(str(user_msg), _bus_reply,
+                                    {"channel": "console"}):
+            ack = _bus_state["ack"] or ""
+            yield _sse_frame("answer", {"delta": ack})
+            yield _sse_frame("done", {"reply": ack, "source": "📣 总线"})
+            return
         # 📷 截图就绪 → 视觉链分流（2026-10-26 切片 b，最高优先）：同步
         # 视觉应答走单帧 done（与下方斜杠拦截同款短路形态）——本地小模型
         # 不看图，截图提问天然强制云端
@@ -2093,7 +2120,7 @@ def api_chat_stream():
         # 命中 → 单帧 done（指令不是流式内容，与上方斜杠拦截同模式）。
         # 最近设备操作注入同款补齐，保证流式/非流式上下文一致。
         nonlocal history   # 重绑外层历史（闭包内赋值须显式声明）
-        history = main._inject_recent_actions(history)
+        history = brain.purge_polluted_history(main._inject_recent_actions(history, user_msg=user_msg))
         intent_reply = main.handle_intent_command(user_msg, history)
         if intent_reply is not None:
             yield _sse_frame("done", {

@@ -388,14 +388,22 @@
             display: flex;
             flex-direction: column;
             gap: 15px;
-        }
+                overflow-x: hidden;   /* 防表格撑出页面级横滚（表格在气泡内自滑） */
+    }
         .message {
             max-width: 70%;
+            min-width: 0;       /* 防撑爆（2026-10-28 表格实锤）：flex 项默认
+                                   min-width:auto 会被子表内容顶破——全链归零 */
             padding: 10px 15px;
             border-radius: var(--radius-bubble);
             font-size: 14px;
             line-height: 1.5;
             word-wrap: break-word;
+        }
+        .message .bubble-content {
+            max-width: 100%;
+            min-width: 0;
+            overflow-x: auto;   /* 超宽内容在气泡内滑动，绝不上抛页面 */
         }
         /* 气泡卡片化：轻阴影（令牌化） */
         .bot-message {
@@ -674,6 +682,14 @@
         }
         .md-table tbody tr:nth-child(even) {
             background: rgba(0, 0, 0, 0.02);
+        }
+        /* 行内代码（2026-10-28）：灰底等宽，修复 `xxx` 裸奔导致的长短不一 */
+        .md-code {
+            background: rgba(0, 0, 0, 0.06);
+            border-radius: 4px;
+            padding: 1px 5px;
+            font-family: Consolas, Menlo, "Courier New", monospace;
+            font-size: 12px;
         }
         /* 内容错开淡入（UI 微操）：仅历史回放批渲染/系统消息挂 .msg-enter，
            流式输出的思维链与正文绝不挂此类——保持连续 */

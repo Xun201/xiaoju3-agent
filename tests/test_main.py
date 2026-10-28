@@ -1165,7 +1165,8 @@ class TestRecentActionsInjection(_MainCase):
         ]
         with open(self.actions_file, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False)
-        main.handle_message('web', 'admin', None, "你好")
+        # 门控新契约（2026-10-28）：设备语境消息才注入（"你好"零注入）
+        main.handle_message('web', 'admin', None, "继续操作设备")
         blocks = self._action_blocks()
         self.assertEqual(len(blocks), 1)
         self.assertIn("最新操作丙", blocks[0]["content"])
@@ -1174,7 +1175,7 @@ class TestRecentActionsInjection(_MainCase):
 
     def test_qq_channel_injects_recent_actions(self):
         self._seed_actions(["adb_tap: 点击 (10, 20)"])
-        main.handle_message('qq', 1, None, "再点一次")
+        main.handle_message('qq', 1, None, "继续刚才的操作")
         blocks = self._action_blocks()
         self.assertEqual(len(blocks), 1)
         self.assertIn("adb_tap: 点击 (10, 20)", blocks[0]["content"])
@@ -1199,7 +1200,10 @@ class TestRecentActionsInjection(_MainCase):
     def test_injection_block_sits_right_after_system_prompt(self):
         self._seed_actions(["control_ha_device: light.a → turn_off"])
         main.state_manager.save_memory("user", "用户喜欢蓝色")
-        main.handle_message('web', 'admin', None, "你还记得我喜欢什么吗")
+        # 门控新契约（2026-10-28）：设备语境消息才注入（注入块紧跟置顶提示词
+        # 的次序断言保留；"你好"类纯净闲聊零注入由 gate 测试覆盖）
+        main.handle_message('web', 'admin', None, "刚才关灯的操作还记得吧，"
+                                                   "那我喜欢什么颜色")
         args, _ = self.smart_ask.call_args
         hist = args[1]
         self.assertEqual(hist[0], main.SYSTEM_PROMPT)

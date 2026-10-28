@@ -3215,3 +3215,56 @@ class PetPrefApiTests(unittest.TestCase):
             data = json.load(f)
         self.assertTrue(data["desktop_pet_enabled"])
         self.assertEqual(data["exit"], "ask")   # 既有键不丢
+
+
+class StreamBusDispatchTests(unittest.TestCase):
+    """Bug 4 修复回归（2026-10-28 骨架屏卡死实锤）：流式端点总线 dispatch
+    ——秒回 ack 单帧 answer+done（骨架屏立即落地成文字气泡）。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+        self._wd = getattr(main, "_STOCK_WATCHDOG", None)
+        if self._wd is not None:
+            self._wd.cancel()
+
+
+    """Bug 4 修复回归（2026-10-28 骨架屏卡死实锤）：流式端点总线 dispatch
+    ——秒回 ack 单帧 answer+done（骨架屏立即落地成文字气泡）。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_stream_stock_dispatch_ack(self):
+        ack_text = ("收到！小橘这就去拉数据跑模型，大概需要二三十秒，"
+                    "主人稍等片刻哦~（如果太慢小橘会挨骂的）")
+
+        def fake_dispatch(text, reply, meta=None):
+            reply(ack_text)
+            return True
+
+        with mock.patch.object(main.CommandBus, "dispatch",
+                               side_effect=fake_dispatch), \
+                mock.patch.object(dashboard, "_take_screenshot",
+                                  return_value=None), \
+                mock.patch.object(main.brain, "smart_ask_stream",
+                                  side_effect=AssertionError("不该进大脑")):
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "帮我选股"})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_data(as_text=True)
+        self.assertIn("event: answer", body)
+        self.assertIn("二三十秒", body)
+        self.assertIn("event: done", body)
+        self.assertIn("📣 总线", body)
+
+    def test_stream_normal_chat_not_intercepted(self):
+        with mock.patch.object(main.CommandBus, "dispatch",
+                               return_value=False), \
+                mock.patch.object(dashboard, "_take_screenshot",
+                                  return_value=None), \
+                mock.patch.object(main.brain, "smart_ask_stream",
+                                  return_value=("闲聊", "测试")):
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "今天心情怎么样"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("📣 总线", resp.get_data(as_text=True))

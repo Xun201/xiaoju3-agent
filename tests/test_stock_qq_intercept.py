@@ -21,6 +21,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import main  # noqa: E402
+import brain  # noqa: E402
 
 PLUGIN_SRC = os.path.join(PROJECT_ROOT, "agent_state", "plugins")
 
@@ -423,3 +424,36 @@ class RotatingStreamTests(unittest.TestCase):
             self.assertLessEqual(len(files), 3, files)   # 最多 3 份
             self.assertGreater(len(files), 1, "应发生过轮转")
             rs.close()
+
+
+class InjectionGateTests(unittest.TestCase):
+    """Bug 3 硬性过滤（2026-10-28 '你好'被当设备话题续读实锤）：
+    非设备语境零注入；设备/指代语境正常注入；污染历史轮整条剔除。"""
+
+    def test_greeting_no_injection(self):
+        history = [{"role": "user", "content": "hi"}]
+        out = main._inject_recent_actions(
+            history, user_msg="你好")
+        self.assertEqual(out, history)   # 零注入
+
+    def test_device_context_injects(self):
+        history = [{"role": "user", "content": "hi"}]
+        with mock.patch.object(main, "get_recent_actions",
+                               return_value=[{"detail": "control_ha_device False"}]), \
+                mock.patch.object(main, "_filter_recent_actions",
+                                  side_effect=lambda a: a):
+            out = main._inject_recent_actions(
+                history, user_msg="把灯打开")
+        self.assertTrue(any("设备操作记录" in str(m.get("content", ""))
+                            for m in out))
+
+    def test_purge_drops_polluted_turns(self):
+        history = [
+            {"role": "user", "content": "你好"},
+            {"role": "assistant",
+             "content": "根据您提供的设备操作记录，解析：control_ha_device turn_on"},
+            {"role": "assistant", "content": "今天天气不错"},
+        ]
+        out = brain.purge_polluted_history(history)
+        self.assertEqual(len(out), 2)
+        self.assertTrue(all("操作记录" not in m["content"] for m in out))

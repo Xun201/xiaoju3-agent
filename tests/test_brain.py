@@ -387,8 +387,8 @@ class HistoryContextCleanTests(unittest.TestCase):
         self.assertNotIn("很长内容", users[0]["content"])
 
     def test_build_messages_folds_device_readout_answers(self):
-        """②刀扩展（2026-10-27 队长拍板）：历史 assistant 正文的设备记录
-        解读轮折叠成占位（真机实捕 10/10 命中污染轮零误伤）。"""
+        """③刀硬过滤（2026-10-28 夜"你好"被当设备话题续读实锤）：污染轮
+        **整条剔除**绝不喂模型（旧"已省略"占位本身仍在递刀，弃用）。"""
         history = [
             {"role": "user", "content": "你好"},
             {"role": "assistant",
@@ -396,7 +396,11 @@ class HistoryContextCleanTests(unittest.TestCase):
         ]
         msgs = brain._build_messages("在吗", history)
         asst = [m for m in msgs if m["role"] == "assistant"]
-        self.assertEqual(asst[0]["content"], "[历史设备操作解读已省略]")
+        self.assertEqual(asst, [])   # 污染轮零残留
+        # 载荷本体零残留（SYSTEM_PROMPT 工具清单合法含"操作记录"字样，
+        # 断言须锚污染载荷本体而非泛字样）
+        self.assertFalse(any("control_ha_device → turn_on" in m["content"]
+                             for m in msgs))
 
     def test_build_messages_keeps_normal_device_reply(self):
         """正常设备执行回复（"已为你打开灯"形态）零误伤保留。"""

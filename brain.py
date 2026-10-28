@@ -2193,13 +2193,36 @@ _ATTACH_INJECT_MARK = "（以上为用户上传的附件全文"
 _DEVICE_READOUT_MARKS = ("操作记录", "turn_on")
 
 
+def _is_stale_device_readout(text):
+    """设备操作记录解读轮判定（真机实捕 10/10 命中零误伤：正常设备执行轮
+    回复是"已为你打开灯"形态，不含工具名/记录字样）。"""
+    if not text:
+        return False
+    return any(mark in text for mark in _DEVICE_READOUT_MARKS)
+
+
+def purge_polluted_history(history):
+    """硬性过滤（2026-10-28 队长拍板"工具执行原始日志绝不作为聊天历史
+    喂给大模型"）：assistant 轮含设备操作记录/工具名标记 → **整条剔除**
+    （旧的折叠占位"已省略"本身仍在给模型递刀，弃用）。加载侧/透传侧
+    统一走本函数。"""
+    out = []
+    for m in history or []:
+        if (isinstance(m, dict) and m.get("role") == "assistant"
+                and _is_stale_device_readout(str(m.get("content") or ""))):
+            continue
+        out.append(m)
+    return out
+
+
 def _fold_stale_device_readouts(text):
     """历史 assistant 正文折叠"设备操作记录解读轮"（2026-10-27 队长拍板第
     ②刀扩展：隔夜控灯记录的解读回复留在历史里持续污染纯净闲聊——07:32
     实锤复发）。判据=正文含"操作记录"或"turn_on"（真机实捕 10/10 命中
     污染轮零误伤：正常设备执行轮回复是"已为你打开灯"形态，不含工具名/
     记录字样；用户真聊设备话题或编程时可能误伤——该轮已在前端展示过，
-    折叠仅影响历史回放，取舍可接受）。折叠保留轮次结构。"""
+    折叠仅影响历史回放，取舍可接受）。保留作兼容；组装主链已升级为
+    purge 整条剔除（更狠，见 purge_polluted_history）。"""
     if not text:
         return text
     for mark in _DEVICE_READOUT_MARKS:
@@ -2275,6 +2298,11 @@ def _build_messages(message, history, user_id=None):
             content = _strip_consumed_attachments(content)
         elif role == "assistant":
             content = _strip_history_think_blocks(content)
+            # 🚫 硬性过滤（2026-10-28 队长拍板）：工具执行原始日志/解读轮
+            # **整条剔除**，绝不作为聊天历史喂给大模型（旧的"已省略"占位
+            # 本身仍在对模型递刀——"你好"被当设备话题续读的实锤根因）
+            if _is_stale_device_readout(content):
+                continue
             content = _fold_stale_device_readouts(content)
         if role == "system":
             for prefix in ("【前情提要】", MEMORY_CONTEXT_PREFIX,

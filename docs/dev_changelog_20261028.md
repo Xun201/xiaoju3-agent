@@ -171,3 +171,11 @@
 - 表格豆包风精修（圆角容器/横向滑动/不撑爆气泡）+ 桌宠开关默认关（动态加载/pet_pref 端点/🧰 开关卡）+ 3 旧契约锚更新为动态引导口径。
 - **v2.1.1 Release**：tag v2.1.1+Release 页（setup exe 115,365,827 字节+sha256 附件）；标题按 AGENTS.md Release 命名规范用"小橘3号 v2.1.1"（非"里程碑"——X.0.0 专属，已向队长说明可改）。
 - 全仓 2864+5 全绿；生产车 b779394a 三进程在跑 2.1.1。
+
+## 深夜批㉑：真机四 Bug 修复（生产 exe c7f47c32 三进程 21:1x 在线）
+
+- Bug 3 上下文污染三层硬过滤（注入门控 `_DEVICE_CTX_RE` 非设备语境零注入/组装污染轮整条剔除弃占位/`purge_polluted_history` 贯穿 dashboard 两视图+GET /api/history——生产活体 50 条残留 0）。
+- Bug 4 流式端点补总线 dispatch（ack 单帧 answer+done 骨架秒落；结果 bus_reply 推送）。
+- Bug 1 气泡宽度链 min-width:0 全链+overflow-x 气泡内滑动（页面级横滚消失）。Bug 2 renderRich 行内代码灰底等宽 md-code。
+- 全仓 2869+5 全绿（+5 锚+4 契约更新）；安装包重跑并 clobber 重传 Release（sha256 795828f5…）。
+- 坑录：SYSTEM_PROMPT 工具清单合法含"操作记录"——污染断言锚载荷本体；onebot_event 外层 except 吞测试 side_effect 异常。

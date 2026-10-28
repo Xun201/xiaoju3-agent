@@ -681,7 +681,11 @@
             .replace(/\[CQ:[^\]]*\]/g, '');
     }
     function renderRich(text) {
-        return renderCQFace(escapeHtml(text)).replace(/\n/g, '<br>');
+        // 行内代码（2026-10-28 总线/工具回复实锤：`control_ha_device` 裸奔
+        // 出戏）：转义后把 `xxx` 包成灰底等宽 <code>；无反引号零开销直通
+        return renderCQFace(escapeHtml(text))
+            .replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>')
+            .replace(/\n/g, '<br>');
     }
 
     // ==================== Markdown 表格渲染（2026-10-28，总线选股清单实锤） ====================

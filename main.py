@@ -848,13 +848,23 @@ def _filter_recent_actions(actions, ttl_hours=None):
     return out
 
 
-def _inject_recent_actions(history):
+_DEVICE_CTX_RE = re.compile(
+    r"设备|灯|插座|空调|报警|开关|扫描|它|刚才|那个|继续|上次|操作")
+
+
+def _inject_recent_actions(history, user_msg=None):
     """最近设备操作注入（指代消解上下文）：进入 smart_ask 前取最近 5 条
     **24 小时内**的设备操作记录，以"以下是最近的设备操作记录"为中文前缀
     拼入系统上下文；空记录/全过期（无文件/读取异常）不拼。
     范围修正（2026-10-27）：仪表盘 /api/chat 与 /api/chat/stream 同样调用
     本函数（xiaoju3_dashboard.py 两处实锤），旧 docstring 说"不经本链路"
-    已过时。包装文案明确"背景参考"语义——r1 曾把注入块当用户问题解读。"""
+    已过时。包装文案明确"背景参考"语义——r1 曾把注入块当用户问题解读。
+
+    🚫 硬性过滤（2026-10-28 夜，"你好"被当设备话题续读实锤）：仅当用户
+    消息命中设备/指代语境词才注入——纯净闲聊（你好/吃什么都好）**零注入**，
+    提示词背景参考的软化措辞对 r1 无效（实锤它照样当主问题解读）。"""
+    if user_msg is not None and not _DEVICE_CTX_RE.search(str(user_msg)):
+        return history
     try:
         actions = get_recent_actions()
     except Exception as e:
@@ -1134,7 +1144,8 @@ def _brain_reply(source, message, messages, user_id, new_session=False):
         return intent_reply
 
     history = _inject_long_term_memories(messages)
-    history = _inject_recent_actions(history)
+    history = brain.purge_polluted_history(
+        _inject_recent_actions(history, user_msg=message))
     return _smart_ask_with_child_lock(message, history, session_key, user_id)
 
 
