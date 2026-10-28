@@ -179,3 +179,9 @@
 - Bug 1 气泡宽度链 min-width:0 全链+overflow-x 气泡内滑动（页面级横滚消失）。Bug 2 renderRich 行内代码灰底等宽 md-code。
 - 全仓 2869+5 全绿（+5 锚+4 契约更新）；安装包重跑并 clobber 重传 Release（sha256 795828f5…）。
 - 坑录：SYSTEM_PROMPT 工具清单合法含"操作记录"——污染断言锚载荷本体；onebot_event 外层 except 吞测试 side_effect 异常。
+
+## 深夜批㉒：版本倒挂修复→v2.2.1 Released+新号保命模式
+
+- **版本倒挂修复**：v2.1.1 Release+tag 删除（版本从 2.2.0 倒退系误发）→ 重发 **v2.2.1**（版本单源 xiaoju3.py 已升）。Release：https://github.com/Xun201/xiaoju3-agent/releases/tag/v2.2.1
+- **新号保命模式**：QQ 日限 40 条（超限静默到次日）+ 最小间隔 3-6s + 选股 QQ 屏蔽引导去控制台；conftest 第四哨兵（XIAOJU3_QQ_SAFE_MODE=0 测试态）。
+- 生产车已部署 version=2.2.1 三进程在跑。
