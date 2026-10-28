@@ -276,7 +276,9 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
         self.assertIn("sendMessageLegacy", js)     # 回退函数在位
         self.assertIn("sendMessageStream(text, loadingMsg, rotateTimer)",
                       js)
-        self.assertIn(".catch(() => sendMessageLegacy", js)   # 失败回退
+        # 失败回退（2026-10-28 排队条：主动中断跳过 legacy，其余照走）
+        self.assertIn("sendMessageLegacy(text, loadingMsg, rotateTimer);", js)
+        self.assertIn("__xj3AbortSkip", js)   # 中断跳过回退的守卫在位
 
     def test_progressive_render_anchors(self):
         js = self._js()

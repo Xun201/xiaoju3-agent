@@ -1955,7 +1955,7 @@ class ThinkCardFrontendTests(unittest.TestCase):
         dynamic_ids = {"xiaoju3-toast",
                  "about-overlay", "dev-switch-row",
                  "proactive-audit", "proactive-summary",
-                 "proactive-summary-text", "proactive-arrow"}   # showToast/关于卡（#264 B2d）/开发者开关行（#264 B2c）/主动性审计框（#271③ Phase 1）首次调用时 createElement 自建
+                 "proactive-summary-text", "proactive-arrow", "queue-bar"}   # showToast/关于卡（#264 B2d）/开发者开关行（#264 B2c）/主动性审计框（#271③ Phase 1）首次调用时 createElement 自建
         missing = js_ids - dynamic_ids - html_ids
         self.assertEqual(missing, set(),
                          msg="console.js 引用了 index.html 不存在的 id: %s" % missing)
@@ -3268,3 +3268,53 @@ class StreamBusDispatchTests(unittest.TestCase):
                                     json={"message": "今天心情怎么样"})
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn("📣 总线", resp.get_data(as_text=True))
+
+
+class ConsoleCloudChatTests(unittest.TestCase):
+    """控制台闲聊强制云端（2026-10-28 本地毒话术根除）：非工具语境直连云端，
+    云端异常回退 smart_ask 旧链；工具语境（_NEED_BRAIN_RE）不劫持。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_greeting_goes_cloud(self):
+        with mock.patch.object(main, "console_cloud_chat",
+                               return_value="在呢喵，主人今天怎么样～"), \
+                mock.patch.object(dashboard, "smart_ask",
+                                  side_effect=AssertionError("不该进本地链")):
+            resp = self.client.post("/api/chat", json={"message": "你好"})
+        body = resp.get_json()
+        self.assertEqual(body["code"], 200)
+        self.assertEqual(body["data"]["source"], "☁️ 云端")
+        self.assertIn("在呢喵", body["data"]["reply"])
+
+    def test_tool_context_not_hijacked(self):
+        # 工具语境（_NEED_BRAIN_RE 命中）不劫持 → 走 smart_ask 工具循环
+        msg = "把客厅灯打开"
+        self.assertIsNotNone(main._NEED_BRAIN_RE.search(msg))
+        with mock.patch.object(dashboard, "smart_ask",
+                               return_value=("已为你打开客厅灯 ✅", "🏠 本地")):
+            resp = self.client.post("/api/chat", json={"message": msg})
+        self.assertIn("打开", resp.get_json()["data"]["reply"])
+
+    def test_cloud_fail_falls_back(self):
+        with mock.patch.object(main, "console_cloud_chat",
+                               return_value=None), \
+                mock.patch.object(dashboard, "smart_ask",
+                                  return_value=("旧链回复", "🏠 本地")):
+            resp = self.client.post("/api/chat", json={"message": "你好"})
+        self.assertEqual(resp.get_json()["data"]["reply"], "旧链回复")
+
+    def test_stream_greeting_goes_cloud(self):
+        with mock.patch.object(main, "console_cloud_chat",
+                               return_value="云端闲聊回复"), \
+                mock.patch.object(main.brain, "smart_ask_stream",
+                                  side_effect=AssertionError("不该进本地链")), \
+                mock.patch.object(dashboard, "_take_screenshot",
+                                  return_value=None):
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "你好"})
+        body = resp.get_data(as_text=True)
+        self.assertIn("event: answer", body)
+        self.assertIn("云端闲聊回复", body)
+        self.assertIn("☁️ 云端", body)

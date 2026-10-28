@@ -1580,6 +1580,11 @@
             }
         });
         es.onerror = function () { /* EventSource 原生自动重连，无需处理 */ };
+        // 思考一行折叠（2026-10-28）：点击消息内思考行展开/收起全文
+        document.addEventListener('click', function (ev) {
+            const tl = ev.target.closest('.message.bot-message .think-live');
+            if (tl) tl.classList.toggle('open');
+        });
     })();
 
     // ==================== 天气卡真实化（#351 聚合面板一期） ====================
@@ -1780,12 +1785,107 @@
     ];
     const THINKING_ROTATE_MS = 900;
 
+    // 💬 排队条（2026-10-28 对齐 ZCode）：生成中再发消息 → 缩成输入框上方
+    // 一行排队条（💬 排队中：… + [立即执行][删除]）；立即执行=中断当前流式
+    // （AbortController）转发排队消息；任务自然结束=自动补发排队消息。
+    let __xj3Generating = false;
+    let __xj3BusAbort = null;     // 总线任务无法 abort（后端线程）——立即执行
+    let __xj3Queued = null;       // =并发二次请求（后端自排队，前端只补气泡）
+    let __xj3AbortSkip = false;   // 主动中断时禁走 legacy 回退
+
+    function ensureQueueBar() {
+        let bar = document.getElementById('queue-bar');
+        if (bar) return bar;
+        bar = document.createElement('div');
+        bar.id = 'queue-bar';
+        bar.style.cssText = 'display:none;align-items:center;gap:8px;'
+            + 'margin:0 12px 6px;padding:6px 12px;font-size:12px;'
+            + 'background:rgba(240,243,249,0.92);border:1px solid '
+            + 'var(--color-border,#e0e4ec);border-radius:8px;'
+            + 'backdrop-filter:blur(4px);';
+        const chatHistory = document.getElementById('chat-history');
+        const inputArea = document.querySelector('.chat-input-area');
+        (inputArea || chatHistory || document.body).parentNode.insertBefore(
+            bar, inputArea || chatHistory);
+        return bar;
+    }
+
+    function showQueueBar(text) {
+        const bar = ensureQueueBar();
+        bar.innerHTML = '';
+        const label = document.createElement('span');
+        label.textContent = '💬 排队中：' + text;
+        label.style.cssText = 'flex:1;min-width:0;overflow:hidden;'
+            + 'text-overflow:ellipsis;white-space:nowrap;color:#536ba9;';
+        const runBtn = document.createElement('button');
+        runBtn.textContent = '立即执行';
+        runBtn.style.cssText = 'font-size:11px;padding:2px 10px;border-radius:6px;'
+            + 'border:1px solid var(--color-border,#e0e4ec);background:#fff;'
+            + 'cursor:pointer;';
+        runBtn.addEventListener('click', function () {
+            const q = __xj3Queued;
+            __xj3Queued = null;
+            hideQueueBar();
+            if (__xj3BusAbort) {   // 总线任务不可中断：并发二次请求（后端自排队）
+                __xj3Generating = false;
+                window.sendMessage.__force = true;
+            }
+            if (__xj3Abort) {      // 流式任务：中断当前再发
+                __xj3AbortSkip = true;
+                try { __xj3Abort.abort(); } catch (e) {}
+            }
+            __xj3Generating = false;
+            window.sendMessage.__force = true;
+            window.sendMessage();
+        });
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '删除';
+        delBtn.style.cssText = 'font-size:11px;padding:2px 10px;border-radius:6px;'
+            + 'border:1px solid var(--color-border,#e0e4ec);background:#fff;'
+            + 'cursor:pointer;';
+        delBtn.addEventListener('click', function () {
+            __xj3Queued = null;
+            hideQueueBar();
+        });
+        bar.appendChild(label);
+        bar.appendChild(runBtn);
+        bar.appendChild(delBtn);
+        bar.style.display = 'flex';
+    }
+
+    function hideQueueBar() {
+        const bar = document.getElementById('queue-bar');
+        if (bar) bar.style.display = 'none';
+    }
+
+    window.__xj3GenFinish = function () {
+        __xj3Generating = false;
+        if (__xj3Queued) {
+            const q = __xj3Queued;
+            __xj3Queued = null;
+            hideQueueBar();
+            window.sendMessage.__force = true;
+            window.sendMessage();
+            void q;
+        }
+    };
+
     window.sendMessage = function() {
         const input = document.getElementById('chat-input');
         if (!input) return;
 
         const text = input.value.trim();
         if (!text) return;
+
+        // 💬 排队条：生成中再发 → 缩一行排队（不直发后端）
+        if (__xj3Generating && !window.sendMessage.__force) {
+            __xj3Queued = text;
+            showQueueBar(text);
+            input.value = '';
+            window.__xj3SyncSendBtn && window.__xj3SyncSendBtn();
+            return;
+        }
+        window.sendMessage.__force = false;
 
         appendUserMessage(text);
         input.value = '';
@@ -1805,12 +1905,25 @@
             loadingMsg.textContent = THINKING_STATUS[statusIdx % THINKING_STATUS.length];
             statusIdx += 1;
         }, THINKING_ROTATE_MS);
+        __xj3Generating = true;
+        __xj3AbortSkip = false;
+        window.sendMessage.__force = false;
 
         // 🌊 思维链真流式（2026-10-05 C2，#244）：优先走 SSE 流式端点，
         // 失败/异常回退旧 /api/chat（口径零回退）。历史回放/刷新重试仍走
-        // appendBotMessage 旧管线（本次只改发送链）。
+        // appendBotMessage 旧管线（本次只改发送链）。主动中断（排队条
+        // "立即执行"）不走 legacy 回退——用户要的是插队不是重发。
         sendMessageStream(text, loadingMsg, rotateTimer)
-            .catch(() => sendMessageLegacy(text, loadingMsg, rotateTimer));
+            .catch(() => {
+                if (__xj3AbortSkip) {
+                    try { loadingMsg.remove(); } catch (e) {}
+                    window.__xj3GenFinish && window.__xj3GenFinish();
+                    return;
+                }
+                sendMessageLegacy(text, loadingMsg, rotateTimer);
+                window.__xj3GenFinish && window.__xj3GenFinish();
+            })
+            .finally(() => window.__xj3GenFinish && window.__xj3GenFinish());
     };
 
     // 流式分支：fetch POST + getReader 手解 SSE（EventSource 不支持 POST）。
@@ -1825,6 +1938,7 @@
         const history = document.getElementById('chat-history');
         // ⏱️ 总闸 190s AbortController（比后端 180s 硬超时略长的最终防线）
         const ac = new AbortController();
+        __xj3Abort = ac;
         const streamGuard = setTimeout(() => ac.abort(), 190000);
         // ⏱️ 看门狗（2026-10-22 救火拍板）：首帧前 30s / 帧间 90s 无任何帧
         // → 中断并就地报错（不转 legacy——同源后端会同样卡死）。任何底层

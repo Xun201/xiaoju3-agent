@@ -2089,6 +2089,40 @@ def _stock_screen_reply_qq():
     return mod.stock_screen_text()
 
 
+def console_cloud_chat(message, history=None):
+    """控制台闲聊云端直答（2026-10-28 队长拍板"本地毒话术根除"）：控制台
+    非工具意图的普通对话直连云端大脑（与 QQ 接管同构）——本地小脑只保留
+    工具场景，闲聊不再经过 r1（"建议您联网"类幻觉生成面物理消失）。
+    返回 None=云端不可用/失败（调用方回退 smart_ask 旧链兜底）。"""
+    key = CLOUD_KEY or ""
+    if not key:
+        return None
+    sys_prompt = dict(prompts.QQ_CLOUD_SYSTEM)
+    sys_prompt["content"] = prompts.QQ_CLOUD_SYSTEM["content"].format(
+        user_title="主人")
+    msgs = [sys_prompt]
+    msgs = _inject_long_term_memories(msgs)   # 询问族完整塞入（失忆硬逻辑）
+    tail = [m for m in (history or [])[-6:]
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    msgs = msgs + tail
+    user_content = str(message or "")
+    lite = _local_extract_lite(message)
+    if lite:
+        user_content = f"[小脑速记] {lite}；主人说：{user_content}"
+    msgs = msgs + [{"role": "user", "content": user_content}]
+    try:
+        r = requests.post(CLOUD_URL, json={
+            "model": CLOUD_MODEL, "messages": msgs, "stream": False,
+            "temperature": 0.7}, timeout=(5, 60))
+        body = r.json()
+        content = str(body.get("choices", [{}])[0].get("message", {})
+                      .get("content", "")).strip()
+        return content or None
+    except Exception as e:
+        print(f"⚠️ [控制台云端直答] 失败（回退旧链）: {type(e).__name__}")
+        return None
+
+
 def _stock_screen_result_for(channel):
     """按通道取选股结果形态：QQ=纯文本（不渲染表格）；控制台=Markdown
     表格（前端 renderRichTables 渲染成真表）。"""

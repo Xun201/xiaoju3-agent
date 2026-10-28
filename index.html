@@ -1106,7 +1106,20 @@
             max-width: 100%;
         }
         .message.bot-message .source-badge,
-        .message.bot-message .msg-tools { align-self: flex-start; margin-top: 6px; }
+        .message.bot-message .msg-tools { align-self: flex-start; margin-top: 4px; }
+        /* 思考一行折叠（2026-10-28 队长口径）：消息内思考钳成一行小字紧贴
+           正文，点击展开全文（流式独立块不受限，仅终态消息内生效） */
+        .message.bot-message .think-live {
+            max-height: 20px;
+            overflow: hidden;
+            cursor: pointer;
+            border-left: 2px solid var(--v0-n200, #e0e4ec);
+            padding-left: 8px;
+        }
+        .message.bot-message .think-live.open {
+            max-height: none;
+            overflow: visible;
+        }
         .source-badge {
             background: var(--v0-n100); border: 1px solid var(--v0-n200);
             color: var(--v0-n500); border-radius: 6px; font-size: 11px;
@@ -1115,8 +1128,10 @@
         /* ---- 思考链（v0 ThinkingPanel 色：Brain 行灰字+左线小字）---- */
         .think-live {
             font-size: 12px; color: var(--v0-n500);
-            margin: 0 0 10px;   /* 与下方白色气泡卡拉开（队长口径） */
+            margin: 0 0 4px;    /* 一行折叠贴正文（2026-10-28 队长口径：
+                                   割裂大空隙根因=10px 大间距+空块残留） */
         }
+        .think-live:empty { display: none; margin: 0; }
         .think-live-label { color: var(--v0-n500); }
         .think-live-line {
             color: var(--v0-n400); border-left: 1px solid var(--v0-n200);
