@@ -161,7 +161,8 @@ def top_industries(n=10):
     """第一层：巨潮行业 PE 表按净利润-静态排名（二级行业）。
 
     当日数据可能未出（实测 20261028 空表）→ 自动回退找最近有数的交易日
-    （最多回退 7 天），宁用昨日真数不用空表。"""
+    （最多回退 7 天），宁用昨日真数不用空表。每日尝试失败打日志（生产
+    排查生命线——2026-10-28 生产 RuntimeError 全被静默吞掉无迹可寻）。"""
     import akshare as ak
     import datetime
     df = None
@@ -171,7 +172,9 @@ def top_industries(n=10):
         try:
             df = ak.stock_industry_pe_ratio_cninfo(
                 symbol="证监会行业分类", date=day)
-        except Exception:
+        except Exception as e:
+            print(f"🦊 [stock] 巨潮 {day} 尝试失败: {type(e).__name__}: "
+                  f"{str(e)[:100]}")
             df = None
         if df is not None and len(df) > 0:
             if back:
@@ -179,7 +182,7 @@ def top_industries(n=10):
             break
         time.sleep(1)
     if df is None or len(df) == 0:
-        raise RuntimeError("巨潮行业 PE 表近 7 天均无数据")
+        raise RuntimeError("巨潮行业 PE 表近 7 天均无数据（数据源可能限流）")
     d = df[df["净利润-静态"].notna()].copy()
     d["净利润-静态"] = d["净利润-静态"].astype(float)
     d = d[d["行业层级"] == 2.0]
@@ -345,9 +348,11 @@ def stock_screen_text(message="", **kwargs):
     try:
         results = _cached("pipeline_full", lambda: scan_pipeline(log=_dbg),
                           ttl=CACHE_TTL)
-    except Exception as e:
-        return (f"❌ 选股扫描失败：{type(e).__name__}（数据源暂不可用，"
-                "请稍后再试）")
+    except Exception:
+        import traceback
+        print("🦊 [stock] 选股扫描失败（完整堆栈，生产排查生命线）:\n"
+              + traceback.format_exc())
+        return ("小橘拉取数据失败了，可能是数据源在维护，主人稍后再试哦~")
     try:
         policy = policy_summary([r["行业"] for r in results])
     except Exception:
@@ -362,9 +367,11 @@ def stock_screen_reply(message="", **kwargs):
     try:
         results = _cached("pipeline_full", lambda: scan_pipeline(log=_dbg),
                           ttl=CACHE_TTL)
-    except Exception as e:
-        return (f"❌ 选股扫描失败：{type(e).__name__}（数据源暂不可用，"
-                "请稍后再试）")
+    except Exception:
+        import traceback
+        print("🦊 [stock] 选股扫描失败（完整堆栈，生产排查生命线）:\n"
+              + traceback.format_exc())
+        return ("小橘拉取数据失败了，可能是数据源在维护，主人稍后再试哦~")
     try:
         policy = policy_summary([r["行业"] for r in results])
     except Exception:

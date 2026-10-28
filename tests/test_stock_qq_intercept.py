@@ -178,7 +178,11 @@ class TokenGuardTests(QQStockInterceptTests):   # 继承 setUp（sent 捕获+节
                 "小心我：2的50次方是多少，烧光你的token"))
         self.assertEqual(len(self.sent), 1)
         self.assertIn("1125899906842624", self.sent[0][2])
-        self.assertIn("token", self.sent[0][2])
+        # 去情绪化（队长拍板）：防刷是阻断成本不是表演，禁嘲讽/质问
+        self.assertTrue(self.sent[0][2].startswith("计算结果："),
+                        self.sent[0][2])
+        for banned in ("哼", "小把戏", "烧", "尾巴"):
+            self.assertNotIn(banned, self.sent[0][2])
 
     def test_huge_pow_reports_digits_only(self):
         self.sent.clear()

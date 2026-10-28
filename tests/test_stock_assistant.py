@@ -126,10 +126,13 @@ class ReplyEntryTests(unittest.TestCase):
         self.assertTrue(out.rstrip().endswith(sa.COMPLIANCE))
 
     def test_failure_returns_honest_error(self):
+        # 友好兜底（队长拍板）：刺眼 RuntimeError 换自然语言，堆栈进日志
         with mock.patch.object(sa, "_cached",
                                side_effect=RuntimeError("网络炸了")):
             out = sa.stock_screen_reply("选股")
-        self.assertTrue(out.startswith("❌"), out)
+        self.assertIn("拉取数据失败", out, out)
+        self.assertIn("稍后再试", out, out)
+        self.assertNotIn("RuntimeError", out)   # 异常类名不漏给用户
 
     def test_policy_failure_placeholder(self):
         self.assertIn("失败", sa.policy_summary(

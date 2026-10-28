@@ -1987,6 +1987,7 @@ _MSG_LEN_CAP = 500
 
 def _math_bait_reply(text):
     """幂运算钓饵直算：命中"N的M次方"→ 本地 pow 直接回（零 token 零延迟）。
+    回复极简客观（队长拍板：防刷是阻断成本不是表演，禁嘲讽/质问/傲娇）。
     结果 >200 位只报位数与量级（防回复爆炸）。非幂运算返回 None 正常放行。"""
     m = _MATH_BAIT_RE.search(str(text or ""))
     if not m:
@@ -1994,19 +1995,14 @@ def _math_bait_reply(text):
     import math
     base, exp = int(m.group(1)), int(m.group(2))
     if base <= 1:
-        val = str(base ** min(exp, 64))
-        return (f"算都不用算～{base} 的 {exp} 次方 = {val}。"
-                "这种小把戏还想烧小橘的 token？哼～")
+        return f"计算结果：{base ** min(exp, 64)}"
     digits = int(exp * math.log10(base)) + 1
     if digits <= 200:
-        val = str(base ** exp)
-        return (f"算都不用算～{base} 的 {exp} 次方 = {val}。"
-                "这种小把戏还想烧小橘的 token？哼～")
+        return f"计算结果：{base ** exp}"
     lead = 10 ** ((exp * math.log10(base)) % 1)
     expo = int(exp * math.log10(base))
-    return (f"{base} 的 {exp} 次方是一个 {digits} 位数（约 {lead:.3f}"
-            f"×10^{expo}）。完整数值有 {digits} 位，发出去尾巴都要打完啦，"
-            "小橘就不当打字机了哦～")
+    return (f"计算结果：{base} 的 {exp} 次方是一个 {digits} 位数"
+            f"（约 {lead:.3f}×10^{expo}）")
 
 
 def _stock_screen_reply_qq():
