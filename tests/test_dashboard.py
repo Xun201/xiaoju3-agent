@@ -1141,7 +1141,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("'/api/history'", js)                   # 历史接口
         self.assertIn("res.data.messages", js)                # 渲染 messages
         self.assertIn("method: 'DELETE'", js)                 # 清空历史（带确认）
-        self.assertIn("confirm(", js)                         # 确认语义
+        self.assertIn("showConfirm('清空聊天记录'", js)        # 确认语义（2026-10-29 起现代弹窗，原生 confirm 退役）
 
     def test_console_js_refresh_forward_implemented(self):
         """刷新/转发按钮实装（界面 §4.2）：移除 alert 占位。"""

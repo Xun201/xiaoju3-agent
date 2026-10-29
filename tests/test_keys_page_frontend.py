@@ -84,10 +84,12 @@ class KeysPageJsTests(unittest.TestCase):
         self.assertIn("it.set", build)      # 未配置灰态
 
     def test_overwrite_second_confirm(self):
-        """覆盖流程：保存前 window.confirm 二次确认（设计稿拍板防误操作）。"""
+        """覆盖流程：保存前二次确认（设计稿拍板防误操作）——2026-10-29 起
+        走 showConfirm 现代弹窗（原生 window.confirm 全量退役）。"""
         body = _fn_body(self.cjs, "startKeyEdit")
-        self.assertIn("window.confirm('确认覆盖 '", body)
+        self.assertIn("showConfirm('覆盖密钥', '确认覆盖 '", body)
         self.assertIn("旧值不可恢复。", body)
+        self.assertIn("confirmText: '覆盖'", body)
 
     def test_post_body_has_confirm_true(self):
         """POST /api/keys body {key,value,confirm:true}（后端 400 兜底）。"""

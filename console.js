@@ -46,6 +46,72 @@
         };
     })('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">');
 
+    // ==================== 现代确认弹窗（2026-10-29 队长指令：原生 confirm 全量退役） ====================
+    // 对齐 DeepSeek 规范：深色半透明遮罩+居中白圆角卡+加粗标题+灰描述+核心
+    // 点缀蓝胶囊主钮+右上 ×。z-index 50000，遮罩全屏覆盖=弹出期背景不可点。
+    // Esc/遮罩空白点击/× 均为取消；Enter=确认。textContent 注入零 XSS 面。
+    // showConfirm(title, message, onConfirm, opts)：
+    //   opts.confirmText（默认'确定'）/ opts.cancelText（默认'取消'）/
+    //   opts.showCancel（默认 true；false=单钮提示态）
+    function showConfirm(title, message, onConfirm, opts) {
+        opts = opts || {};
+        const overlay = document.createElement('div');
+        overlay.className = 'xj3-modal-overlay';
+        const card = document.createElement('div');
+        card.className = 'xj3-modal-card';
+        card.setAttribute('role', 'dialog');
+        card.setAttribute('aria-modal', 'true');
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'xj3-modal-close';
+        closeBtn.setAttribute('aria-label', '关闭');
+        closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+        const titleEl = document.createElement('div');
+        titleEl.className = 'xj3-modal-title';
+        titleEl.textContent = title;
+        const msgEl = document.createElement('p');
+        msgEl.className = 'xj3-modal-msg';
+        msgEl.textContent = message;
+        const btns = document.createElement('div');
+        btns.className = 'xj3-modal-btns';
+        let settled = false;
+        function close(result) {
+            if (settled) return;
+            settled = true;
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+            if (result === 'confirm' && typeof onConfirm === 'function') onConfirm();
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') close('cancel');
+            else if (e.key === 'Enter') { e.preventDefault(); close('confirm'); }
+        }
+        if (opts.showCancel !== false) {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'xj3-modal-btn xj3-modal-btn-secondary';
+            cancelBtn.textContent = opts.cancelText || '取消';
+            cancelBtn.addEventListener('click', function () { close('cancel'); });
+            btns.appendChild(cancelBtn);
+        }
+        const okBtn = document.createElement('button');
+        okBtn.className = 'xj3-modal-btn xj3-modal-btn-primary';
+        okBtn.textContent = opts.confirmText || '确定';
+        okBtn.addEventListener('click', function () { close('confirm'); });
+        btns.appendChild(okBtn);
+        closeBtn.addEventListener('click', function () { close('cancel'); });
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) close('cancel');
+        });
+        document.addEventListener('keydown', onKey, true);
+        card.appendChild(closeBtn);
+        card.appendChild(titleEl);
+        card.appendChild(msgEl);
+        card.appendChild(btns);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        okBtn.focus();
+    }
+    window.showConfirm = showConfirm;   // 全局可达（控制台调试/外部脚本）
+
     // 音效引擎自持兜底（2026-10-29 穿透修复）：桌宠 DOM 物理移除时
     // desktop-pet.js 的 WebAudio 引擎随之消失——window.xiaoju3Sound 缺席
     // → 铃铛绑定代码 if (soundBtn && window.xiaoju3Sound) 永假=监听器从未
@@ -668,14 +734,17 @@
                 }).then(() => loadTodos())
                   .catch(err => console.error('保存待办说明失败', err));
             }
-            // #238：删除单条待办（仅已完成项有入口；confirm 二次确认 → DELETE 硬删）
+            // #238：删除单条待办（仅已完成项有入口；确认弹窗二次确认 → DELETE 硬删）
             const delBtn = ev.target.closest('button.todo-del');
             if (delBtn) {
                 const tid = parseInt(delBtn.dataset.id, 10);
-                if (!window.confirm('确定删除这条已完成的待办？删除后不可恢复。')) return;
-                fetch(`/api/todos/${tid}`, { method: 'DELETE' })
-                    .then(() => loadTodos())
-                    .catch(err => console.error('删除待办失败', err));
+                showConfirm('删除已完成待办',
+                    '确定删除这条已完成的待办？删除后不可恢复。',
+                    function () {
+                        fetch(`/api/todos/${tid}`, { method: 'DELETE' })
+                            .then(() => loadTodos())
+                            .catch(err => console.error('删除待办失败', err));
+                    }, { confirmText: '删除' });
             }
         });
         // 复选框 + 优先级下拉：值变化类交互走 change（勾=完成/取消=恢复、
@@ -1463,22 +1532,25 @@
                     }
                 }).catch(function () { showToast('❌ 挂载失败'); });
             } else if (btn.dataset.act === 'del-doc') {
-                if (!window.confirm('确定从知识库彻底删除《' + (d.title || d.path)
-                    + '》？其全部切片与向量将一并删除，不可恢复。')) return;
-                fetch('/api/knowledge/doc/delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: d.path })
-                }).then(res => res.json()).then(function (r) {
-                    if (r.code === 200 && (r.data || {}).ok) {
-                        showToast('🗑 已删除《' + (d.title || '') + '》'
-                            + '（' + r.data.chunks + ' 块）');
+                showConfirm('删除知识库文档',
+                    '确定从知识库彻底删除《' + (d.title || d.path)
+                    + '》？其全部切片与向量将一并删除，不可恢复。',
+                    function () {
+                        fetch('/api/knowledge/doc/delete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: d.path })
+                        }).then(res => res.json()).then(function (r) {
+                            if (r.code === 200 && (r.data || {}).ok) {
+                                showToast('🗑 已删除《' + (d.title || '') + '》'
+                                    + '（' + r.data.chunks + ' 块）');
                         refreshContextTags();   // 计数标签与清单即时同步
                         closeAll();
                     } else {
                         showToast('❌ ' + ((r || {}).error || '删除失败'));
                     }
                 }).catch(function () { showToast('❌ 删除失败'); });
+                }, { confirmText: '删除' });
             }
         });
         refreshContextTags();
@@ -2498,7 +2570,7 @@
     const clearBtn = document.getElementById('clear-history');
     if (clearBtn) {
         clearBtn.addEventListener('click', () => {
-            if (!confirm('确定清空聊天记录吗？此操作不可恢复。')) return;
+            showConfirm('清空聊天记录', '确定清空聊天记录吗？此操作不可恢复。', function () {
                 fetch('/api/history', { method: 'DELETE' })
                 .then(res => res.json())
                 .then(res => {
@@ -2514,6 +2586,7 @@
                     showToast('聊天记录已清空');
                 })
                 .catch(err => showToast('清空失败：' + err.message));
+            }, { confirmText: '清空' });
         });
     }
 
@@ -4136,13 +4209,13 @@
         saveBtn.addEventListener('click', function () {
             const value = input.value;
             if (!value.trim()) { showToast('新值不能为空'); return; }
-            // 二次确认（设计稿第五节拍板：防误操作，旧值不可恢复）
-            if (!window.confirm('确认覆盖 ' + it.key + ' 吗？旧值不可恢复。')) return;
-            fetch('/api/keys', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: it.key, value: value, confirm: true })
-            })
+            // 二次确认（设计稿第五节拍板：防误操作，旧值不可恢复）——现代弹窗
+            showConfirm('覆盖密钥', '确认覆盖 ' + it.key + ' 吗？旧值不可恢复。', function () {
+                fetch('/api/keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: it.key, value: value, confirm: true })
+                })
                 .then(function (res) {
                     return res.json().then(function (body) {
                         return { status: res.status, body: body };
@@ -4168,6 +4241,7 @@
                     loadKeys();          // 刷新掩码显示
                 })
                 .catch(function (err) { showToast('保存失败: ' + err.message); });
+            }, { confirmText: '覆盖' });
         });
         btns.appendChild(cancelBtn);
         btns.appendChild(saveBtn);

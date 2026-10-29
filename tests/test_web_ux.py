@@ -597,5 +597,61 @@ class PaneRegistryCompletenessTests(unittest.TestCase):
         self.assertIn("soundBtn.addEventListener", js)            # 铃铛绑定在位
 
 
+class ModernModalTests(unittest.TestCase):
+    """现代确认弹窗（2026-10-29 队长指令：原生 confirm 全量退役，对齐
+    DeepSeek 弹窗规范）。锚三层：①原生弹窗绝迹 ②组件与 CSS 在位
+    ③四个业务调用点全部改道 showConfirm。"""
+
+    def setUp(self):
+        self.js = _read("console.js")
+        self.html = _read("index.html")
+
+    def test_no_native_confirm_left(self):
+        """console.js / index.html 零 window.confirm、零裸 confirm( 调用。"""
+        import re
+        self.assertNotIn("window.confirm(", self.js)
+        self.assertIsNone(re.search(r"(?<![A-Za-z])confirm\(", self.js),
+                          "console.js 残留裸 confirm( 调用")
+        self.assertNotIn("window.confirm", self.html)
+
+    def test_modal_component_and_css_present(self):
+        """showConfirm 组件定义+全局导出；CSS 类与关键样式在位
+        （遮罩 z 50000 高于首装引导低于 toast、白卡圆角、蓝色胶囊主钮）。"""
+        js, html = self.js, self.html
+        self.assertIn("function showConfirm(title, message, onConfirm, opts)", js)
+        self.assertIn("window.showConfirm = showConfirm;", js)
+        self.assertIn("xj3-modal-overlay", html)
+        self.assertIn("xj3-modal-card", html)
+        self.assertIn("xj3-modal-btn-primary", html)
+        self.assertIn("z-index: 50000", html)          # 遮罩层级
+        self.assertIn("rgba(17, 24, 39, 0.5)", html)   # 深色半透明遮罩
+        self.assertIn("border-radius: 16px", html)     # 白卡圆角
+        self.assertIn("border-radius: 999px", html)    # 胶囊主钮
+
+    def test_modal_ux_contract(self):
+        """交互契约：Esc=取消/Enter=确认、遮罩空白点击=取消、textContent
+        注入零 XSS、settled 防重入、确认后回调 onConfirm。"""
+        js = self.js
+        start = js.index("function showConfirm(title, message, onConfirm, opts)")
+        body = js[start:js.index("window.showConfirm = showConfirm;", start)]
+        self.assertIn("e.key === 'Escape') close('cancel')", body)
+        self.assertIn("e.key === 'Enter')", body)
+        self.assertIn("if (e.target === overlay) close('cancel');", body)
+        self.assertIn("titleEl.textContent = title;", body)
+        self.assertIn("msgEl.textContent = message;", body)
+        self.assertIn("if (settled) return;", body)
+        self.assertIn("if (result === 'confirm' && typeof onConfirm === 'function') onConfirm();", body)
+
+    def test_four_call_sites_migrated(self):
+        """四个业务调用点全部改道 showConfirm：删待办/删知识库文档/清空
+        聊天记录/密钥覆盖——各带语义化 confirmText。"""
+        js = self.js
+        for marker in ("showConfirm('删除已完成待办'", "showConfirm('删除知识库文档'",
+                       "showConfirm('清空聊天记录'", "showConfirm('覆盖密钥'"):
+            self.assertIn(marker, js, "调用点未迁移: " + marker)
+        for text in ("confirmText: '删除'", "confirmText: '清空'", "confirmText: '覆盖'"):
+            self.assertIn(text, js)
+
+
 if __name__ == "__main__":
     unittest.main()

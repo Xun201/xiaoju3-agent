@@ -250,6 +250,53 @@
         .dash-quick-btn svg, .dock-menu-item svg, .context-tag svg {
             vertical-align: -2px; margin-right: 3px;
         }
+        /* ==================== 现代确认弹窗（2026-10-29 队长指令：原生 confirm 全量退役，对齐 DeepSeek） ==================== */
+        /* 深色半透明遮罩+居中白圆角卡+加粗标题+灰描述+核心点缀蓝胶囊主钮
+           （与发送按钮同色系）；z 50000=高于首装引导(3000)/工具面板，低于
+           toast(100000)；遮罩全屏覆盖=弹出期背景不可点 */
+        .xj3-modal-overlay {
+            position: fixed; inset: 0; z-index: 50000;
+            background: rgba(17, 24, 39, 0.5);
+            display: flex; align-items: center; justify-content: center;
+            padding: 24px;
+            animation: xj3ModalFade 0.18s ease-out;
+        }
+        .xj3-modal-card {
+            background: #ffffff; border-radius: 16px;
+            width: min(420px, 100%);
+            padding: 24px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+            position: relative;
+            animation: xj3ModalPop 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .xj3-modal-close {
+            position: absolute; top: 14px; right: 14px;
+            background: none; border: none; cursor: pointer;
+            color: #9ca3af; padding: 4px; line-height: 0; border-radius: 8px;
+        }
+        .xj3-modal-close:hover { color: #374151; background: rgba(31, 41, 55, 0.06); }
+        .xj3-modal-title {
+            margin: 0 28px 10px 0;
+            font-size: 17px; font-weight: 700; color: #1f2937;
+        }
+        .xj3-modal-msg {
+            margin: 0; font-size: 14px; line-height: 1.65; color: #6b7280;
+            word-break: break-word;
+        }
+        .xj3-modal-btns { display: flex; gap: 10px; margin-top: 22px; }
+        .xj3-modal-btn {
+            flex: 1; height: 40px; border: none; border-radius: 999px;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+            transition: filter 0.15s, background 0.15s;
+        }
+        .xj3-modal-btn:active { filter: brightness(0.92); }
+        .xj3-modal-btn-primary { background: #2563eb; color: #ffffff; }
+        .xj3-modal-btn-primary:hover { filter: brightness(1.08); }
+        .xj3-modal-btn-primary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+        .xj3-modal-btn-secondary { background: #f3f4f6; color: #374151; }
+        .xj3-modal-btn-secondary:hover { background: #e5e7eb; }
+        @keyframes xj3ModalFade { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes xj3ModalPop { from { opacity: 0; transform: scale(0.94) translateY(8px); } to { opacity: 1; transform: none; } }
         /* 待办卡片（2026-10-04 待办提取）：pending 可点击标完成，done 灰显划线 */
         /* 紧急修复（2026-10-22）：内层独立滚动保留，上限改视口自适应
            （180px 写死在长列表+卡片化布局下顶底互挤）；同款细腻滚动条 */
