@@ -317,14 +317,19 @@ class AggregatorPanelTests(unittest.TestCase):
         cache["payload"] = None   # 清场防串扰其他测试
 
     def test_sidebar_scroll_fix(self):
-        """紧急修复（2026-10-22）：侧栏整栏滚动+底部留白+细腻滚动条；待办
-        列表内层滚动上限改视口自适应（180px 写死退役）；卡片禁 flex 压缩
-        （todos-list 有 overflow→min-height 归零→待办卡被压瘪才是截断真因）。"""
+        """紧急修复（2026-10-22）+色块化重构（2026-10-29）：滚动收归
+        .sidebar-scroll 内层容器（原侧栏自身滚动退役——外层裁剪内层滚），
+        底部留白与滚动能力原样保留；悬浮滚动条 4px 圆角内缩 12px 不贴
+        分界线；待办卡禁 flex 压缩原样。"""
         html = self.html
         sb = html[html.index(".sidebar {"):html.index(".panel-header")]
-        self.assertIn("overflow-y: auto", sb)
-        self.assertIn("padding-bottom: 20px", sb)
-        self.assertIn(".sidebar::-webkit-scrollbar-thumb", html)
+        self.assertIn("overflow: hidden", sb)                  # 外层只裁剪
+        self.assertIn(".sidebar-scroll {", html)               # 内层滚动容器在位
+        sc_at = html.index(".sidebar-scroll {")
+        sc = html[sc_at:html.index("}", sc_at)]
+        self.assertIn("overflow-y: auto", sc)                  # 滚动能力在内层
+        self.assertIn("padding: 14px 6px 20px 14px", sc)       # 底部留白原样（shorthand 20px）
+        self.assertIn(".sidebar-scroll::-webkit-scrollbar-thumb", html)
         tl_at = html.index(".todos-list {")
         tl = html[tl_at:html.index("}", tl_at)]
         self.assertIn("max-height: 32vh", tl)

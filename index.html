@@ -93,22 +93,38 @@
             min-width: 300px;
             background-color: var(--color-bg-chat);   /* 答辩微调：底色让位卡片，卡片自身用 card 色 */
             border-right: 1px solid var(--color-border);
-            padding: 14px;
-            padding-bottom: 20px;                      /* 紧急修复：底部留白，最后一张卡不顶窗沿 */
+            padding: 0;                 /* 色块化重构（2026-10-29）：呼吸间距移交内层容器 */
+            display: block;             /* 单一子容器 .sidebar-scroll，绝对定位铺满 */
+            gap: 0;
+            box-shadow: none;           /* 色块化：分界感纯靠灰白色差，无阴影 */
+            z-index: 10;
+            border-radius: 0;
+            margin: 0;
+            overflow: hidden;           /* 外层只裁剪，滚动在 .sidebar-scroll */
+            position: relative;
+        }
+        /* 内层滚动容器（2026-10-29 色块化重构）：全部侧栏内容与滚动都在这层，
+           滚动条悬浮在面板内部右缘（right:12px 距分界线 12px+），4px 圆角
+           半透明悬浮样式——永不贴死分界线（队长三连实锤后的最终形态） */
+        .sidebar-scroll {
+            position: absolute;
+            inset: 0 12px 0 0;          /* 右缘内缩 12px：滚动条远离分界线 */
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding: 14px 6px 20px 14px;
             display: flex;
             flex-direction: column;
-            gap: 12px;                                 /* 答辩微调：卡片呼吸间距 */
-            box-shadow: var(--shadow-sidebar);
-            z-index: 10;
-            /* 卡片化：卡片圆角 + 轻阴影（令牌化，克制不过度重绘） */
-            border-radius: var(--radius-card);
-            margin: 12px;
-            /* 紧急修复（2026-10-22）：整栏顺滑滚动——body overflow:hidden 会
-               硬裁超高层内容（待办卡曾被底部截断无法滚达），overflow-y 收归
-               侧栏自身；细腻滚动条双引擎（webkit 伪元素 + thin） */
-            overflow-y: auto;
+            gap: 12px;
             scrollbar-width: thin;
+            scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
         }
+        .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+        .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+        .sidebar-scroll::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 2px;
+        }
+        .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.3); }
         .sidebar { will-change: transform; }   /* GPU 图层同 chat-area（2026-10-25 白屏闪烁） */
         /* ==================== 侧栏拖拽调宽把手（2026-10-27） ==================== */
         /* flex 兄弟节点（.sidebar 与 .chat-area 之间），宽 10px 配对负外边距
@@ -1014,8 +1030,8 @@
             border-radius: 0;                /* 色块化：方角满幅（卡片漂浮时代退役） */
             margin: 0;                       /* 色块化：右缘紧贴分界线（12px 外距退役） */
             width: 320px;
-            padding: 12px 12px 20px;         /* 呼吸感内收进灰区内部 */
-            gap: 16px;                       /* 卡片漂浮间距（v0 gap-4） */
+            padding: 0;                      /* 呼吸间距移交 .sidebar-scroll 内层容器 */
+            gap: 0;
         }
         .dash-card, .stat-item.todos-card { margin: 0; }   /* 间距交给 gap */
         .panel-header {
@@ -1458,6 +1474,7 @@
     <!-- 左侧监控面板（移动端收为可展开抽屉）；2026-10-22 答辩微调：
          模块卡片化（小米负一屏风，多层柔影+同心圆角令牌，纯样式零逻辑） -->
     <div class="sidebar">
+<div class="sidebar-scroll">
 <div class="panel-header">小橘3号 · 系统状态</div>
         <div class="v0-side-gap"></div>
 <!-- 天气卡（#351 一期真实化 + UI 三期 v0 WeatherCard 形态）：超大温度
@@ -1536,7 +1553,8 @@
 <div class="stat-item" style="margin-top: auto; font-size: 12px; color: var(--color-text-hint); text-align: center;">
             © 2026 小橘3号 Agent · <span id="footer-version" style="cursor:pointer;" title="v?" >V?.?.?</span>
         </div>
-    </div>
+    </div></div>
+
 
     </div>
 
