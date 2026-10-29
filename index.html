@@ -108,25 +108,17 @@
            半透明悬浮样式——永不贴死分界线（队长三连实锤后的最终形态） */
         .sidebar-scroll {
             position: absolute;
-            inset: 0 2px 0 0;           /* 右缘仅 2px 呼吸位：滚动条贴近分界线（2026-10-29 终版） */
+            inset: 0;                   /* 满幅：滚动条视觉全隐，灰白直抵分界线（2026-10-29 终版） */
             overflow-y: auto;
             overscroll-behavior: contain;
             padding: 14px 6px 20px 14px;
             display: flex;
             flex-direction: column;
             gap: 12px;
-            scrollbar-width: thin;
-            scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+            scrollbar-width: none;      /* 滚动条视觉彻底隐藏（滚轮滚动保留） */
         }
-        .sidebar-scroll::-webkit-scrollbar { width: 6px; }
-        .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
-        .sidebar-scroll::-webkit-scrollbar-thumb {
-            background: rgba(0, 0, 0, 0.15);
-            border-radius: 3px;
-        }
-        .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.3); }
-        /* 鼠标悬浮侧栏时滚动条加浓（更醒目大气） */
-        .sidebar:hover .sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.3); }
+        .sidebar-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+        .sidebar-scroll::-webkit-scrollbar-thumb { background: transparent; }
         .sidebar { will-change: transform; }   /* GPU 图层同 chat-area（2026-10-25 白屏闪烁） */
         /* ==================== 侧栏拖拽调宽把手（2026-10-27） ==================== */
         /* flex 兄弟节点（.sidebar 与 .chat-area 之间），宽 10px 配对负外边距
