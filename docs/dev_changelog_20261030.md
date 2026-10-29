@@ -12,6 +12,10 @@
 ### 回滚
 - git revert 本笔；ui_pref.json.bak-20261030-width400 还原；index.html.bak-20261030-width400。
 
+### 坑录（APK 陈旧资产案，本批自查实锤）
+- **gradle 对 android_app/www/ 零感知**——Capacitor 的打包真源是 `android_app/android/app/src/main/assets/public/`（www→assets 需手动同步步，gradle 不会替你拷）。本日早些时候两次"APK 重打"（蓝线批 b2888c20）实际打包的是**今天之前**的旧 assets——82 任务全 up-to-date+md5 不变就是信号，当时被当增量放过。
+- 正解=同步 www 两文件（index.html/console.js）→assets/public→重建→**unzip -p 解包验内容**（width: 400px/border 契约/divider-dragging 逐项在位，::after 零命中）。修正版 APK=09d6c2d1（3.98MB）dist 双位置。
+
 ## 批一 — fix(蓝线贴线根因根除:resizer 白底融白区+border 方案定稿)（v2.2.1 内部补丁，生产热同步部署）
 
 ### 改了什么
