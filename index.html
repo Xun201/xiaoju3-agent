@@ -124,7 +124,7 @@
             flex: 0 0 10px;
             align-self: stretch;                /* 全高：随 body 100vh 拉满 */
             margin: 0;                          /* 色块化布局：两块紧贴，负 margin hack 退役 */
-            background: transparent;
+            background: var(--v0-n200);         /* 与左侧同色：灰色穿越热区直抵纯白，硬拼接无浅带 */
             cursor: col-resize;
             position: relative;
             z-index: 30;
@@ -985,7 +985,7 @@
             --v0-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
         }
         body {
-            background: var(--v0-n50);
+            background: var(--v0-n200);         /* 与侧栏同色（2026-10-29 对比度拉大批次） */
             /* 队长指定现代无衬线栈（2026-10-26 像素级对齐）：告别默认衬线
                回退；中文回退雅黑/苹方。!important 压过旧皮肤外层规则 */
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -1008,7 +1008,7 @@
 
         /* ---- 左栏 → v0 Dashboard aside ---- */
         .sidebar {
-            background: var(--v0-n50);       /* 左侧灰色大区块：自左向右铺满到分界线 */
+            background: var(--v0-n200);      /* 左侧灰色大区块（2026-10-29 拉大对比度：一眼分明） */
             border: none;
             box-shadow: none;
             border-radius: 0;                /* 色块化：方角满幅（卡片漂浮时代退役） */
