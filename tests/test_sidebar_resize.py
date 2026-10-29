@@ -143,30 +143,22 @@ class SidebarResizeFrontendTests(unittest.TestCase):
     def test_resizer_css_rule(self):
         body = _css_rule(self.html, "#sidebar-resizer")
         self.assertIn("cursor: col-resize", body)
-        self.assertIn("flex: 0 0 6px", body)   # 2026-10-29 终版：热区 6px
-        self.assertIn("margin: 0", body)        # 2026-10-29 二次拍板：色块化布局 body padding 归零，无需负 margin hack
+        self.assertIn("flex: 0 0 10px", body)   # 热区 10px（2026-10-30 终版）
+        self.assertIn("margin: 0", body)        # 色块化布局：负 margin hack 退役
         self.assertIn("align-self: stretch", body)
+        self.assertIn("background: #ffffff", body)   # 热区融入白区：交界=sidebar 右缘（蓝线贴线前提）
 
-    def test_resizer_thinline_after_rule(self):
-        """分界线形态（2026-10-29 队长口径升级）：全高贯穿——::after
-        top/bottom 归零（原 12px 内缩=断裂根因），默认 2px 浅灰实线。"""
-        body = _css_rule(self.html, "#sidebar-resizer::after")
-        self.assertIn("content: \"", body)
-        self.assertIn("position: absolute", body)
-        self.assertIn("width: 2px", body)
-        self.assertIn("top: 0", body)
-        self.assertIn("bottom: 0", body)
-        self.assertNotIn("background:", body)  # 2026-10-29 终版：常态无 background 声明（物理删除）
-        # 旧内缩断裂形态禁回归
-        self.assertNotIn("top: 12px", body)
-        self.assertNotIn("bottom: 12px", body)
-
-    def test_resizer_hover_blue_thick(self):
-        """hover/拖拽态：点缀蓝高亮+加粗 4px（2026-10-29 队长口径）。"""
-        m = re.search(r"#sidebar-resizer:(?:hover|dragging)::after[^{]*\{([^}]*)\}",
-                      self.html)
-        self.assertTrue(m, "hover/dragging ::after 规则未找到")
-        self.assertIn("#2563eb", m.group(1))      # hover/拖拽=点缀蓝浮现
+    def test_divider_border_on_sidebar(self):
+        """分界线新契约（2026-10-30 队长终版）：渲染权=.sidebar border-right
+        随态染蓝——border 即 sidebar 盒最右条带，右缘物理=灰白交界，
+        像素级零偏移。::after 渲染位方案（与交界隔热区宽度）禁回归。"""
+        self.assertIn("border-right: 2px solid transparent", self.html)
+        self.assertNotIn("#sidebar-resizer::after", self.html)   # 旧错位方案根除
+        m = re.search(r"\.sidebar:hover,\s*"
+                      r"\.sidebar:has\(\+ #sidebar-resizer:hover\),\s*"
+                      r"\.sidebar\.divider-dragging\s*\{[^}]*\}", self.html)
+        self.assertTrue(m, "hover 选择器组（sidebar/resizer/拖拽态）未找到")
+        self.assertIn("#2563eb", m.group(0))      # hover/拖拽=点缀蓝浮现
 
     def test_mobile_media_hides_resizer(self):
         m = re.search(r"@media \(max-width: 768px\)\s*\{", self.html)
@@ -184,6 +176,9 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         self.assertIn("get_layout_pref", body)
         self.assertIn("xiaoju3_sidebar_width", body)
         self.assertIn("matchMedia('(max-width: 768px)')", body)
+        # 拖拽态=sidebar 染蓝开关（border 方案的 JS 侧）
+        self.assertIn("classList.add('divider-dragging')", body)
+        self.assertIn("classList.remove('divider-dragging')", body)
 
     def test_drag_clamp_bounds_in_js(self):
         body = _fn_body(self.js, "initSidebarResize")

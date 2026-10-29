@@ -5273,6 +5273,7 @@ var qrcode = function() {
             startX = e.clientX;
             startW = sb.getBoundingClientRect().width;
             handle.classList.add('dragging');
+            sb.classList.add('divider-dragging');   /* 分界线拖拽态：border 保持蓝（2026-10-29） */
             document.body.style.cursor = 'col-resize';       // 拖出把手光标不闪断
             document.body.style.userSelect = 'none';         // 防拖拽选中文本
             try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 旧内核无捕获 */ }
@@ -5292,6 +5293,7 @@ var qrcode = function() {
             if (!dragging) return;
             dragging = false;
             handle.classList.remove('dragging');
+            sb.classList.remove('divider-dragging');   /* 分界线拖拽态解除 */
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
             const w = clamp(sb.getBoundingClientRect().width);

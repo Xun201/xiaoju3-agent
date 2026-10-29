@@ -92,7 +92,6 @@
             width: 33.33%;
             min-width: 300px;
             background-color: var(--color-bg-chat);   /* 答辩微调：底色让位卡片，卡片自身用 card 色 */
-            border-right: 1px solid var(--color-border);
             padding: 0;                 /* 色块化重构（2026-10-29）：呼吸间距移交内层容器 */
             display: block;             /* 单一子容器 .sidebar-scroll，绝对定位铺满 */
             gap: 0;
@@ -102,7 +101,13 @@
             margin: 0;
             overflow: hidden;           /* 外层只裁剪，滚动在 .sidebar-scroll */
             position: relative;
+            border-right: 2px solid transparent;   /* 分界线本体（2026-10-29 终版：border 即边界，物理零偏移） */
+            transition: border-color 0.15s ease;
         }
+        /* hover 侧栏/悬浮拖拽热区/拖拽中：边框染点缀蓝（=分界线亮起） */
+        .sidebar:hover,
+        .sidebar:has(+ #sidebar-resizer:hover),
+        .sidebar.divider-dragging { border-right-color: #2563eb; }
         /* 内层滚动容器（2026-10-29 色块化重构）：全部侧栏内容与滚动都在这层，
            滚动条悬浮在面板内部右缘（right:12px 距分界线 12px+），4px 圆角
            半透明悬浮样式——永不贴死分界线（队长三连实锤后的最终形态） */
@@ -121,38 +126,26 @@
         .sidebar-scroll::-webkit-scrollbar-thumb { background: transparent; }
         .sidebar { will-change: transform; }   /* GPU 图层同 chat-area（2026-10-25 白屏闪烁） */
         /* ==================== 侧栏拖拽调宽把手（2026-10-27） ==================== */
-        /* flex 兄弟节点（.sidebar 与 .chat-area 之间），宽 10px 配对负外边距
-           -5px×2=净零布局位移；热区 10px 保证好抓。视觉=极细线（队长口径
-           2026-10-27 深夜，VSCode 交互）：::after 画 2px 垂直细线（上下 12px
-           呼吸位不顶窗沿），默认极淡灰、hover/拖拽亮狐毛橙。拖拽/持久化
-           逻辑在 console.js initSidebarResize（双击复位；≤768px 抽屉态
-           display:none 连 ::after 一起隐藏——抽屉无拖宽语义）。 */
-        /* 分界线（2026-10-29 终版：ZCode 式纯色块拼接）——左右两区底色
-           自然贴合出边界，常态无任何线；resizer=纯透明热区，仅 hover/
-           拖拽浮现 2px 点缀蓝。拖拽逻辑不变（initSidebarResize）。 */
+        /* flex 兄弟节点（.sidebar 与 .chat-area 之间），宽 10px 纯热区，
+           底色与右区同白——热区整条融入白区，灰白交界物理停在 .sidebar
+           右缘，border-right 蓝线（hover/拖拽浮现）右缘=交界，像素级贴线
+           零偏移（2026-10-30 队长终版口径：交界处一像素都不许偏）。
+           拖拽/持久化逻辑在 console.js initSidebarResize（双击复位；
+           ≤768px 抽屉态 display:none——抽屉无拖宽语义）。 */
         #sidebar-resizer {
-            flex: 0 0 6px;
+            flex: 0 0 10px;
             align-self: stretch;                /* 全高：随 body 100vh 拉满 */
             margin: 0;                          /* 色块化布局：两块紧贴，负 margin hack 退役 */
-            background: transparent;            /* 纯透明热区：两色自然贴合，零杂质（2026-10-29 终版） */
+            background: #ffffff;                /* 与右区同白：热区融入白区，交界=sidebar 右缘（蓝线贴线前提） */
             cursor: col-resize;
             position: relative;
             z-index: 30;
             touch-action: none;
         }
-        #sidebar-resizer::after {
-            content: "";
-            position: absolute;
-            top: 0;                             /* 贯穿顶底 */
-            bottom: 0;
-            left: 0;                            /* 蓝线中心=灰白交界（resizer 左缘，像素级重合） */
-            width: 2px;
-            transform: translateX(-50%);
-            transition: background 0.15s ease;  /* 平时无任何线——左灰右白色块自然贴合 */
-        }
-        #sidebar-resizer:hover::after, #sidebar-resizer.dragging::after {
-            background: #2563eb;                /* hover/拖拽=浮现 2px 点缀蓝指示线 */
-        }
+        /* 分界线渲染权在 .sidebar border-right（hover/拖拽染点缀蓝）——
+           resizer 不再自带任何视觉。::after 方案退役根因：渲染位与真交界
+           隔着一个热区宽度（透明热区透出 body 灰底，交界在热区右缘），
+           left:0/left:50% 怎么调都差几像素（2026-10-30 队长实锤根除） */
         .panel-header {
             font-size: 18px;
             font-weight: 600;
@@ -1018,11 +1011,12 @@
 
         /* ---- 左栏 → v0 Dashboard aside ---- */
         .sidebar {
-            background: var(--v0-n200);      /* 左侧灰色大区块（2026-10-29 拉大对比度：一眼分明） */
-            border: none;
+            background: var(--v0-n200);      /* 左侧灰色大区块（对比度一眼分明） */
+            border-top: none; border-bottom: none; border-left: none;
+            border-right: 2px solid transparent;   /* 分界线本体（随态染蓝） */
             box-shadow: none;
-            border-radius: 0;                /* 色块化：方角满幅（卡片漂浮时代退役） */
-            margin: 0;                       /* 色块化：右缘紧贴分界线（12px 外距退役） */
+            border-radius: 0;
+            margin: 0;
             width: 320px;
             padding: 0;                      /* 呼吸间距移交 .sidebar-scroll 内层容器 */
             gap: 0;
