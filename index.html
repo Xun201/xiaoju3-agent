@@ -123,8 +123,7 @@
         #sidebar-resizer {
             flex: 0 0 10px;
             align-self: stretch;                /* 全高：随 body 100vh 拉满 */
-            margin: -16px -4px;                 /* 负上下 margin 吃掉 v0 皮肤body padding:16px——
-                                                分界线穿透留白带直抵窗口顶底（断裂根因） */
+            margin: 0;                          /* 色块化布局：两块紧贴，负 margin hack 退役 */
             background: transparent;
             cursor: col-resize;
             position: relative;
@@ -994,8 +993,8 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
                          Roboto, "Helvetica Neue", Arial,
                          "Microsoft YaHei", "PingFang SC", sans-serif !important;
-            gap: 16px;
-            padding: 16px;
+            gap: 0;                          /* 色块化布局：左右两块无缝硬拼接（2026-10-29） */
+            padding: 0;                      /* 页面留白带退役——断层根因 */
             box-sizing: border-box;
         }
         /* 表单控件默认不继承字体——显式拉齐（否则输入框仍是旧字体） */
@@ -1011,11 +1010,13 @@
 
         /* ---- 左栏 → v0 Dashboard aside ---- */
         .sidebar {
-            background: transparent;
+            background: var(--v0-n50);       /* 左侧灰色大区块：自左向右铺满到分界线 */
             border: none;
             box-shadow: none;
+            border-radius: 0;                /* 色块化：方角满幅（卡片漂浮时代退役） */
+            margin: 0;                       /* 色块化：右缘紧贴分界线（12px 外距退役） */
             width: 320px;
-            padding: 2px 2px 8px;
+            padding: 12px 12px 20px;         /* 呼吸感内收进灰区内部 */
             gap: 16px;                       /* 卡片漂浮间距（v0 gap-4） */
         }
         .dash-card, .stat-item.todos-card { margin: 0; }   /* 间距交给 gap */
@@ -1204,10 +1205,10 @@
 
         /* ---- 右侧聊天区 → v0 ChatPanel 大卡 ---- */
         .chat-area {
-            background: #ffffff;
-            border: 1px solid var(--v0-n200);
-            border-radius: 16px;
-            box-shadow: var(--v0-card-shadow);
+            background: #ffffff;             /* 右侧纯白大区块：自右向左铺满到分界线 */
+            border: none;                    /* 色块化：与分界线硬拼接（断层根因除） */
+            border-radius: 0;
+            box-shadow: none;
             overflow: hidden;
         }
         .chat-header {
