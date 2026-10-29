@@ -2086,7 +2086,7 @@ class TestProactiveUiFoldAndFooterTap:
         assert "openToolsPanel" in js
         assert "proBody.hidden" in js          # 卡片点击就地展开/收起
         assert "appendProactiveSection" not in js   # 设置页段已迁出
-        assert "🧰 小工具面板" in js
+        assert "小工具面板" in js   # 面板标题（2026-10-29 起标题图标=矢量扳手 innerHTML，去 Emoji）
         # 三分类+占位卡
         for kw in ("📊 小橘监控", "🏠 小橘能控制什么", "🔌 管理",
                    "插件管理", "记忆查看", "家电列表"):

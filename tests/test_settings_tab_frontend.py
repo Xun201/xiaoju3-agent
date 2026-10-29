@@ -68,8 +68,10 @@ class SettingsTabHtmlTests(unittest.TestCase):
         console-minimize 在前端双文件禁绝（缩球入口已迁桌宠右键菜单）。"""
         html = _read("index.html")
         self.assertIn(
-            '<button id="console-settings-entry" class="header-btn" title="设置">⚙️</button>',
-            html)
+            '<button id="console-settings-entry" class="header-btn" title="设置">'
+            '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="12" cy="12" r="3"/>', html)   # 图标=矢量齿轮（2026-10-29 去 Emoji）
+        self.assertIn('stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/>', html)
         self.assertNotIn("console-minimize", html)
         self.assertNotIn("console-minimize", _read("console.js"))
 

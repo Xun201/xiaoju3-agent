@@ -244,6 +244,12 @@
         /* 终端记录页只读：清空按钮禁用态（灰色、禁悬停反馈） */
         .header-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .header-btn:disabled:hover { background: none; }
+        /* 矢量图标（2026-10-29 队长要求去 Emoji 凑数）：Lucide/Feather 线性
+           风内联 SVG，stroke=currentColor 随按钮色态联动（含 v0 换肤） */
+        .header-btn svg { display: block; }
+        .dash-quick-btn svg, .dock-menu-item svg, .context-tag svg {
+            vertical-align: -2px; margin-right: 3px;
+        }
         /* 待办卡片（2026-10-04 待办提取）：pending 可点击标完成，done 灰显划线 */
         /* 紧急修复（2026-10-22）：内层独立滚动保留，上限改视口自适应
            （180px 写死在长列表+卡片化布局下顶底互挤）；同款细腻滚动条 */
@@ -1411,8 +1417,8 @@
         <div class="stat-item dash-card">
             <div class="stat-label">快捷指令</div>
             <div class="dash-quick">
-                <button id="quick-todo" class="dash-quick-btn" title="预填待办内容后发送">📝 记待办</button>
-                <button id="quick-check" class="dash-quick-btn" title="检查后端服务健康状态">🩺 系统自检</button>
+                <button id="quick-todo" class="dash-quick-btn" title="预填待办内容后发送"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>记待办</button>
+                <button id="quick-check" class="dash-quick-btn" title="检查后端服务健康状态"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 2.3A.3.3 0 1 0 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6 6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.2.2 0 1 0 .3.3"/><path d="M8 15v1a6 6 0 0 0 6 6 6 6 0 0 0 6-6v-4"/><circle cx="20" cy="10" r="2"/></svg>系统自检</button>
             </div>
         </div>
         <div class="v0-side-gap"></div>
@@ -1420,7 +1426,7 @@
              30 秒轮询），pending 点击标完成（POST /api/todos/<id>/done） -->
         <div class="stat-item dash-card todos-card">
             <div class="stat-label">📋 待办 <span id="todos-count-text"></span>
-                <span id="todos-edit-gear" class="todos-gear" title="编辑优先级（点切换锁定/解锁）">⚙️</span></div>
+                <span id="todos-edit-gear" class="todos-gear" title="编辑优先级（点切换锁定/解锁）"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span></div>
             <div class="todos-job" id="todos-job-line" hidden></div>
             <ul class="todos-list" id="todos-list"></ul>
         </div>
@@ -1475,20 +1481,20 @@
     <div class="chat-area">
         <div class="chat-header">
             <!-- 移动端抽屉开关（≤768px 显示） -->
-            <button id="sidebar-toggle" class="header-btn" title="监控面板">☰</button>
+            <button id="sidebar-toggle" class="header-btn" title="监控面板"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
             <span class="header-title">小橘3号 · 控制台</span>
             <span class="header-actions">
-                <button id="force-refresh" class="header-btn" title="强制刷新（清缓存）">🔄</button>
-                <button id="tools-entry" class="header-btn" title="小工具面板">🧰</button>
-                <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
-                <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
-                <button id="auto-tts-toggle" class="header-btn" title="自动朗读开关（AI 回复自动播报，与音效独立）">🔇</button>
+                <button id="force-refresh" class="header-btn" title="强制刷新（清缓存）"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg></button>
+                <button id="tools-entry" class="header-btn" title="小工具面板"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></button>
+                <button id="clear-history" class="header-btn" title="清空聊天记录"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg></button>
+                <button id="sound-toggle" class="header-btn" title="音效开关"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></button>
+                <button id="auto-tts-toggle" class="header-btn" title="自动朗读开关（AI 回复自动播报，与音效独立）"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg></button>
                 <!-- 主题切换入口（#264 B2b 微调）：头部 🦊 按钮已删（与桌宠菜单
                      「切换主题」+设置页「界面偏好」双入口冗余），toggleTheme 保留 -->
                 <!-- 密钥管理入口（#264 B2b，方案 A）：LV3+ 可见（探针 403 时
                      hidden），掩码只写不读——设计稿第五节铁律 -->
-                <button id="keys-entry" class="header-btn" title="密钥管理" hidden>🔑</button>
-                <button id="console-settings-entry" class="header-btn" title="设置">⚙️</button>
+                <button id="keys-entry" class="header-btn" title="密钥管理" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
+                <button id="console-settings-entry" class="header-btn" title="设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
             </span>
         </div>
         <!-- 聊天标签页：对话窗口 / 终端记录（切换逻辑在 console.js；终端
@@ -1505,7 +1511,7 @@
                 <!-- #UI修复：tab 栏取消后终端页经 🧰 面板进入，返回按钮补齐回路 -->
                 <button id="terminal-back" class="header-btn" type="button" title="返回对话">← 返回</button>
                 <span>终端对话记录（只读）· 运行 python xiaoju3.py 产生</span>
-                <button id="terminal-refresh" class="header-btn" type="button" title="刷新终端记录">⟳ 刷新</button>
+                <button id="terminal-refresh" class="header-btn" type="button" title="刷新终端记录"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:3px"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>刷新</button>
             </div>
             <div class="chat-history terminal-history" id="terminal-history"></div>
         </div>
@@ -1516,7 +1522,7 @@
             <div class="terminal-toolbar">
                 <div class="toolbar-left">
                     <button id="settings-back" class="header-btn" type="button" title="返回对话窗口（#264 B2d③ B 方案）">← 返回</button>
-                    <button id="settings-refresh" class="header-btn" type="button" title="重新读取">⟳ 刷新</button>
+                    <button id="settings-refresh" class="header-btn" type="button" title="重新读取"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:3px"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>刷新</button>
                 </div>
                 <button id="settings-save" class="header-btn toolbar-right" type="button" title="保存修改项">💾 保存</button>
             </div>
@@ -1545,7 +1551,7 @@
             <div class="terminal-toolbar">
                 <div class="toolbar-left">
                     <button id="keys-back" class="header-btn" type="button" title="返回对话窗口">← 返回</button>
-                    <button id="keys-refresh" class="header-btn" type="button" title="重新读取">⟳ 刷新</button>
+                    <button id="keys-refresh" class="header-btn" type="button" title="重新读取"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:3px"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>刷新</button>
                 </div>
             </div>
             <div class="settings-list" id="keys-list"></div>
@@ -1571,12 +1577,12 @@
                 </div>
 
                 <div class="input-dock-menu" id="input-dock-menu" hidden>
-                    <div class="dock-menu-item" data-action="upload">📄 上传文件</div>
-                    <div class="dock-menu-item" data-action="screenshot">📸 截图提问</div>
-                    <div class="dock-menu-item" data-action="link">🔗 解析链接</div>
+                    <div class="dock-menu-item" data-action="upload"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>上传文件</div>
+                    <div class="dock-menu-item" data-action="screenshot"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>截图提问</div>
+                    <div class="dock-menu-item" data-action="link"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>解析链接</div>
                     <div class="dock-menu-sep"></div>
-                    <button id="dock-skills" class="dock-menu-item" type="button" title="技能清单（内置原子能力）">⚡ 技能清单</button>
-                    <button id="dock-plugins" class="dock-menu-item" type="button" title="插件清单（外部扩展）">🧩 插件清单</button>
+                    <button id="dock-skills" class="dock-menu-item" type="button" title="技能清单（内置原子能力）"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>技能清单</button>
+                    <button id="dock-plugins" class="dock-menu-item" type="button" title="插件清单（外部扩展）"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/></svg>插件清单</button>
                 </div>
                 <div class="dock-popover" id="dock-popover" hidden></div>
             </div>

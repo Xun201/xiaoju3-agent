@@ -32,11 +32,25 @@
         showToast(next === 'orange' ? '已切换到橘色主题 🦊' : '已切换到深蓝主题');
     }
 
+    // 矢量图标表（2026-10-29 队长要求去 Emoji 凑数）：状态按钮经 innerHTML
+    // 换图标（textContent 会抹掉 SVG 露白）；路径=Lucide/Feather 线性风，
+    // 与 index.html 顶栏静态图标同源同款，stroke=currentColor 随色态联动。
+    const ICON_SVGS = (function (a) {
+        return {
+            bell: a + '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+            bellOff: a + '<path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>',
+            volume2: a + '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>',
+            volumeX: a + '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>',
+            settings: a + '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+            library: a + '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>'
+        };
+    })('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">');
+
     // 音效总开关（WebAudio 引擎在 desktop-pet.js 中，localStorage 记忆）
     const soundBtn = document.getElementById('sound-toggle');
     function refreshSoundBtn() {
         if (soundBtn && window.xiaoju3Sound) {
-            soundBtn.textContent = window.xiaoju3Sound.enabled() ? '🔔' : '🔕';
+            soundBtn.innerHTML = window.xiaoju3Sound.enabled() ? ICON_SVGS.bell : ICON_SVGS.bellOff;
         }
     }
     if (soundBtn && window.xiaoju3Sound) {
@@ -67,7 +81,7 @@
     }
     const autoTTSBtn = document.getElementById('auto-tts-toggle');
     function refreshAutoTTSBtn() {
-        if (autoTTSBtn) autoTTSBtn.textContent = autoTTSEnabled() ? '🔊' : '🔇';
+        if (autoTTSBtn) autoTTSBtn.innerHTML = autoTTSEnabled() ? ICON_SVGS.volume2 : ICON_SVGS.volumeX;
     }
     if (autoTTSBtn) {
         autoTTSBtn.addEventListener('click', () => {
@@ -434,7 +448,7 @@
         if (!listEl) return;
         if (countEl) countEl.textContent = data.pending_count ? `(${data.pending_count})` : '';
         if (gearEl) {
-            gearEl.textContent = '⚙️';                       // 尾巴 F2：单一图标
+            gearEl.innerHTML = ICON_SVGS.settings;           // 尾巴 F2：单一图标（矢量齿轮，2026-10-29 去 Emoji）
             gearEl.classList.toggle('editing', todoEditing);  // 编辑态橙色高亮
         }
         if (jobEl) {
@@ -1313,7 +1327,8 @@
                         // 文档标签可点开清单（2026-10-26：旧版纯 span 零绑定=
                         // 设计缺口；context-tag--link 带指针态）
                         parts.push('<span class="context-tag context-tag--link"'
-                            + ' data-action="docs" title="点击查看文档清单">📚 已摄取文档 '
+                            + ' data-action="docs" title="点击查看文档清单">' + ICON_SVGS.library
+                            + '已摄取文档 '
                             + ctx.doc_count + '</span>');
                     }
                     if (ctx.video_job === 'running') parts.push('<span class="context-tag">⏳ 转写中</span>');
@@ -4512,7 +4527,7 @@
         top.appendChild(back);
         const title = document.createElement('div');
         title.style.cssText = 'font-size:18px;font-weight:700;';
-        title.textContent = '🧰 小工具面板';
+        title.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:4px"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>小工具面板';
         top.appendChild(title);
         overlay.appendChild(top);
 

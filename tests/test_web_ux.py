@@ -78,21 +78,24 @@ class AutoTTSFrontendTests(unittest.TestCase):
     # ---------- 开关按钮（与音效开关同款视觉、相互独立） ----------
 
     def test_toggle_button_in_header_actions(self):
-        """index.html 聊天头部工具区新增自动朗读按钮：🔊/🔇、header-btn 同款
-        样式、初始 🔇（默认关闭态与 console.js 回显一致）。"""
+        """index.html 聊天头部工具区新增自动朗读按钮：volume-x/volume-2 矢量
+        图标（2026-10-29 去 Emoji）、header-btn 同款样式、初始静音态（默认
+        关闭与 console.js 回显一致）。"""
         actions = self._header_actions()
         self.assertIn('id="auto-tts-toggle"', actions)
         self.assertIn("class=\"header-btn\"", actions)
-        self.assertIn("🔇", actions)          # 默认关闭图标
+        self.assertIn("<svg", actions)        # 矢量图标按钮（去 Emoji 凑数）
+        self.assertIn('points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"', actions)   # volume-x 喇叭
         js = self.console_js
-        self.assertIn("autoTTSEnabled() ? '🔊' : '🔇'", js)   # 开/关双态回显
+        self.assertIn("autoTTSEnabled() ? ICON_SVGS.volume2 : ICON_SVGS.volumeX", js)   # 开/关双态回显
         self.assertIn("refreshAutoTTSBtn();", js)              # 载入即回显（刷新保持）
 
     def test_independent_from_sound_toggle(self):
-        """与音效开关独立（音效≠朗读）：🔔/🔕 音效按钮与逻辑零改动并存，
-        localStorage 键名区分（autotts / tts_voice），不共用。"""
+        """与音效开关独立（音效≠朗读）：bell/bellOff 音效按钮与逻辑并存
+        （2026-10-29 起为矢量图标），localStorage 键名区分（autotts /
+        tts_voice），不共用。"""
         js = self.console_js
-        self.assertIn("window.xiaoju3Sound.enabled() ? '🔔' : '🔕'", js)  # 音效开关原样
+        self.assertIn("window.xiaoju3Sound.enabled() ? ICON_SVGS.bell : ICON_SVGS.bellOff", js)  # 音效开关双态
         self.assertIn("getElementById('sound-toggle')", js)
         keys = ("xiaoju3_autotts", "xiaoju3_tts_voice")
         for key in keys:
@@ -241,7 +244,7 @@ class BallWidgetTests(unittest.TestCase):
         start = html.index('<span class="header-actions">')
         actions = html[start:html.index("</span>", start)]
         self.assertIn('id="console-settings-entry"', actions)
-        self.assertIn("⚙️", actions)
+        self.assertIn('<circle cx="12" cy="12" r="3"/>', actions)   # 矢量齿轮（2026-10-29 去 Emoji）
         self.assertIn('title="设置"', actions)
         self.assertIn("class=\"header-btn\"", actions)
         # console.js 接线：点击齿轮切设置 tab
