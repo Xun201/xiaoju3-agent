@@ -2088,9 +2088,13 @@ class TestProactiveUiFoldAndFooterTap:
         assert "appendProactiveSection" not in js   # 设置页段已迁出
         assert "小工具面板" in js   # 面板标题（2026-10-29 起标题图标=矢量扳手 innerHTML，去 Emoji）
         # 三分类+占位卡
-        for kw in ("📊 小橘监控", "🏠 小橘能控制什么", "🔌 管理",
+        # 2026-10-29 起 sectionLabel 图标=ICON_SVGS 矢量（emoji 禁令），
+        # 节标文字不再带 emoji 前缀
+        for kw in ("小橘监控", "小橘能控制什么", "管理",
                    "插件管理", "记忆查看", "家电列表"):
             assert kw in js, kw
+        for icon_kw in ("ICON_SVGS.chart", "ICON_SVGS.house", "ICON_SVGS.plug"):
+            assert icon_kw in js, icon_kw
 
     def test_footer_version_tap_binding(self):
         js = self._js()

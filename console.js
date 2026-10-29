@@ -2352,7 +2352,21 @@ var qrcode = function() {
             volume2: a + '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>',
             volumeX: a + '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>',
             settings: a + '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
-            library: a + '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>'
+            library: a + '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>',
+            message: a + '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+            trash: a + '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
+            x: a + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+            fileText: a + '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
+            puzzle: a + '<path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/></svg>',
+            zap: a + '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+            video: a + '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
+            clock: a + '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+            droplet: a + '<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>',
+            wind: a + '<path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg>',
+            chart: a + '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>',
+            house: a + '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
+            plug: a + '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z"/></svg>',
+            refresh: a + '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>'
         };
     })('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">');
 
@@ -2615,7 +2629,7 @@ var qrcode = function() {
         msgEl.textContent = '用摄像头扫电脑「连接手机」卡片上的二维码，一步连上你的小橘。';
         const scanBtn = document.createElement('button');
         scanBtn.className = 'xj3-modal-btn xj3-modal-btn-primary';
-        scanBtn.style.cssText += 'height:46px;font-size:15px;';
+        scanBtn.style.cssText += 'height:46px;font-size:15px;width:100%;';
         scanBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>扫码连接';
         scanBtn.addEventListener('click', function () {
             overlay.remove();
@@ -3212,10 +3226,10 @@ var qrcode = function() {
                 `<option value="${p}"${p === pr ? ' selected' : ''}>${p}</option>`).join('');
             const prControl = todoEditing
                 ? `<select class="todo-pr-select" title="优先级">${prOptions}</select>`
-                : `<span class="todo-pr-badge${pr === 'P0' ? ' todo-pr-p0' : ''}" title="点 ⚙️ 进入编辑模式后可改">${pr}</span>`;
+                : `<span class="todo-pr-badge${pr === 'P0' ? ' todo-pr-p0' : ''}" title="点齿轮图标进入编辑模式后可改">${pr}</span>`;
             // #238：垃圾桶仅对已完成项渲染（pending 无删除入口）
             const delBtn = t.status === 'done'
-                ? `<button class="todo-del" data-id="${t.id}" title="删除这条已完成待办">🗑️</button>`
+                ? `<button class="todo-del" data-id="${t.id}" title="删除这条已完成待办" style="display:inline-flex;align-items:center">${ICON_SVGS.trash}</button>`
                 : '';
             // #239 待办说明折叠（2026-10-05）：note 非空 → 主任务下渲染
             // "淡淡说明"行（默认收起，▸/▾ 切换，本会话 JS 记忆展开态）；
@@ -3251,7 +3265,7 @@ var qrcode = function() {
         }
         // 紧凑视图尾行：被收起的未完成条目计数（点击 ⚙️ 进编辑模式查看全部）
         if (compact && compactHidden > 0) {
-            html += `<li class="todo-more" title="点 ⚙️ 进入编辑模式查看全部">还有 ${compactHidden} 项待办…</li>`;
+            html += `<li class="todo-more" title="点齿轮图标进入编辑模式查看全部">还有 ${compactHidden} 项待办…</li>`;
         }
         listEl.innerHTML = html;
     }
@@ -3910,7 +3924,7 @@ var qrcode = function() {
                     + '<span class="attach-chip-name">' + escapeHtml(f.name) + '</span>'
                     + '<span class="attach-chip-size">' + escapeHtml(f.size || '') + '</span>'
                     + '</span>'
-                    + '<button class="attach-clear" title="移除附件">✕</button>'
+                    + '<button class="attach-clear" title="移除附件" style="display:inline-flex;align-items:center">' + ICON_SVGS.x + '</button>'
                     + '</span>';
             }).join('');
             attachBar.innerHTML = '<div class="attach-chip-row">' + chips + '</div>'
@@ -3960,7 +3974,7 @@ var qrcode = function() {
                 + '<span class="attach-chip-name">屏幕截图</span>'
                 + '<span class="attach-chip-size">' + escapeHtml(size || '') + '</span>'
                 + '</span>'
-                + '<button class="attach-clear" title="移除截图">✕</button>'
+                + '<button class="attach-clear" title="移除截图" style="display:inline-flex;align-items:center">' + ICON_SVGS.x + '</button>'
                 + '</span></div>'
                 + '<div class="attach-ready">📷 截图已就绪（发送时 AI 直接看图回答）</div>';
             attachBar.removeAttribute('hidden');
@@ -3999,7 +4013,8 @@ var qrcode = function() {
                                 + '" data-plugin="' + escapeHtml(p.name) + '"'
                                 + (qa ? ' title="点击填入触发词：' + escapeHtml(qa)
                                     + '（可编辑后发送）"' : ' title="点击选择文件"')
-                                + '>🧩 ' + escapeHtml(p.name)
+                                + ' style="display:flex;align-items:center;gap:6px">'
+                                + ICON_SVGS.puzzle + ' ' + escapeHtml(p.name)
                                 + ' <span class="dp-sub">v' + escapeHtml(p.version)
                                 + ' · ' + escapeHtml(p.desc || '') + '</span></div>');
                         });
@@ -4007,7 +4022,8 @@ var qrcode = function() {
                                     rows.join('') || '<div class="dp-sub">暂无外部插件</div>');
                     } else {
                         (d.skills || []).forEach(function (s) {
-                            rows.push('<div class="dp-row">⚡ ' + escapeHtml(s)
+                            rows.push('<div class="dp-row" style="display:flex;align-items:center;gap:6px">'
+                                + ICON_SVGS.zap + ' ' + escapeHtml(s)
                                 + '</div>');
                         });
                         showPopover('内置技能（' + (d.skills || []).length + '）',
@@ -4055,9 +4071,12 @@ var qrcode = function() {
                             + '已摄取文档 '
                             + ctx.doc_count + '</span>');
                     }
-                    if (ctx.video_job === 'running') parts.push('<span class="context-tag">⏳ 转写中</span>');
-                    if (ctx.video_last) parts.push('<span class="context-tag">📺 '
-                        + escapeHtml(ctx.video_last) + '</span>');
+                    if (ctx.video_job === 'running') parts.push('<span class="context-tag"'
+        + ' style="display:inline-flex;align-items:center;gap:3px">'
+        + ICON_SVGS.clock + '转写中</span>');
+                    if (ctx.video_last) parts.push('<span class="context-tag"'
+        + ' style="display:inline-flex;align-items:center;gap:3px">'
+        + ICON_SVGS.video + escapeHtml(ctx.video_last) + '</span>');
                     if (parts.length) {
                         bar.innerHTML = parts.join('');
                         bar.hidden = false;
@@ -4081,14 +4100,15 @@ var qrcode = function() {
             if (d.ingested_at) sub.push(escapeHtml(d.ingested_at));
             return '<div class="dp-row dp-doc-row">'
                 + '<span class="dp-doc-main" data-act="remount" data-idx="' + i
-                + '" title="点击挂载为附件，下一条消息 AI 直接读它回答">📄 '
+                + '" title="点击挂载为附件，下一条消息 AI 直接读它回答" style="display:inline-flex;align-items:center;gap:4px">' + ICON_SVGS.fileText
                 + escapeHtml(d.title || d.path) + '</span>'
                 + '<span class="dp-sub">' + sub.join(' · ') + '</span>'
                 + '<span class="dp-doc-acts">'
                 + '<button class="dp-doc-btn" data-act="remount" data-idx="' + i
-                + '" title="挂载为附件">↻</button>'
+                + '" title="挂载为附件" style="display:inline-flex;align-items:center">'
+                + ICON_SVGS.refresh + '</button>'
                 + '<button class="dp-doc-btn dp-doc-del" data-act="del-doc" data-idx="' + i
-                + '" title="从知识库彻底删除（切片+向量一并清除）">🗑</button>'
+                + '" title="从知识库彻底删除（切片+向量一并清除）" style="display:inline-flex;align-items:center">' + ICON_SVGS.trash + '</button>'
                 + '</span></div>';
         }
         const tagsBar = document.getElementById('context-tags-bar');
@@ -4380,9 +4400,11 @@ var qrcode = function() {
                 if (d.humidity != null || d.wind != null) {
                     elMeta.hidden = false;
                     elMeta.innerHTML =
-                        '<span>💧 ' + (d.humidity != null
+                        '<span style="display:inline-flex;align-items:center;gap:3px">'
+            + ICON_SVGS.droplet + ' ' + (d.humidity != null
                             ? Math.round(d.humidity) + '%' : '--') + '</span>'
-                        + '<span>🌬 ' + (d.wind != null
+                        + '<span style="display:inline-flex;align-items:center;gap:3px">'
+            + ICON_SVGS.wind + ' ' + (d.wind != null
                             ? Math.round(d.wind) + ' km/h' : '--') + '</span>';
                 } else {
                     elMeta.hidden = true;
@@ -4556,7 +4578,7 @@ var qrcode = function() {
     const THINKING_ROTATE_MS = 900;
 
     // 💬 排队条（2026-10-28 对齐 ZCode）：生成中再发消息 → 缩成输入框上方
-    // 一行排队条（💬 排队中：… + [立即执行][删除]）；立即执行=中断当前流式
+    // 一行排队条（图标=ICON_SVGS.message 矢量 + [立即执行][删除]）；立即执行=中断当前流式
     // （AbortController）转发排队消息；任务自然结束=自动补发排队消息。
     let __xj3Generating = false;
     let __xj3BusAbort = null;     // 总线任务无法 abort（后端线程）——立即执行
@@ -4584,7 +4606,8 @@ var qrcode = function() {
         const bar = ensureQueueBar();
         bar.innerHTML = '';
         const label = document.createElement('span');
-        label.textContent = '💬 排队中：' + text;
+        label.innerHTML = ICON_SVGS.message
+            + '<span style="margin-left:4px">排队中：' + text + '</span>';
         label.style.cssText = 'flex:1;min-width:0;overflow:hidden;'
             + 'text-overflow:ellipsis;white-space:nowrap;color:#536ba9;';
         const runBtn = document.createElement('button');
@@ -7326,11 +7349,19 @@ var qrcode = function() {
         top.appendChild(title);
         overlay.appendChild(top);
 
-        function sectionLabel(text) {
+        function sectionLabel(text, icon) {
             const s = document.createElement('div');
             s.style.cssText = 'font-weight:700;font-size:13px;opacity:.7;'
-                + 'margin:14px 0 8px;';
-            s.textContent = text;
+                + 'margin:14px 0 8px;display:flex;align-items:center;gap:6px;';
+            if (icon) {
+                const ic = document.createElement('span');
+                ic.style.cssText = 'display:inline-flex;align-items:center;';
+                ic.innerHTML = icon;
+                s.appendChild(ic);
+            }
+            const txt = document.createElement('span');
+            txt.textContent = text;
+            s.appendChild(txt);
             overlay.appendChild(s);
         }
         function grid() {
@@ -7349,7 +7380,7 @@ var qrcode = function() {
         }
 
         // 📊 小橘监控
-        sectionLabel('📊 小橘监控');
+        sectionLabel('小橘监控', ICON_SVGS.chart);
         const g1 = grid();
         const proBody = document.createElement('div');
         proBody.style.cssText = 'margin:10px 0 20px;';
@@ -7375,13 +7406,13 @@ var qrcode = function() {
             }));
 
         // 🏠 小橘能控制什么
-        sectionLabel('🏠 小橘能控制什么');
+        sectionLabel('小橘能控制什么', ICON_SVGS.house);
         const g2 = grid();
         g2.appendChild(buildToolCard('家电列表', 'HA 实体清单（只读，控制走对话）',
             function () { toggleToolBody('tool-ha-body', loadHaDevicesInto); }));
 
         // 🔌 管理
-        sectionLabel('🔌 管理');
+        sectionLabel('管理', ICON_SVGS.plug);
         const g3 = grid();
         g3.appendChild(buildToolCard('设置', '权限分级配置/界面偏好/密钥管理',
             function () {

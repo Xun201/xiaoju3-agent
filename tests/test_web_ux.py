@@ -769,5 +769,38 @@ class PairingAndMobileTests(unittest.TestCase):
         self.assertIn(".header-actions { flex-shrink: 0; gap: 2px; }", html)
 
 
+class NoEmojiUiIconsTests(unittest.TestCase):
+    """最高工程纪律锚（2026-10-29 队长死命令）：UI 图标永久禁用 Emoji——
+    按钮/操作栏/组件标签零 Emoji 字符；ICON_SVGS 扩编条目在位。"""
+
+    def setUp(self):
+        self.js = _read("console.js")
+
+    def test_action_bar_and_buttons_emoji_free(self):
+        """排队条/待办删除钮/附件关闭钮/文档行——操作与按钮位零 Emoji。"""
+        js = self.js
+        self.assertNotIn("💬 排队中", js)          # 排队条→message SVG
+        self.assertNotIn("🗑️</", js)               # 删除按钮→trash SVG
+        self.assertNotIn(">✕</button>", js)         # 关闭钮→x SVG
+        self.assertNotIn(">📄 ", js)                # 文档行→fileText SVG
+        self.assertNotIn(">🗑</button>", js)
+        self.assertNotIn(">↻</button>", js)         # 挂载刷新→refresh SVG
+
+    def test_icon_svgs_extended_entries(self):
+        """ICON_SVGS 扩编条目在位（排队/删除/关闭/文档/拼图/闪电/视频/
+        时钟/水滴/风/图表/房子/插头/刷新）。"""
+        for name in ("message:", "trash:", "x:", "fileText:", "puzzle:",
+                     "zap:", "video:", "clock:", "droplet:", "wind:",
+                     "chart:", "house:", "plug:", "refresh:"):
+            self.assertIn(name, self.js)
+
+    def test_section_labels_svg_prefix(self):
+        """工具面板三节标：文字不带 emoji 前缀，图标=ICON_SVGS 矢量。"""
+        js = self.js
+        self.assertIn("sectionLabel('小橘监控', ICON_SVGS.chart);", js)
+        self.assertIn("sectionLabel('小橘能控制什么', ICON_SVGS.house);", js)
+        self.assertIn("sectionLabel('管理', ICON_SVGS.plug);", js)
+
+
 if __name__ == "__main__":
     unittest.main()
