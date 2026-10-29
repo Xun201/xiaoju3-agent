@@ -757,6 +757,20 @@ def _social_greeting(target_desc, chat_fn=None):
 _SOCIAL_COOLDOWN_MARK = "social_visit_{tid}"
 
 
+def _ensure_social_tables(db):
+    """社交串门持久层（幂等建表）。2026-10-30 实锤双雷：旧版按
+    meta(key,value) 列名读写（与 _db() 的 meta(k,v) 不匹配）+ social_log
+    全仓零建表——全局日限与 24h 冷却双双静默失效（except 吞 OperationalError，
+    计数永远 0）。修=建表与读写统一 k/v 口径。"""
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS meta (
+            k TEXT PRIMARY KEY, v TEXT);
+        CREATE TABLE IF NOT EXISTS social_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_id TEXT, target_type TEXT, ts TEXT, greeting TEXT);
+    """)
+
+
 def social_visit(db=None):
     """多目标随机串门：从社交池随机选一个目标（24h 冷却），发问候。
     返回 True=发了消息。任何失败静默。"""
@@ -769,27 +783,30 @@ def social_visit(db=None):
     now = _dt.datetime.now()
     today = now.strftime("%Y-%m-%d")
 
-    # 全局日限检查
+    # 全局日限检查（k/v 口径=meta_get/meta_set；计数读不到=保命侧
+    # fail-closed，宁可不出手也不无账发送——2026-10-30 队长红线）
     own_db = db or _db()
     try:
-        row = own_db.execute(
-            "SELECT value FROM meta WHERE key='social_date'").fetchone()
-        social_date = row[0] if row else ""
-        row2 = own_db.execute(
-            "SELECT value FROM meta WHERE key='social_count'").fetchone()
-        social_count = int(row2[0]) if row2 else 0
+        _ensure_social_tables(own_db)
+        social_date = meta_get(own_db, "social_date")
+        social_count = int(meta_get(own_db, "social_count", "0") or 0)
         if social_date != today:
             social_date = today
             social_count = 0
         if social_count >= _SOCIAL_DAILY_CAP:
             return False   # 今日额度用完
     except Exception:
-        social_count = 0
+        return False
 
     # 随机选一个目标（洗牌后取第一个可用的）
     targets = pool[:]
     _random.shuffle(targets)
     for tt, tid in targets:
+        # 主人豁免（保命红线）：主人走专属唤醒通道（带全量记忆），
+        # 绝不落入社交池被隐私切断的社交模式问候
+        if tid == (os.environ.get("XIAOJU3_OWNER_QQ", "") or "").strip():
+            continue
+
         # 24h 冷却检查（memory.db social_log 表）
         try:
             row = own_db.execute(
@@ -808,24 +825,19 @@ def social_visit(db=None):
         if not greeting:
             continue
 
-        # 发送
+        # 发送（拟人打字延迟 3-6s 随机——风控铁律绝不秒发）
+        time.sleep(_random.uniform(*_SOCIAL_DELAY))
         ok = _social_send(tt, tid, greeting)
         if not ok:
             continue
 
-        # 记录
+        # 记录（k/v 口径 meta_set——2026-10-30 修复列名不匹配静默失效）
         try:
             own_db.execute(
                 "INSERT INTO social_log(target_id, target_type, ts, greeting) "
                 "VALUES(?,?,?,?)", (tid, tt, now_str(), greeting[:100]))
-            own_db.execute(
-                "INSERT INTO meta(key, value) VALUES('social_date',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (today,))
-            own_db.execute(
-                "INSERT INTO meta(key, value) VALUES('social_count',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=CAST("
-                "CAST(excluded.value AS INTEGER)+1 AS TEXT)", (str(social_count + 1),))
+            meta_set(own_db, "social_date", today)
+            meta_set(own_db, "social_count", str(social_count + 1))
             own_db.commit()
         except Exception:
             pass
