@@ -2156,23 +2156,70 @@ def api_chat_stream():
             yield _sse_frame("done", {
                 "reply": sanitize_for_web(intent_reply), "source": "⚙️ 指令"})
             return
+        # ⏱️ 硬超时守护常量（云端分支与 smart_ask_stream 分支共用）：
+        # 挂死时 SSE 无收口帧 → 前端骨架/思考卡残留，180s 无帧即 error 收口
+        _STREAM_HARD_TIMEOUT = 180
         # ☁️ 控制台闲聊强制云端（2026-10-28 队长拍板"本地毒话术根除"）：
-        # 非工具语境普通对话直连云端（单帧 answer+done，与 QQ 接管同构）；
-        # 云端异常回退 smart_ask 旧链（本地小脑只剩工具场景）。
+        # 非工具语境普通对话直连云端。2026-10-29 思维链找回——旧版单帧
+        # answer+done 把 reasoning_content 整段丢掉（前端折叠卡永失）；
+        # 现流式回调 think/answer 逐帧转发（与本地 smart_ask_stream 同帧
+        # 协议），done 带 <think> 包装全文→前端 finalizeThinkCard 定稿
+        # "已思考（用时 X 秒）"折叠卡；云端异常 → 友好兜底单帧 done
+        #（绝不回退本地毒话术，也绝不静默断流）。
         if (os.environ.get("XIAOJU3_QQ_CLOUD_TAKEOVER", "1") == "1"
                 and not main._NEED_BRAIN_RE.search(user_msg)):
-            cloud = main.console_cloud_chat(user_msg, history)
-            if cloud is not None:
-                reply = sanitize_for_web(cloud)
-                yield _sse_frame("answer", {"delta": reply})
-                yield _sse_frame("done", {"reply": reply, "source": "☁️ 云端"})
+            import queue
+            import threading
+            q = queue.Queue()
+            CDONE = object()   # 哨兵：云端流结束后通知 generator 收口
+            holder = {}
+
+            def _cloud_event(ev):
+                et = ev.get("type")
+                if et in ("think", "answer"):
+                    q.put(_sse_frame(et, {"delta": ev.get("delta", "")}))
+
+            def _cloud_runner():
+                try:
+                    holder["reply"] = main.console_cloud_chat(
+                        user_msg, history, on_event=_cloud_event)
+                except Exception as e:
+                    holder["error"] = str(e)
+                finally:
+                    q.put(CDONE)
+
+            threading.Thread(target=_cloud_runner, daemon=True).start()
+            # ⏱️ 硬超时守护（与下方 smart_ask_stream 分支同口径）：云端
+            # 挂死 180s 无帧即 error 收口，骨架卡不残留
+            while True:
+                try:
+                    item = q.get(timeout=_STREAM_HARD_TIMEOUT)
+                except queue.Empty:
+                    print(f"⏱️ [云端流式] {_STREAM_HARD_TIMEOUT}s 无收口——"
+                          "硬超时，发 error 帧")
+                    yield _sse_frame("error", {"error": "响应超时（180s 无进展），"
+                                               "请重试或改用同步发送"})
+                    return
+                if item is CDONE:
+                    break
+                yield item
+            cloud = holder.get("reply")
+            if not cloud:
+                # ☁️ None → **绝不回退本地毒话术**（2026-10-28 队长拍板）。
+                # 旧版此处 `return jsonify(...)` 在 generator 内=零帧断流
+                # 死代码（StopIteration 吞值，前端骨架卡挂死到看门狗）——
+                # 修为真 done 帧，友好兜底文案照常上屏。
+                yield _sse_frame("done", {
+                    "reply": "小橘网络有点小问题，主人稍后再试试嘛～🐾",
+                    "source": "🐾 兜底"})
                 return
-            # ☁️ None → **绝不回退本地毒话术**
-            return jsonify({
-                "code": 200,
-                "data": {"reply": "小橘网络有点小问题，主人稍后再试试嘛～🐾",
-                         "source": "🐾 兜底"}
-            })
+            reply = sanitize_for_web(cloud)
+            try:
+                _append_console_history(user_msg, reply, "☁️ 云端")
+            except Exception as persist_err:
+                print(f"[控制台历史落盘失败][云端流式] {persist_err}")
+            yield _sse_frame("done", {"reply": reply, "source": "☁️ 云端"})
+            return
         import json as _json
         import queue
         q = queue.Queue()
@@ -2204,8 +2251,8 @@ def api_chat_stream():
         # ⏱️ 硬超时守护（2026-10-10 思考卡残留修复）：runner 挂死（如工具
         # 执行无超时）时 DONE 永不到来，generator 无限阻塞 → SSE 无收口
         # 帧 → 前端思考卡永残留（真机现场）。180s 无帧即发 error 帧收口，
-        # 挂死线程为 daemon 随底层超时自灭。
-        _STREAM_HARD_TIMEOUT = 180
+        # 挂死线程为 daemon 随底层超时自灭。（常量定义上移至云端分支前，
+        # 2026-10-29 两个分支共用）
         while True:
             try:
                 item = q.get(timeout=_STREAM_HARD_TIMEOUT)

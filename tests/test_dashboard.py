@@ -3191,17 +3191,141 @@ class ConsoleCloudChatTests(unittest.TestCase):
         self.assertNotIn("建议您联网", body["data"]["reply"])
 
     def test_stream_greeting_goes_cloud(self):
+        """云端直答流式契约（2026-10-29 思维链找回）：on_event 回调的
+        think/answer 逐帧转发出 SSE，done 带回 <think> 包装全文（前端
+        finalizeThinkCard 依赖此形态定稿折叠卡），来源 ☁️ 云端。"""
+        events = []
+
+        def fake_cloud(msg, hist=None, on_event=None):
+            events.append("called")
+            if on_event is not None:
+                on_event({"type": "think", "delta": "主人打招呼"})
+                on_event({"type": "answer", "delta": "在呢喵"})
+            return "<think>主人打招呼</think>在呢喵，主人～"
+
         with mock.patch.dict(os.environ,
                              {"XIAOJU3_QQ_CLOUD_TAKEOVER": "1"}),                 mock.patch.object(main, "console_cloud_chat",
-                                  return_value="云端闲聊回复"),                 mock.patch.object(main.brain, "smart_ask_stream",
+                                  side_effect=fake_cloud),                 mock.patch.object(main.brain, "smart_ask_stream",
                                   side_effect=AssertionError("不该进本地链")),                 mock.patch.object(dashboard, "_take_screenshot",
                                   return_value=None):
             resp = self.client.post("/api/chat/stream",
                                     json={"message": "你好"})
         body = resp.get_data(as_text=True)
+        self.assertEqual(events, ["called"])
+        self.assertIn("event: think", body)          # 思考帧不再被丢弃
+        self.assertIn("主人打招呼", body)
         self.assertIn("event: answer", body)
-        self.assertIn("云端闲聊回复", body)
+        self.assertIn("在呢喵", body)
+        self.assertIn("event: done", body)
+        self.assertIn("<think>主人打招呼</think>在呢喵，主人～", body)
         self.assertIn("☁️ 云端", body)
+
+    def test_stream_cloud_fail_yields_fallback_done(self):
+        """云端 None → 友好兜底 done 帧（旧版 generator 内 return jsonify
+        =零帧断流死代码，前端骨架卡挂死到看门狗——修为真帧）。"""
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_CLOUD_TAKEOVER": "1"}),                 mock.patch.object(main, "console_cloud_chat",
+                                  return_value=None),                 mock.patch.object(main.brain, "smart_ask_stream",
+                                  side_effect=AssertionError("不该进本地链")),                 mock.patch.object(dashboard, "_take_screenshot",
+                                  return_value=None):
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "你好"})
+        body = resp.get_data(as_text=True)
+        self.assertIn("event: done", body)           # 必有收口帧（不断流）
+        self.assertIn("稍后再试", body)
+        self.assertIn("🐾 兜底", body)
+
+
+class ConsoleCloudChatStreamUnitTests(unittest.TestCase):
+    """console_cloud_chat 流式单元锚（2026-10-29 思维链找回）：
+    reasoning_content→think 回调+<think> 包装；无思考=裸正文；失败=None。"""
+
+    class _FakeResp:
+        def __init__(self, lines):
+            self._lines = lines
+
+        def raise_for_status(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_lines(self, decode_unicode=True):
+            return iter(self._lines)
+
+    def _call(self, sse_lines, message="你好"):
+        captured = []
+
+        def _sse(payload):
+            return f'data: {payload}'
+
+        lines = [_sse(p) for p in sse_lines]
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_CLOUD_TAKEOVER": "1",
+                              "XIAOJU3_CONSOLE_CLOUD_MODEL": ""}),                 mock.patch.object(main, "CLOUD_KEY", "sk-test"),                 mock.patch.object(main, "requests") as mr:
+            mr.post.return_value = self._FakeResp(lines)
+            out = main.console_cloud_chat(
+                message, on_event=lambda ev: captured.append(ev))
+        return out, captured, mr.post.call_args
+
+    def test_reasoning_wrapped_and_think_events(self):
+        out, captured, args = self._call([
+            '{"choices":[{"delta":{"reasoning_content":"主人打招呼","content":null}}]}',
+            '{"choices":[{"delta":{"reasoning_content":null,"content":"在呢"}}]}',
+            '{"choices":[{"delta":{"content":"喵～"}}]}',
+            '[DONE]',
+        ])
+        self.assertEqual(out, "<think>主人打招呼</think>在呢喵～")
+        kinds = [ev["type"] for ev in captured]
+        self.assertEqual(kinds, ["think", "answer", "answer"])  # 思考先行
+        self.assertEqual(captured[0]["delta"], "主人打招呼")
+        # 缺省模型=思考模式（deepseek-chat 无 reasoning_content，卡无从谈起）；
+        # 空串 env 同样落缺省（防环境残留干扰）
+        self.assertEqual(args.kwargs.get("json", {}).get("model"),
+                         "deepseek-reasoner")
+        self.assertTrue(args.kwargs.get("json", {}).get("stream"))
+
+    def test_env_overrides_console_cloud_model(self):
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_CLOUD_TAKEOVER": "1",
+                              "XIAOJU3_CONSOLE_CLOUD_MODEL": "deepseek-chat"}):
+            captured = []
+            with mock.patch.object(main, "CLOUD_KEY", "sk-test"),                         mock.patch.object(main, "requests") as mr:
+                mr.post.return_value = self._FakeResp(
+                    ['data: {"choices":[{"delta":{"content":"嗯"}}]}',
+                     'data: [DONE]'])
+                out = main.console_cloud_chat(
+                    "你好", on_event=lambda ev: captured.append(ev))
+                model = mr.post.call_args.kwargs["json"]["model"]
+        self.assertEqual(model, "deepseek-chat")
+        self.assertEqual(out, "嗯")   # 无思考 → 裸正文，零 <think> 包装
+
+    def test_plain_body_when_no_reasoning(self):
+        out, captured, _ = self._call([
+            '{"choices":[{"delta":{"content":"直答"}}]}',
+            '[DONE]',
+        ])
+        self.assertEqual(out, "直答")
+        self.assertNotIn("<think>", out)
+        self.assertEqual([ev["type"] for ev in captured], ["answer"])
+
+    def test_failure_returns_none(self):
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_CLOUD_TAKEOVER": "1"}),                 mock.patch.object(main, "CLOUD_KEY", "sk-test"),                 mock.patch.object(main, "requests") as mr:
+            mr.post.side_effect = RuntimeError("网络炸了")
+            out = main.console_cloud_chat("你好")
+        self.assertIsNone(out)   # 失败契约：None→调用方友好兜底
+
+    def test_empty_content_returns_none(self):
+        """思考有货正文空=生成失败，不产半截卡（R1 守门同口径）。"""
+        out, _, _ = self._call([
+            '{"choices":[{"delta":{"reasoning_content":"只有思考"}}]}',
+            '[DONE]',
+        ])
+        self.assertIsNone(out)
 
 
 class StreamBusDispatchTests(unittest.TestCase):

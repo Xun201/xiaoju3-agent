@@ -2142,11 +2142,23 @@ def _stock_screen_reply_qq():
     return mod.stock_screen_text()
 
 
-def console_cloud_chat(message, history=None):
-    """控制台闲聊云端直答（2026-10-28 队长拍板"本地毒话术根除"）：控制台
-    非工具意图的普通对话直连云端大脑（与 QQ 接管同构）——本地小脑只保留
-    工具场景，闲聊不再经过 r1（"建议您联网"类幻觉生成面物理消失）。
-    返回 None=云端不可用/失败（调用方回退 smart_ask 旧链兜底）。
+def console_cloud_chat(message, history=None, on_event=None):
+    """控制台闲聊云端直答（2026-10-28 队长拍板"本地毒话术根除"；2026-10-29
+    思维链找回改流式）：控制台非工具意图的普通对话直连云端大脑（与 QQ
+    接管同构）——本地小脑只保留工具场景，闲聊不再经过 r1（"建议您联网"
+    类幻觉生成面物理消失）。
+
+    流式契约（对齐 brain._ask_cloud_stream）：stream:true 逐块解析 SSE，
+    reasoning_content 增量→on_event({"type":"think","delta":..})，
+    content 增量→on_event({"type":"answer","delta":..})；on_event 传
+    None 静默消费。返回 "<think>…</think>正文"（有思考时统一包装，
+    前端 THINK_BLOCK_RE 出折叠卡）；无思考=裸正文；None=云端不可用/
+    失败（调用方出友好兜底，绝不回退本地毒话术）。
+
+    模型=XIAOJU3_CONSOLE_CLOUD_MODEL（缺省 deepseek-reasoner 思考模式
+    ——deepseek-chat 非思考模式本就不返回 reasoning_content，思考卡
+    无从谈起；V3.2 起两模式同价，只多付思考输出 token）。QQ 通道独立
+    链保持非思考不动（QQ 剥 think 发送，速度优先）。
     门控=XIAOJU3_QQ_CLOUD_TAKEOVER（与 QQ 接管共用同一开关——都是"云
     端接管"概念；conftest 置 0 让测试走旧链）。"""
     if os.environ.get("XIAOJU3_QQ_CLOUD_TAKEOVER", "1") != "1":
@@ -2154,6 +2166,8 @@ def console_cloud_chat(message, history=None):
     key = CLOUD_KEY or ""
     if not key:
         return None
+    model = (os.environ.get("XIAOJU3_CONSOLE_CLOUD_MODEL", "").strip()
+             or "deepseek-reasoner")
     sys_prompt = dict(prompts.QQ_CLOUD_SYSTEM)
     sys_prompt["content"] = prompts.QQ_CLOUD_SYSTEM["content"].format(
         user_title="主人")
@@ -2169,18 +2183,48 @@ def console_cloud_chat(message, history=None):
     msgs = msgs + [{"role": "user", "content": user_content}]
     headers = {"Authorization": f"Bearer {key}",
                "Content-Type": "application/json"}
+    chunks = []
+    r_chunks = []
     try:
-        r = requests.post(CLOUD_URL, json={
-            "model": CLOUD_MODEL, "messages": msgs, "stream": False,
-            "temperature": 0.7}, headers=headers, timeout=(5, 60))
-        body = r.json()
-        content = str(body.get("choices", [{}])[0].get("message", {})
-                      .get("content", "")).strip()
-        return content or None
+        with requests.post(CLOUD_URL, json={
+                "model": model, "messages": msgs, "stream": True,
+                "temperature": 0.7}, headers=headers, timeout=(5, 90),
+                stream=True) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except (ValueError, TypeError):
+                    continue
+                try:
+                    ch_delta = obj["choices"][0]["delta"] or {}
+                except (KeyError, IndexError, AttributeError):
+                    continue
+                th = str(ch_delta.get("reasoning_content") or "")
+                if th:
+                    r_chunks.append(th)
+                    if on_event is not None:
+                        on_event({"type": "think", "delta": th})
+                delta = ch_delta.get("content") or ""
+                if delta:
+                    chunks.append(delta)
+                    if on_event is not None:
+                        on_event({"type": "answer", "delta": delta})
     except Exception as e:
         print(f"⚠️ [控制台云端直答] 失败（回退旧链）: {type(e).__name__}: "
               f"{str(e)[:80]}")
         return None
+    body = "".join(chunks).strip()
+    if not body:
+        return None   # 思考有货正文空=生成失败，不产半截卡（R1 守门同口径）
+    if r_chunks:
+        return '<think>' + "".join(r_chunks).strip() + '</think>' + body
+    return body
 
 
 def _stock_screen_result_for(channel):
