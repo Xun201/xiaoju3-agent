@@ -133,17 +133,17 @@
         #sidebar-resizer::after {
             content: "";
             position: absolute;
-            top: 0;                             /* 贯穿顶底（原 12px 内缩） */
+            top: 0;                             /* 贯穿顶底 */
             bottom: 0;
             left: 50%;
-            width: 2px;
+            width: 1px;                         /* 平时 1px 极细浅灰（隐形化） */
             transform: translateX(-50%);
-            background: var(--color-border, #e0e4ec);   /* 默认浅灰实线 */
+            background: var(--color-border, #e0e4ec);
             transition: background 0.15s ease, width 0.15s ease;
         }
         #sidebar-resizer:hover::after, #sidebar-resizer.dragging::after {
-            width: 4px;
-            background: #2563eb;                /* hover/拖拽=点缀蓝高亮 */
+            width: 2px;
+            background: #2563eb;                /* hover/拖拽=2px 点缀蓝 */
         }
         .panel-header {
             font-size: 18px;

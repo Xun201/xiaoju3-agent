@@ -144,7 +144,7 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         body = _css_rule(self.html, "#sidebar-resizer")
         self.assertIn("cursor: col-resize", body)
         self.assertIn("flex: 0 0 10px", body)
-        self.assertIn("margin: 0 -4px", body)   # 2026-10-29：上下 margin 归零=全高贯穿
+        self.assertIn("margin: 0", body)        # 2026-10-29 二次拍板：色块化布局 body padding 归零，无需负 margin hack
         self.assertIn("align-self: stretch", body)
 
     def test_resizer_thinline_after_rule(self):
@@ -153,7 +153,7 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         body = _css_rule(self.html, "#sidebar-resizer::after")
         self.assertIn("content: \"", body)
         self.assertIn("position: absolute", body)
-        self.assertIn("width: 2px", body)
+        self.assertIn("width: 1px", body)   # 2026-10-29 隐形化口径：1px 极细
         self.assertIn("top: 0", body)
         self.assertIn("bottom: 0", body)
         self.assertIn("var(--color-border", body)   # 默认浅灰（令牌）
@@ -166,7 +166,7 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         m = re.search(r"#sidebar-resizer:(?:hover|dragging)::after[^{]*\{([^}]*)\}",
                       self.html)
         self.assertTrue(m, "hover/dragging ::after 规则未找到")
-        self.assertIn("width: 4px", m.group(1))
+        self.assertIn("width: 2px", m.group(1))   # hover=2px 蓝（隐形化口径）
         self.assertIn("#2563eb", m.group(1))
 
     def test_mobile_media_hides_resizer(self):
