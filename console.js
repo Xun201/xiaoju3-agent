@@ -46,7 +46,61 @@
         };
     })('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">');
 
-    // 音效总开关（WebAudio 引擎在 desktop-pet.js 中，localStorage 记忆）
+    // 音效引擎自持兜底（2026-10-29 穿透修复）：桌宠 DOM 物理移除时
+    // desktop-pet.js 的 WebAudio 引擎随之消失——window.xiaoju3Sound 缺席
+    // → 铃铛绑定代码 if (soundBtn && window.xiaoju3Sound) 永假=监听器从未
+    // 挂上（真机 CDP 实锤），回复到达 ding 同亡。此处自持同款最小引擎
+    //（键 xiaoju3_sound/缺省 on/ding=880+1318.5Hz 双音，与旧引擎状态兼
+    // 容）；pet 引擎若回归，此兜底自动让位（window 已存在则不覆盖）。
+    if (!window.xiaoju3Sound) {
+        const SOUND_KEY = 'xiaoju3_sound';
+        let soundCtx = null;
+        function soundEnsureCtx() {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return null;        // 无 AudioContext：静默降级
+            try {
+                if (!soundCtx) soundCtx = new AC();
+                if (soundCtx.state === 'suspended') soundCtx.resume().catch(function () {});
+                return soundCtx.state === 'running' ? soundCtx : null;
+            } catch (e) { return null; }
+        }
+        function soundTone(freq, dur, delay, type, vol) {
+            const c = soundEnsureCtx();
+            if (!c) return;
+            try {
+                const osc = c.createOscillator();
+                const gain = c.createGain();
+                const t0 = c.currentTime + (delay || 0);
+                osc.type = type || 'sine';
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0.0001, t0);
+                gain.gain.exponentialRampToValueAtTime(vol || 0.08, t0 + 0.012);
+                gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+                osc.connect(gain);
+                gain.connect(c.destination);
+                osc.start(t0);
+                osc.stop(t0 + dur + 0.03);
+            } catch (e) { /* 合成失败静默：提示音绝不打断主流程 */ }
+        }
+        window.xiaoju3Sound = {
+            enabled: function () {
+                try { return (localStorage.getItem(SOUND_KEY) || 'on') !== 'off'; }
+                catch (e) { return true; }
+            },
+            ding: function () {
+                if (!this.enabled()) return;
+                soundTone(880, 0.10, 0, 'sine', 0.07);
+                soundTone(1318.5, 0.16, 0.09, 'sine', 0.06);
+            },
+            toggle: function () {
+                const next = this.enabled() ? 'off' : 'on';
+                try { localStorage.setItem(SOUND_KEY, next); } catch (e) {}
+                return this.enabled();
+            },
+        };
+    }
+
+    // 音效总开关（WebAudio 引擎：桌面窗侧 desktop-pet.js 或上方自持兜底）
     const soundBtn = document.getElementById('sound-toggle');
     function refreshSoundBtn() {
         if (soundBtn && window.xiaoju3Sound) {
@@ -2676,7 +2730,10 @@
         console: {
             btn: function () { return null; },   // #UI修复：tab 栏退役，按钮已删（空值安全同 settings 条目）
             show: function () { return [chatHistoryPaneEl]; },
-            hide: function () { return [terminalPaneEl, settingsPaneEl]; },
+            // 2026-10-29 穿透修复：hide 必须收全四个视图——旧清单漏
+            // keysPaneEl，密钥页点「← 返回」后 keys 面板留在聊天下方穿模
+            //（队长截图实锤；terminal.hide 同漏同修）
+            hide: function () { return [terminalPaneEl, settingsPaneEl, keysPaneEl]; },
             input: true,
             clearTitle: '清空聊天记录',
             enter: null,
@@ -2685,7 +2742,7 @@
         terminal: {
             btn: function () { return null; },   // #UI修复：tab 栏退役，按钮已删
             show: function () { return [terminalPaneEl]; },
-            hide: function () { return [chatHistoryPaneEl, settingsPaneEl]; },
+            hide: function () { return [chatHistoryPaneEl, settingsPaneEl, keysPaneEl]; },   // 2026-10-29 穿透修复：补 keysPaneEl（同 console 条目）
             input: false,
             clearTitle: '',
             enter: function () {

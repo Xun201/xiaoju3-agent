@@ -417,7 +417,9 @@ class TerminalTabTests(unittest.TestCase):
         self.assertIn("switchChatTab('terminal')", self.console_js)
         self.assertIn("switchChatTab('console')", section)
         self.assertIn("show: function () { return [terminalPaneEl]; }", section)
-        self.assertIn("hide: function () { return [chatHistoryPaneEl, settingsPaneEl]; }",
+        # 2026-10-29 穿透修复：hide 收全（含 keysPaneEl——旧清单漏它致
+        # 密钥页返回后 keys 面板残留穿模）
+        self.assertIn("hide: function () { return [chatHistoryPaneEl, settingsPaneEl, keysPaneEl]; }",
                       section)
         self.assertIn("setInterval(loadTerminalHistory, TERMINAL_REFRESH_MS)",
                       section)
@@ -547,6 +549,52 @@ class WebUxNodeLiveRunTests(unittest.TestCase):
         self.assertEqual(out["right"], "auto")                # 定位切换到 left/top
         self.assertEqual(out["replay2Left"], "195px")         # 再缩重放（摆位不跨重放）
         self.assertTrue(out["noThrow"])                       # 缺挂载点不抛错
+
+
+class PaneRegistryCompletenessTests(unittest.TestCase):
+    """视图切换注册表完整性（2026-10-29 穿透修复锚）：四个视图（对话/终端/
+    设置/密钥）在 CHAT_TABS 里互斥——任何 tab 的 hide 列表必须收全其余
+    三 pane。旧清单 console/terminal 漏 keysPaneEl：密钥页点「← 返回」后
+    keys 面板留在聊天下方穿模（队长截图实锤）。此锚锁死回归。"""
+
+    def setUp(self):
+        self.js = _read("console.js")
+
+    def _hide_list_of(self, tab):
+        """提取 CHAT_TABS[tab].hide 函数体（show 起点到 input 标记之间）。"""
+        start = self.js.index("%s: {" % tab)
+        show = self.js.index("show: function () { return [", start)
+        hide = self.js.index("hide: function () { return [", show)
+        end = self.js.index("];", hide)
+        return self.js[hide:end]
+
+    def test_every_hide_list_covers_all_other_panes(self):
+        panes = {
+            "console": "chatHistoryPaneEl",
+            "terminal": "terminalPaneEl",
+            "settings": "settingsPaneEl",
+            "keys": "keysPaneEl",
+        }
+        for tab, own_pane in panes.items():
+            hide_body = self._hide_list_of(tab)
+            for other, el in panes.items():
+                if other == tab:
+                    continue
+                self.assertIn(el, hide_body,
+                              "%s.hide 漏 %s（穿模回归）" % (tab, el))
+
+    def test_sound_engine_self_provided_fallback(self):
+        """音效引擎自持兜底（2026-10-29 穿透修复锚）：desktop-pet.js 不再被
+        引用后 window.xiaoju3Sound 缺席=铃铛监听器从未绑（真机 CDP 实锤）。
+        console.js 必须自持同款引擎（键 xiaoju3_sound/缺省 on/ding 双音），
+        且仅在引擎缺席时兜底（pet 引擎回归自动让位）。"""
+        js = self.js
+        self.assertIn("if (!window.xiaoju3Sound) {", js)          # 兜底守卫
+        self.assertIn("window.xiaoju3Sound = {", js)              # 自持引擎
+        self.assertIn("xiaoju3_sound", js)                        # 键名兼容旧态
+        self.assertIn("'on') !== 'off'", js)                      # 缺省开
+        self.assertIn("1318.5", js)                               # ding 双音配方
+        self.assertIn("soundBtn.addEventListener", js)            # 铃铛绑定在位
 
 
 if __name__ == "__main__":
