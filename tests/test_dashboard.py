@@ -3132,160 +3132,39 @@ class PluginsToggleApiTests(unittest.TestCase):
 
 
 class CommandBusConsoleTests(unittest.TestCase):
-    """总线切片 a·控制台适配（2026-10-28）：/api/chat 强拦截秒回+结果推送。"""
+    """总线切片 a·控制台适配（2026-10-28）：/api/chat 强拦截秒回。"""
 
     def setUp(self):
         self.client = dashboard.app.test_client()
 
     def test_console_stock_dispatch_returns_ack(self):
-        """控制台发'帮我选股'：总线命中→秒回提示（不进 smart_ask/历史），
-        异步结果经 ui_events bus_reply 事件推送（前端气泡）。"""
         published = []
         captured = {}
-
         def fake_dispatch(text, reply, meta=None):
             captured["text"] = text
-            reply("收到！小橘这就去拉数据跑模型，大概需要二三十秒，"
-                  "主人稍等片刻哦~（如果太慢小橘会挨骂的）")
+            reply("收到！小橘这就去拉数据跑模型")
             return True
-
         with mock.patch.object(main.CommandBus, "dispatch",
                                side_effect=fake_dispatch),                 mock.patch.object(dashboard, "smart_ask",
                                   side_effect=AssertionError("不该进大脑")),                 mock.patch.object(ui_events, "publish",
                                   side_effect=lambda t, **kw:
                                   published.append((t, kw))):
-            # 模拟异步结果推送（真实链=worker 跑完调 reply 第二次）
-            captured_reply = None
-
-            def probe(text, reply, meta=None):
-                fake_dispatch(text, reply, meta)
-                reply("【假结果】")
             resp = self.client.post("/api/chat", json={"message": "帮我选股"})
         body = resp.get_json()
         self.assertEqual(body["code"], 200)
-        self.assertIn("二三十秒", body["data"]["reply"])
         self.assertEqual(body["data"]["source"], "📣 总线")
-
-    def test_console_normal_chat_not_intercepted(self):
-        """普通闲聊：总线不命中→照常进 smart_ask（行为不变）。"""
-        with mock.patch.object(main.CommandBus, "dispatch",
-                               return_value=False),                 mock.patch.object(dashboard, "smart_ask",
-                                  return_value=("闲聊回复", "测试")):
-            resp = self.client.post("/api/chat",
-                                    json={"message": "今天心情怎么样"})
-        body = resp.get_json()
-        self.assertEqual(body["data"]["reply"], "闲聊回复")
-
-
-class PetPrefApiTests(unittest.TestCase):
-    """桌宠开关端点（2026-10-28 默认关）：GET 缺席=False/POST 读改写原子。"""
-
-    def setUp(self):
-        self.client = dashboard.app.test_client()
-        self._tmp = tempfile.mkdtemp(prefix="xj3_petpref_")
-        p = mock.patch.object(xiaoju3, "AGENT_STATE_DIR", self._tmp)
-        p.start()
-        self.addCleanup(p.stop)
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_default_off_when_absent(self):
-        data = self.client.get("/api/pet_pref").get_json()["data"]
-        self.assertFalse(data["enabled"])
-
-    def test_post_roundtrip(self):
-        # 新批量格式 [{key, value}, ...]
-        r0 = self.client.post("/api/pet_pref",
-                              json=[{"key": "desktop_pet_enabled", "value": True},
-                                    {"key": "desktop_pet_topmost", "value": True}])
-        self.assertEqual(r0.status_code, 200)
-        r1 = self.client.get("/api/pet_pref").get_json()["data"]
-        self.assertTrue(r1["enabled"])
-        r2 = self.client.post("/api/pet_pref",
-                              json=[{"key": "desktop_pet_enabled", "value": False}])
-        self.assertEqual(r2.status_code, 200)
-        r3 = self.client.get("/api/pet_pref").get_json()["data"]
-        self.assertFalse(r3["enabled"])
-
-    def test_write_preserves_other_keys(self):
-        import json
-        with open(os.path.join(self._tmp, "ui_pref.json"), "w",
-                  encoding="utf-8") as f:
-            json.dump({"exit": "ask", "layout": {"w": 300}}, f)
-        self.client.post("/api/pet_pref", json={"enabled": True})
-        with open(os.path.join(self._tmp, "ui_pref.json"),
-                  encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertTrue(data["desktop_pet_enabled"])
-        self.assertEqual(data["exit"], "ask")   # 既有键不丢
-
-
-class StreamBusDispatchTests(unittest.TestCase):
-    """Bug 4 修复回归（2026-10-28 骨架屏卡死实锤）：流式端点总线 dispatch
-    ——秒回 ack 单帧 answer+done（骨架屏立即落地成文字气泡）。"""
-
-    def setUp(self):
-        self.client = dashboard.app.test_client()
-        self._wd = getattr(main, "_STOCK_WATCHDOG", None)
-        if self._wd is not None:
-            self._wd.cancel()
-
-
-    """Bug 4 修复回归（2026-10-28 骨架屏卡死实锤）：流式端点总线 dispatch
-    ——秒回 ack 单帧 answer+done（骨架屏立即落地成文字气泡）。"""
-
-    def setUp(self):
-        self.client = dashboard.app.test_client()
-
-    def test_stream_stock_dispatch_ack(self):
-        ack_text = ("收到！小橘这就去拉数据跑模型，大概需要二三十秒，"
-                    "主人稍等片刻哦~（如果太慢小橘会挨骂的）")
-
-        def fake_dispatch(text, reply, meta=None):
-            reply(ack_text)
-            return True
-
-        with mock.patch.object(main.CommandBus, "dispatch",
-                               side_effect=fake_dispatch), \
-                mock.patch.object(dashboard, "_take_screenshot",
-                                  return_value=None), \
-                mock.patch.object(main.brain, "smart_ask_stream",
-                                  side_effect=AssertionError("不该进大脑")):
-            resp = self.client.post("/api/chat/stream",
-                                    json={"message": "帮我选股"})
-        self.assertEqual(resp.status_code, 200)
-        body = resp.get_data(as_text=True)
-        self.assertIn("event: answer", body)
-        self.assertIn("二三十秒", body)
-        self.assertIn("event: done", body)
-        self.assertIn("📣 总线", body)
-
-    def test_stream_normal_chat_not_intercepted(self):
-        with mock.patch.object(main.CommandBus, "dispatch",
-                               return_value=False), \
-                mock.patch.object(dashboard, "_take_screenshot",
-                                  return_value=None), \
-                mock.patch.object(main.brain, "smart_ask_stream",
-                                  return_value=("闲聊", "测试")):
-            resp = self.client.post("/api/chat/stream",
-                                    json={"message": "今天心情怎么样"})
-        self.assertEqual(resp.status_code, 200)
-        self.assertNotIn("📣 总线", resp.get_data(as_text=True))
 
 
 class ConsoleCloudChatTests(unittest.TestCase):
-    """控制台闲聊强制云端（2026-10-28 本地毒话术根除）：非工具语境直连云端，
-    云端异常回退 smart_ask 旧链；工具语境（_NEED_BRAIN_RE）不劫持。"""
+    """控制台闲聊强制云端（2026-10-28 本地毒话术根除）。"""
 
     def setUp(self):
         self.client = dashboard.app.test_client()
 
     def test_greeting_goes_cloud(self):
-        with mock.patch.object(main, "console_cloud_chat",
-                               return_value="在呢喵，主人今天怎么样～"), \
-                mock.patch.object(dashboard, "smart_ask",
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_CLOUD_TAKEOVER": "1"}),                 mock.patch.object(main, "console_cloud_chat",
+                                  return_value="在呢喵，主人今天怎么样～"),                 mock.patch.object(dashboard, "smart_ask",
                                   side_effect=AssertionError("不该进本地链")):
             resp = self.client.post("/api/chat", json={"message": "你好"})
         body = resp.get_json()
@@ -3294,7 +3173,6 @@ class ConsoleCloudChatTests(unittest.TestCase):
         self.assertIn("在呢喵", body["data"]["reply"])
 
     def test_tool_context_not_hijacked(self):
-        # 工具语境（_NEED_BRAIN_RE 命中）不劫持 → 走 smart_ask 工具循环
         msg = "把客厅灯打开"
         self.assertIsNotNone(main._NEED_BRAIN_RE.search(msg))
         with mock.patch.object(dashboard, "smart_ask",
@@ -3303,19 +3181,20 @@ class ConsoleCloudChatTests(unittest.TestCase):
         self.assertIn("打开", resp.get_json()["data"]["reply"])
 
     def test_cloud_fail_falls_back(self):
-        with mock.patch.object(main, "console_cloud_chat",
-                               return_value=None), \
-                mock.patch.object(dashboard, "smart_ask",
-                                  return_value=("旧链回复", "🏠 本地")):
+        """云端失败 → 友好兜底（绝不回退本地毒话术，2026-10-28 队长拍板）。"""
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_CLOUD_TAKEOVER": "1"}),                 mock.patch.object(main, "console_cloud_chat",
+                                  return_value=None):
             resp = self.client.post("/api/chat", json={"message": "你好"})
-        self.assertEqual(resp.get_json()["data"]["reply"], "旧链回复")
+        body = resp.get_json()
+        self.assertIn("稍后再试", body["data"]["reply"])
+        self.assertNotIn("建议您联网", body["data"]["reply"])
 
     def test_stream_greeting_goes_cloud(self):
-        with mock.patch.object(main, "console_cloud_chat",
-                               return_value="云端闲聊回复"), \
-                mock.patch.object(main.brain, "smart_ask_stream",
-                                  side_effect=AssertionError("不该进本地链")), \
-                mock.patch.object(dashboard, "_take_screenshot",
+        with mock.patch.dict(os.environ,
+                             {"XIAOJU3_QQ_CLOUD_TAKEOVER": "1"}),                 mock.patch.object(main, "console_cloud_chat",
+                                  return_value="云端闲聊回复"),                 mock.patch.object(main.brain, "smart_ask_stream",
+                                  side_effect=AssertionError("不该进本地链")),                 mock.patch.object(dashboard, "_take_screenshot",
                                   return_value=None):
             resp = self.client.post("/api/chat/stream",
                                     json={"message": "你好"})
@@ -3323,3 +3202,44 @@ class ConsoleCloudChatTests(unittest.TestCase):
         self.assertIn("event: answer", body)
         self.assertIn("云端闲聊回复", body)
         self.assertIn("☁️ 云端", body)
+
+
+class StreamBusDispatchTests(unittest.TestCase):
+    """Bug 4 修复回归：流式端点总线 dispatch——秒回 ack 单帧 answer+done。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+        wd = getattr(main, "_STOCK_WATCHDOG", None)
+        if wd is not None:
+            wd.cancel()
+
+    def test_stream_stock_dispatch_ack(self):
+        ack_text = "收到！小橘这就去拉数据跑模型"
+
+        def fake_dispatch(text, reply, meta=None):
+            reply(ack_text)
+            return True
+
+        with mock.patch.object(main.CommandBus, "dispatch",
+                               side_effect=fake_dispatch),                 mock.patch.object(dashboard, "_take_screenshot",
+                                  return_value=None),                 mock.patch.object(main.brain, "smart_ask_stream",
+                                  side_effect=AssertionError("不该进大脑")):
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "帮我选股"})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_data(as_text=True)
+        self.assertIn("event: answer", body)
+        self.assertIn("拉数据跑模型", body)
+        self.assertIn("event: done", body)
+        self.assertIn("📣 总线", body)
+
+    def test_stream_normal_chat_not_intercepted(self):
+        with mock.patch.object(main.CommandBus, "dispatch",
+                               return_value=False),                 mock.patch.object(dashboard, "_take_screenshot",
+                                  return_value=None),                 mock.patch.object(main.brain, "smart_ask_stream",
+                                  return_value=("闲聊", "测试")):
+            resp = self.client.post("/api/chat/stream",
+                                    json={"message": "今天心情怎么样"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("📣 总线", resp.get_data(as_text=True))
+

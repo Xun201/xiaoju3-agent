@@ -4691,6 +4691,13 @@
     if (toolsEntry) {
         toolsEntry.addEventListener('click', openToolsPanel);
     }
+    // 🔄 强制刷新（清缓存+重载，2026-10-29 队长要求）
+    const refreshBtn = document.getElementById('force-refresh');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', function () {
+            window.location.reload(true);
+        });
+    }
 })();
 
     // ==================== 小工具面板（MAA 式收纳，2026-10-13 批 1） ====================

@@ -602,8 +602,14 @@ def _wake_loop():
             finally:
                 db.close()
             if not wake:
-                # 被挡住（quiet/硬帽/未静默）→ 下个检查周期自然再查；
-                # quiet 结束后 10 分钟内必查到，无需额外等待
+                # 🎲 社交串门（Owner 未唤醒时低概率触发，日限 3 次）
+                if _random.random() < 0.05:   # 5% 概率/检查周期
+                    try:
+                        social_db = _db()
+                        social_visit(db=social_db)
+                        social_db.close()
+                    except Exception:
+                        pass
                 continue
             wake_once(now_dt)
         except Exception as e:
@@ -625,3 +631,168 @@ def stop():
     """teardown 钩子调用：停唤醒线程（卸载即冬眠，零残留）。"""
     _STOP.set()
     print("🦊 [qq_lifemate] 唤醒线程已停（冬眠）")
+
+
+# ==================== 多目标随机串门（2026-10-29 队长拍板） ====================
+# 不是无脑群发——小橘加入的所有群聊和好友都成为"社交对象"。每次触发时
+# 随机挑一个目标问候（一会聊这个群，一会聊那个群），增加真实感。
+# 安全铁律：
+# - 全局日限 2-3 次（多目标共享，防高频封号）
+# - 同一目标 24h 冷却（雨露均沾，不盯一个聊）
+# - 非 Owner 目标：彻底切断主人记忆，切换"社交模式" Prompt
+# - 群聊必须模拟打字延迟 3-6s（绝不可秒发）
+# - 社交池默认空白（只能在私聊找 Owner）——队长手动配置后才启用
+
+_SOCIAL_POOL_ENV = "XIAOJU3_SOCIAL_POOL"
+_SOCIAL_DAILY_CAP = 3
+_SOCIAL_TARGET_COOLDOWN_H = 24
+_SOCIAL_DELAY = (3.0, 6.0)
+
+
+def _parse_social_pool():
+    """解析 XIAOJU3_SOCIAL_POOL 环境变量。
+    格式：逗号分隔，每项 g:群号 或 f:好友QQ。
+    如 "g:123456,f:789012,g:111222" → [("group","123456"),("friend","789012"),...]"""
+    raw = os.environ.get(_SOCIAL_POOL_ENV, "").strip()
+    if not raw:
+        return []
+    out = []
+    for item in raw.split(","):
+        item = item.strip()
+        if item.startswith("g:"):
+            out.append(("group", item[2:]))
+        elif item.startswith("f:"):
+            out.append(("friend", item[2:]))
+        elif item.isdigit():
+            out.append(("group", item))   # 默认按群处理
+    return out
+
+
+def _social_send(target_type, target_id, text):
+    """发送到群或私聊（OneBot API）。"""
+    api = (os.environ.get("ONEBOT_API_URL", "").strip()
+           or os.environ.get("NAPCAT_API_URL", "").strip()
+           or "http://127.0.0.1:3001").rstrip("/")
+    headers = {}
+    token = (os.environ.get("ONEBOT_TOKEN", "") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if target_type == "group":
+        payload = {"group_id": int(target_id), "message": text}
+        endpoint = "send_group_msg"
+    else:
+        payload = {"user_id": int(target_id), "message": text}
+        endpoint = "send_private_msg"
+    try:
+        import requests
+        r = requests.post(f"{api}/{endpoint}", json=payload,
+                          headers=headers, timeout=8)
+        body = r.json()
+        return (r.status_code == 200 and body.get("retcode") == 0
+                and (body.get("data") or {}).get("message_id"))
+    except Exception as e:
+        print(f"🦊 [social] 发送异常: {e}")
+        return False
+
+
+_SOCIAL_MODE_PROMPT = (
+    "你是小橘，现在在一个普通的群聊/好友聊天中。请发一句符合聊天氛围的"
+    "日常问候或轻松话题（如'大家早上好呀'、'有人在摸鱼吗'、'今天天气不错呢'）。"
+    "语气自然轻松，像真人聊天。"
+    "【绝对红线】严禁暴露关于主人的任何信息（名字/习惯/偏好/日程/位置）。"
+    "严禁提供任何网址、下载链接或安装教程。严禁长篇大论。1-2 句即可。")
+
+
+def _social_greeting(target_desc, chat_fn=None):
+    """生成社交模式问候语（场景隔离——零主人信息）。"""
+    prompt = [{"role": "system", "content": _SOCIAL_MODE_PROMPT},
+              {"role": "user", "content": f"当前目标：{target_desc}。"
+               "请生成一句问候。"}]
+    try:
+        if chat_fn:
+            return str(chat_fn(prompt) or "").strip()
+        from brain import ask_cloud
+        return str(ask_cloud(prompt) or "").strip()
+    except Exception:
+        return None
+
+
+_SOCIAL_COOLDOWN_MARK = "social_visit_{tid}"
+
+
+def social_visit(db=None):
+    """多目标随机串门：从社交池随机选一个目标（24h 冷却），发问候。
+    返回 True=发了消息。任何失败静默。"""
+    pool = _parse_social_pool()
+    if not pool:
+        return False
+    import random as _random
+    import datetime as _dt
+
+    now = _dt.datetime.now()
+    today = now.strftime("%Y-%m-%d")
+
+    # 全局日限检查
+    own_db = db or _db()
+    try:
+        row = own_db.execute(
+            "SELECT value FROM meta WHERE key='social_date'").fetchone()
+        social_date = row[0] if row else ""
+        row2 = own_db.execute(
+            "SELECT value FROM meta WHERE key='social_count'").fetchone()
+        social_count = int(row2[0]) if row2 else 0
+        if social_date != today:
+            social_date = today
+            social_count = 0
+        if social_count >= _SOCIAL_DAILY_CAP:
+            return False   # 今日额度用完
+    except Exception:
+        social_count = 0
+
+    # 随机选一个目标（洗牌后取第一个可用的）
+    targets = pool[:]
+    _random.shuffle(targets)
+    for tt, tid in targets:
+        # 24h 冷却检查（memory.db social_log 表）
+        try:
+            row = own_db.execute(
+                "SELECT ts FROM social_log WHERE target_id=? "
+                "ORDER BY ts DESC LIMIT 1", (tid,)).fetchone()
+            if row:
+                last = _dt.datetime.strptime(row[0][:19], "%Y-%m-%d %H:%M:%S")
+                if (now - last).total_seconds() < _SOCIAL_TARGET_COOLDOWN_H * 3600:
+                    continue
+        except Exception:
+            pass   # 表不存在=首次，直接用
+
+        # 生成问候语
+        desc = f"{'群聊' if tt == 'group' else '好友'} {tid}"
+        greeting = _social_greeting(desc)
+        if not greeting:
+            continue
+
+        # 发送
+        ok = _social_send(tt, tid, greeting)
+        if not ok:
+            continue
+
+        # 记录
+        try:
+            own_db.execute(
+                "INSERT INTO social_log(target_id, target_type, ts, greeting) "
+                "VALUES(?,?,?,?)", (tid, tt, now_str(), greeting[:100]))
+            own_db.execute(
+                "INSERT INTO meta(key, value) VALUES('social_date',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (today,))
+            own_db.execute(
+                "INSERT INTO meta(key, value) VALUES('social_count',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=CAST("
+                "CAST(excluded.value AS INTEGER)+1 AS TEXT)", (str(social_count + 1),))
+            own_db.commit()
+        except Exception:
+            pass
+        print(f"🦊 [social] 串门成功: {tt}:{tid} → {greeting[:40]}")
+        return True
+
+    return False

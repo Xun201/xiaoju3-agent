@@ -29,8 +29,12 @@ _PREF_PATH = os.path.join(
 #: 透明色（magenta 作色键——素材中不会出现的颜色）
 _TC = "magenta"
 #: 素材路径
-_PET_IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "..", "assets", "DSniang1.jpg")
+try:
+    from paths import RESOURCE_ROOT
+    _PET_IMG = os.path.join(RESOURCE_ROOT, "assets", "DSniang1.jpg")
+except ImportError:
+    _PET_IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "assets", "DSniang1.jpg")
 #: 默认窗口大小
 _PET_SIZE = 200
 

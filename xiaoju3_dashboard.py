@@ -1972,7 +1972,8 @@ def api_chat():
         # ☁️ 控制台闲聊强制云端（2026-10-28 队长拍板"本地毒话术根除"）：
         # 非工具语境的普通对话直连云端大脑（与 QQ 接管同构）；本地小脑只剩
         # 工具场景。云端异常/不可用回退 smart_ask 旧链。
-        if not main._NEED_BRAIN_RE.search(user_msg):
+        if (os.environ.get("XIAOJU3_QQ_CLOUD_TAKEOVER", "1") == "1"
+                and not main._NEED_BRAIN_RE.search(user_msg)):
             cloud = main.console_cloud_chat(user_msg, history)
             if cloud is not None:
                 reply = sanitize_for_web(cloud)
@@ -1984,7 +1985,12 @@ def api_chat():
                     "code": 200,
                     "data": {"reply": reply, "source": "☁️ 云端"}
                 })
-            # ☁️ None（接管关或云端失败）→ 落 smart_ask（不硬兜底，留给旧链）
+            # ☁️ None → **绝不回退本地毒话术**
+            return jsonify({
+                "code": 200,
+                "data": {"reply": "小橘网络有点小问题，主人稍后再试试嘛～🐾",
+                         "source": "🐾 兜底"}
+            })
         print(f"[香橙派收到消息] {user_msg}")
         # 控制台=owner 本机语境（与 relationship.tone_prefix 同源兜底）：
         # 不传 user_id 时 persona 段 uid 空串→控制台人格永不生效（冒烟实锤）
@@ -2153,14 +2159,20 @@ def api_chat_stream():
         # ☁️ 控制台闲聊强制云端（2026-10-28 队长拍板"本地毒话术根除"）：
         # 非工具语境普通对话直连云端（单帧 answer+done，与 QQ 接管同构）；
         # 云端异常回退 smart_ask 旧链（本地小脑只剩工具场景）。
-        if not main._NEED_BRAIN_RE.search(user_msg):
+        if (os.environ.get("XIAOJU3_QQ_CLOUD_TAKEOVER", "1") == "1"
+                and not main._NEED_BRAIN_RE.search(user_msg)):
             cloud = main.console_cloud_chat(user_msg, history)
             if cloud is not None:
                 reply = sanitize_for_web(cloud)
                 yield _sse_frame("answer", {"delta": reply})
                 yield _sse_frame("done", {"reply": reply, "source": "☁️ 云端"})
                 return
-            # ☁️ None（接管关或云端失败）→ 落 smart_ask（不硬兜底，留给旧链）
+            # ☁️ None → **绝不回退本地毒话术**
+            return jsonify({
+                "code": 200,
+                "data": {"reply": "小橘网络有点小问题，主人稍后再试试嘛～🐾",
+                         "source": "🐾 兜底"}
+            })
         import json as _json
         import queue
         q = queue.Queue()

@@ -383,13 +383,14 @@
 
         .chat-history {
             flex: 1;
-            padding: 20px;
+            padding: 12px 12px 20px 12px;
             overflow-y: auto;
+            overflow-x: hidden;
             display: flex;
             flex-direction: column;
-            gap: 15px;
-                overflow-x: hidden;   /* 防表格撑出页面级横滚（表格在气泡内自滑） */
-    }
+            align-items: flex-start !important;  /* 🔒 全部子项贴左（用户消息自行 flex-end） */
+            gap: 12px;
+        }
         .message {
             max-width: 70%;
             min-width: 0;       /* 防撑爆（2026-10-28 表格实锤）：flex 项默认
@@ -1469,6 +1470,7 @@
             <button id="sidebar-toggle" class="header-btn" title="监控面板">☰</button>
             <span class="header-title">小橘3号 · 控制台</span>
             <span class="header-actions">
+                <button id="force-refresh" class="header-btn" title="强制刷新（清缓存）">🔄</button>
                 <button id="tools-entry" class="header-btn" title="小工具面板">🧰</button>
                 <button id="clear-history" class="header-btn" title="清空聊天记录">🧹</button>
                 <button id="sound-toggle" class="header-btn" title="音效开关">🔔</button>
@@ -1579,18 +1581,8 @@
     <div id="xiaoju3-ball" title="点击恢复桌宠（可拖拽移动）">
         <img src="/assets/pet/normal_half.png" alt="小橘3号">
     </div>
-
-         document.body，无静态容器元素（2026-10-03 清理孤儿空 div
-         #xiaoju3-root——注释称"注入点"但实现从未使用）。 -->
-
-         三能力齐备（边缘吸附 / 左右翻转 / 随机台词气泡，静态断言见
-         test_dashboard.py 桌宠规格组与 test_pet_desktop.py）；
-         2026-10-01 的下线注释档见 git 历史。 -->
-    <!-- 桌宠开关（2026-10-28 队长拍板默认关）：按 ui_pref.desktop_pet_enabled
-         （浏览器/桌面窗双形态同源）。设置开关在 🧰 工具面板"桌面宠物"卡。 -->
-    <script>
-    (function () {
-            .then(function (j) {
+    <!-- 桌宠已迁移独立窗口（tkinter pet_window.py），控制台不再渲染 DOM 桌宠 -->
+    <div id="tools-overlay" hidden>
                 if (!(j && j.data && j.data.enabled)) return;   // 默认关
                 const s = document.createElement('script');
                 document.body.appendChild(s);
