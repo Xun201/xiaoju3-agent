@@ -1,0 +1,11 @@
+{
+  "name": "xiaoju3-phone",
+  "version": "2.2.1",
+  "private": true,
+  "description": "xiaoju3 console Capacitor shell",
+  "dependencies": {
+    "@capacitor/android": "^6.2.3",
+    "@capacitor/cli": "^6.2.3",
+    "@capacitor/core": "^6.2.3"
+  }
+}

@@ -642,6 +642,20 @@ class ModernModalTests(unittest.TestCase):
         self.assertIn("if (settled) return;", body)
         self.assertIn("if (result === 'confirm' && typeof onConfirm === 'function') onConfirm();", body)
 
+    def test_apk_api_base_pipeline(self):
+        """APK 遥控壳 API_BASE 管线（2026-10-29）：Capacitor 环境下 fetch/
+        EventSource 统一前缀（桌面空基串零变化）+探活失败弹后端地址配置卡
+        +截图入口隐藏（依赖桌面屏幕捕获）。"""
+        js = self.js
+        self.assertIn("window.__XJ3_API_BASE = '';", js)          # 桌面零变化
+        self.assertIn("localStorage.getItem('xj3_api_base')", js)
+        self.assertIn("window.fetch = function (input, init)", js)
+        self.assertIn("window.EventSource.prototype = OrigES.prototype;", js)
+        self.assertIn("function showApiBaseConfig()", js)
+        self.assertIn("localStorage.setItem('xj3_api_base', base)", js)
+        self.assertIn('data-action="screenshot"', js)             # 隐藏目标在位
+        self.assertIn("shotItem.hidden = true", js)
+
     def test_four_call_sites_migrated(self):
         """四个业务调用点全部改道 showConfirm：删待办/删知识库文档/清空
         聊天记录/密钥覆盖——各带语义化 confirmText。"""

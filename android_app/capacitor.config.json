@@ -1,0 +1,11 @@
+{
+  "appId": "com.xun.xiaoju3",
+  "appName": "小橘3号",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "http"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

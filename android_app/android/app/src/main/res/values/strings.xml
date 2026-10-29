@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">小橘3号</string>
+    <string name="title_activity_main">小橘3号</string>
+    <string name="package_name">com.xun.xiaoju3</string>
+    <string name="custom_url_scheme">com.xun.xiaoju3</string>
+</resources>

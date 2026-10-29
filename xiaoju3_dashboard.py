@@ -97,6 +97,26 @@ except Exception:
     pass
 
 app = Flask(__name__)
+
+
+@app.after_request
+def _apk_cors_headers(resp):
+    """APK 遥控壳跨域放行（2026-10-29）：Capacitor WebView 源
+    （http://localhost）访问局域网后端属跨域——有 Origin 头才补 CORS
+    （桌面同源请求零变化；内网工具无公网暴露，* 放行可接受）。Flask 的
+    自动 OPTIONS 应答经本钩子同样带上 CORS 头=预检通过。"""
+    try:
+        if request.headers.get("Origin"):
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Access-Control-Allow-Headers"] = (
+                "Content-Type, Authorization, X-API-Key")
+            resp.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, DELETE, OPTIONS")
+    except Exception:
+        pass   # CORS 头补写失败不影响主响应
+    return resp
+
+
 # 🛡️ 迁移守望探测端点（架构 §8，migration docstring 接入示例：一行注册；
 # 原 :5002 main.py 注册点随架构合并迁入）
 app.register_blueprint(health_bp)

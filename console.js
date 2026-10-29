@@ -112,6 +112,100 @@
     }
     window.showConfirm = showConfirm;   // 全局可达（控制台调试/外部脚本）
 
+    // ==================== 手机端 API_BASE（APK 遥控壳，2026-10-29） ====================
+    // 桌面端零变化：__XJ3_API_BASE=''=同源相对路径。APK 内经 localStorage
+    // 'xj3_api_base' 配置（如 http://192.168.x.x:5003），fetch/EventSource
+    // 统一前缀；Capacitor 环境探活失败/未配置 → 弹后端地址配置卡。
+    window.__XJ3_API_BASE = '';
+    (function () {
+        try {
+            if (window.Capacitor) {
+                window.__XJ3_API_BASE =
+                    localStorage.getItem('xj3_api_base') || '';
+            }
+        } catch (e) { /* localStorage 不可用：按同源处理 */ }
+        const origFetch = window.fetch ? window.fetch.bind(window) : null;
+        if (origFetch) {
+            window.fetch = function (input, init) {
+                try {
+                    if (typeof input === 'string' && input.charAt(0) === '/'
+                            && window.__XJ3_API_BASE) {
+                        input = window.__XJ3_API_BASE + input;
+                    }
+                } catch (e) { /* 前缀失败按原请求发出 */ }
+                return origFetch(input, init);
+            };
+        }
+        const OrigES = window.EventSource;
+        if (OrigES) {
+            window.EventSource = function (url, cfg) {
+                if (typeof url === 'string' && url.charAt(0) === '/'
+                        && window.__XJ3_API_BASE) {
+                    url = window.__XJ3_API_BASE + url;
+                }
+                return new OrigES(url, cfg);
+            };
+            window.EventSource.prototype = OrigES.prototype;
+        }
+    })();
+    function showApiBaseConfig() {
+        // 后端地址配置卡（仅 APK 弹）：复用 .xj3-modal-* 样式体系
+        const overlay = document.createElement('div');
+        overlay.className = 'xj3-modal-overlay';
+        const card = document.createElement('div');
+        card.className = 'xj3-modal-card';
+        card.setAttribute('role', 'dialog');
+        card.setAttribute('aria-modal', 'true');
+        const titleEl = document.createElement('div');
+        titleEl.className = 'xj3-modal-title';
+        titleEl.textContent = '连接小橘主机';
+        const msgEl = document.createElement('p');
+        msgEl.className = 'xj3-modal-msg';
+        msgEl.textContent = '填电脑上小橘后端的地址（同一 WiFi 下形如 '
+            + 'http://192.168.31.50:5003；Tailscale 则填 100.x.x.x:5003）。'
+            + '保存后自动重连。';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'http://192.168.31.50:5003';
+        input.style.cssText = 'width:100%;box-sizing:border-box;margin-top:14px;'
+            + 'padding:10px 14px;border:1px solid #d1d5db;border-radius:10px;'
+            + 'font-size:14px;color:#1f2937;';
+        const btns = document.createElement('div');
+        btns.className = 'xj3-modal-btns';
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'xj3-modal-btn xj3-modal-btn-primary';
+        saveBtn.textContent = '保存并连接';
+        saveBtn.addEventListener('click', function () {
+            const base = input.value.trim().replace(/\/+$/, '');
+            try { localStorage.setItem('xj3_api_base', base); } catch (e) {}
+            window.__XJ3_API_BASE = base;
+            overlay.remove();
+            window.location.reload();
+        });
+        btns.appendChild(saveBtn);
+        card.appendChild(titleEl);
+        card.appendChild(msgEl);
+        card.appendChild(input);
+        card.appendChild(btns);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        input.focus();
+    }
+    if (window.Capacitor) {
+        // APK 内：首启/后端失联 → 弹配置卡；已配置且探活成功 → 静默
+        setTimeout(function () {
+            fetch('/api/health').then(function (r) { return r.json(); })
+                .then(function (j) {
+                    if (!j || j.status !== 'ok') throw new Error('not ok');
+                })
+                .catch(function () { showApiBaseConfig(); });
+        }, 1500);
+        // 桌面专属入口隐藏：截图提问（依赖桌面屏幕捕获链）
+        const shotItem = document.querySelector(
+            '.dock-menu-item[data-action="screenshot"]');
+        if (shotItem) shotItem.hidden = true;
+    }
+
     // 音效引擎自持兜底（2026-10-29 穿透修复）：桌宠 DOM 物理移除时
     // desktop-pet.js 的 WebAudio 引擎随之消失——window.xiaoju3Sound 缺席
     // → 铃铛绑定代码 if (soundBtn && window.xiaoju3Sound) 永假=监听器从未
