@@ -1151,6 +1151,14 @@
             padding: 24px 32px;
         }
         .chat-history > * { max-width: 768px; margin-left: auto; margin-right: auto; }
+        /* 2026-10-29 队长拍板：bot 消息贴左（margin-left:0 覆写 auto），
+           用户消息贴右（margin-left:auto）。旧版全部 auto margin 导致
+           bot 消息也被居中——左侧巨大留白的真正元凶。 */
+        .chat-history > * { max-width: 768px; }
+        .chat-history > .message.bot-message {
+            margin-left: 0;
+            margin-right: auto;
+        }
         /* 用户气泡严格贴右（2026-10-26 队长口径）：居中容器内右对齐豁免——
            flex 交叉轴 auto margin 会压过 align-self，必须显式钉死 */
         .chat-history > .message.user-message {
