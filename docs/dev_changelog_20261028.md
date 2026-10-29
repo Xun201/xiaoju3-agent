@@ -225,3 +225,13 @@
 - 新号保命模式（日限 40 静默+间隔 3-6s+选股 QQ 屏蔽）
 - 云端失败友好兜底（不回退本地）
 - 全仓 2876+5 全绿；生产 468b7bfa 三进程在跑；Release v2.2.1 资产同步
+
+## 深夜批㉘：控制台对齐修复+四维人格+总线接线（生产 exe 最新版三进程在跑）
+
+- `.chat-history` 加 `align-items: flex-start !important` 全部子项贴左（用户消息自行 flex-end 覆写）
+- bot 气泡 `margin-left:0; margin-right:auto` 铁律
+- renderRich 三合一：行内代码 md-code + **bold** → strong + ### heading → b.md-heading
+- renderRichTables 升级流式+终端+聊天三处渲染口
+- 内层 flex gap 5→3px 收紧
+- bus_progress 收口到 ack 气泡内部进度行
+- 全仓 2872+5 全绿 0 失败
