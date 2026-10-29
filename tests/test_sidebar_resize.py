@@ -153,10 +153,10 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         body = _css_rule(self.html, "#sidebar-resizer::after")
         self.assertIn("content: \"", body)
         self.assertIn("position: absolute", body)
-        self.assertIn("width: 1px", body)   # 2026-10-29 隐形化口径：1px 极细
+        self.assertIn("width: 2px", body)
         self.assertIn("top: 0", body)
         self.assertIn("bottom: 0", body)
-        self.assertIn("var(--color-border", body)   # 默认浅灰（令牌）
+        self.assertIn("background: transparent", body)   # 2026-10-29 隐形化：默认全透明
         # 旧内缩断裂形态禁回归
         self.assertNotIn("top: 12px", body)
         self.assertNotIn("bottom: 12px", body)
@@ -166,8 +166,7 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         m = re.search(r"#sidebar-resizer:(?:hover|dragging)::after[^{]*\{([^}]*)\}",
                       self.html)
         self.assertTrue(m, "hover/dragging ::after 规则未找到")
-        self.assertIn("width: 2px", m.group(1))   # hover=2px 蓝（隐形化口径）
-        self.assertIn("#2563eb", m.group(1))
+        self.assertIn("#2563eb", m.group(1))      # hover/拖拽=点缀蓝浮现
 
     def test_mobile_media_hides_resizer(self):
         m = re.search(r"@media \(max-width: 768px\)\s*\{", self.html)

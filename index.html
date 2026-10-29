@@ -83,6 +83,11 @@
         }
 
         /* ==================== 左侧监控面板（MAA 卡片化） ==================== */
+        /* 分界纯净（2026-10-29 队长拍板）：侧栏滚动条整体隐藏——深灰粗带
+           （滚动条本体）贴在分界线上破坏两色贴合；滚轮/触摸滚动保留 */
+        .sidebar { scrollbar-width: none; -ms-overflow-style: none; }
+        .sidebar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+        .sidebar::-webkit-scrollbar-thumb { background: transparent; }
         .sidebar {
             width: 33.33%;
             min-width: 300px;
@@ -105,10 +110,6 @@
             scrollbar-width: thin;
         }
         .sidebar { will-change: transform; }   /* GPU 图层同 chat-area（2026-10-25 白屏闪烁） */
-        .sidebar::-webkit-scrollbar { width: 6px; }
-        .sidebar::-webkit-scrollbar-track { background: transparent; }
-        .sidebar::-webkit-scrollbar-thumb { background: rgba(31, 41, 55, 0.15); border-radius: 3px; }
-        .sidebar::-webkit-scrollbar-thumb:hover { background: rgba(31, 41, 55, 0.25); }
         /* ==================== 侧栏拖拽调宽把手（2026-10-27） ==================== */
         /* flex 兄弟节点（.sidebar 与 .chat-area 之间），宽 10px 配对负外边距
            -5px×2=净零布局位移；热区 10px 保证好抓。视觉=极细线（队长口径
@@ -136,14 +137,13 @@
             top: 0;                             /* 贯穿顶底 */
             bottom: 0;
             left: 50%;
-            width: 1px;                         /* 平时 1px 极细浅灰（隐形化） */
+            width: 2px;
             transform: translateX(-50%);
-            background: var(--color-border, #e0e4ec);
-            transition: background 0.15s ease, width 0.15s ease;
+            background: transparent;            /* 平时全透明——左灰右白自然贴合出边界 */
+            transition: background 0.15s ease;
         }
         #sidebar-resizer:hover::after, #sidebar-resizer.dragging::after {
-            width: 2px;
-            background: #2563eb;                /* hover/拖拽=2px 点缀蓝 */
+            background: #2563eb;                /* hover/拖拽=浮现 2px 点缀蓝指示线 */
         }
         .panel-header {
             font-size: 18px;
