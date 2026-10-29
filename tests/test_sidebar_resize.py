@@ -156,7 +156,7 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         self.assertIn("width: 2px", body)
         self.assertIn("top: 0", body)
         self.assertIn("bottom: 0", body)
-        self.assertIn("background: transparent", body)   # 2026-10-29 隐形化：默认全透明
+        self.assertNotIn("background:", body)  # 2026-10-29 终版：常态无 background 声明（物理删除）
         # 旧内缩断裂形态禁回归
         self.assertNotIn("top: 12px", body)
         self.assertNotIn("bottom: 12px", body)

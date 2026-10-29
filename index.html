@@ -117,10 +117,9 @@
            呼吸位不顶窗沿），默认极淡灰、hover/拖拽亮狐毛橙。拖拽/持久化
            逻辑在 console.js initSidebarResize（双击复位；≤768px 抽屉态
            display:none 连 ::after 一起隐藏——抽屉无拖宽语义）。 */
-        /* 分界线（2026-10-29 队长拍板重做）：全高贯穿+拖拽调比例——
-           把手 10px 热区（margin 归零去断裂），视觉线=中央 2px 浅灰实线
-           （::after top/bottom 0 贯穿），hover/拖拽加粗至 4px 点缀蓝。
-           拖拽逻辑不变（console.js initSidebarResize 指针捕获+rAF）。 */
+        /* 分界线（2026-10-29 终版：ZCode 式纯色块拼接）——左右两区底色
+           自然贴合出边界，常态无任何线；resizer=纯透明热区，仅 hover/
+           拖拽浮现 2px 点缀蓝。拖拽逻辑不变（initSidebarResize）。 */
         #sidebar-resizer {
             flex: 0 0 10px;
             align-self: stretch;                /* 全高：随 body 100vh 拉满 */
@@ -139,8 +138,7 @@
             left: 50%;
             width: 2px;
             transform: translateX(-50%);
-            background: transparent;            /* 平时全透明——左灰右白自然贴合出边界 */
-            transition: background 0.15s ease;
+            transition: background 0.15s ease;  /* 平时无任何线——左灰右白色块自然贴合 */
         }
         #sidebar-resizer:hover::after, #sidebar-resizer.dragging::after {
             background: #2563eb;                /* hover/拖拽=浮现 2px 点缀蓝指示线 */
