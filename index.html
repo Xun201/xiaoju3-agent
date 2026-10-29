@@ -314,9 +314,9 @@
         .todos-list::-webkit-scrollbar-thumb:hover { background: rgba(31, 41, 55, 0.25); }
         /* 尾巴 1：复选框条目——完成态保留显示（划线灰显），取消钩即恢复；
            尾巴 C：P0/P1/P2 pill（active 高亮主色） */
-        .todo-item { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; line-height: 1.5; padding: 3px 4px; border-radius: 6px; }
-        .todo-item .todo-check { margin: 2px 0 0; cursor: pointer; accent-color: var(--color-primary); flex: none; }
-        .todo-item .todo-text { user-select: text; word-break: break-all; flex: 1; }
+        .todo-item { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 1.5; padding: 3px 4px; border-radius: 6px; }   /* 打平批：flex-start→center（时间/徽标吊顶=高低不平根因） */
+        .todo-item .todo-check { margin: 0; cursor: pointer; accent-color: var(--color-primary); flex: none; }
+        .todo-item .todo-text { user-select: text; word-break: normal; overflow-wrap: anywhere; flex: 1; min-width: 0; }   /* break-all 退役：英文词不再腰斩（"Dashboar/d"实锤），min-width:0 保障整齐换行 */
         .todo-item.done { opacity: 0.75; }
         .todo-item.done .todo-text { color: var(--color-text-hint); text-decoration: line-through; }
         .todo-item .todo-pills { display: flex; gap: 3px; flex: none; }
@@ -354,6 +354,7 @@
         .todo-pr-badge {
             font-size: 10px; line-height: 1; padding: 2px 4px; border-radius: 4px;
             background: var(--color-progress-track); color: var(--color-text-hint); flex: none;
+            white-space: nowrap;
         }
         /* 答辩微调：P0 低饱和度红徽标（最高优先级一眼可辨，不刺眼） */
         .todo-pr-badge.todo-pr-p0 {
@@ -1020,6 +1021,15 @@
             width: 375px;                    /* 默认宽（2026-10-30 队长定稿黄金比例：320→400→360→375）；用户拖宽走 ui_pref 覆盖 */
             padding: 0;                      /* 呼吸间距移交 .sidebar-scroll 内层容器 */
             gap: 0;
+            container-type: inline-size;     /* 容器查询锚点：拖窄降档（下 @container） */
+        }
+        /* 收窄降档（2026-10-30 打平批，队长授权"宽度不够就缩小"）：
+           拖宽 <360px 时卡头仍单行（标签 10px+温度 26px）；375 默认档
+           不触发，观感零变化。容器=自身 inline-size。特异性特意压过
+           后方常规规则（@container 在样式表前部，同特异性会输给位置） */
+        @container (max-width: 359px) {
+            .system-card .v0-card-head .stat-label { font-size: 10px; }
+            .system-card #temp-text { font-size: 26px; }
         }
         .dash-card, .stat-item.todos-card { margin: 0; }   /* 间距交给 gap */
         .panel-header {
@@ -1059,6 +1069,7 @@
             margin-bottom: 0;
             font-size: 11px; font-weight: 400;   /* 辅助信息降档（2026-10-30 队长：主次层级拉开） */
             letter-spacing: 0.06em;
+            white-space: nowrap; flex-shrink: 0; /* 打平批：标签绝不禁压缩折行（"系统/状态"竖排实锤） */
         }
         .v0-head-right {
             display: inline-flex; align-items: center; gap: 10px;
@@ -1179,7 +1190,7 @@
         .v0-disk-item:hover { background: var(--v0-n50); }
         .v0-disk-item.on { background: var(--v0-n100); font-weight: 600; }
         .todo-time {
-            float: right; margin-left: 6px;
+            flex: none; white-space: nowrap; margin-left: 6px;   /* 打平批：float 退役（flex 行内本被忽略，吊顶参差根因同除） */
             font-family: "Cascadia Mono", Consolas, monospace;
             font-size: 11px; color: var(--v0-n400);
             font-variant-numeric: tabular-nums;

@@ -1,5 +1,19 @@
 # 开发者日志 2026-10-30
 
+## 批六 — fix(侧栏卡片排版全打平)（v2.2.1 内部补丁，生产热同步不重启）
+
+### 改了什么
+- **卡头折行根因**："系统状态"标签是卡头 flex 行里唯一无 nowrap 的可压缩项——队长拖窄（ui_pref 实锤 308）时被挤压成"系统/状态"竖排。修=标签 `white-space: nowrap; flex-shrink: 0`；**容器查询降档**（队长授权"宽度不够就缩小"）：.sidebar 设 container-type: inline-size，<360px 时标签 10px+温度 26px（特异性特意压过后方常规规则——@container 在样式表前部，同特异性会输给位置的坑当场踩到并修复）；375 默认档不触发零观感变化。
+- **待办高低不平双根因**：①行 `align-items: flex-start`（时间/P0 吊顶）→ center 垂直居中；②`.todo-text` `word-break: break-all`（英文词腰斩"Dashboar/d"实锤）→ `word-break: normal; overflow-wrap: anywhere; min-width: 0` 整词换行；③`.todo-time` float:right 退役（flex 行内本被忽略+吊顶参差同根）→ flex:none+nowrap；④P0 徽标 nowrap。
+- 清生产 ui_pref 残留 sidebar_width=308（备份 .bak-20261030-flatten）。
+
+### 怎么验证的
+- 全仓 pytest 2911+5 全绿；生产页双档验证：375 档（containerType=inline-size/标签温度单行/待办 center）+**模拟拖窄 308 档（降档 10px/26px 生效、单行、零横向溢出）**；待办+系统卡实拍 _dev/shot_flatten_*.png；PIL 扫接缝=hover 蓝线右缘仍精确贴 375 交界。
+- APK assets 同步+重建+**解包验证**（container-type/align-items:center/overflow-wrap 在包内），9b820d81 dist 双位置。
+
+### 回滚
+- git revert 本笔；index.html.bak-20261030-flatten / ui_pref.json.bak-20261030-flatten 还原。
+
 ## 批五 — tweak(侧栏 375px+系统卡排版呼吸感)（v2.2.1 内部补丁，生产热同步不重启）
 
 ### 改了什么
