@@ -144,26 +144,30 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         body = _css_rule(self.html, "#sidebar-resizer")
         self.assertIn("cursor: col-resize", body)
         self.assertIn("flex: 0 0 10px", body)
-        self.assertIn("margin: 12px -5px", body)
+        self.assertIn("margin: 0 -4px", body)   # 2026-10-29：上下 margin 归零=全高贯穿
+        self.assertIn("align-self: stretch", body)
 
     def test_resizer_thinline_after_rule(self):
-        """极细线形态（2026-10-27 队长口径）：热区 10px 不变，视觉=::after
-        2px 垂直细线，默认极淡灰。锚规则体形态防回退粗块。"""
+        """分界线形态（2026-10-29 队长口径升级）：全高贯穿——::after
+        top/bottom 归零（原 12px 内缩=断裂根因），默认 2px 浅灰实线。"""
         body = _css_rule(self.html, "#sidebar-resizer::after")
-        self.assertIn("content: \"\"", body)
+        self.assertIn("content: \"", body)
         self.assertIn("position: absolute", body)
         self.assertIn("width: 2px", body)
-        self.assertIn("rgba(31, 41, 55, 0.10)", body)
-        # 主规则不得再有可见背景（旧粗块形态禁回归）
-        main = _css_rule(self.html, "#sidebar-resizer")
-        self.assertNotIn("rgba(217, 111, 43", main)
+        self.assertIn("top: 0", body)
+        self.assertIn("bottom: 0", body)
+        self.assertIn("var(--color-border", body)   # 默认浅灰（令牌）
+        # 旧内缩断裂形态禁回归
+        self.assertNotIn("top: 12px", body)
+        self.assertNotIn("bottom: 12px", body)
 
-    def test_resizer_hover_orange_thinline(self):
-        """hover/拖拽态：细线亮狐毛橘（::after 变体规则，非整块背景）。"""
+    def test_resizer_hover_blue_thick(self):
+        """hover/拖拽态：点缀蓝高亮+加粗 4px（2026-10-29 队长口径）。"""
         m = re.search(r"#sidebar-resizer:(?:hover|dragging)::after[^{]*\{([^}]*)\}",
                       self.html)
         self.assertTrue(m, "hover/dragging ::after 规则未找到")
-        self.assertIn("rgba(217, 111, 43", m.group(1))
+        self.assertIn("width: 4px", m.group(1))
+        self.assertIn("#2563eb", m.group(1))
 
     def test_mobile_media_hides_resizer(self):
         m = re.search(r"@media \(max-width: 768px\)\s*\{", self.html)

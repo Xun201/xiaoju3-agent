@@ -116,10 +116,15 @@
            呼吸位不顶窗沿），默认极淡灰、hover/拖拽亮狐毛橙。拖拽/持久化
            逻辑在 console.js initSidebarResize（双击复位；≤768px 抽屉态
            display:none 连 ::after 一起隐藏——抽屉无拖宽语义）。 */
+        /* 分界线（2026-10-29 队长拍板重做）：全高贯穿+拖拽调比例——
+           把手 10px 热区（margin 归零去断裂），视觉线=中央 2px 浅灰实线
+           （::after top/bottom 0 贯穿），hover/拖拽加粗至 4px 点缀蓝。
+           拖拽逻辑不变（console.js initSidebarResize 指针捕获+rAF）。 */
         #sidebar-resizer {
             flex: 0 0 10px;
-            align-self: stretch;
-            margin: 12px -5px;
+            align-self: stretch;                /* 全高：随 body 100vh 拉满 */
+            margin: -16px -4px;                 /* 负上下 margin 吃掉 v0 皮肤body padding:16px——
+                                                分界线穿透留白带直抵窗口顶底（断裂根因） */
             background: transparent;
             cursor: col-resize;
             position: relative;
@@ -129,17 +134,17 @@
         #sidebar-resizer::after {
             content: "";
             position: absolute;
-            top: 12px;
-            bottom: 12px;
+            top: 0;                             /* 贯穿顶底（原 12px 内缩） */
+            bottom: 0;
             left: 50%;
             width: 2px;
             transform: translateX(-50%);
-            border-radius: 1px;
-            background: rgba(31, 41, 55, 0.10);
-            transition: background 0.15s ease;
+            background: var(--color-border, #e0e4ec);   /* 默认浅灰实线 */
+            transition: background 0.15s ease, width 0.15s ease;
         }
         #sidebar-resizer:hover::after, #sidebar-resizer.dragging::after {
-            background: rgba(217, 111, 43, 0.85);
+            width: 4px;
+            background: #2563eb;                /* hover/拖拽=点缀蓝高亮 */
         }
         .panel-header {
             font-size: 18px;
