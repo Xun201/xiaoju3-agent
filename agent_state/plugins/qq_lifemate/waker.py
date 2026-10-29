@@ -106,6 +106,10 @@ _WAKE_PROMPT = (
     "\"小橘：\"等角色名开头——上面 QQ 记录里的\"小橘说过：「…」只是记忆"
     "引述格式，不是要你说的话；除正文和[表情:关键词] 标注外不能有任何"
     "其他文字。"
+    "【消息独立性死命令（2026-10-29）】这条消息就是此刻的第一句话，必须"
+    "自成一体：严禁出现\"那句话/刚才那/上次说/上面说/你刚说\"等指代前文"
+    "的表述——上下文里没有\"那句话\"，凭空追问就是瞎编；想不起具体要说"
+    "什么，就诚实地发\"小橘走神了，本来想说啥来着…主人提个头呗\"。"
 )
 
 REPLAY_HOUR = 3          # 每日回放：03:00 后首个检查周期触发（内部动作不发声）
@@ -390,6 +394,36 @@ def enforce_persona(text):
     return text
 
 
+# 幽灵追问拦截（2026-10-29 队长拍板"上下文断层直接承认走神，严禁瞎编"）：
+# 唤醒生成偶发引用不存在的上文（真机实锤 18:14 凭空发"那句话呢？"）——
+# 出口确定性黑名单拦截，命中即整条替换为诚实走神话术（不经模型二改）。
+_GHOST_CONTEXT_RE = None
+_STRAY_REPLIES = (
+    "小橘走神了，本来想说啥来着…主人提个头呗[表情:疑问]",
+    "呜，小橘刚才走神了，想说什么一下子想不起来[表情:疑问]",
+    "小橘想事情想得走神了——主人现在方便听小橘重新说吗[表情:疑问]",
+)
+
+
+def enforce_context_independence(text, sticker_kw=None):
+    """唤醒消息独立性死命令（出口层，全来源生效）：正文含指代前文的表述
+    （那句话/刚才那/上次说…）即判"幽灵追问"，整条替换为诚实走神话术
+    （随机一条，自带[表情:疑问]标注走既有 sticker 链）。干净原文原样
+    返回。不改模型输出内容本身——只做发送前的最后一道确定性闸门。"""
+    global _GHOST_CONTEXT_RE
+    import re
+    if _GHOST_CONTEXT_RE is None:
+        _GHOST_CONTEXT_RE = re.compile(
+            r"那句话|刚才那|上次说|上面说|你刚说|刚刚说|前面说|之前说|方才说")
+    if text and _GHOST_CONTEXT_RE.search(text):
+        import random as _random
+        pick = _random.choice(_STRAY_REPLIES)
+        print(f"🦊 [qq_lifemate] 幽灵追问拦截→诚实走神话术: {str(text)[:36]}")
+        new_text, new_kw = extract_sticker_keyword(pick)
+        return new_text, (new_kw or sticker_kw)
+    return text, sticker_kw
+
+
 def generate_wake_text(scene_action, now_dt, db=None):
     """本地模型生成唤醒话（人格 QQ 档+场景接续）。失败返回 None（本轮
     放弃，下个检查周期再试——绝不拿模板话硬发）。"""
@@ -491,6 +525,9 @@ def wake_once(now_dt):
         if not text:
             text = fallback_text(last_scene(db), now_dt)
             sticker_kw = None   # 模板直出不带表情标注
+        # 幽灵追问拦截（2026-10-29 队长拍板）：指代不存在的上文→诚实走神
+        # 话术（全来源最后一道闸门：本地生成/云端重写/模板统一过检）
+        text, sticker_kw = enforce_context_independence(text, sticker_kw)
         if not send_qq(text):
             return False
         # 表现力编排（切片 b）：文字已发出，按概率附加语音/表情（失败
