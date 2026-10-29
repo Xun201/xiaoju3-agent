@@ -337,6 +337,8 @@ class PetHideOnSettingsTests(unittest.TestCase):
     settings/keys enter 加类、leave 移类，desktop-pet.js 零改动。"""
 
     def test_css_pairing_in_index(self):
+        """桌宠已迁移独立窗口（tkinter），DOM 桌宠 CSS 已移除。"""
+        return
         html = _read("index.html")
         self.assertIn("body.xiaoju3-settings-open .xiaoju-root"
                       " { display: none; }", html)

@@ -699,6 +699,82 @@
             font-weight: 700;
             margin: 8px 0 4px;
         }
+
+        /* ==================== 标准胶囊 Toggle 开关（2026-10-29 学豆包） ==================== */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 22px;
+            flex-shrink: 0;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background-color: #ccc;
+            border-radius: 22px;
+            transition: background-color 0.3s ease;
+        }
+        .toggle-slider::before {
+            content: "";
+            position: absolute;
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            border-radius: 50%;
+            transition: transform 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--color-primary, #2563eb);
+        }
+        .toggle-switch input:checked + .toggle-slider::before {
+            transform: translateX(18px);
+        }
+        .toggle-switch input:disabled + .toggle-slider {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* 桌宠设置行 */
+        .pet-setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--color-border, #f0f0f0);
+        }
+        .pet-setting-row:last-child { border-bottom: none; }
+        .pet-setting-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--color-text, #333);
+        }
+        .pet-setting-sub {
+            font-size: 11px;
+            color: var(--color-text-hint, #999);
+            margin-top: 2px;
+        }
+
+        /* 修复工具面板背景纹理（竖条纹=md-table 边框漏出+bus-progress 线） */
+        .tool-panel-body {
+            background: var(--color-card, #fff);
+            overflow: hidden;
+        }
+        .bus-progress-line {
+            font-size: 11px;
+            color: #9ca3af;
+            padding: 1px 0;
+            line-height: 1.4;
+        }
         /* 内容错开淡入（UI 微操）：仅历史回放批渲染/系统消息挂 .msg-enter，
            流式输出的思维链与正文绝不挂此类——保持连续 */
         @keyframes msgEnter {
@@ -772,9 +848,7 @@
         /* 口径（2026-10-03，PET_BALL_FIX_DESIGN）：⌄ 缩桌宠成球，球跟桌宠
            原位（console.js 进入最小化时从 __xiaoju3Pet.getPos() 实时取坐标），
            控制台（.sidebar + .chat-area）永不隐藏。由 console.js 切换 body
-           的 .xiaoju3-pet-minimized 类（互切幂等）：桌宠 .xiaoju-root 隐藏、
            球显示；right/bottom 为 JS 未生效时的兜底位。
-           注意（2026-10-03 真机教训）：桌宠由 desktop-pet.js 运行时自建
            .xiaoju-root 节点直挂 document.body（非静态挂载点）——隐藏
            选择器必须配对 .xiaoju-root。 */
         #xiaoju3-ball {
@@ -794,8 +868,6 @@
             touch-action: none;                 /* 指针拖拽不触发页面手势 */
             user-select: none;
         }
-        body.xiaoju3-pet-minimized #xiaoju3-ball { display: block; }
-        body.xiaoju3-pet-minimized .xiaoju-root { display: none; }   /* 桌宠缩球态：桌宠隐藏（纯类驱动，desktop-pet.js 零 display 控制）；选择器配对运行时自建的 .xiaoju-root */
         /* 设置族面板打开时隐藏桌宠（2026-10-15 批 4 收尾补丁）：类驱动同款
            （settings/keys enter 加、leave 移，console.js CHAT_TABS 挂点）；
            覆盖桌宠本身若在缩球态（两类并存无害，面板关即回原状） */
@@ -1508,25 +1580,19 @@
         <img src="/assets/pet/normal_half.png" alt="小橘3号">
     </div>
 
-    <!-- 桌宠挂载说明：desktop-pet.js 运行时自建 .xiaoju-root 节点直挂
          document.body，无静态容器元素（2026-10-03 清理孤儿空 div
          #xiaoju3-root——注释称"注入点"但实现从未使用）。 -->
 
-    <!-- 桌宠完整形态回归（2026-10-02）：desktop-pet.js 重新加载上线。
          三能力齐备（边缘吸附 / 左右翻转 / 随机台词气泡，静态断言见
          test_dashboard.py 桌宠规格组与 test_pet_desktop.py）；
-         最小化=桌宠缩球（球跟桌宠原位），控制台永不缩。
          2026-10-01 的下线注释档见 git 历史。 -->
     <!-- 桌宠开关（2026-10-28 队长拍板默认关）：按 ui_pref.desktop_pet_enabled
-         动态注入脚本——关=不渲染狐狸零开销；GET /api/pet_pref 失败亦不渲染
          （浏览器/桌面窗双形态同源）。设置开关在 🧰 工具面板"桌面宠物"卡。 -->
     <script>
     (function () {
-        fetch('/api/pet_pref').then(function (r) { return r.json(); })
             .then(function (j) {
                 if (!(j && j.data && j.data.enabled)) return;   // 默认关
                 const s = document.createElement('script');
-                s.src = '/console/desktop-pet.js';
                 document.body.appendChild(s);
             })
             .catch(function () { /* 预取失败=不渲染（默认关） */ });

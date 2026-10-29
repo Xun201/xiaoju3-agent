@@ -214,3 +214,14 @@
 - **左侧留白**：桌宠 .xiaoju-img 250×250 矩形 pointer-events:auto 兜点击。scale 0.8 已缩。完整解耦挂账 #311。
 - **行内代码**：renderRich 加 `xxx` → md-code。
 - 全仓 2876+5 全绿；Release v2.2.1 资产 clobber 同步。
+
+## 深夜批㉗：控制台 UI 三修+新号保命+桌宠开关+发版（生产 exe 最新三进程在跑）
+
+- bot 气泡贴左（margin-left:0+margin-right:auto 铁律）+内层 flex gap 收紧
+- renderRich 三合一渲染：`code`+**bold**+### heading
+- 桌宠 DOM 全量物理移除（index.html+console.js 零残留，旧契约锚更新）
+- bus_progress 收口到 ack 气泡内部进度行
+- 控制台闲聊强制云端（api_chat/stream 双视图）
+- 新号保命模式（日限 40 静默+间隔 3-6s+选股 QQ 屏蔽）
+- 云端失败友好兜底（不回退本地）
+- 全仓 2876+5 全绿；生产 468b7bfa 三进程在跑；Release v2.2.1 资产同步

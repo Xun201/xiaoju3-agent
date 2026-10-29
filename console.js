@@ -4472,51 +4472,6 @@
 
     // 🐾 桌宠开关（2026-10-28 队长拍板默认关）：ui_pref.desktop_pet_enabled
     // → /api/pet_pref GET/POST；切换后刷新页面生效（脚本按配置动态注入）。
-    function loadPetToggleInto(body) {
-        body.textContent = '读取中…';
-        fetch('/api/pet_pref').then(function (r) { return r.json(); })
-            .then(function (j) {
-                const enabled = !!(j.data && j.data.enabled);
-                body.textContent = '';
-                const row = document.createElement('div');
-                row.style.cssText = 'display:flex;align-items:center;gap:10px;';
-                const info = document.createElement('div');
-                info.style.cssText = 'flex:1;';
-                info.innerHTML = '🐾 <b>启用桌面宠物</b><br>'
-                    + '<span class="dp-sub">狐狸挂件（右下角）。默认关闭；'
-                    + '切换后刷新页面生效。</span>';
-                const btn = document.createElement('button');
-                btn.className = 'btn btn-small';
-                btn.textContent = enabled ? '关闭' : '开启';
-                btn.addEventListener('click', function () {
-                    btn.disabled = true;
-                    btn.textContent = '保存中…';
-                    fetch('/api/pet_pref', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({enabled: !enabled})
-                    }).then(function (r) { return r.json(); })
-                      .then(function (j2) {
-                          if (j2.code === 200) {
-                              showToast('桌宠已' + (!enabled ? '开启'
-                                      : '关闭') + '，刷新页面后生效');
-                          } else {
-                              showToast('保存失败');
-                          }
-                          loadPetToggleInto(body);
-                      })
-                      .catch(function () {
-                          showToast('保存失败');
-                          loadPetToggleInto(body);
-                      });
-                });
-                row.appendChild(info);
-                row.appendChild(btn);
-                body.appendChild(row);
-            })
-            .catch(function () { body.textContent = '读取失败'; });
-    }
-
     function loadHaDevicesInto(body) {
         body.textContent = '加载中…（HA 可达约需 1-10s）';
         fetch('/api/ha/devices').then(function (r) { return r.json(); })
@@ -4625,9 +4580,110 @@
             }));
         g3.appendChild(buildToolCard('插件管理', '外部插件启停（停用即卸载，重启用即时换装）',
             function () { toggleToolBody('tool-plugins-body', loadPluginsManageInto); }));
-        g3.appendChild(buildToolCard('桌面宠物', '桌宠开关（默认关；切换后刷新页面生效）',
-            function () { toggleToolBody('tool-pet-body', loadPetToggleInto); }));
+        g3.appendChild(_buildPetCard());
         note('面板骨架批 1：监控三类中「主动性监控」可用；其余卡片为占位。');
+    }
+
+    // 🐾 桌宠管理卡（自包含展开式：Toggle 内嵌在卡片内，不外溢到面板底部）
+    function _buildPetCard() {
+        const card = document.createElement('div');
+        card.style.cssText = 'background:var(--color-card,#fff);'
+            + 'border:1px solid var(--color-border,#e0e4ec);'
+            + 'border-radius:var(--radius-card,12px);padding:16px;'
+            + 'box-shadow:var(--shadow-card,0 1px 4px rgba(0,0,0,0.06));'
+            + 'cursor:pointer;user-select:none;';
+
+        const title = document.createElement('div');
+        title.style.cssText = 'font-size:14px;font-weight:700;margin-bottom:4px;';
+        title.textContent = '桌面宠物';
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:12px;color:var(--color-text-hint,#999);';
+        hint.textContent = '桌宠开关（默认关）▶ 点击展开';
+        card.appendChild(title);
+        card.appendChild(hint);
+
+        const body = document.createElement('div');
+        body.style.cssText = 'display:none;margin-top:12px;';
+        card.appendChild(body);
+
+        let expanded = false;
+        let loaded = false;
+
+        card.addEventListener('click', function () {
+            expanded = !expanded;
+            body.style.display = expanded ? 'block' : 'none';
+            hint.textContent = expanded ? '桌宠开关（默认关）▼ 点击收起' : '桌宠开关（默认关）▶ 点击展开';
+            if (expanded && !loaded) {
+                loaded = true;
+                _renderPetToggles(body);
+            }
+        });
+
+        return card;
+    }
+
+    function _renderPetToggles(container) {
+        container.textContent = '加载中…';
+        fetch('/api/pet_pref').then(function (r) { return r.json(); })
+            .then(function (j) {
+                const d = j.data || {};
+                container.textContent = '';
+
+                const items = [
+                    { key: 'desktop_pet_enabled',  label: '🐾 显示桌宠', sub: '独立窗口狐狸挂件' },
+                    { key: 'desktop_pet_topmost',  label: '📌 窗口置顶', sub: '始终在最前层' },
+                    { key: 'desktop_pet_drag',     label: '🖱️ 允许拖拽', sub: '按住狐狸拖到任意位置' },
+                ];
+
+                items.forEach(function (item) {
+                    const enabled = !!d[item.key];
+                    const row = document.createElement('div');
+                    row.className = 'pet-setting-row';
+
+                    const info = document.createElement('div');
+                    const lab = document.createElement('div');
+                    lab.className = 'pet-setting-label';
+                    lab.textContent = item.label;
+                    const sub = document.createElement('div');
+                    sub.className = 'pet-setting-sub';
+                    sub.textContent = item.sub;
+                    info.appendChild(lab);
+                    info.appendChild(sub);
+
+                    const toggle = document.createElement('label');
+                    toggle.className = 'toggle-switch';
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.checked = enabled;
+                    const slider = document.createElement('span');
+                    slider.className = 'toggle-slider';
+                    toggle.appendChild(cb);
+                    toggle.appendChild(slider);
+
+                    cb.addEventListener('change', function () {
+                        const val = cb.checked;
+                        cb.disabled = true;
+                        fetch('/api/pet_pref', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify([{key: item.key, value: val}])
+                        }).then(function (r) { return r.json(); })
+                          .then(function () { cb.disabled = false; })
+                          .catch(function () { cb.checked = !val; cb.disabled = false; });
+                    });
+
+                    row.appendChild(info);
+                    row.appendChild(toggle);
+                    container.appendChild(row);
+                });
+
+                const tip = document.createElement('div');
+                tip.className = 'pet-setting-sub';
+                tip.style.marginTop = '8px';
+                tip.textContent = '💡 切换后刷新页面生效（独立窗口进程由桌面启动器管理）';
+                container.appendChild(tip);
+            })
+            .catch(function () { container.textContent = '读取失败'; });
     }
 
     // 🧰 入口绑定（header-actions 最前，齿轮/密钥同款 header-btn）

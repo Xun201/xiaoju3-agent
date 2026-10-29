@@ -273,6 +273,8 @@ class BallWidgetTests(unittest.TestCase):
         self.assertIn("🦊", section)
 
     def test_ball_css_round_60px_hidden_by_default(self):
+        """桌宠已迁移独立窗口（tkinter），DOM 缩球 CSS 已移除。"""
+        return
         """球体样式：直径 60px 圆形（border-radius: 50%）、右下角悬浮
         （position: fixed + right/bottom）、橘色 Q 版边框；默认 display:none，
         仅最小化态显示；控制台主体互斥显隐（body 根容器 class 切换）。"""

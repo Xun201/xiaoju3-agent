@@ -1006,9 +1006,8 @@ class ServingTests(unittest.TestCase):
         resp = self.client.get("/console")
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
-        # 桌宠动态引导（默认关）：bootstrap 引用 desktop-pet.js 且带版本参数
-        self.assertRegex(
-            html, r"s\.src = '/console/desktop-pet\.js\?v=\d+';")
+        # 桌宠已迁移独立窗口（tkinter），控制台不再加载 desktop-pet.js
+        self.assertNotIn("desktop-pet.js", html)
         self.assertNotIn("<!-- <script src=\"/console/desktop-pet.js\">", html)
 
     def test_mascot_asset_served(self):
@@ -2228,7 +2227,7 @@ class ConsoleCacheBustingTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
         self.assertIn("console.js?v=", html)
-        self.assertIn("desktop-pet.js?v=", html)   # 动态引导引用同样带版本
+        # 桌宠已迁移独立窗口（tkinter），console.js 不再引用 desktop-pet.js
 
     def test_version_changes_when_file_mtime_changes(self):
         resp1 = self.client.get("/console")
@@ -3197,12 +3196,18 @@ class PetPrefApiTests(unittest.TestCase):
         self.assertFalse(data["enabled"])
 
     def test_post_roundtrip(self):
-        r1 = self.client.post("/api/pet_pref", json={"enabled": True})
-        self.assertTrue(r1.get_json()["data"]["enabled"])
-        r2 = self.client.get("/api/pet_pref").get_json()["data"]
-        self.assertTrue(r2["enabled"])
-        r3 = self.client.post("/api/pet_pref", json={"enabled": False})
-        self.assertFalse(r3.get_json()["data"]["enabled"])
+        # 新批量格式 [{key, value}, ...]
+        r0 = self.client.post("/api/pet_pref",
+                              json=[{"key": "desktop_pet_enabled", "value": True},
+                                    {"key": "desktop_pet_topmost", "value": True}])
+        self.assertEqual(r0.status_code, 200)
+        r1 = self.client.get("/api/pet_pref").get_json()["data"]
+        self.assertTrue(r1["enabled"])
+        r2 = self.client.post("/api/pet_pref",
+                              json=[{"key": "desktop_pet_enabled", "value": False}])
+        self.assertEqual(r2.status_code, 200)
+        r3 = self.client.get("/api/pet_pref").get_json()["data"]
+        self.assertFalse(r3["enabled"])
 
     def test_write_preserves_other_keys(self):
         import json

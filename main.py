@@ -2435,6 +2435,7 @@ def start_background_services():
     """启动 QQ 接入层的后台服务线程（原 :5002 __main__ 启动点，随架构合并
     移交 :5003 dashboard 进程在启动时调用；重复调用会重复拉心跳，勿多次调用）。
 
+    - 🐾 独立桌宠进程（ui_pref desktop_pet_enabled=True 时 spawn pet_window.py）；
     - 💓 主动心跳引擎（heartbeat.start_heartbeat daemon 线程）；
     - 👀 多设备互相守望（架构 §8 最小可用版）：PEER_DEVICE_URL 配置即启用
       （多对端扩展 XIAOJU3_PEERS+XIAOJU3_WATCH=1 口径不变）；无对端=单机

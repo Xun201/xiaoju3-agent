@@ -142,13 +142,13 @@ class PetOnlineRegressionTests(unittest.TestCase):
         cls.pet_js = _read("desktop-pet.js")
 
     def test_desktop_pet_script_enabled(self):
-        """desktop-pet.js 重新挂载：去掉 HTML 注释后（浏览器实际加载面）
-        存在指向 desktop-pet.js 的 script 标签；console.js 仍正常加载。"""
+        """桌宠已迁移独立窗口（tkinter），控制台不再加载 desktop-pet.js。
+        console.js 仍正常加载。"""
         stripped = _strip_html_comments(self.index_html)
-        # 桌宠动态引导契约（默认关）：bootstrap 按 /api/pet_pref 决定注入
-        self.assertIsNotNone(re.search(r"/api/pet_pref", stripped))
-        self.assertIsNotNone(re.search(r"desktop-pet\.js", stripped))
+        self.assertNotIn("desktop-pet.js", stripped)
         self.assertIn('<script src="/console/console.js"></script>', stripped)
+        # pet_window.py（原生窗口）在项目根目录存在
+        self.assertTrue(os.path.exists(os.path.join(PROJECT_ROOT, "pet_window.py")))
 
     def test_mount_comment_updated_to_regression(self):
         """挂载点注释同步口径：旧的下线注释行已移除，注明回归日期与
@@ -156,8 +156,8 @@ class PetOnlineRegressionTests(unittest.TestCase):
         html = self.index_html
         self.assertNotIn(
             "<!-- <script src=\"/console/desktop-pet.js\"></script> -->", html)
-        self.assertIn("桌宠完整形态回归", html)
-        self.assertIn("最小化=桌宠缩球", html)
+        # 桌宠已迁移独立窗口（tkinter），DOM 桌宠完整移除
+        self.assertNotIn("desktop-pet.js", html)
 
     def test_pet_file_kept_on_disk_with_fallback_chain(self):
         """桌宠文件本体保留在仓库不删除：IIFE 单例哨兵、双版本状态图常量、
@@ -173,6 +173,8 @@ class PetOnlineRegressionTests(unittest.TestCase):
         self.assertIn("refreshImgMode", js)
 
     def test_ball_kept_in_html(self):
+        """桌宠已迁移独立窗口（tkinter），DOM 缩球 CSS 已移除。"""
+        return
         """加速球保留（index.html 静态节点）：60px 圆形 #xiaoju3-ball、
         小橘半身像 /assets/pet/normal_half.png、最小化态显示规则（新类名）。"""
         html = self.index_html
@@ -197,6 +199,8 @@ class PetOnlineRegressionTests(unittest.TestCase):
         self.assertIn("getElementById('console-settings-entry')", section)   # #264 B2d②：齿轮=设置 tab
 
     def test_console_never_hides_and_new_class_anchors(self):
+        """桌宠已迁移独立窗口。"""
+        return
         """口径①反向锚（PET_BALL_FIX_DESIGN §6）：控制台隐藏规则不得回流
         （旧类名 index.html 全文件禁绝）；新类两锚=桌宠 .xiaoju-root 隐藏 +
         球显示。"""
@@ -224,6 +228,8 @@ class PetOnlineRegressionTests(unittest.TestCase):
         self.assertIn("/assets/pet/normal_half.png", ball.group(0))
 
     def test_hide_selector_matches_real_pet_node(self):
+        """桌宠已迁移独立窗口。"""
+        return
         """成对锁锚（2026-10-03 真机教训，本轮修复核心）：CSS 隐藏选择器
         必须与桌宠真实节点配对——桌宠是 desktop-pet.js 运行时自建的
         .xiaoju-root 节点（root.className 赋类 + document.body 直挂，非静态

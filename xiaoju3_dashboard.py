@@ -1294,20 +1294,28 @@ def api_pet_pref_set():
     import json as _json
     import os as _os
     import xiaoju3 as _x3
-    body = request.get_json(silent=True) or {}
-    enabled = bool(body.get("enabled"))
+    body = request.get_json(silent=True) or []
+    # 支持批量格式 [{key, value}, ...]（桌宠面板三开关）
+    if isinstance(body, list):
+        updates = body
+    else:
+        # 兼容旧格式 {name, enabled}
+        updates = [{"key": "desktop_pet_enabled", "value": bool(body.get("enabled"))}]
     path = _os.path.join(_x3.AGENT_STATE_DIR, "ui_pref.json")
     try:
         data = {}
         if _os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 data = _json.load(f)
-        data["desktop_pet_enabled"] = enabled
+        for u in updates:
+            k = str(u.get("key") or "").strip()
+            if k.startswith("desktop_pet_"):
+                data[k] = bool(u.get("value"))
         tmp = path + ".pettmp"
         with open(tmp, "w", encoding="utf-8") as f:
             _json.dump(data, f, ensure_ascii=False, indent=1)
         _os.replace(tmp, path)
-        return jsonify({"code": 200, "data": {"enabled": enabled}})
+        return jsonify({"code": 200})
     except Exception as e:
         return jsonify({"code": 500, "error": str(e)}), 500
 
@@ -1976,6 +1984,7 @@ def api_chat():
                     "code": 200,
                     "data": {"reply": reply, "source": "☁️ 云端"}
                 })
+            # ☁️ None（接管关或云端失败）→ 落 smart_ask（不硬兜底，留给旧链）
         print(f"[香橙派收到消息] {user_msg}")
         # 控制台=owner 本机语境（与 relationship.tone_prefix 同源兜底）：
         # 不传 user_id 时 persona 段 uid 空串→控制台人格永不生效（冒烟实锤）
@@ -2151,6 +2160,7 @@ def api_chat_stream():
                 yield _sse_frame("answer", {"delta": reply})
                 yield _sse_frame("done", {"reply": reply, "source": "☁️ 云端"})
                 return
+            # ☁️ None（接管关或云端失败）→ 落 smart_ask（不硬兜底，留给旧链）
         import json as _json
         import queue
         q = queue.Queue()
