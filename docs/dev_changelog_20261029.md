@@ -333,3 +333,19 @@
 
 ### 回滚
 - 代码：git revert 6c58cae；index.html 备份链 .bak-20261029-*。
+
+
+## 深夜十三批（四） — fix(蓝线像素级重合灰白交界)（v2.2.1 内部补丁，生产热同步部署）
+
+### 改了什么
+- #sidebar-resizer::after left:50% → left:0：蓝线（2px，translateX(-50%)）渲染中心从 resizer 盒正中移到左缘——灰白交界的物理位置就是 resizer 左缘，蓝线像素级压线。
+- #sidebar-resizer 负外边距（0 -4px，热区向两侧扩张=蓝线随盒错位的来源）归零；热区 10px→6px（更好抓）。
+- test_sidebar_resize 锚随新几何更新（flex 6px/left 0/margin 0）。
+
+### 怎么验证的
+- 全仓 pytest：2901 passed, 5 skipped, 0 失败（resizer CSS 锚随新几何更新）。
+- 真浏览器几何断言三点同线：sidebarRight==resizerLeft==蓝线中心==320。
+- 真鼠标 hover 分界线：2px 蓝线浮现且左右分别为灰/白（截图）。
+
+### 回滚
+- 代码：git revert 本笔；index.html 备份 .bak-20261029-align。
