@@ -1017,7 +1017,7 @@
             box-shadow: none;
             border-radius: 0;
             margin: 0;
-            width: 360px;                    /* 默认宽（2026-10-30 队长定稿黄金比例：320→400→360）；用户拖宽走 ui_pref 覆盖 */
+            width: 375px;                    /* 默认宽（2026-10-30 队长定稿黄金比例：320→400→360→375）；用户拖宽走 ui_pref 覆盖 */
             padding: 0;                      /* 呼吸间距移交 .sidebar-scroll 内层容器 */
             gap: 0;
         }
@@ -1055,7 +1055,11 @@
             display: flex; align-items: center; justify-content: space-between;
             margin-bottom: 14px;
         }
-        .v0-card-head .stat-label { margin-bottom: 0; }
+        .v0-card-head .stat-label {
+            margin-bottom: 0;
+            font-size: 11px; font-weight: 400;   /* 辅助信息降档（2026-10-30 队长：主次层级拉开） */
+            letter-spacing: 0.06em;
+        }
         .v0-head-right {
             display: inline-flex; align-items: center; gap: 10px;
         }
@@ -1118,6 +1122,7 @@
         .v0-status-ok {
             display: inline-flex; align-items: center; gap: 5px;
             font-size: 12px; color: var(--v0-n500);
+            white-space: nowrap;                 /* 禁"运行正/常"断行（360px 实锤） */
         }
         .v0-dot { width: 6px; height: 6px; border-radius: 999px;
                   background: #10b981; display: inline-block; }
@@ -1131,12 +1136,12 @@
             background: #ffffff; border: none; border-radius: 16px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); padding: 24px;
         }
-        .stat-row { margin-bottom: 12px; }
+        .stat-row { margin-bottom: 16px; }   /* 行距 12→16：上下呼吸感（2026-10-30 队长排版批） */
         .stat-row[hidden] { display: none; }
         .stat-row:last-child { margin-bottom: 0; }
         .stat-header {
             display: flex; justify-content: space-between; align-items: baseline;
-            font-size: 13px; color: var(--v0-n900); margin-bottom: 6px;
+            font-size: 13px; color: var(--v0-n900); margin-bottom: 8px;
         }
         .stat-header span:last-child {
             font-variant-numeric: tabular-nums; font-weight: 600;
@@ -1196,7 +1201,11 @@
             transition: width 0.6s ease;
         }
         .stat-item .stat-label span { color: var(--v0-n900); font-weight: 600; }
-        #temp-text { font-size: 30px; }
+        #temp-text {
+            font-size: 32px; font-weight: 700;   /* 核心数据升档：更大更粗（2026-10-30 队长排版批） */
+            letter-spacing: -0.02em; line-height: 1.1;
+            white-space: nowrap;                 /* 禁"GPU/45°C"竖排断行（360px 实锤） */
+        }
         .dash-quick-btn {
             background: var(--v0-n50); border: 1px solid var(--v0-n200);
             border-radius: 10px; color: var(--v0-n900); font-weight: 500;

@@ -1,5 +1,19 @@
 # 开发者日志 2026-10-30
 
+## 批五 — tweak(侧栏 375px+系统卡排版呼吸感)（v2.2.1 内部补丁，生产热同步不重启）
+
+### 改了什么
+- 宽度 360→375px（队长定稿黄金比例终版）；清生产 ui_pref 残留 sidebar_width=302（备份 .bak-20261030-typo375）。
+- 系统卡排版四件（360px 实锤病根=GPU 温度无 nowrap 被 30px 大字挤成竖排断行）：①卡头标签降档 11px/400（辅助信息，作用域 .v0-card-head 内=系统/天气两卡一致）②GPU 温度升档 32px/700+letter-spacing+**white-space:nowrap**（禁"GPU/45°C"竖排）③运行正常 nowrap（禁"运行正/常"断行）④行距 .stat-row 12→16px+行头下距 6→8px。
+- 百分比等宽数字核实：`.stat-header span:last-child` 与 1006 行 tabular-nums 组**本来就在**（逐项计算样式实测 tabular-nums），零改动。
+
+### 怎么验证的
+- 全仓 pytest 2911+5 全绿；生产页计算样式六连（375/11px·400/32px·700·nowrap·单行/16px/tabular-nums）；PIL 扫描常态接缝=灰[..374]→白[376..]交界精确 375；hover 蓝线贴线截图三件 _dev/shot_typo375_*.png。
+- APK assets 同步+重建+**解包验证三处新样式在包内**（width:375px/32px·700/16px），1c2239cc dist 双位置。
+
+### 回滚
+- git revert 本笔；index.html.bak-20261030-typo375 / ui_pref.json.bak-20261030-typo375 还原。
+
 ## 批四 — tweak(侧栏默认宽 400→360 黄金比例)（v2.2.1 内部补丁，生产热同步不重启）
 
 ### 改了什么
