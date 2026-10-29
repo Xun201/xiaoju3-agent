@@ -131,7 +131,7 @@
            自然贴合出边界，常态无任何线；resizer=纯透明热区，仅 hover/
            拖拽浮现 2px 点缀蓝。拖拽逻辑不变（initSidebarResize）。 */
         #sidebar-resizer {
-            flex: 0 0 10px;
+            flex: 0 0 6px;
             align-self: stretch;                /* 全高：随 body 100vh 拉满 */
             margin: 0;                          /* 色块化布局：两块紧贴，负 margin hack 退役 */
             background: transparent;            /* 纯透明热区：两色自然贴合，零杂质（2026-10-29 终版） */
@@ -145,7 +145,7 @@
             position: absolute;
             top: 0;                             /* 贯穿顶底 */
             bottom: 0;
-            left: 50%;
+            left: 0;                            /* 蓝线中心=灰白交界（resizer 左缘，像素级重合） */
             width: 2px;
             transform: translateX(-50%);
             transition: background 0.15s ease;  /* 平时无任何线——左灰右白色块自然贴合 */

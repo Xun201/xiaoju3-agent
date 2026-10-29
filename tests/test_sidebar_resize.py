@@ -143,7 +143,7 @@ class SidebarResizeFrontendTests(unittest.TestCase):
     def test_resizer_css_rule(self):
         body = _css_rule(self.html, "#sidebar-resizer")
         self.assertIn("cursor: col-resize", body)
-        self.assertIn("flex: 0 0 10px", body)
+        self.assertIn("flex: 0 0 6px", body)   # 2026-10-29 终版：热区 6px
         self.assertIn("margin: 0", body)        # 2026-10-29 二次拍板：色块化布局 body padding 归零，无需负 margin hack
         self.assertIn("align-self: stretch", body)
 
