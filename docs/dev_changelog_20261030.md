@@ -1,5 +1,17 @@
 # 开发者日志 2026-10-30
 
+## 批四 — tweak(侧栏默认宽 400→360 黄金比例)（v2.2.1 内部补丁，生产热同步不重启）
+
+### 改了什么
+- v0 `.sidebar` width 400px→360px（队长定稿黄金比例）；清生产 ui_pref 新残留 sidebar_width=310（队长拖宽试手感写入，备份 .bak-20261030-width360）。
+- APK assets 同步步照「陈旧资产案」正解执行：www→assets/public→重建→**unzip 解包验证 width: 360px 在包内**（d1f14c16，dist 双位置）。
+
+### 怎么验证的
+- 全仓 pytest 2911+5 全绿；三点热同步 md5 一致（仓库/生产 _internal/APK assets=80c8c6c2）；APK 解包 grep 实锤。
+
+### 回滚
+- git revert c801a27；ui_pref.json.bak-20261030-width360 / index.html.bak-20261030-width360 还原。
+
 ## 批三 — tweak(侧栏默认宽 320→400)（v2.2.1 内部补丁，生产热同步部署）
 
 ### 改了什么
