@@ -17,6 +17,9 @@ AppVersion={#AppVersion}
 AppName=小橘3号
 DefaultDirName={localappdata}\Programs\小橘3号
 PrivilegesRequired=lowest
+CloseApplications=yes
+RestartApplications=no
+AppMutex=Xiaoju3_Desktop_SingleInstance
 Compression=lzma2
 SolidCompression=yes
 UninstallDisplayIcon={app}\xiaoju3.exe
@@ -65,6 +68,19 @@ Name: "ha"; Description: "计划接入 Home Assistant 主动服务心跳（需�
 ; 「彻底删除」可选项归后续步（卸载向导复选 + 删除树）。
 
 [Code]
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  // 安装前静默清一遍残留进程（桌面角色互斥体只由桌面角色持有，
+  // launcher/backend 不持 AppMutex——文件锁双保险，
+  // 防「无法自动关闭所有应用程序」报错；2026-10-29 队长真机实锤）。
+  Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM xiaoju3.exe /T >nul 2>&1', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(800);
+end;
+
 const
   MAX_WMI_ATTEMPTS = 3;   { 同一 WMI 查询最多尝试次数（§8.1 重试预算） }
 

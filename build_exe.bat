@@ -11,8 +11,10 @@ if exist build rmdir /s /q build
 rem dist/phone = APK delivery: move-aside before wipe, restore after
 if exist dist_phone_keep rmdir /s /q dist_phone_keep
 if exist dist\phone move /y dist\phone dist_phone_keep >nul 2>&1
+if exist dist\xiaoju3-phone-*.apk move /y dist\xiaoju3-phone-*.apk dist_phone_apk.apk >nul 2>&1
 if exist dist rmdir /s /q dist
 if not exist dist mkdir dist
+if exist dist_phone_apk.apk move /y dist_phone_apk.apk dist\ >nul 2>&1
 if exist dist_phone_keep move /y dist_phone_keep dist\phone >nul 2>&1
 
 if exist version_info.txt del /q version_info.txt
