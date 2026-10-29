@@ -8,7 +8,13 @@ rem 前置：pip install pyinstaller pillow + Inno Setup 6（ISCC 三路探测�
 
 echo [1/5] 清理旧构建产物（build/ dist/ version_info.txt）...
 if exist build rmdir /s /q build
+rem dist/phone = APK delivery: move-aside before wipe, restore after
+if exist dist_phone_keep rmdir /s /q dist_phone_keep
+if exist dist\phone move /y dist\phone dist_phone_keep >nul 2>&1
 if exist dist rmdir /s /q dist
+if not exist dist mkdir dist
+if exist dist_phone_keep move /y dist_phone_keep dist\phone >nul 2>&1
+
 if exist version_info.txt del /q version_info.txt
 
 echo [2/5] 生成版本资源与图标（make_build_assets.py）...

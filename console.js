@@ -1503,6 +1503,16 @@
         window.__xj3HideShot = function () {
             if (attachBar) attachBar.setAttribute('hidden', '');
         };
+        // 插件快捷指令映射（2026-10-29 队长指令：插件面板从只读列表升级
+        // 为可点击入口——点一下等价于输入触发指令并自动发送，走既有总线/
+        // intent_router 链；打字触发保持原样不受影响）。不在表内的插件
+        // 仍为纯展示。upload 动作=复用 ＋ 菜单的文件选择流（桌面窗口）。
+        const PLUGIN_QUICK_ACTIONS = {
+            stock_assistant: { label: '帮我选股', send: '帮我选股' },
+            dice:            { label: '掷骰子', send: '掷骰子' },
+            video_ingest:    { label: '提取视频内容', send: '提取视频内容' },
+            doc_ingest:      { label: '上传文档', upload: true },
+        };
         function fetchPlugins(kind) {
             fetch('/api/plugins')
                 .then(res => res.json())
@@ -1511,9 +1521,15 @@
                     const rows = [];
                     if (kind === 'plugins') {
                         (d.plugins || []).forEach(function (p) {
+                            const qa = PLUGIN_QUICK_ACTIONS[p.name];
                             rows.push('<div class="dp-row">🧩 ' + escapeHtml(p.name)
                                 + ' <span class="dp-sub">v' + escapeHtml(p.version)
-                                + ' · ' + escapeHtml(p.desc || '') + '</span></div>');
+                                + ' · ' + escapeHtml(p.desc || '') + '</span>'
+                                + (qa ? '<button class="dp-quick" data-plugin="'
+                                    + escapeHtml(p.name) + '" title="点击执行：'
+                                    + escapeHtml(qa.label) + '">▶ ' + escapeHtml(qa.label)
+                                    + '</button>' : '')
+                                + '</div>');
                         });
                         showPopover('外部插件（' + (d.plugins || []).length + '）',
                                     rows.join('') || '<div class="dp-sub">暂无外部插件</div>');
@@ -1530,6 +1546,28 @@
         }
         document.getElementById('dock-skills').addEventListener('click', function () { fetchPlugins('skills'); });
         document.getElementById('dock-plugins').addEventListener('click', function () { fetchPlugins('plugins'); });
+        // 插件快捷指令点击（事件委托绑 popover，重渲染不丢监听）：
+        // send 型=填输入框即发（window.sendMessage 读输入框，走既有流式链）；
+        // upload 型=转发 ＋ 菜单 upload 项（桌面文件选择器）。
+        popover.addEventListener('click', function (ev) {
+            const chip = ev.target.closest('.dp-quick');
+            if (!chip) return;
+            const qa = PLUGIN_QUICK_ACTIONS[chip.dataset.plugin];
+            if (!qa) return;
+            closeAll();
+            if (qa.upload) {
+                const upItem = document.querySelector(
+                    '.dock-menu-item[data-action="upload"]');
+                if (upItem) upItem.click();
+                return;
+            }
+            if (qa.send) {
+                const inputEl = document.getElementById('chat-input');
+                if (!inputEl) return;
+                inputEl.value = qa.send;
+                window.sendMessage();
+            }
+        });
 
         // 上下文标签条：动态渲染（摄取文档计数+转写/扫描任务态）
         function refreshContextTags() {

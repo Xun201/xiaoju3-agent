@@ -667,5 +667,48 @@ class ModernModalTests(unittest.TestCase):
             self.assertIn(text, js)
 
 
+class PluginQuickActionsTests(unittest.TestCase):
+    """插件面板可点击快捷指令（2026-10-29 队长指令：只读列表升级为入口）。
+    点 chip 等价于输入触发指令并自动发送（走既有总线/intent_router 链）；
+    打字触发保持原样。锚三层：映射表/渲染 chip/点击行为。"""
+
+    def setUp(self):
+        self.js = _read("console.js")
+        self.html = _read("index.html")
+
+    def test_quick_action_map_four_plugins(self):
+        """四个插件映射：stock_assistant/dice/video_ingest=send 型，
+        doc_ingest=upload 型（复用 ＋ 菜单文件选择流）。"""
+        js = self.js
+        self.assertIn("const PLUGIN_QUICK_ACTIONS = {", js)
+        self.assertIn("stock_assistant: { label: '帮我选股', send: '帮我选股' }", js)
+        self.assertIn("dice:            { label: '掷骰子', send: '掷骰子' }", js)
+        self.assertIn("video_ingest:    { label: '提取视频内容', send: '提取视频内容' }", js)
+        self.assertIn("doc_ingest:      { label: '上传文档', upload: true }", js)
+
+    def test_renderer_emits_clickable_chip(self):
+        """渲染层：映射内插件行追加 .dp-quick chip（data-plugin 标识）。"""
+        js = self.js
+        self.assertIn("const qa = PLUGIN_QUICK_ACTIONS[p.name];", js)
+        self.assertIn("'<button class=\"dp-quick\" data-plugin=\"'", js)
+        self.assertIn("popover.addEventListener('click'", js)
+        self.assertIn("const chip = ev.target.closest('.dp-quick');", js)
+
+    def test_click_behavior_send_and_upload(self):
+        """点击行为：send 型=填输入框+window.sendMessage()（既有流式链）；
+        upload 型=转发 ＋ 菜单 upload 项；发送前 closeAll 收面板。"""
+        js = self.js
+        start = js.index("popover.addEventListener('click'")
+        body = js[start:js.index("});", js.index("window.sendMessage();", start))]
+        self.assertIn("closeAll();", body)
+        self.assertIn("inputEl.value = qa.send;", js)
+        self.assertIn("window.sendMessage();", js)
+        self.assertIn('.dock-menu-item[data-action="upload"]', js)
+
+    def test_quick_chip_css_present(self):
+        self.assertIn(".dp-quick {", self.html)
+        self.assertIn(".dp-row { display: flex;", self.html)
+
+
 if __name__ == "__main__":
     unittest.main()
