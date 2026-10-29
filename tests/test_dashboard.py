@@ -3367,3 +3367,21 @@ class StreamBusDispatchTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn("📣 总线", resp.get_data(as_text=True))
 
+
+class PairingInfoApiTests(unittest.TestCase):
+    """手机 APK 扫码配对信息端点（2026-10-29）：局域网 IP 候选+端口。"""
+
+    def setUp(self):
+        self.client = dashboard.app.test_client()
+
+    def test_pairing_info_returns_ips_and_port(self):
+        resp = self.client.get("/api/pairing/info")
+        body = resp.get_json()
+        self.assertEqual(body["code"], 200)
+        self.assertIsInstance(body["data"]["ips"], list)
+        self.assertGreaterEqual(len(body["data"]["ips"]), 1)
+        self.assertEqual(body["data"]["port"], 5003)
+        for ip in body["data"]["ips"]:
+            self.assertNotIn(":", ip)   # 纯 IPv4（无端口混入）
+
+

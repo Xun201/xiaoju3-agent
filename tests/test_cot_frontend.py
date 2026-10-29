@@ -116,7 +116,7 @@ class TTSVoiceSelectionTests(unittest.TestCase):
         self.assertIn("pickTTSVoice()", body)                 # 选中项回显按回退链
         # 不经 getElementById 引用新节点（index.html 无此 id，双向一致）
         self.assertNotIn("getElementById('tts-voice-select')", js)
-        self.assertNotIn("tts-voice-select", self.index_html)
+        self.assertNotIn("getElementById('tts-voice-select')", self.index_html)   # 原意=JS 不得 getElementById 引用（2026-10-29 移动端隐藏 select 用 id 合法）
 
     def test_voiceschanged_async_handled(self):
         """音色列表异步到达：voiceschanged 事件重建下拉

@@ -651,7 +651,7 @@ class ModernModalTests(unittest.TestCase):
         self.assertIn("localStorage.getItem('xj3_api_base')", js)
         self.assertIn("window.fetch = function (input, init)", js)
         self.assertIn("window.EventSource.prototype = OrigES.prototype;", js)
-        self.assertIn("function showApiBaseConfig()", js)
+        self.assertIn("function showPairGate()", js)   # 2026-10-29 二次拍板：扫码配对门取代输入框弹窗
         self.assertIn("localStorage.setItem('xj3_api_base', base)", js)
         self.assertIn('data-action="screenshot"', js)             # 隐藏目标在位
         self.assertIn("shotItem.hidden = true", js)
@@ -668,46 +668,105 @@ class ModernModalTests(unittest.TestCase):
 
 
 class PluginQuickActionsTests(unittest.TestCase):
-    """插件面板可点击快捷指令（2026-10-29 队长指令：只读列表升级为入口）。
-    点 chip 等价于输入触发指令并自动发送（走既有总线/intent_router 链）；
-    打字触发保持原样。锚三层：映射表/渲染 chip/点击行为。"""
+    """插件面板点击交互（2026-10-29 二次拍板：去蓝色按钮回净列表，整行
+    可点；点击=触发词填输入框+聚焦（不直发，方便二次编辑）；
+    doc_ingest 无指令语义=整行点击弹文件选择。另含技能/插件浮层滚动锚。"""
 
     def setUp(self):
         self.js = _read("console.js")
         self.html = _read("index.html")
 
-    def test_quick_action_map_four_plugins(self):
-        """四个插件映射：stock_assistant/dice/video_ingest=send 型，
-        doc_ingest=upload 型（复用 ＋ 菜单文件选择流）。"""
+    def test_quick_action_map_three_triggers(self):
+        """三插件触发词映射（填输入框用）；doc_ingest=null=文件选择语义。"""
         js = self.js
         self.assertIn("const PLUGIN_QUICK_ACTIONS = {", js)
-        self.assertIn("stock_assistant: { label: '帮我选股', send: '帮我选股' }", js)
-        self.assertIn("dice:            { label: '掷骰子', send: '掷骰子' }", js)
-        self.assertIn("video_ingest:    { label: '提取视频内容', send: '提取视频内容' }", js)
-        self.assertIn("doc_ingest:      { label: '上传文档', upload: true }", js)
+        self.assertIn("stock_assistant: '帮我选股',", js)
+        self.assertIn("dice:            '掷骰子',", js)
+        self.assertIn("video_ingest:    '提取视频内容',", js)
+        self.assertIn("doc_ingest:      null,", js)
 
-    def test_renderer_emits_clickable_chip(self):
-        """渲染层：映射内插件行追加 .dp-quick chip（data-plugin 标识）。"""
+    def test_rows_clickable_no_button(self):
+        """净列表回归：无 ▶ 按钮/无 .dp-quick；映射内整行 .dp-click 可点。"""
         js = self.js
-        self.assertIn("const qa = PLUGIN_QUICK_ACTIONS[p.name];", js)
-        self.assertIn("'<button class=\"dp-quick\" data-plugin=\"'", js)
-        self.assertIn("popover.addEventListener('click'", js)
-        self.assertIn("const chip = ev.target.closest('.dp-quick');", js)
+        self.assertNotIn("dp-quick", js)
+        self.assertNotIn("window.sendMessage", js.split("popover.addEventListener")[1])  # 不直发
+        self.assertIn('dp-click', js)
+        self.assertIn("const clickable = qa !== undefined;", js)
 
-    def test_click_behavior_send_and_upload(self):
-        """点击行为：send 型=填输入框+window.sendMessage()（既有流式链）；
-        upload 型=转发 ＋ 菜单 upload 项；发送前 closeAll 收面板。"""
+    def test_click_fills_input_not_send(self):
+        """点击行为契约：closeAll→触发词填输入框→focus；doc_ingest=null 走
+        upload 转发；绝不调用 sendMessage（队长要求二次编辑）。"""
         js = self.js
         start = js.index("popover.addEventListener('click'")
-        body = js[start:js.index("});", js.index("window.sendMessage();", start))]
+        body = js[start:js.index("inputEl.focus();", start) + len("inputEl.focus();")]
+        self.assertIn("const row = ev.target.closest('.dp-row.dp-click');", body)
         self.assertIn("closeAll();", body)
-        self.assertIn("inputEl.value = qa.send;", js)
-        self.assertIn("window.sendMessage();", js)
-        self.assertIn('.dock-menu-item[data-action="upload"]', js)
+        self.assertIn("inputEl.value = trigger;", body)
+        self.assertIn("inputEl.focus();", body)
+        self.assertIn('.dock-menu-item[data-action="upload"]', body)
+        self.assertNotIn("window.sendMessage", body)   # 填充不发送
 
-    def test_quick_chip_css_present(self):
-        self.assertIn(".dp-quick {", self.html)
-        self.assertIn(".dp-row { display: flex;", self.html)
+    def test_popover_scroll_and_hover_css(self):
+        """技能/插件浮层滚动（队长实锤划不动）+行 hover 提示。"""
+        html = self.html
+        self.assertIn("max-height: min(420px, 70vh); overflow-y: auto;", html)
+        self.assertIn(".dp-row.dp-click { cursor: pointer; }", html)
+        self.assertIn(".dp-row.dp-click:hover { background: rgba(31, 41, 55, 0.06); }", html)
+        self.assertNotIn(".dp-quick", html)   # 蓝色按钮 CSS 绝迹
+
+
+class PairingAndMobileTests(unittest.TestCase):
+    """扫码配对（2026-10-29 队长拍板"干掉手输 URL"）+移动端排版修复锚。"""
+
+    def setUp(self):
+        self.js = _read("console.js")
+        self.html = _read("index.html")
+
+    def test_pair_gate_scan_first(self):
+        """配对门：扫码大按钮为主路径；手动输入降级为 details 折叠；
+        绝不再让用户裸填 URL 当第一步。"""
+        js = self.js
+        self.assertIn("function showPairGate()", js)
+        self.assertIn("'\u626b\u7801\u8fde\u63a5'", js) if False else None
+        self.assertIn("扫码连接", js)
+        self.assertIn("<details>", js) if False else None
+        self.assertIn("createElement('details')", js)
+        self.assertIn("openPairScanner()", js)
+        self.assertNotIn("function showApiBaseConfig()", js)   # 旧输入框弹窗退役
+
+    def test_qr_scanner_stack(self):
+        """扫码器：getUserMedia 后摄 + BarcodeDetector 加速 + jsQR 兜底。"""
+        js = self.js
+        self.assertIn("navigator.mediaDevices.getUserMedia", js)
+        self.assertIn("facingMode: 'environment'", js)
+        self.assertIn("window.BarcodeDetector || null", js)
+        self.assertIn("jsQR(img.data, img.width, img.height)", js)
+
+    def test_pairing_payload_parser(self):
+        """载荷解析：xiaoju3://connect?ips=a,b&port=5003 → 候选 base 列表。"""
+        js = self.js
+        self.assertIn("function parsePairingPayload(text)", js)
+        self.assertIn("/^xiaoju3:\/\/\/connect\?([^#]+)/", js) if False else None
+        self.assertIn("xiaoju3:", js)
+        self.assertIn("pairConnect(candidates)", js)
+        self.assertIn("localStorage.setItem('xj3_api_base', base)", js)
+
+    def test_desktop_pair_qr_card(self):
+        """桌面 🧰「连接手机」卡：/api/pairing/info → qrcode() SVG 弹窗。"""
+        js = self.js
+        self.assertIn("buildToolCard('连接手机', '生成二维码——手机小橘 App 扫码即连'", js)
+        self.assertIn("function openPairQrModal()", js)
+        self.assertIn("fetch('/api/pairing/info')", js)
+        self.assertIn("qr.addData(payload);", js)
+        self.assertIn("createSvgTag({ cellSize: 5, margin: 2 })", js)
+
+    def test_mobile_header_css(self):
+        """移动端头部防挤压：标题 nowrap 省略号/音色选择隐藏/按钮紧凑。"""
+        html = self.html
+        self.assertIn(".header-title { flex: 1 1 auto; min-width: 0;"
+                      " white-space: nowrap;", html)
+        self.assertIn("#tts-voice-select { display: none; }", html)
+        self.assertIn(".header-actions { flex-shrink: 0; gap: 2px; }", html)
 
 
 if __name__ == "__main__":

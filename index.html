@@ -596,22 +596,15 @@
             background: #ffffff; border-radius: 10px; padding: 10px 12px;
             box-shadow: var(--shadow-card); z-index: 900; min-width: 240px; max-width: 300px;
             font-size: 13px; color: #374151;
+            max-height: min(420px, 70vh); overflow-y: auto;
         }
         .dock-popover h4 { margin: 0 0 6px; font-size: 12px; color: #6b7280; font-weight: 600; }
         .dock-popover .dp-row { padding: 5px 6px; border-radius: 6px; }
-        /* 插件快捷指令 chip（2026-10-29 队长指令：插件面板可点击入口）：
-           小蓝 pill，hover 加深；行内右对齐不挤描述文字 */
-        .dp-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-        .dp-row .dp-sub { flex: 1; }
-        .dp-quick {
-            flex-shrink: 0; border: none; cursor: pointer;
-            background: rgba(37, 99, 235, 0.1); color: #2563eb;
-            font-size: 12px; font-weight: 600;
-            padding: 4px 10px; border-radius: 999px;
-            transition: background 0.15s, color 0.15s;
-        }
-        .dp-quick:hover { background: #2563eb; color: #ffffff; }
-        .dp-quick:active { filter: brightness(0.92); }
+        /* 插件快捷行（2026-10-29 二次拍板：去蓝色按钮回净列表，整行可点）
+           ——hover 浅灰+pointer 提示整行可点；点击=触发词填输入框（不直发，
+           方便二次编辑） */
+        .dp-row.dp-click { cursor: pointer; }
+        .dp-row.dp-click:hover { background: rgba(31, 41, 55, 0.06); }
         .dock-popover .dp-row:hover { background: rgba(31, 41, 55, 0.05); }
         .dock-popover .dp-sub { color: #9ca3af; font-size: 11px; }
 
@@ -909,6 +902,15 @@
             .message { max-width: 85%; }
             .chat-input-area { padding: 10px 12px; }
             .chat-input-area input { font-size: 16px; }  /* 16px 防 iOS 聚焦自动放大 */
+            /* 移动端头部防挤压（2026-10-29 队长实锤：标题竖排/图标挤团）——
+               标题 nowrap 省略号化，音色选择隐藏（非核心），按钮紧凑横排 */
+            .chat-header { padding: 8px 10px; gap: 6px; min-width: 0; }
+            .header-title { flex: 1 1 auto; min-width: 0; white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
+            .header-actions { flex-shrink: 0; gap: 2px; }
+            .header-btn { padding: 5px 6px; }
+            #tts-voice-select { display: none; }   /* 非核心，让位标题 */
+            .composer { width: 100%; max-width: 100%; }   /* 现役输入区容器 */
         }
 
         /* ==================== 加速球（桌宠缩略态） ==================== */

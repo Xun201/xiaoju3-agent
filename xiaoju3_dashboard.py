@@ -99,6 +99,48 @@ except Exception:
 app = Flask(__name__)
 
 
+def _local_lan_ips():
+    """局域网 IPv4 候选列表（UDP connect 技巧：不发包只查路由）——主选=
+    默认路由出口 IP；辅选=hostname 解析出的本机地址。Tailscale（100.x）
+    与局域网段都会出现在候选里，手机端逐个探活自动挑通的。"""
+    ips = []
+    s = None
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            primary = s.getsockname()[0]
+            if primary and primary not in ips:
+                ips.append(primary)
+        except Exception:
+            pass
+        try:
+            host_addrs = {a[4][0] for a in
+                          socket.getaddrinfo(socket.gethostname(), None,
+                                             socket.AF_INET)}
+            for a in sorted(host_addrs):
+                if (not a.startswith("127.") and a not in ips
+                        and not a.endswith(".1")):
+                    ips.append(a)
+        except Exception:
+            pass
+    finally:
+        if s:
+            s.close()
+    if not ips:
+        ips = ["127.0.0.1"]
+    return ips
+
+
+@app.route('/api/pairing/info')
+def api_pairing_info():
+    """手机 APK 扫码配对信息（2026-10-29 队长拍板"干掉手输 URL"）：
+    返回本机局域网 IP 候选与后端端口——桌面端据此生成配对二维码。"""
+    return jsonify({"code": 200,
+                    "data": {"ips": _local_lan_ips(), "port": 5003}})
+
+
 @app.after_request
 def _apk_cors_headers(resp):
     """APK 遥控壳跨域放行（2026-10-29）：Capacitor WebView 源
