@@ -156,48 +156,66 @@ _FENCE = re.compile(r"```.*?```", re.S)
 
 
 def parse_protocol_lines(text):
-    """收严版协议行解析。返回 (clean_text, options|None, summary|None, hitl)。
+    """收严版协议行解析（v2，DeepSeek 审查回执采纳 5 项修复）。
+    返回 (clean_text, options|None, summary|None, hitl)。
 
     边界规则（秘书回执①）：
-    - 代码围栏（```…```）先置占位，解析后还原——围栏内的协议样文本零误伤；
-    - 协议行只认「开头 3 行内」或「末尾 3 行内」的**整行锚定**命中；
+    - 代码围栏（```…```）先置**随机不可预测占位**（uuid——v1 的
+      \\x00FENCE{i} 可被正文伪造致内容错乱），解析后还原；
+    - 协议行只认「开头 3 行内」或「末尾 3 行内」的**整行锚定**命中
+      （v2 改显式 idx 判定——v1 的 lo/hi 区间在 n≤6 短文本下恒空=全漏判）；
+    - 首尾空行先裁剪再算窗口（尾部空行把真实协议行挤出窗口的漏判堵死）；
     - 整行锚定=行首 strip 后必须以 @options:/@summary: 开头——列表前缀
       （- @options:）与加粗（**@options:**）天然不认；
-    - 命中的协议行从正文剥离；正文其余部分原样保留。"""
-    hitl = "@老板" in text
+    - 命中的协议行从正文剥离（多协议行**取首个**，语义明确）；正文其余
+      部分原样保留（v1 的全局连续空行压缩已撤销——违反原样保留）；
+    - hitl 判定基于围栏占位后的文本（围栏内 @老板 不触发）。"""
+    import uuid
     fences = []
+    tokens = []
 
     def _stash(m):
         fences.append(m.group(0))
-        return f"\x00FENCE{len(fences) - 1}\x00"
+        tok = f"\x00{uuid.uuid4().hex}\x00"
+        tokens.append(tok)
+        return tok
 
     work = _FENCE.sub(_stash, text)
+    hitl = "@老板" in work   # 围栏免疫：占位后判定（v1 在原文判定=围栏内 @老板 误触发）
     lines = work.splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
     n = len(lines)
-    lo, hi = _PROTO_EDGE_LINES, n - _PROTO_EDGE_LINES
-    options = []
+    options = None
     summary = None
+
+    def _in_edge(idx):
+        return idx < _PROTO_EDGE_LINES or idx >= n - _PROTO_EDGE_LINES
+
     for idx, line in enumerate(lines):
-        if lo <= idx < hi:
-            continue   # 正文中段：永不解析
-        stripped = line.strip()
-        m = _OPTIONS_LINE.match(stripped)
-        if m:
-            opts = [x.strip()[:_PROTO_OPT_MAX]
-                    for x in m.group(1).split("|") if x.strip()][:6]
-            if opts:
-                options = opts
-                lines[idx] = ""
-            continue
-        m = _SUMMARY_LINE.match(stripped)
-        if m:
-            summary = m.group(1).strip()[:200]
-            lines[idx] = ""
+        if _in_edge(idx):
+            stripped = line.strip()
+            m = _OPTIONS_LINE.match(stripped)
+            if m:
+                if options is None:   # 取首个（多协议行语义明确）
+                    opts = [x.strip()[:_PROTO_OPT_MAX]
+                            for x in m.group(1).split("|") if x.strip()][:6]
+                    if opts:
+                        options = opts
+                        lines[idx] = ""
+                continue
+            m = _SUMMARY_LINE.match(stripped)
+            if m:
+                if summary is None:
+                    summary = m.group(1).strip()[:200]
+                    lines[idx] = ""
     work = "\n".join(lines)
-    for i, f in enumerate(fences):
-        work = work.replace(f"\x00FENCE{i}\x00", f)
-    clean = re.sub(r"\n{3,}", "\n\n", work).strip()
-    return clean, (options or None), summary, hitl
+    for tok, f in zip(tokens, fences):
+        work = work.replace(tok, f)
+    clean = work.strip()
+    return clean, options, summary, hitl
 
 
 class CollabHub:

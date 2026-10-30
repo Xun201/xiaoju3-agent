@@ -206,3 +206,50 @@ class ProtocolEdgeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeepSeekReviewAdoptionTests(unittest.TestCase):
+    """MCP 实战演练（2026-10-30）：DeepSeek 审查 parse_protocol_lines 的
+    5 项采纳修复回归——①uuid 占位防伪造 ②短文本窗口显式判定 ③首尾空行
+    裁剪 ④hitl 围栏免疫 ⑤多协议行取首个+正文原样（无全局空行压缩）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xj3_rev_")
+        self.hub = _hub(self.tmp)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_short_text_protocol_still_parsed(self):
+        """DeepSeek 意见②：n≤6 短文本旧 lo/hi 区间恒空=全漏判——v2 显式判定修复。"""
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(
+            "@summary: 短消息摘要\n@老板 请确认")
+        self.assertEqual(summ, "短消息摘要")
+        self.assertTrue(hitl)
+
+    def test_trailing_blank_lines_do_not_evict_protocol(self):
+        """DeepSeek 意见③：尾部空行不再把协议行挤出窗口。"""
+        text = "@老板 请确认\n@options: 甲|乙\n\n\n\n"
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(text)
+        self.assertEqual(opts, ["甲", "乙"])
+
+    def test_fence_placeholder_unforgeable(self):
+        """DeepSeek 意见①：uuid 随机占位——正文伪造旧占位串不再错乱。"""
+        evil = "正文含伪造占位 \x00FENCE0\x00 结束\n@老板 看看"
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(evil)
+        self.assertIn("\x00FENCE0\x00", clean)   # 伪造串原样保留（未被还原成围栏）
+        self.assertTrue(hitl)
+
+    def test_hitl_ignores_boss_in_fence(self):
+        """DeepSeek 意见⑤：围栏内 @老板 不触发 HITL。"""
+        text = "```py\nprint('@老板 请确认')\n```\n普通正文无协议"
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(text)
+        self.assertFalse(hitl)
+
+    def test_multiple_protocol_lines_first_wins_body_kept(self):
+        """DeepSeek 意见⑥⑦：多协议行取首个；正文无全局空行压缩。"""
+        text = "@summary: 摘要甲\n\n\n\n@summary: 摘要乙\n@老板 正文\n\n\n保留空行"
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(text)
+        self.assertEqual(summ, "摘要甲")
+        self.assertIn("\n\n\n", clean)   # 正文连续空行原样
