@@ -889,39 +889,7 @@
         /* ≤768px 双栏折叠为单栏。方案：监控侧栏收为可展开抽屉——fixed 定位 +
            translateX 滑入滑出，由聊天头部 ☰ 按钮切换（console.js 给 .sidebar
            加/去 .open 类），聊天区独占整行，输入区保持全宽可用。 */
-        @media (max-width: 768px) {
-            .sidebar {
-                position: fixed;
-                left: 0;
-                top: 0;
-                bottom: 0;
-                width: min(80vw, 300px);
-                min-width: 0;
-                margin: 0;
-                border-radius: 0;
-                border-right: 1px solid var(--color-border);
-                transform: translateX(-105%);
-                transition: transform 0.25s ease;
-                z-index: 100;
-                box-shadow: var(--shadow-card);
-            }
-            .sidebar.open { transform: translateX(0); }
-            #sidebar-toggle { display: inline-flex; }
-            #sidebar-resizer { display: none; }   /* 抽屉态无拖宽语义（2026-10-27） */
-            .chat-history { padding: 12px; gap: 10px; }
-            .message { max-width: 85%; }
-            .chat-input-area { padding: 10px 12px; }
-            .chat-input-area input { font-size: 16px; }  /* 16px 防 iOS 聚焦自动放大 */
-            /* 移动端头部防挤压（2026-10-29 队长实锤：标题竖排/图标挤团）——
-               标题 nowrap 省略号化，音色选择隐藏（非核心），按钮紧凑横排 */
-            .chat-header { padding: 8px 10px; gap: 6px; min-width: 0; }
-            .header-title { flex: 1 1 auto; min-width: 0; white-space: nowrap;
-                overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
-            .header-actions { flex-shrink: 0; gap: 2px; }
-            .header-btn { padding: 5px 6px; }
-            #tts-voice-select { display: none; }   /* 非核心，让位标题 */
-            .composer { width: 100%; max-width: 100%; }   /* 现役输入区容器 */
-        }
+        
 
         /* ==================== 加速球（桌宠缩略态） ==================== */
         /* 口径（2026-10-03，PET_BALL_FIX_DESIGN）：⌄ 缩桌宠成球，球跟桌宠
@@ -1492,6 +1460,39 @@
             .sidebar { width: 264px; }
             .chat-history { padding: 16px; }
             .chat-input-area { padding: 4px 16px 16px; }
+        }
+            @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: 0;
+                top: 0;
+                bottom: 0;
+                width: min(80vw, 300px);
+                min-width: 0;
+                margin: 0;
+                border-radius: 0;
+                border-right: 1px solid var(--color-border);
+                transform: translateX(-105%);
+                transition: transform 0.25s ease;
+                z-index: 100;
+                box-shadow: var(--shadow-card);
+            }
+            .sidebar.open { transform: translateX(0); }
+            #sidebar-toggle { display: inline-flex; }
+            #sidebar-resizer { display: none; }   /* 抽屉态无拖宽语义（2026-10-27） */
+            .chat-history { padding: 12px; gap: 10px; }
+            .message { max-width: 85%; }
+            .chat-input-area { padding: 10px 12px; }
+            .chat-input-area input { font-size: 16px; }  /* 16px 防 iOS 聚焦自动放大 */
+            /* 移动端头部防挤压（2026-10-29 队长实锤：标题竖排/图标挤团）——
+               标题 nowrap 省略号化，音色选择隐藏（非核心），按钮紧凑横排 */
+            .chat-header { padding: 8px 10px; gap: 6px; min-width: 0; }
+            .header-title { flex: 1 1 auto; min-width: 0; white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
+            .header-actions { flex-shrink: 0; gap: 2px; }
+            .header-btn { padding: 5px 6px; }
+            #tts-voice-select { display: none; }   /* 非核心，让位标题 */
+            .composer { width: 100%; max-width: 100%; }   /* 现役输入区容器 */
         }
     </style>
     <link rel="icon" href="data:,">
