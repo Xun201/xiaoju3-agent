@@ -96,10 +96,15 @@ def _log(q, a, tk="?"):
 class CollabHub:
     """协作总线：文件监听 → 角色消息流（publish+history）。"""
 
-    def __init__(self, sync_path=_SYNC, task_path=_TASK_BUS, env=None):
-        self.sync_path = sync_path
-        self.task_path = task_path
+    def __init__(self, sync_path=None, task_path=None, env=None):
         self.env = env or _load_env()
+        # 路径 env 覆盖（2026-10-30 部署实锤：生产 _dev 无总线文件——
+        # hub 进程与 ZCode 同机时直接监听仓库 _dev 绝对路径，零拷贝实时；
+        # 跨机部署再议远端方案）。缺省=项目根 _dev。
+        self.sync_path = (sync_path
+                          or self.env.get("XIAOJU3_COLLAB_SYNC") or _SYNC)
+        self.task_path = (task_path
+                          or self.env.get("XIAOJU3_COLLAB_TASK") or _TASK_BUS)
         self.history = []            # [{role,text,ts,hitl}]
         self._lock = threading.Lock()
         self._stop = threading.Event()
