@@ -104,8 +104,10 @@
             border-right: 2px solid transparent;   /* 分界线本体（2026-10-29 终版：border 即边界，物理零偏移） */
             transition: border-color 0.15s ease;
         }
-        /* hover 侧栏/悬浮拖拽热区/拖拽中：边框染点缀蓝（=分界线亮起） */
-        .sidebar:hover,
+        /* hover 拖拽热区/拖拽中：边框染点缀蓝（=分界线亮起）。
+           2026-10-30 队长实锤"整个侧栏都能触发蓝线"根治：删 `.sidebar:hover`
+           选择器——它让鼠标在侧栏任意位置都点亮右缘蓝线（热区越界真凶）。
+           现在只有鼠标落在 4px 热区（:has 反射）或拖拽中才亮。 */
         .sidebar:has(+ #sidebar-resizer:hover),
         .sidebar.divider-dragging { border-right-color: #2563eb; }
         /* 内层滚动容器（2026-10-29 色块化重构）：全部侧栏内容与滚动都在这层，

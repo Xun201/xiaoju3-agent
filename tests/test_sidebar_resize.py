@@ -154,8 +154,7 @@ class SidebarResizeFrontendTests(unittest.TestCase):
         像素级零偏移。::after 渲染位方案（与交界隔热区宽度）禁回归。"""
         self.assertIn("border-right: 2px solid transparent", self.html)
         self.assertNotIn("#sidebar-resizer::after", self.html)   # 旧错位方案根除
-        m = re.search(r"\.sidebar:hover,\s*"
-                      r"\.sidebar:has\(\+ #sidebar-resizer:hover\),\s*"
+        m = re.search(r"\.sidebar:has\(\+ #sidebar-resizer:hover\),\s*"
                       r"\.sidebar\.divider-dragging\s*\{[^}]*\}", self.html)
         self.assertTrue(m, "hover 选择器组（sidebar/resizer/拖拽态）未找到")
         self.assertIn("#2563eb", m.group(0))      # hover/拖拽=点缀蓝浮现
