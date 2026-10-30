@@ -7,6 +7,7 @@ waker 复用——避免 importlib spec_from_file_location 包内相对导入的
 """
 import os
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime
@@ -835,7 +836,14 @@ def social_visit(db=None):
                   f"/{_SOCIAL_DAILY_CAP}），跳过")
             return False
     except Exception as e:
-        print(f"🦊 [social] 计数库异常 fail-closed: {e}")
+        # P2 告警补齐（秘书回执）：连续 fail-closed ≥3 次升级醒目告警
+        _SOCIAL_FC_STREAK = getattr(sys.modules[__name__],
+                                    "_SOCIAL_FC_STREAK", 0) + 1
+        if _SOCIAL_FC_STREAK >= 3:
+            print(f"❌ [social] 连续 {_SOCIAL_FC_STREAK} 次 fail-closed"
+                  f"（计数库持续异常，社交串门停摆）——请排查 memory.db: {e}")
+        else:
+            print(f"🦊 [social] 计数库异常 fail-closed: {e}")
         return False
 
     # 随机选一个目标（洗牌后取第一个可用的）
@@ -884,6 +892,7 @@ def social_visit(db=None):
         except Exception:
             pass
         print(f"🦊 [social] 串门成功: {tt}:{tid} → {greeting[:40]}")
+        sys.modules[__name__]._SOCIAL_FC_STREAK = 0   # 成功=计数库恢复
         return True
 
     print(f"🦊 [social] 本轮无可串目标（池 {len(pool)} 个全在冷却/豁免/失败）")

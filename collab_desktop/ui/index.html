@@ -114,6 +114,25 @@
   .sendbtn:hover { filter: brightness(1.12); }
   .sendbtn:disabled { opacity: .5; cursor: default; }
   .sysline { text-align: center; color: var(--dim); font-size: 11px; margin: 4px 0; }
+  .round-badge {
+    align-self: center; font-size: 10.5px; color: var(--dim);
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 3px 14px; border-radius: 999px; margin: 2px 0;
+  }
+  .thinking {
+    margin-bottom: 8px; border-left: 3px solid var(--line);
+    padding-left: 8px;
+  }
+  .thinking .th-toggle {
+    font-size: 11px; color: var(--dim); cursor: pointer; user-select: none;
+  }
+  .thinking .th-toggle:hover { color: var(--txt); }
+  .thinking .th-body {
+    display: none; margin-top: 6px; font-size: 11.5px; color: var(--dim);
+    white-space: pre-wrap; max-height: 220px; overflow-y: auto;
+    background: rgba(0,0,0,.18); border-radius: 6px; padding: 6px 8px;
+  }
+  .thinking.open .th-body { display: block; }
 </style>
 </head>
 <body>
@@ -147,6 +166,12 @@
   let lastCount = 0;
 
   function addMsg(m) {
+    if (m.round) {
+      const rb = document.createElement('div');
+      rb.className = 'round-badge';
+      rb.textContent = '—— ' + m.round + ' ——';
+      stream.appendChild(rb);
+    }
     if (m.hitl) { addHitl(m); return; }
     const row = document.createElement('div');
     row.className = 'msg ' + (m.role || 'zcode');
@@ -160,6 +185,20 @@
     meta.className = 'meta';
     meta.textContent = (NAMES[m.role] || m.role) + ' · ' + (m.ts || '');
     bubble.appendChild(meta);
+    if (m.thinking) {
+      const th = document.createElement('div');
+      th.className = 'thinking';
+      const tg = document.createElement('div');
+      tg.className = 'th-toggle';
+      tg.textContent = '💭 工作思维链（点击展开）';
+      const tb = document.createElement('div');
+      tb.className = 'th-body';
+      tb.textContent = m.thinking;
+      tg.addEventListener('click', () => th.classList.toggle('open'));
+      th.appendChild(tg);
+      th.appendChild(tb);
+      bubble.appendChild(th);
+    }
     const body = document.createElement('div');
     body.textContent = m.text || '';
     bubble.appendChild(body);

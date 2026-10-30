@@ -8,6 +8,7 @@
 零配置：DeepSeek Key/路径全部自动读生产环境（.env + 项目根），队长双击即用。
 """
 import os
+import re
 import sys
 import threading
 import time
@@ -83,49 +84,114 @@ class BossApi:
                          daemon=True, name="deepseek-plan").start()
         return {"code": 200, "data": {"queued": True}}
 
+    def _deepseek(self, messages, max_tokens=900):
+        """DeepSeek 单轮调用（reasoner 默认=带思维链）。返回
+        (content, thinking)；失败抛异常。"""
+        import urllib.request
+        key = ENV.get("DEEPSEEK_API_KEY") or ENV.get("CLOUD_KEY") or ""
+        url = ENV.get("CLOUD_URL") or \
+            "https://api.deepseek.com/chat/completions"
+        model = ENV.get("CLOUD_MODEL") or "deepseek-reasoner"
+        if not key:
+            raise RuntimeError("未配置 DeepSeek Key")
+        payload = {"model": model, "messages": messages,
+                   "stream": False, "temperature": 0.3,
+                   "max_tokens": max_tokens}
+        req = urllib.request.Request(
+            url, data=json_dumps(payload),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            body = json_loads(r.read().decode())
+        msg = (body.get("choices") or [{}])[0].get("message", {})
+        content = str(msg.get("content") or "").strip()
+        thinking = str(msg.get("reasoning_content") or "").strip()
+        tk = body.get("usage", {}).get("total_tokens", "?")
+        return content, thinking, tk
+
+    def _write_task_section(self, tag, body):
+        with open(TASK_PATH, "a", encoding="utf-8") as f:
+            f.write(f"\n## [{tag}] {_now_iso()}\n\n{body[:1500]}\n\n---\n")
+
     def _plan_worker(self, text):
+        """两两交流循环（2026-10-30 队长：融合两两互相交流，用户可看见
+        工作思维链）：老板需求 → 秘书出方案（思维链抓取）→ 方案落
+        TASK_BUS [包工头任务] 节（包工头领命）→ [包工头回执] 出现后秘书
+        审查回执（第二轮）→ @老板 总结。全程消息带 thinking 上屏。"""
         with self._deepseek_lock:
+            # 第一轮：秘书出方案（reasoner 带思维链）
             try:
-                import urllib.request
-                key = ENV.get("DEEPSEEK_API_KEY") or ENV.get("CLOUD_KEY") or ""
-                url = ENV.get("CLOUD_URL") or \
-                    "https://api.deepseek.com/chat/completions"
-                model = ENV.get("CLOUD_MODEL") or "deepseek-chat"
-                if not key:
-                    self.hub._emit("secretary",
-                                   "未配置 DeepSeek Key，无法生成方案")
-                    return
-                boss_line = f"【老板原话】{text}"
-                payload = {
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content":
-                         "你是小橘3号项目的技术秘书。老板提出了一个需求，"
-                         "请给出可直接执行的技术方案：最多 5 条要点，每条"
-                         "一行以「- 」开头，简体中文；最后给一行"
-                         "「@老板 请确认方案」并附 @options: 行（用 | 分隔"
-                         "2-4 个执行选项，如 同意按此执行|先出细节设计|暂缓）。"
-                         "不确定的明确说不确定，禁止编造。"},
-                        {"role": "user", "content": boss_line}],
-                    "stream": False, "temperature": 0.3, "max_tokens": 800}
-                req = urllib.request.Request(
-                    url, data=json_dumps(payload),
-                    headers={"Content-Type": "application/json",
-                             "Authorization": f"Bearer {key}"})
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    body = json_loads(r.read().decode())
-                content = (body.get("choices") or [{}])[0].get(
-                    "message", {}).get("content", "").strip()
-                if not content:
-                    self.hub._emit("secretary", "DeepSeek 返回为空，请重试")
-                    return
-                # 写 TASK_BUS [秘书回复] 节（轮询自然捕获推流）
-                with open(TASK_PATH, "a", encoding="utf-8") as f:
-                    f.write(f"\n## [秘书回复] {_now_iso()}\n\n"
-                            f"{content[:1500]}\n\n---\n")
-                self.hub._emit("secretary", content[:1500])
+                content, thinking, tk = self._deepseek([
+                    {"role": "system", "content":
+                     "你是小橘3号项目的技术秘书。老板提出了一个需求，请给出"
+                     "可直接执行的技术方案：最多 5 条要点，每条一行以「- 」"
+                     "开头，简体中文；最后一行写「已派发给包工头，请其领命"
+                     "执行并回执」。不确定的明确说不确定，禁止编造。"},
+                    {"role": "user", "content": f"【老板原话】{text}"}])
             except Exception as e:
                 self.hub._emit("secretary", f"方案生成失败（请重试）: {e}")
+                return
+            m = {"role": "secretary", "text": content[:1500],
+                 "ts": _now_iso(), "hitl": False,
+                 "thinking": thinking[:2000], "round": "方案"}
+            self.hub._emit("secretary", m["text"], thinking=m["thinking"],
+                           round_tag=m["round"])
+            # 方案落 TASK_BUS [包工头任务] 节（包工头领命依据）
+            self._write_task_section(
+                "包工头任务", f"（秘书方案，请包工头领命执行）\n{content[:1200]}"
+                f"\n\n【老板原话】{text[:200]}")
+            # 第二轮：等包工头回执（轮询 TASK_BUS，最多等 10 分钟）
+            self.hub._emit("zcode", "（已收到任务，包工头执行中——回执写入后"
+                                    "秘书将自动审查）", round_tag="执行")
+            receipt = self._wait_receipt(timeout_s=600)
+            if not receipt:
+                self.hub._emit("secretary",
+                               "包工头暂未回执（超时 10 分钟），任务保持"
+                               "在 TASK_BUS，回执到达后我会自动审查。")
+                return
+            # 第三轮：秘书审查回执（思维链抓取）+ @老板 总结
+            try:
+                review, r_thinking, r_tk = self._deepseek([
+                    {"role": "system", "content":
+                     "你是小橘3号项目的技术秘书。包工头对刚才的任务提交了"
+                     "回执，请审查：完成质量/遗漏/风险，最多 3 条要点，"
+                     "最后给一行「@老板」总结（一句话结论）。简体中文。"},
+                    {"role": "user",
+                     "content": f"【原任务】{content[:800]}\n"
+                                f"【包工头回执】{receipt[:800]}"}],
+                    max_tokens=500)
+                self._write_task_section("秘书审查", review[:1200])
+                self.hub._emit("secretary", review[:1200],
+                               thinking=r_thinking[:2000], round_tag="审查")
+                self.hub._emit("boss", f"（自动总结）{review.splitlines()[0][:120]}"
+                               if review.splitlines() else "（审查完成）")
+            except Exception as e:
+                self.hub._emit("secretary", f"审查轮失败: {e}")
+
+    def _wait_receipt(self, timeout_s=600):
+        """轮询 TASK_BUS 等 [包工头回执] 新节（Signal：ZCode 写回执即触发）。"""
+        import re as _re
+        deadline = time.time() + timeout_s
+        baseline = self._read_receipts()
+        while time.time() < deadline:
+            time.sleep(5)
+            cur = self._read_receipts()
+            new = [r for r in cur if r not in baseline]
+            if new:
+                return new[-1]
+        return None
+
+    def _read_receipts(self):
+        try:
+            with open(TASK_PATH, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except Exception:
+            return []
+        out = []
+        for m in re.finditer(
+                r"## \[包工头回执\][^\n]*\n(.*?)(?=\n## |\Z)", text, re.S):
+            out.append(m.group(1).strip())
+        return out
 
 
 def json_dumps(obj):

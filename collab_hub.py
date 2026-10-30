@@ -224,7 +224,7 @@ class CollabHub:
         self._calls = 0
 
     # ---------- 消息入流 ----------
-    def _emit(self, role, text):
+    def _emit(self, role, text, thinking=None, round_tag=None):
         if not text or not text.strip():
             return False
         text = text.strip()[:4000]
@@ -238,6 +238,10 @@ class CollabHub:
             msg["options"] = options
         if summary and msg["hitl"]:
             msg["summary"] = summary
+        if thinking:
+            msg["thinking"] = thinking   # 工作思维链上屏（2026-10-30 队长）
+        if round_tag:
+            msg["round"] = round_tag
         with self._lock:
             self.history.append(msg)
             del self.history[:-HISTORY_MAX]
