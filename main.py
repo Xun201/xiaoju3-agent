@@ -1972,7 +1972,20 @@ def _send_reply_segments(user_id, group_id, reply, post=None, sleep_fn=None):
             payload["group_id"] = group_id
         else:
             payload["user_id"] = user_id
-        post(endpoint, payload)
+        try:
+            resp = post(endpoint, payload)
+            body = resp.json()
+            ok = (getattr(resp, "status_code", 0) == 200
+                  and body.get("retcode") == 0
+                  and (body.get("data") or {}).get("message_id"))
+        except Exception as _chk_e:
+            ok, body = False, {}
+            print(f"❌ [QQ发送] 回执读取异常: {_chk_e}")
+        if not ok:
+            print(f"❌ [QQ发送] 回执异常（消息可能未送达）endpoint={endpoint} "
+                  f"HTTP={getattr(resp, 'status_code', '?')} "
+                  f"retcode={body.get('retcode')} "
+                  f"wording={str(body.get('wording', ''))[:60]}")
         if idx < len(segments) - 1:
             sleep_fn(random.uniform(*TYPING_DELAY_RANGE))
 
@@ -2451,7 +2464,7 @@ def onebot_event(data):
         reply = _sanitize_qq_reply(reply, user_msg=raw_message or "")
         reply = _persona_leak_guard(reply)   # 人称泄露质检门（持久战第四保险）
         try:
-            reply = _persona_guard_pipeline(message, reply)   # 仲裁脑改写（v2）
+            reply = _persona_guard_pipeline(raw_message, reply)   # 仲裁脑改写（v2；2026-10-30 修 NameError：原引用未定义的 message 致管线每次失效原样放行）
         except Exception as e:
             print(f"⚠️ [人称管线] 异常（原样放行）: {e}")
         print(f"🐛 准备发送回复，内容为: {reply}")

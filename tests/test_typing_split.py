@@ -86,3 +86,31 @@ def test_private_payload_shape(monkeypatch):
         post=lambda ep, p: posts.append((ep, p)), sleep_fn=lambda s: None)
     assert all(p == {"user_id": 12345, "message": p["message"]}
                for _, p in posts)
+
+
+# 7 回执校验（2026-10-30 #259 老雷根治）：retcode 非 0 → 显式失败日志，
+# 不再静默假成功；失败不抛（下条消息不受影响）
+def test_send_receipt_failure_logged(monkeypatch, capsys):
+    class _BadResp:
+        status_code = 200
+        def json(self):
+            return {"status": "failed", "retcode": 120, "wording": "风控拦截",
+                    "data": None}
+    main._send_reply_segments(
+        12345, None, "短回复",
+        post=lambda ep, p: _BadResp(), sleep_fn=lambda s: None)
+    out = capsys.readouterr().out
+    assert "回执异常" in out and "120" in out and "风控拦截" in out
+
+
+# 8 回执成功（retcode 0 + message_id）→ 零失败日志
+def test_send_receipt_ok_silent(monkeypatch, capsys):
+    class _OkResp:
+        status_code = 200
+        def json(self):
+            return {"status": "ok", "retcode": 0,
+                    "data": {"message_id": 123}}
+    main._send_reply_segments(
+        12345, None, "短回复",
+        post=lambda ep, p: _OkResp(), sleep_fn=lambda s: None)
+    assert "回执异常" not in capsys.readouterr().out
