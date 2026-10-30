@@ -1,0 +1,108 @@
+# -*- coding: utf-8 -*-
+"""AI 协作总线测试（2026-10-30 Multi-Agent UI 批）。
+
+覆盖（临时目录零联网）：
+- CollabHub 增量解析：SYNC 变化→zcode 消息；TASK_BUS [秘书回复]/[老板拍板]
+  新节→secretary/boss 消息；签名去重（同节不重放）；
+- HITL：@老板 → hitl=True；
+- emit_boss：写 TASK_BUS [老板拍板] 节 + 入 history；
+- snapshot 截断与顺序；
+- 联网门：XIAOJU3_BUS_ENABLED≠1 → _auto_secretary 零调用（黑名单/日帽同源
+  ai_bus_daemon 已验，此处只锚门）。
+"""
+import importlib.util
+import os
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+spec = importlib.util.spec_from_file_location(
+    "collab_hub", os.path.join(ROOT, "collab_hub.py"))
+collab_hub = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(collab_hub)
+
+
+def _hub(tmp):
+    return collab_hub.CollabHub(
+        sync_path=os.path.join(tmp, "SYNC.md"),
+        task_path=os.path.join(tmp, "TASK_BUS.md"),
+        env={"XIAOJU3_BUS_ENABLED": "0"})
+
+
+class CollabHubTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xj3_collab_")
+        self.hub = _hub(self.tmp)
+
+    def _w(self, name, text):
+        with open(os.path.join(self.tmp, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_sync_change_emits_zcode(self):
+        self._w("SYNC.md", "# SYNC 头部导航\n")
+        self.hub.poll_once()   # 首轮入基线
+        self._w("SYNC.md", "# SYNC 头部导航\n\n## 最新状态\n修复了发送回执校验" * 3)
+        n = self.hub.poll_once()
+        self.assertGreaterEqual(n, 1)
+        roles = [m["role"] for m in self.hub.snapshot()]
+        self.assertIn("zcode", roles)
+
+    def test_task_bus_new_sections_parsed_once(self):
+        self._w("TASK_BUS.md", "# TASK_BUS\n")
+        self.hub.poll_once()
+        self._w("TASK_BUS.md",
+                "# TASK_BUS\n\n## [秘书回复] 2026-10-30 11:00\n\n- 结论甲\n\n---\n"
+                "\n## [老板拍板] 2026-10-30 11:05\n\n同意方案 A\n\n---\n")
+        self.hub.poll_once()
+        roles = sorted(m["role"] for m in self.hub.snapshot())
+        self.assertIn("secretary", roles)
+        self.assertIn("boss", roles)
+        # 同节重放：再 poll 不产生新消息（签名去重）
+        before = len(self.hub.snapshot())
+        self.hub.poll_once()
+        self.assertEqual(len(self.hub.snapshot()), before)
+
+    def test_hitl_flag_on_at_boss(self):
+        self.hub._emit("secretary", "方案 A 已就绪，@老板 请确认方案 A")
+        last = self.hub.snapshot()[-1]
+        self.assertTrue(last["hitl"])
+        self.hub._emit("secretary", "普通结论无确认诉求")
+        self.assertFalse(self.hub.snapshot()[-1]["hitl"])
+
+    def test_emit_boss_writes_task_bus_and_history(self):
+        path = os.path.join(self.tmp, "TASK_BUS.md")
+        r = self.hub.emit_boss("拍板：采用方案 A")
+        self.assertEqual(r["code"], 200)
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn(collab_hub.BOSS_TAG, content)
+        self.assertIn("拍板：采用方案 A", content)
+        self.assertEqual(self.hub.snapshot()[-1]["role"], "boss")
+
+    def test_emit_boss_empty_400(self):
+        self.assertEqual(self.hub.emit_boss("  ")["code"], 400)
+
+    def test_snapshot_limit(self):
+        for i in range(30):
+            self.hub._emit("zcode", f"msg-{i}")
+        snap = self.hub.snapshot(10)
+        self.assertEqual(len(snap), 10)
+        self.assertEqual(snap[-1]["text"], "msg-29")   # 新在后
+
+    def test_auto_secretary_gate_off(self):
+        """联网门：开关≠1 → 零调用（不写秘书节）。"""
+        self._w("TASK_BUS.md", "# TASK_BUS\n")   # 预建（门关时不写文件）
+        self._w("SYNC.md", "初始")
+        self.hub.poll_once()
+        self._w("SYNC.md", "初始\n\n## 最新状态\n" + "较长的新战报内容，" * 20)
+        self.hub.poll_once()
+        zcode_msgs = [m for m in self.hub.snapshot() if m["role"] == "zcode"]
+        self.assertGreaterEqual(len(zcode_msgs), 1)   # zcode 消息照常
+        with open(os.path.join(self.tmp, "TASK_BUS.md"), encoding="utf-8") as f:
+            self.assertNotIn(collab_hub.SECRET_TAG, f.read())   # 联网门关=零秘书节
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -958,6 +958,39 @@
         }
         /* 首装引导覆盖层（步 A4b）：z-index 3000 置顶（高于加速球/卡片），
            显隐走 [hidden] 全局兜底；默认 hidden，非引导场景零视觉变化 */
+        /* ---- 🚌 AI 协作总线面板（2026-10-30 Multi-Agent UI）---- */
+        .collab-pane { padding: 14px 18px; overflow-y: auto; height: 100%; box-sizing: border-box; }
+        .collab-msg { display: flex; gap: 10px; margin-bottom: 14px; align-items: flex-start; }
+        .collab-avatar {
+            flex: none; width: 34px; height: 34px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .collab-avatar svg { width: 18px; height: 18px; }
+        .collab-msg.role-secretary .collab-avatar { background: #dbeafe; color: #1d4ed8; }
+        .collab-msg.role-zcode .collab-avatar { background: #f1f5f9; color: #475569; }
+        .collab-msg.role-boss .collab-avatar { background: #dcfce7; color: #15803d; }
+        .collab-bubble {
+            max-width: 78%; border-radius: 12px; padding: 10px 14px;
+            font-size: 13px; line-height: 1.55; overflow-wrap: anywhere;
+        }
+        .collab-msg.role-secretary .collab-bubble { background: #eff6ff; border: 1px solid #bfdbfe; }
+        .collab-msg.role-zcode .collab-bubble { background: #f8fafc; border: 1px solid #e2e8f0; }
+        .collab-msg.role-boss .collab-bubble { background: #f0fdf4; border: 1px solid #bbf7d0; }
+        .collab-meta { font-size: 10px; color: #9ca3af; margin-bottom: 3px; }
+        .collab-hitl {
+            border: 2px solid #f59e0b; background: #fffbeb; border-radius: 12px;
+            padding: 12px 14px; margin-bottom: 14px;
+        }
+        .collab-hitl-title { font-weight: 700; font-size: 13px; color: #b45309; margin-bottom: 6px; }
+        .collab-input-bar { display: flex; gap: 8px; padding: 10px 0 0; }
+        .collab-input-bar input {
+            flex: 1; border: 1px solid var(--v0-n200, #e5e7eb); border-radius: 10px;
+            padding: 9px 12px; font-size: 13px; outline: none;
+        }
+        .collab-input-bar button {
+            border: none; border-radius: 10px; padding: 9px 18px; cursor: pointer;
+            background: #2563eb; color: #fff; font-weight: 600; font-size: 13px;
+        }
         #first-run-overlay { position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; }
         .first-run-card { background: var(--color-panel, #fff); color: var(--color-text, #222); border-radius: 10px; padding: 20px 24px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
         .first-run-sub { opacity: .75; margin: 4px 0 10px; }
@@ -1664,6 +1697,17 @@
         <!-- 密钥管理面板（#264 B2b，方案 A）：GET /api/keys 渲染键名+掩码
              （前端不碰明文）；覆盖=POST {key,value,confirm:true}（二次确认）。
              LV3+ 门=页面加载探针（403→入口 hidden，后端 403 双保险）。 -->
+        <div class="collab-pane" id="collab-pane" hidden>
+            <div class="terminal-toolbar">
+                <div class="toolbar-left"><span style="font-weight:700;font-size:14px;">🚌 AI 协作总线</span>
+                <span style="font-size:11px;color:#9ca3af;margin-left:8px;">秘书🧠 · 包工头🔧 · 老板👑 —— 实时协作流（@老板 触发确认卡片）</span></div>
+            </div>
+            <div id="collab-stream"></div>
+            <div class="collab-input-bar">
+                <input id="collab-input" type="text" placeholder="以老板身份发言或拍板（写入 TASK_BUS，包工头可见）…">
+                <button id="collab-send">发送</button>
+            </div>
+        </div>
         <div class="settings-pane" id="keys-pane" hidden>
             <div class="terminal-toolbar">
                 <div class="toolbar-left">

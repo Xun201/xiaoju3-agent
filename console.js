@@ -4375,6 +4375,130 @@ var qrcode = function() {
             const tl = ev.target.closest('.message.bot-message .think-live');
             if (tl) tl.classList.toggle('open');
         });
+        // 🚌 协作总线实时推送（2026-10-30 Multi-Agent UI）：collab_msg 事件
+        // → 「协作」Tab 三色气泡（秘书🧠蓝/包工头🔧灰/老板👑绿——内联 SVG 角标）
+        es.addEventListener('collab_msg', function (ev) {
+            try {
+                const d = JSON.parse(ev.data);
+                if (d.role && d.text) renderCollabMsg(d);
+            } catch (e) { /* 单事件失败不拆连接 */ }
+        });
+    })();
+
+    // ==================== AI 协作总线面板（2026-10-30 Multi-Agent UI） ====================
+    const COLLAB_AVATARS = {
+        secretary: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>',
+        zcode: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
+        boss: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.735H5.81a1 1 0 0 1-.957-.735L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/><path d="M5 21h14"/></svg>'
+    };
+    const COLLAB_NAMES = { secretary: '秘书 DeepSeek', zcode: '包工头 ZCode', boss: '老板' };
+
+    function renderCollabMsg(m) {
+        const stream = document.getElementById('collab-stream');
+        if (!stream) return;
+        const row = document.createElement('div');
+        row.className = 'collab-msg role-' + (m.role || 'zcode');
+        const av = document.createElement('div');
+        av.className = 'collab-avatar';
+        av.innerHTML = COLLAB_AVATARS[m.role] || COLLAB_AVATARS.zcode;
+        av.title = COLLAB_NAMES[m.role] || m.role;
+        row.appendChild(av);
+        // HITL：@老板 → 确认卡片（醒目+同意/驳回/自定义）
+        if (m.hitl) {
+            const card = document.createElement('div');
+            card.className = 'collab-hitl';
+            const t = document.createElement('div');
+            t.className = 'collab-hitl-title';
+            t.textContent = '⏸ 需要老板确认';
+            card.appendChild(t);
+            const body = document.createElement('div');
+            body.textContent = m.text;
+            card.appendChild(body);
+            const bar = document.createElement('div');
+            bar.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
+            const mk = function (label, val) {
+                const b = document.createElement('button');
+                b.textContent = label;
+                b.style.cssText = 'border:none;border-radius:8px;padding:6px 14px;'
+                    + 'cursor:pointer;font-size:12px;font-weight:600;';
+                b.style.background = val ? '#16a34a' : '#dc2626';
+                b.style.color = '#fff';
+                b.addEventListener('click', function () {
+                    sendCollab((val ? '✅ 同意 — ' : '❌ 驳回 — ') + m.text.slice(0, 60));
+                    card.style.opacity = '0.5';
+                    bar.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
+                });
+                return b;
+            };
+            bar.appendChild(mk('同意', true));
+            bar.appendChild(mk('驳回', false));
+            card.appendChild(bar);
+            row.removeChild(av);
+            row.className = 'collab-msg role-boss';
+            row.appendChild(card);
+            stream.appendChild(row);
+            stream.scrollTop = stream.scrollHeight;
+            return;
+        }
+        const bubble = document.createElement('div');
+        bubble.className = 'collab-bubble';
+        const meta = document.createElement('div');
+        meta.className = 'collab-meta';
+        meta.textContent = (COLLAB_NAMES[m.role] || m.role) + ' · ' + (m.ts || '');
+        bubble.appendChild(meta);
+        const content = document.createElement('div');
+        content.innerHTML = renderRich(String(m.text || ''));   // 复用富文本（md-code 等已转义）
+        bubble.appendChild(content);
+        row.appendChild(bubble);
+        stream.appendChild(row);
+        stream.scrollTop = stream.scrollHeight;
+    }
+
+    function loadCollabHistory() {
+        const stream = document.getElementById('collab-stream');
+        if (!stream) return;
+        stream.textContent = '加载中…';
+        fetch('/api/collab/history').then(function (r) { return r.json(); })
+            .then(function (j) {
+                stream.textContent = '';
+                ((j.data && j.data.items) || []).forEach(renderCollabMsg);
+                if (!stream.childElementCount) {
+                    stream.textContent = '暂无协作消息——包工头写战报 / 秘书回复后会实时出现在这里';
+                }
+                stream.scrollTop = stream.scrollHeight;
+            })
+            .catch(function () { stream.textContent = '协作历史读取失败'; });
+    }
+
+    function sendCollab(text) {
+        text = String(text || '').trim();
+        if (!text) return;
+        fetch('/api/collab/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text })
+        }).then(function (r) { return r.json(); })
+          .then(function (j) {
+              if (j && j.code === 200) {
+                  showToast('已写入 TASK_BUS（老板拍板）');
+              } else {
+                  showToast('发送失败：' + ((j && j.error) || '未知错误'));
+              }
+          })
+          .catch(function () { showToast('发送请求失败'); });
+    }
+    (function initCollabInput() {
+        const input = document.getElementById('collab-input');
+        const btn = document.getElementById('collab-send');
+        if (!input || !btn) return;
+        btn.addEventListener('click', function () {
+            if (input.value.trim()) { sendCollab(input.value); input.value = ''; }
+        });
+        input.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter' && input.value.trim()) {
+                sendCollab(input.value); input.value = '';
+            }
+        });
     })();
 
     // ==================== 天气卡真实化（#351 聚合面板一期） ====================
@@ -5353,6 +5477,7 @@ var qrcode = function() {
     const settingsListEl = document.getElementById('settings-list');   // #264 B2a
     const keysEntryBtn = document.getElementById('keys-entry');        // #264 B2b 密钥管理（LV3+，探针定显隐）
     const keysPaneEl = document.getElementById('keys-pane');           // #264 B2b
+    const collabPaneEl = document.getElementById('collab-pane');       // 🚌 AI 协作总线（2026-10-30）
     const keysListEl = document.getElementById('keys-list');           // #264 B2b
     const terminalHistoryEl = document.getElementById('terminal-history');
     const chatHistoryPaneEl = document.getElementById('chat-history');
@@ -5432,7 +5557,7 @@ var qrcode = function() {
             // 2026-10-29 穿透修复：hide 必须收全四个视图——旧清单漏
             // keysPaneEl，密钥页点「← 返回」后 keys 面板留在聊天下方穿模
             //（队长截图实锤；terminal.hide 同漏同修）
-            hide: function () { return [terminalPaneEl, settingsPaneEl, keysPaneEl]; },
+            hide: function () { return [terminalPaneEl, settingsPaneEl, keysPaneEl, collabPaneEl]; },
             input: true,
             clearTitle: '清空聊天记录',
             enter: null,
@@ -5441,7 +5566,7 @@ var qrcode = function() {
         terminal: {
             btn: function () { return null; },   // #UI修复：tab 栏退役，按钮已删
             show: function () { return [terminalPaneEl]; },
-            hide: function () { return [chatHistoryPaneEl, settingsPaneEl, keysPaneEl]; },   // 2026-10-29 穿透修复：补 keysPaneEl（同 console 条目）
+            hide: function () { return [chatHistoryPaneEl, settingsPaneEl, keysPaneEl, collabPaneEl]; },   // 2026-10-29 穿透修复：补 keysPaneEl（同 console 条目）；2026-10-30 五方：补 collabPaneEl
             input: false,
             clearTitle: '',
             enter: function () {
@@ -5460,7 +5585,7 @@ var qrcode = function() {
         settings: {
             btn: function () { return null; },   // #264 B2d③：tab 栏无设置按钮（B 方案），空值安全
             show: function () { return [settingsPaneEl]; },
-            hide: function () { return [chatHistoryPaneEl, terminalPaneEl, keysPaneEl]; },
+            hide: function () { return [chatHistoryPaneEl, terminalPaneEl, keysPaneEl, collabPaneEl]; },
             input: false,
             clearTitle: '',
             enter: function () {
@@ -5474,7 +5599,7 @@ var qrcode = function() {
         keys: {
             btn: function () { return keysEntryBtn; },   // #264 B2b：LV3+ 才显示（探针定显隐）
             show: function () { return [keysPaneEl]; },
-            hide: function () { return [chatHistoryPaneEl, terminalPaneEl, settingsPaneEl]; },
+            hide: function () { return [chatHistoryPaneEl, terminalPaneEl, settingsPaneEl, collabPaneEl]; },
             input: false,
             clearTitle: '',
             enter: function () {
@@ -5484,6 +5609,17 @@ var qrcode = function() {
             leave: function () {
                 document.body.classList.remove('xiaoju3-settings-open');
             },
+        },
+        collab: {
+            btn: function () { return null; },
+            show: function () { return [collabPaneEl]; },
+            hide: function () { return [chatHistoryPaneEl, terminalPaneEl, settingsPaneEl, keysPaneEl]; },   // 五方互斥（2026-10-30）
+            input: false,
+            clearTitle: '',
+            enter: function () {
+                loadCollabHistory();   // 切入拉历史回放+滚动到底
+            },
+            leave: null,
         },
     };
     let activeChatTab = 'console';

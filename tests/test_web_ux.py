@@ -419,8 +419,8 @@ class TerminalTabTests(unittest.TestCase):
         self.assertIn("show: function () { return [terminalPaneEl]; }", section)
         # 2026-10-29 穿透修复：hide 收全（含 keysPaneEl——旧清单漏它致
         # 密钥页返回后 keys 面板残留穿模）
-        self.assertIn("hide: function () { return [chatHistoryPaneEl, settingsPaneEl, keysPaneEl]; }",
-                      section)
+        self.assertIn("hide: function () { return [chatHistoryPaneEl, settingsPaneEl, keysPaneEl, collabPaneEl]; }",
+                      section)   # 2026-10-30 五方互斥：补 collabPaneEl
         self.assertIn("setInterval(loadTerminalHistory, TERMINAL_REFRESH_MS)",
                       section)
         self.assertIn("clearInterval(terminalRefreshTimer)", section)
@@ -574,6 +574,7 @@ class PaneRegistryCompletenessTests(unittest.TestCase):
             "terminal": "terminalPaneEl",
             "settings": "settingsPaneEl",
             "keys": "keysPaneEl",
+            "collab": "collabPaneEl",   # 🚌 AI 协作总线（2026-10-30 五方）
         }
         for tab, own_pane in panes.items():
             hide_body = self._hide_list_of(tab)

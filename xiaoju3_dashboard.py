@@ -853,6 +853,26 @@ def api_todo_delete(todo_id):
     return jsonify({"code": 200, "data": {"ok": True}})
 
 
+@app.route("/api/collab/history")
+def api_collab_history():
+    """协作总线历史（「协作」Tab 回放）：最近 100 条角色消息。"""
+    import collab_hub
+    return jsonify({"code": 200, "data": {"items": collab_hub.get_hub().snapshot(100)}})
+
+
+@app.route("/api/collab/send", methods=["POST"])
+def api_collab_send():
+    """老板发言/拍板（HITL 卡片与输入框）：写 TASK_BUS [老板拍板] 节 +
+    collab_msg 推送回显。空消息 400，零静默假成功。"""
+    body = request.get_json(silent=True) or {}
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return jsonify({"code": 400, "error": "空消息"}), 400
+    import collab_hub
+    r = collab_hub.get_hub().emit_boss(text)
+    return jsonify(r), (200 if r.get("code") == 200 else 400)
+
+
 @app.route("/api/first_run/status")
 def api_first_run_status():
     """首装判定（安装器方案步 A3）：ENV_FILE 不存在即 first_run。"""
@@ -2633,6 +2653,15 @@ def serve():
     # （待办单向同步已随拆库退役：XIAOJU3_TODOS_DB_PATH 共用 todos.db，
     # 两版读写同一个库，无需同步——2026-10-04 拆库批次）
     main.start_background_services()
+
+    # 🚌 AI 协作总线（2026-10-30 Multi-Agent UI）：SYNC/TASK_BUS 监听线程
+    # + /api/collab/{history,send} 两端点（文件变化 → collab_msg SSE 推送
+    # → 控制台「协作」Tab 三色气泡；秘书自动回话受 XIAOJU3_BUS_ENABLED 门）
+    try:
+        import collab_hub
+        collab_hub.start_background()
+    except Exception as _cb_e:
+        print(f"⚠️ [collab] 协作总线启动失败（不影响主流程）: {_cb_e}")
 
     # 🚀 openai SDK 后台预热（2026-10-04 启动优化拍板①）：vision_tools 顶层
     # 已惰性化（openai 链 ≈0.6s 移出启动路径），服务就绪后 daemon 线程延迟

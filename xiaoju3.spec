@@ -131,6 +131,7 @@ datas=[
         'web_sanitize',
         'hardware_profiler',
         'agent_state.state_manager',
+        'collab_hub',                      # AI 协作总线（2026-10-30）
         # ── plugins 包（静态 import，进 PYZ 而非 datas）──
         'plugins.accounting',
         'plugins.batch_logger',
