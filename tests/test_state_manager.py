@@ -295,5 +295,52 @@ class TodoStoreTests(unittest.TestCase):
         conn.close()
 
 
+class SaveMemoryDedupTests(unittest.TestCase):
+    """save_memory 内容去重（2026-10-30 队长拍板根治：生产 10 条重复
+    "明日方舟"实锤）。UPDATE 优先 rowcount==0 才 INSERT。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xj3_dedup_")
+        self.sm = StateManager(self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_duplicate_content_updates_not_inserts(self):
+        self.sm.save_memory("user", "主人最喜欢玩明日方舟")
+        self.sm.save_memory("user", "主人最喜欢玩明日方舟")
+        self.sm.save_memory("user", "主人最喜欢玩明日方舟")
+        import sqlite3
+        conn = sqlite3.connect(self.sm.memory_db)
+        n = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        conn.close()
+        self.assertEqual(n, 1)   # 三次同文→仍 1 条
+
+    def test_different_content_both_kept(self):
+        self.sm.save_memory("user", "主人最喜欢玩明日方舟")
+        self.sm.save_memory("user", "主人明天下午3点要开组会")
+        import sqlite3
+        conn = sqlite3.connect(self.sm.memory_db)
+        n = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        conn.close()
+        self.assertEqual(n, 2)
+
+    def test_duplicate_refreshes_timestamp(self):
+        self.sm.save_memory("user", "旧记忆")
+        import sqlite3
+        conn = sqlite3.connect(self.sm.memory_db)
+        t1 = conn.execute(
+            "SELECT timestamp FROM memories WHERE content='旧记忆'").fetchone()[0]
+        conn.close()
+        import time
+        time.sleep(1.1)   # CURRENT_TIMESTAMP 秒级精度
+        self.sm.save_memory("user", "旧记忆")
+        conn = sqlite3.connect(self.sm.memory_db)
+        t2 = conn.execute(
+            "SELECT timestamp FROM memories WHERE content='旧记忆'").fetchone()[0]
+        conn.close()
+        self.assertGreaterEqual(t2, t1)   # 鲜活度刷新
+
+
 if __name__ == "__main__":
     unittest.main()

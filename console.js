@@ -7482,7 +7482,6 @@ var qrcode = function() {
         g3.appendChild(buildToolCard('连接手机', '生成二维码——手机小橘 App 扫码即连',
             function () { openPairQrModal(); }));
         g3.appendChild(_buildPetCard());
-        note('面板骨架批 1：监控三类中「主动性监控」可用；其余卡片为占位。');
     }
 
     // 🐾 桌宠管理卡（自包含展开式：Toggle 内嵌在卡片内，不外溢到面板底部）

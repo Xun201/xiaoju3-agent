@@ -250,18 +250,33 @@ class StateManager:
     def save_memory(self, category, content, emotion_tag=None,
                     emotional_impact=None):
         """保存一条长期记忆（#297 批 1 扩签名：情绪打标，旧调用零改动——
-        emotion_tag/emotional_impact 缺省走 neutral/0.0）。"""
+        emotion_tag/emotional_impact 缺省走 neutral/0.0）。
+
+        内容去重（2026-10-30 队长拍板根治）：同 content 已存在→UPDATE 刷新
+        timestamp（鲜活度回写，注入排序靠前）而非插新行——生产实锤 10 条
+        重复"明日方舟"（同句重复"记住"每几分钟一条）。UPDATE 优先模式
+        （rowcount==0 才 INSERT）天然原子，记住链/summary_facts/人格沉淀
+        全部写入方统一受保护。"""
         tag = emotion_tag or 'neutral'
         impact = emotional_impact if emotional_impact is not None else 0.0
         conn = sqlite3.connect(self.memory_db)
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO memories (category, content, emotion_tag,"
-            " emotional_impact) VALUES (?, ?, ?, ?)",
-            (category, content, tag, impact))
-        conn.commit()
-        conn.close()
-        print(f"💾 [状态外置层] 已保存记忆: {category}")
+            "UPDATE memories SET timestamp = CURRENT_TIMESTAMP,"
+            " emotion_tag = ?, emotional_impact = ? WHERE content = ?",
+            (tag, impact, content))
+        if cursor.rowcount == 0:
+            cursor.execute(
+                "INSERT INTO memories (category, content, emotion_tag,"
+                " emotional_impact) VALUES (?, ?, ?, ?)",
+                (category, content, tag, impact))
+            conn.commit()
+            conn.close()
+            print(f"💾 [状态外置层] 已保存记忆: {category}")
+        else:
+            conn.commit()
+            conn.close()
+            print(f"💾 [状态外置层] 记忆已存在，刷新鲜活度: {category}")
 
     def get_recent_memories(self, limit=5):
         """获取最近几条记忆，用于注入 Prompt"""
