@@ -104,5 +104,43 @@ class CollabHubTests(unittest.TestCase):
             self.assertNotIn(collab_hub.SECRET_TAG, f.read())   # 联网门关=零秘书节
 
 
+class HitlOptionsTests(unittest.TestCase):
+    """HITL 升级锚（2026-10-30 队长拍板）：options/@summary 解析+剥离。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xj3_hitl_")
+        self.hub = _hub(self.tmp)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_options_line_parsed_and_stripped(self):
+        self.hub._emit(
+            "secretary",
+            "两个方向请定夺\n@options: 启动M2多端联动|优先修APK|暂缓"
+            "\n@summary: 当前有两条路线，请老板指示\n@老板 请拍板")
+        last = self.hub.snapshot()[-1]
+        self.assertTrue(last["hitl"])
+        self.assertEqual(last["options"],
+                         ["启动M2多端联动", "优先修APK", "暂缓"])
+        self.assertEqual(last["summary"], "当前有两条路线，请老板指示")
+        self.assertNotIn("@options", last["text"])   # 协议行从正文剥离
+        self.assertNotIn("@summary", last["text"])
+
+    def test_no_options_line_no_field(self):
+        self.hub._emit("secretary", "普通消息 @老板 看一眼")
+        last = self.hub.snapshot()[-1]
+        self.assertTrue(last["hitl"])
+        self.assertIsNone(last.get("options"))
+        self.assertIsNone(last.get("summary"))
+
+    def test_options_capped_at_six(self):
+        self.hub._emit("secretary",
+                       "@老板 选一个\n@options: a|b|c|d|e|f|g|h")
+        self.assertEqual(len(self.hub.snapshot()[-1]["options"]), 6)
+        self.assertEqual(len(self.hub.snapshot()[-1]["options"]), 6)
+
+
 if __name__ == "__main__":
     unittest.main()

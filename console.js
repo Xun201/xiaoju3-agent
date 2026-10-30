@@ -4403,7 +4403,8 @@ var qrcode = function() {
         av.innerHTML = COLLAB_AVATARS[m.role] || COLLAB_AVATARS.zcode;
         av.title = COLLAB_NAMES[m.role] || m.role;
         row.appendChild(av);
-        // HITL：@老板 → 确认卡片（醒目+同意/驳回/自定义）
+        // HITL：@老板 → 确认卡片（2026-10-30 升级：summary 事由摘要+
+        // options 多预设钮（缺省四钮）+自定义输入框——队长拍板"别只同意驳回"）
         if (m.hitl) {
             const card = document.createElement('div');
             card.className = 'collab-hitl';
@@ -4411,28 +4412,71 @@ var qrcode = function() {
             t.className = 'collab-hitl-title';
             t.textContent = '⏸ 需要老板确认';
             card.appendChild(t);
+            if (m.summary) {
+                const sm = document.createElement('div');
+                sm.style.cssText = 'font-size:13px;font-weight:600;color:#92400e;'
+                    + 'margin-bottom:6px;';
+                sm.textContent = '📋 ' + m.summary;
+                card.appendChild(sm);
+            }
             const body = document.createElement('div');
             body.textContent = m.text;
+            body.style.cssText = 'margin-bottom:8px;';
             card.appendChild(body);
+            const done = function () {
+                card.style.opacity = '0.55';
+                card.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
+            };
+            // 预设选项钮（hub 解析 @options: 行；未提供=默认四钮）
+            const opts = (m.options && m.options.length) ? m.options
+                : ['同意', '驳回', '暂缓', '修改方案'];
             const bar = document.createElement('div');
-            bar.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
-            const mk = function (label, val) {
+            bar.style.cssText = 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;';
+            opts.forEach(function (opt) {
                 const b = document.createElement('button');
-                b.textContent = label;
+                b.textContent = opt;
                 b.style.cssText = 'border:none;border-radius:8px;padding:6px 14px;'
                     + 'cursor:pointer;font-size:12px;font-weight:600;';
-                b.style.background = val ? '#16a34a' : '#dc2626';
-                b.style.color = '#fff';
+                if (opt === '同意') { b.style.background = '#16a34a'; b.style.color = '#fff'; }
+                else if (opt === '驳回') { b.style.background = '#dc2626'; b.style.color = '#fff'; }
+                else { b.style.background = '#2563eb'; b.style.color = '#fff'; }
                 b.addEventListener('click', function () {
-                    sendCollab((val ? '✅ 同意 — ' : '❌ 驳回 — ') + m.text.slice(0, 60));
-                    card.style.opacity = '0.5';
-                    bar.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
+                    sendCollab('选择了：' + opt + ' — ' + (m.summary || m.text).slice(0, 60));
+                    done();
                 });
-                return b;
-            };
-            bar.appendChild(mk('同意', true));
-            bar.appendChild(mk('驳回', false));
+                bar.appendChild(b);
+            });
             card.appendChild(bar);
+            // 自定义指令输入（队长：必须能直接打字下达自定义指令）
+            const irow = document.createElement('div');
+            irow.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.placeholder = '输入自定义指令...';
+            inp.style.cssText = 'flex:1;border:1px solid #f59e0b;border-radius:8px;'
+                + 'padding:7px 10px;font-size:12px;outline:none;';
+            const send = document.createElement('button');
+            send.textContent = '发送指令';
+            send.style.cssText = 'border:none;border-radius:8px;padding:6px 14px;'
+                + 'cursor:pointer;font-size:12px;font-weight:600;'
+                + 'background:#b45309;color:#fff;';
+            send.addEventListener('click', function () {
+                const v = inp.value.trim();
+                if (!v) return;
+                sendCollab('自定义指令：' + v);
+                inp.value = '';
+                done();
+            });
+            inp.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Enter' && inp.value.trim()) {
+                    sendCollab('自定义指令：' + inp.value.trim());
+                    inp.value = '';
+                    done();
+                }
+            });
+            irow.appendChild(inp);
+            irow.appendChild(send);
+            card.appendChild(irow);
             row.removeChild(av);
             row.className = 'collab-msg role-boss';
             row.appendChild(card);

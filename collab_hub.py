@@ -93,6 +93,30 @@ def _log(q, a, tk="?"):
         pass
 
 
+def _latest_boss_line(task_path, max_chars=300):
+    """最近一条 [老板拍板] 正文（秘书感知用，2026-10-30 队长：老板广播
+    必须让秘书看得到）。无拍板/读失败返回空串。"""
+    try:
+        with open(task_path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        blocks = re.split(r"## \[老板拍板\]", text)
+        for blk in reversed(blocks[1:]):
+            body = blk.split("---")[0].strip()
+            if body:
+                return body[:max_chars]
+    except Exception:
+        pass
+    return ""
+
+
+def _boss_context(task_path):
+    """老板拍板上下文段（有拍板才拼——秘书必须知道老板刚说了什么）。"""
+    boss = _latest_boss_line(task_path)
+    if not boss:
+        return ""
+    return "\n【老板最新拍板（必须知晓并遵守）】\n" + boss
+
+
 class CollabHub:
     """协作总线：文件监听 → 角色消息流（publish+history）。"""
 
@@ -120,8 +144,28 @@ class CollabHub:
     def _emit(self, role, text):
         if not text or not text.strip():
             return False
-        msg = {"role": role, "text": text.strip()[:4000],
+        text = text.strip()[:4000]
+        # HITL 升级（2026-10-30 队长拍板）：可选 options 行「@options: A|B|C」
+        # ——解析出预设选项数组并从正文剥离；未提供=前端用默认四钮
+        # （同意/驳回/暂缓/修改方案）。上限 6 个防按钮爆炸。
+        options = None
+        summary = None
+        m = re.search(r"@options[:：]([^\n]+)", text)
+        if m:
+            options = [x.strip() for x in m.group(1).split("|") if x.strip()][:6]
+            text = (text[:m.start()] + text[m.end():]).strip()
+        # 摘要行「@summary: 一句话事由」（2026-10-30 队长：卡片必须带事由
+        # 摘要——"请确认方案 A"空洞被点名）：解析剥离，前端卡片醒目展示。
+        m2 = re.search(r"@summary[:：]([^\n]+)", text)
+        if m2:
+            summary = m2.group(1).strip()[:200]
+            text = (text[:m2.start()] + text[m2.end():]).strip()
+        msg = {"role": role, "text": text,
                "ts": _now_iso(), "hitl": "@老板" in text}
+        if options and msg["hitl"]:
+            msg["options"] = options
+        if summary and msg["hitl"]:
+            msg["summary"] = summary
         with self._lock:
             self.history.append(msg)
             del self.history[:-HISTORY_MAX]
@@ -223,7 +267,8 @@ class CollabHub:
                      "content": _SYS_PROMPT.format(today=today)},
                     {"role": "user",
                      "content": "【包工头战报增量】\n"
-                                + report_tail[:SYNC_TRUNC]}],
+                                + report_tail[:SYNC_TRUNC]
+                                + _boss_context(self.task_path)}],
                 "stream": False, "temperature": 0.3, "max_tokens": 600}
             req = urllib.request.Request(
                 url, data=json_dumps(payload),
