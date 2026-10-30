@@ -780,6 +780,21 @@ def api_todos():
     })
 
 
+@app.route("/api/todos/<int:todo_id>/pin", methods=["POST"])
+def api_todo_pin(todo_id):
+    """固定优先级开关（2026-10-30 队长拍板）：pin=1 不参与老化/梯队递补，
+    永远待在当前档。body {"pin": bool}；零静默假成功。"""
+    body = request.get_json(silent=True) or {}
+    pin = body.get("pin")
+    if not isinstance(pin, bool):
+        return jsonify({"code": 400, "error": "pin 必须是布尔"}), 400
+    changed = state_manager.set_todo_pin(todo_id, pin)
+    if not changed:
+        return jsonify({"code": 404, "error": f"待办 id={todo_id} 不存在"}), 404
+    print(f"📌 [待办] id={todo_id} 固定优先级={'开' if pin else '关'}")
+    return jsonify({"code": 200, "data": {"id": todo_id, "pin": pin}})
+
+
 @app.route("/api/todos/collapsed_groups", methods=["POST"])
 def api_todo_collapsed_groups():
     """保存折叠分区列表（2026-10-04 尾巴 I：分区折叠持久化；

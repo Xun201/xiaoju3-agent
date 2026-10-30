@@ -740,3 +740,11 @@ class StickerVariantAndTtsCleanTests(unittest.TestCase):
         import express
         out = express.clean_for_tts("主人明天下午3点（记得带伞）要出门")
         self.assertIn("记得带伞", out)   # 非表情/非情绪词括号不误伤
+
+
+class SocialOwnerNotConfiguredTests(unittest.TestCase):
+    """P2 锚（秘书回执）：Owner 未配置分支——send_qq 必须显式跳过不假发。"""
+
+    def test_send_qq_without_owner_skips(self):
+        with patch.dict(os.environ, {"XIAOJU3_OWNER_QQ": ""}):
+            self.assertFalse(waker.send_qq("测试"))   # 未配置=跳过不发送
