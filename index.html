@@ -1225,6 +1225,29 @@
         .todos-list .todo-item { border-radius: 10px; }
         .todos-list .todo-item:hover { background: var(--v0-n50); }
 
+        /* ---- #363 记忆管理面板（2026-10-30 一期 UI）---- */
+        .mem-list {
+            background: #fafafa; border-radius: 12px;
+            padding: 8px 12px; margin-top: 6px;
+        }
+        .mem-row {
+            display: flex; align-items: center; gap: 8px;
+            padding: 7px 2px; font-size: 12px; line-height: 1.5;
+        }
+        .mem-row + .mem-row { border-top: 1px solid var(--v0-n100, #f3f4f6); }
+        .mem-del {
+            flex: none; border: none; background: transparent; cursor: pointer;
+            padding: 3px; border-radius: 6px; color: var(--v0-n400, #9ca3af);
+            display: inline-flex; align-items: center;
+            transition: background 0.15s, color 0.15s;
+        }
+        .mem-del:hover { background: rgba(220, 38, 38, 0.08); color: #dc2626; }
+        .mem-tag {
+            flex: none; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+            background: var(--v0-n100, #f3f4f6); color: var(--v0-n500, #6b7280);
+            white-space: nowrap;
+        }
+
         /* ---- 右侧聊天区 → v0 ChatPanel 大卡 ---- */
         .chat-area {
             background: #ffffff;             /* 右侧纯白大区块：自右向左铺满到分界线 */

@@ -7206,29 +7206,38 @@ var qrcode = function() {
                     body.textContent = '长期记忆为空（对我说「记住…」即可积累）';
                     return;
                 }
+                // #363 一期 UI 精修（2026-10-30 队长：去底层字段+卡片容器）：
+                // 数据脱敏——[user] 前缀与"权重 1"不上屏；沉睡/非中性情绪
+                // 折成右侧小标签；内容即自然语言。
+                const card = document.createElement('div');
+                card.className = 'mem-list';
                 items.forEach(function (m) {
                     const line = document.createElement('div');
-                    line.style.cssText = 'display:flex;align-items:center;'
-                        + 'gap:8px;font-size:12px;padding:4px 0;'
-                        + 'border-bottom:1px dashed var(--color-border,#e0e4ec);';
+                    line.className = 'mem-row';
                     const txt = document.createElement('div');
                     txt.style.cssText = 'flex:1;min-width:0;'
                         + 'overflow-wrap:anywhere;';
-                    const sink = m.sink_status === 'pending_sink' ? ' 💤沉睡' : '';
-                    const emo = m.emotion_tag !== 'neutral'
-                        ? ' 🏷' + m.emotion_tag : '';
-                    txt.textContent = '· [' + m.category + '] ' + m.content +
-                        '（权重 ' + (m.weight || 1) + emo + sink + '）';
+                    txt.textContent = m.content || '';
                     line.appendChild(txt);
-                    // #363 记忆管理面板一期（2026-10-30 队长拍板）：🗑 删除
-                    // （SVG 矢量+showConfirm 确认+物理删除；降级形态无 id 不渲染）
+                    // 特殊状态小标签（普通条目零技术字段上屏）
+                    if (m.sink_status === 'pending_sink') {
+                        const t1 = document.createElement('span');
+                        t1.className = 'mem-tag';
+                        t1.textContent = '沉睡中';
+                        line.appendChild(t1);
+                    }
+                    if (m.emotion_tag && m.emotion_tag !== 'neutral') {
+                        const t2 = document.createElement('span');
+                        t2.className = 'mem-tag';
+                        t2.textContent = m.emotion_tag;
+                        line.appendChild(t2);
+                    }
+                    // 删除（SVG 矢量+showConfirm 确认+物理删除；降级形态
+                    // 无 id 不渲染）
                     if (m.id != null) {
                         const del = document.createElement('button');
+                        del.className = 'mem-del';
                         del.title = '删除这条记忆（不可恢复）';
-                        del.style.cssText = 'flex:none;border:none;background:'
-                            + 'transparent;cursor:pointer;padding:2px;'
-                            + 'color:var(--v0-n400,#9ca3af);display:'
-                            + 'inline-flex;align-items:center;';
                         del.innerHTML = ICON_SVGS.trash;
                         del.addEventListener('click', function () {
                             showConfirm('删除这条记忆',
@@ -7261,8 +7270,9 @@ var qrcode = function() {
                         });
                         line.appendChild(del);
                     }
-                    body.appendChild(line);
+                    card.appendChild(line);
                 });
+                body.appendChild(card);
             })
             .catch(function () { body.textContent = '记忆读取失败'; });
     }
