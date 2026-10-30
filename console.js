@@ -2735,15 +2735,19 @@ var qrcode = function() {
         return list;
     }
     function xj3LinkCheck() {
-        // 单轮：探活当前 base → 失败逐候选切换（成功即换基重载）
+        // 单轮：探活当前 base → 失败逐候选切换（成功且换址才重载）
         // → 全失败弹横幅留待下轮再试；探活通过则撤横幅
+        // 2026-10-30 修正（队长手机实锤 15s reload 风暴）：
+        // ①探活对象从同源''改为当前 base（同源在 Capacitor 下永远 404，
+        //   导致每 15s 误判失联→切候选→reload 循环）
+        // ②reload 前校验目标 base 与当前不同（相同=只撤横幅不重载，防震荡）
         if (xj3LinkChecking) return;
         xj3LinkChecking = true;
         const cands = xj3RuntimeCandidates();
-        const cur = window.__XJ3_API_BASE;
-        probeBase('').then(function (ok) {
+        const cur = window.__XJ3_API_BASE || '';
+        probeBase(cur).then(function (ok) {
             if (ok) { xj3LinkChecking = false; xj3LinkBanner(false); return; }
-            const rest = cands.filter(function (b) { return b !== cur; });
+            const rest = cands.filter(function (b) { return b && b !== cur; });
             let i = 0;
             function tryNext() {
                 if (i >= rest.length) {
@@ -2756,9 +2760,13 @@ var qrcode = function() {
                     if (!ok2) { tryNext(); return; }
                     try { localStorage.setItem('xj3_api_base', alt); }
                     catch (e) {}
-                    window.__XJ3_API_BASE = alt;
                     xj3LinkChecking = false;
-                    window.location.reload();   // 重载即全链路换新 base
+                    if (alt === cur) {
+                        xj3LinkBanner(false);   // 同址恢复：只撤横幅不重载
+                        return;
+                    }
+                    window.__XJ3_API_BASE = alt;
+                    window.location.reload();   // 换基才重载
                 });
             }
             tryNext();
