@@ -1,5 +1,21 @@
 # 开发者日志 2026-10-30
 
+## 批十三 — feat(HITL 升级:summary 摘要+多预设选项+自定义输入+老板广播双向感知)（v2.2.1 内部补丁，重建 exe f8257117 部署 13:5x，全仓 2939+5）
+
+### 改了什么
+- **hub 协议扩展**：消息正文可选两协议行——「@options: A|B|C」（预设选项，解析剥离上限 6）与「@summary: 一句话事由」（解析剥离）——命中 hitl 的消息带 options/summary 字段，未提供=前端默认四钮。
+- **前端 HITL 卡重构**：📋 summary 醒目行+options 多预设钮（同意=绿/驳回=红/其余蓝）+**自定义指令输入框[发送指令]**（Enter 可发）+点击/发送后防重入置灰；写回统一 `[老板拍板] 选择了：X — 事由` / `[老板拍板] 自定义指令：…` 格式。
+- **老板广播双向感知**（队长点名的死穴）：①hub._auto_secretary 与 ②ai_bus_daemon.ask_secretary 的 DeepSeek Prompt 均拼接【老板最新拍板】（collab_hub._latest_boss_line 提取最近节正文）——秘书自动知晓老板刚说了什么；③AGENTS.md 固化「👑 老板拍板感知」纪律：ZCode 每次开工前必读 [老板拍板] 最新节，冲突以拍板为准，执行完留痕。
+
+### 怎么验证的
+- 全仓 **2939+5 全绿**（+3 HITL 锚：options/summary 解析剥离/无协议行无字段/6 项上限）；node --check 过；重建 exe f8257117 部署。
+- **Mock 全链实拍**（shot_hitl_upgrade_20261030.png）：演示秘书消息带 @options 4 项+@summary → 面板渲染 📋 摘要行+四定制蓝钮+自定义输入框；**点击「启动M2多端联动」→ TASK_BUS 落 `[老板拍板] 选择了：启动M2多端联动 — 多端联动 vs APK 修复的资源取舍` + boss 气泡推流**——闭环全通。
+- 老板广播验证：python POST /api/collab/send（Git Bash curl 中文编码炸的坑实测，前端 fetch 无此问题）→ boss 气泡+TASK_BUS 双落。
+
+### 回滚
+- git revert 24a1058；collab_hub.py.bak-20261030-hitl / console.js.bak-20261030-hitl；重建回滚。
+
+
 ## 批十二 — feat(AI 多方协作控制台·Multi-Agent UI)（v2.2.1 内部补丁，重建 exe f9040416/14ac194f 部署，全仓 2936+5）
 
 ### 改了什么
