@@ -1787,19 +1787,13 @@
                         ls[k] = (localStorage.getItem(k) || '').slice(0, 40);
                     }
                 } catch (e) {}
-                return 'UA: ' + navigator.userAgent + '
-'
-                    + 'base: ' + (window.__XJ3_API_BASE || '(空)') + '
-'
+                return 'UA: ' + navigator.userAgent + '\n'
+                    + 'base: ' + (window.__XJ3_API_BASE || '(空)') + '\n'
                     + '探活: ' + (window.__XJ3_API_BASE
-                        ? '已配置' : '未配置（首启应弹出配对门）') + '
-'
-                    + 'localStorage: ' + JSON.stringify(ls) + '
-'
-                    + '错误数: ' + errLog.length + '
-'
-                    + errLog.join('
-');
+                        ? '已配置' : '未配置（首启应弹出配对门）') + '\n'
+                    + 'localStorage: ' + JSON.stringify(ls) + '\n'
+                    + '错误数: ' + errLog.length + '\n'
+                    + errLog.join('\n');
             };
             function showErr(msg) {
                 if (shown) return;
