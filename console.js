@@ -7593,6 +7593,8 @@ var qrcode = function() {
         proBody.hidden = true;
         g1.appendChild(buildToolCard('记忆查看', '内容+权重/状态（长期记忆清单）',
             function () { toggleToolBody('tool-memory-body', loadMemoryInto); }));
+        g1.appendChild(buildToolCard('AI 协作总线', '秘书🧠/包工头🔧/老板👑 实时协作流（@老板 触发确认卡片）',
+            function () { closeToolsPanel(); switchChatTab('collab'); }));
         g1.appendChild(buildToolCard('终端记录', '终端通道聊天记录（只读）',
             function () {
                 closeToolsPanel();
