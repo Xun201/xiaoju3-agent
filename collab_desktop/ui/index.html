@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小橘协作工作台</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #273449;
+    --line: #334155; --txt: #e2e8f0; --dim: #94a3b8;
+    --blue: #3b82f6; --amber: #f59e0b; --green: #22c55e;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--txt);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  header {
+    padding: 14px 22px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 12px;
+  }
+  header .logo {
+    width: 30px; height: 30px; border-radius: 9px;
+    background: linear-gradient(135deg, #f59e0b, #ea580c);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; color: #fff; font-size: 14px;
+  }
+  header h1 { font-size: 16px; font-weight: 700; }
+  header .sub { font-size: 11px; color: var(--dim); }
+  .rolebar {
+    display: flex; gap: 8px; margin-left: auto;
+    font-size: 11px; color: var(--dim);
+  }
+  .rolebar span {
+    padding: 3px 10px; border-radius: 999px;
+    background: var(--panel2); border: 1px solid var(--line);
+  }
+  .rolebar .r-sec { border-color: #1d4ed8; color: #93c5fd; }
+  .rolebar .r-zcode { border-color: #475569; color: #cbd5e1; }
+  .rolebar .r-boss { border-color: #15803d; color: #86efac; }
+  main {
+    flex: 1; overflow-y: auto; padding: 18px 22px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  main::-webkit-scrollbar { width: 8px; }
+  main::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  .msg { display: flex; gap: 10px; align-items: flex-start; max-width: 86%; }
+  .msg.boss { align-self: flex-end; flex-direction: row-reverse; }
+  .avatar {
+    flex: none; width: 34px; height: 34px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+  }
+  .msg.secretary .avatar { background: #1e3a8a; color: #93c5fd; }
+  .msg.zcode .avatar { background: #334155; color: #e2e8f0; }
+  .msg.boss .avatar { background: #14532d; color: #86efac; }
+  .bubble {
+    border-radius: 12px; padding: 10px 14px; font-size: 13.5px;
+    line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap;
+  }
+  .msg.secretary .bubble { background: #172554; border: 1px solid #1e3a8a; }
+  .msg.zcode .bubble { background: var(--panel); border: 1px solid var(--line); }
+  .msg.boss .bubble { background: #052e16; border: 1px solid #14532d; }
+  .meta { font-size: 10px; color: var(--dim); margin-bottom: 3px; }
+  .hitl {
+    border: 2px solid var(--amber); background: #292524;
+    border-radius: 12px; padding: 12px 14px; max-width: 86%;
+    align-self: flex-start; width: 86%;
+  }
+  .hitl .h-title {
+    font-weight: 700; font-size: 13px; color: var(--amber); margin-bottom: 6px;
+  }
+  .hitl .h-summary {
+    font-weight: 600; font-size: 13px; color: #fcd34d; margin-bottom: 6px;
+  }
+  .hitl .h-body { font-size: 13px; line-height: 1.55; margin-bottom: 8px;
+    white-space: pre-wrap; }
+  .hitl .h-opts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .hitl .h-opts button {
+    border: none; border-radius: 8px; padding: 7px 16px; cursor: pointer;
+    background: var(--blue); color: #fff; font-size: 12.5px; font-weight: 600;
+  }
+  .hitl .h-opts button:hover { filter: brightness(1.15); }
+  .hitl .h-custom { display: flex; gap: 8px; margin-top: 10px; }
+  .hitl .h-custom input {
+    flex: 1; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px; font-size: 12.5px;
+    color: var(--txt); outline: none;
+  }
+  .hitl .h-custom button {
+    border: none; border-radius: 8px; padding: 6px 14px; cursor: pointer;
+    background: #b45309; color: #fff; font-size: 12px; font-weight: 600;
+  }
+  footer {
+    padding: 14px 22px 18px; background: var(--panel);
+    border-top: 1px solid var(--line);
+  }
+  .hint { font-size: 11px; color: var(--dim); margin-bottom: 8px; }
+  .inputbar { display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; font-size: 14px; color: var(--txt);
+    font-family: inherit; outline: none; min-height: 58px; max-height: 160px;
+  }
+  textarea:focus { border-color: var(--blue); }
+  .sendbtn {
+    border: none; border-radius: 12px; padding: 13px 26px; cursor: pointer;
+    background: var(--blue); color: #fff; font-size: 14px; font-weight: 700;
+  }
+  .sendbtn:hover { filter: brightness(1.12); }
+  .sendbtn:disabled { opacity: .5; cursor: default; }
+  .sysline { text-align: center; color: var(--dim); font-size: 11px; margin: 4px 0; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="logo">橘</div>
+    <div>
+      <h1>小橘协作工作台</h1>
+      <div class="sub">老板发号施令 · 秘书自动出方案 · 包工头领命执行</div>
+    </div>
+    <div class="rolebar">
+      <span class="r-sec">秘书 DeepSeek</span>
+      <span class="r-zcode">包工头 ZCode</span>
+      <span class="r-boss">老板</span>
+    </div>
+  </header>
+  <main id="stream"></main>
+  <footer>
+    <div class="hint">在下方输入需求（如"给协作面板加导出功能"），秘书将自动生成技术方案；确认后的拍板会写入任务总线，包工头领命执行。</div>
+    <div class="inputbar">
+      <textarea id="boss-input" rows="2"
+        placeholder="输入你的需求或指令…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button class="sendbtn" id="boss-send">发送需求</button>
+    </div>
+  </footer>
+<script>
+  const stream = document.getElementById('stream');
+  const input = document.getElementById('boss-input');
+  const sendBtn = document.getElementById('boss-send');
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const NAMES = { secretary: '秘书 DeepSeek', zcode: '包工头 ZCode', boss: '老板' };
+  let lastCount = 0;
+
+  function addMsg(m) {
+    if (m.hitl) { addHitl(m); return; }
+    const row = document.createElement('div');
+    row.className = 'msg ' + (m.role || 'zcode');
+    const av = document.createElement('div');
+    av.className = 'avatar';
+    av.textContent = (NAMES[m.role] || m.role || '?').slice(0, 2);
+    row.appendChild(av);
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = (NAMES[m.role] || m.role) + ' · ' + (m.ts || '');
+    bubble.appendChild(meta);
+    const body = document.createElement('div');
+    body.textContent = m.text || '';
+    bubble.appendChild(body);
+    row.appendChild(bubble);
+    stream.appendChild(row);
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  function addHitl(m) {
+    const card = document.createElement('div');
+    card.className = 'hitl';
+    const t = document.createElement('div');
+    t.className = 'h-title';
+    t.textContent = '⏸ 需要老板确认';
+    card.appendChild(t);
+    if (m.summary) {
+      const sm = document.createElement('div');
+      sm.className = 'h-summary';
+      sm.textContent = '📋 ' + m.summary;
+      card.appendChild(sm);
+    }
+    const body = document.createElement('div');
+    body.className = 'h-body';
+    body.textContent = m.text;
+    card.appendChild(body);
+    const opts = (m.options && m.options.length)
+      ? m.options : ['同意', '驳回', '暂缓', '修改方案'];
+    const bar = document.createElement('div');
+    bar.className = 'h-opts';
+    opts.forEach(opt => {
+      const b = document.createElement('button');
+      b.textContent = opt;
+      b.addEventListener('click', () => {
+        window.pywebview.api.send_boss('选择了：' + opt + ' — ' + (m.summary || m.text).slice(0, 60));
+        card.style.opacity = '0.55';
+        card.querySelectorAll('button').forEach(x => x.disabled = true);
+        refresh();
+      });
+      bar.appendChild(b);
+    });
+    card.appendChild(bar);
+    const irow = document.createElement('div');
+    irow.className = 'h-custom';
+    const inp = document.createElement('input');
+    inp.placeholder = '输入自定义指令...';
+    const sb = document.createElement('button');
+    sb.textContent = '发送';
+    const fire = () => {
+      const v = inp.value.trim();
+      if (!v) return;
+      window.pywebview.api.send_boss('自定义指令：' + v);
+      inp.value = '';
+      done2();
+    };
+    const done2 = () => {
+      card.style.opacity = '0.55';
+      card.querySelectorAll('button').forEach(x => x.disabled = true);
+      refresh();
+    };
+    sb.addEventListener('click', fire);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') fire(); });
+    irow.appendChild(inp);
+    irow.appendChild(sb);
+    card.appendChild(irow);
+    stream.appendChild(card);
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  function sysLine(text) {
+    const d = document.createElement('div');
+    d.className = 'sysline';
+    d.textContent = text;
+    stream.appendChild(d);
+  }
+
+  async function refresh() {
+    try {
+      const r = await window.pywebview.api.poll();
+      const items = (r && r.items) || [];
+      // 全量重绘（简单可靠；量小 200 条内无感）
+      if (items.length !== lastCount) {
+        stream.textContent = '';
+        if (!items.length) sysLine('暂无消息——在下方输入第一个需求吧');
+        items.forEach(addMsg);
+        lastCount = items.length;
+        stream.scrollTop = stream.scrollHeight;
+      }
+    } catch (e) { /* 轮询失败静默（下轮再试） */ }
+  }
+
+  async function boot() {
+    // 等 js_api 就绪
+    for (let i = 0; i < 40 && !window.pywebview || !window.pywebview.api; i++) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    sendBtn.addEventListener('click', async () => {
+      const v = input.value.trim();
+      if (!v) return;
+      sendBtn.disabled = true;
+      try {
+        await window.pywebview.api.send_boss(v);
+        await window.pywebview.api.request_plan(v);
+        sysLine('已收到需求，秘书正在生成方案…');
+        input.value = '';
+      } finally { sendBtn.disabled = false; }
+    });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (input.value.trim()) sendBtn.click();
+      }
+    });
+    await refresh();
+    setInterval(refresh, 1500);
+  }
+  boot();
+</script>
+</body>
+</html>

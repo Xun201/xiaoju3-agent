@@ -26,6 +26,13 @@ import threading
 import time
 from datetime import datetime
 
+# frozen/console=False 环境 stdout 可能是 GBK——emoji 打印即 UnicodeEncodeError
+# （2026-10-30 桌面工作台启动实锤，错误落盘日志捕获）。统一重配 UTF-8+replace。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # 路径解析（2026-10-30 frozen 路径陷阱修复）：PYZ 内 __file__ 指向
 # _MEIPASS（_internal），按 __file__ 拼出的 _dev 路径不存在=监听永远空转
@@ -93,28 +100,104 @@ def _log(q, a, tk="?"):
         pass
 
 
-def _latest_boss_line(task_path, max_chars=300):
-    """最近一条 [老板拍板] 正文（秘书感知用，2026-10-30 队长：老板广播
-    必须让秘书看得到）。无拍板/读失败返回空串。"""
+def _recent_boss_lines(task_path, window_h=24, max_n=5, max_chars=300):
+    """24h 窗口内的老板拍板（秘书回执②：单条改窗口多条——时间倒序、
+    最多 5 条、多条时附冲突提示）。无拍板/读失败返回空串。"""
     try:
         with open(task_path, encoding="utf-8", errors="replace") as f:
             text = f.read()
         blocks = re.split(r"## \[老板拍板\]", text)
+        now = datetime.now()
+        picked = []
         for blk in reversed(blocks[1:]):
-            body = blk.split("---")[0].strip()
-            if body:
-                return body[:max_chars]
+            head, _, body = blk.partition("\n")
+            body = body.split("---")[0].strip()
+            if not body:
+                continue
+            m = re.search(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", head)
+            if m:
+                try:
+                    ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+                    if (now - ts).total_seconds() > window_h * 3600:
+                        continue   # 超 24h 窗口：旧拍板不注入（时效门）
+                except ValueError:
+                    pass
+            picked.append(body[:max_chars])
+            if len(picked) >= max_n:
+                break
+        if not picked:
+            return ""
+        if len(picked) == 1:
+            return picked[0]
+        return ("\n【注意：24h 内有多条拍板，语义冲突以最新为准】\n"
+                + "\n".join(f"{i+1}. {b}" for i, b in enumerate(picked)))
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 def _boss_context(task_path):
     """老板拍板上下文段（有拍板才拼——秘书必须知道老板刚说了什么）。"""
-    boss = _latest_boss_line(task_path)
+    boss = _recent_boss_lines(task_path)
     if not boss:
         return ""
     return "\n【老板最新拍板（必须知晓并遵守）】\n" + boss
+
+
+# ==================== 协议行解析（秘书回执①：边界收严版） ====================
+# 只认「回复开头 3 行内」或「尾部独立段（末 3 行）」的整行协议；代码围栏内
+# 与正文中段一律不解析；列表前缀（- @options:）/加粗（**@options:**）不认。
+# 选项单项 ≤30 字符截断；@summary 摘要 ≤200。
+
+_PROTO_EDGE_LINES = 3
+_PROTO_OPT_MAX = 30
+_OPTIONS_LINE = re.compile(r"^@options[:：]\s*(.+)$")
+_SUMMARY_LINE = re.compile(r"^@summary[:：]\s*(.+)$")
+_FENCE = re.compile(r"```.*?```", re.S)
+
+
+def parse_protocol_lines(text):
+    """收严版协议行解析。返回 (clean_text, options|None, summary|None, hitl)。
+
+    边界规则（秘书回执①）：
+    - 代码围栏（```…```）先置占位，解析后还原——围栏内的协议样文本零误伤；
+    - 协议行只认「开头 3 行内」或「末尾 3 行内」的**整行锚定**命中；
+    - 整行锚定=行首 strip 后必须以 @options:/@summary: 开头——列表前缀
+      （- @options:）与加粗（**@options:**）天然不认；
+    - 命中的协议行从正文剥离；正文其余部分原样保留。"""
+    hitl = "@老板" in text
+    fences = []
+
+    def _stash(m):
+        fences.append(m.group(0))
+        return f"\x00FENCE{len(fences) - 1}\x00"
+
+    work = _FENCE.sub(_stash, text)
+    lines = work.splitlines()
+    n = len(lines)
+    lo, hi = _PROTO_EDGE_LINES, n - _PROTO_EDGE_LINES
+    options = []
+    summary = None
+    for idx, line in enumerate(lines):
+        if lo <= idx < hi:
+            continue   # 正文中段：永不解析
+        stripped = line.strip()
+        m = _OPTIONS_LINE.match(stripped)
+        if m:
+            opts = [x.strip()[:_PROTO_OPT_MAX]
+                    for x in m.group(1).split("|") if x.strip()][:6]
+            if opts:
+                options = opts
+                lines[idx] = ""
+            continue
+        m = _SUMMARY_LINE.match(stripped)
+        if m:
+            summary = m.group(1).strip()[:200]
+            lines[idx] = ""
+    work = "\n".join(lines)
+    for i, f in enumerate(fences):
+        work = work.replace(f"\x00FENCE{i}\x00", f)
+    clean = re.sub(r"\n{3,}", "\n\n", work).strip()
+    return clean, (options or None), summary, hitl
 
 
 class CollabHub:
@@ -145,23 +228,12 @@ class CollabHub:
         if not text or not text.strip():
             return False
         text = text.strip()[:4000]
-        # HITL 升级（2026-10-30 队长拍板）：可选 options 行「@options: A|B|C」
-        # ——解析出预设选项数组并从正文剥离；未提供=前端用默认四钮
-        # （同意/驳回/暂缓/修改方案）。上限 6 个防按钮爆炸。
         options = None
         summary = None
-        m = re.search(r"@options[:：]([^\n]+)", text)
-        if m:
-            options = [x.strip() for x in m.group(1).split("|") if x.strip()][:6]
-            text = (text[:m.start()] + text[m.end():]).strip()
-        # 摘要行「@summary: 一句话事由」（2026-10-30 队长：卡片必须带事由
-        # 摘要——"请确认方案 A"空洞被点名）：解析剥离，前端卡片醒目展示。
-        m2 = re.search(r"@summary[:：]([^\n]+)", text)
-        if m2:
-            summary = m2.group(1).strip()[:200]
-            text = (text[:m2.start()] + text[m2.end():]).strip()
+        hitl = False
+        text, options, summary, hitl = parse_protocol_lines(text)
         msg = {"role": role, "text": text,
-               "ts": _now_iso(), "hitl": "@老板" in text}
+               "ts": _now_iso(), "hitl": hitl}
         if options and msg["hitl"]:
             msg["options"] = options
         if summary and msg["hitl"]:
