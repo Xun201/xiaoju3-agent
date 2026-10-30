@@ -355,14 +355,16 @@ def extract_sticker_keyword(text):
     """放宽版标注提取（真机 [可爱/开心] 漏网修复）：先认 [表情:X] 主形，
     再扫任意 [..] 内含情绪词的短标注（词 A/词 B 形态取首个词）。返回
     (剥除后文本, 关键词|None)。裸 [表情]（无冒号无关键词，2026-10-28
-    真机泄漏实锤）也剥除——不知道情绪就交 maybe_express 概率路径。"""
+    真机泄漏实锤）也剥除——不知道情绪就交 maybe_express 概率路径。
+    2026-10-30 再放宽（队长实锤"（表情:玩玩）"泄漏）：括号族全兼容
+    （半角 []/全角（）/圆 ()）+冒号全半角+内侧空格容错。"""
     import re
-    m = re.search(r"\[表情[:：]\s*([^\]\s]{1,8})\]", text)
+    m = re.search(r"[\[（［(]\s*表情\s*[:：]\s*([^\]）)］\s]{1,8})\s*[\]）)］]", text)
     if m:
         return (text[:m.start()] + text[m.end():]).strip(), m.group(1).strip()
-    # 裸 [表情]/[表情 ] 等无关键词形态：剥除不留正文（三堵之一）
-    text = re.sub(r"\[表情\s*\]", "", text)
-    for mm in re.finditer(r"\[([^\[\]]{1,12})\]", text):
+    # 裸 [表情]/[表情 ]/（表情）/［表情］ 等无关键词形态：剥除不留正文（三堵之一）
+    text = re.sub(r"[\[（［(]\s*表情\s*[\]）)］]", "", text)
+    for mm in re.finditer(r"[\[（［(]([^\[\]（）［］()]{1,12})[\]）)］]", text):
         inner = mm.group(1)
         hit = next((w for w in STICKER_WORDS if w in inner), None)
         if hit:
@@ -389,11 +391,15 @@ def strip_prefix_noise(text):
                 r"^助手[：:]\s*", r"^[Aa]ssistant[：:]\s*"):
         text = re.sub(pat, "", text)
     # [表情...] 全形态任意位置剥（2026-10-28 三堵之二：裸 [表情] 中段
-    # 残留曾直发 QQ 成纯文本；主解析失败时这里是最后防线）
+    # 残留曾直发 QQ 成纯文本；主解析失败时这里是最后防线）。
+    # 2026-10-30 扩全角/圆括号族（队长实锤"（表情:玩玩）"直发）：
     text = re.sub(r"\[表情[^\[\]]{0,10}\]", "", text)
+    text = re.sub(r"[（(]表情[^（）()]{0,10}[）)]", "", text)
     text = re.sub(r"\[[^\[\]]{1,10}\]\s*$", "", text)
+    text = re.sub(r"[（(][^（）()]{1,10}[）)]\s*$", "", text)
     for w in STICKER_WORDS:   # 含情绪词的短标注（任意位置）一律剥
         text = re.sub(r"\[[^\[\]]{0,6}" + w + r"[^\[\]]{0,6}\]", "", text)
+        text = re.sub(r"[（(][^（）()]{0,6}" + w + r"[^（）()]{0,6}[）)]", "", text)
     return text.strip()
 
 

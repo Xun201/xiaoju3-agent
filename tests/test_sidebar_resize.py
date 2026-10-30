@@ -143,7 +143,7 @@ class SidebarResizeFrontendTests(unittest.TestCase):
     def test_resizer_css_rule(self):
         body = _css_rule(self.html, "#sidebar-resizer")
         self.assertIn("cursor: col-resize", body)
-        self.assertIn("flex: 0 0 10px", body)   # 热区 10px（2026-10-30 终版）
+        self.assertIn("flex: 0 0 4px", body)   # 热区 4px（2026-10-30 队长：过于敏感收窄）
         self.assertIn("margin: 0", body)        # 色块化布局：负 margin hack 退役
         self.assertIn("align-self: stretch", body)
         self.assertIn("background: #ffffff", body)   # 热区融入白区：交界=sidebar 右缘（蓝线贴线前提）

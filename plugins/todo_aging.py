@@ -70,6 +70,8 @@ def run_daily_aging(sm=None, cloud_fn=None, api_key=None, cloud_url=None,
             t = by_id.get(sug["id"])
             if not t:
                 continue
+            if t.get("pin"):
+                continue   # 固定优先级（2026-10-30 队长拍板）：pin 不老化
             cur_eff = t.get("effective_priority") or t.get("priority") or "P1"
             if _age_in_days(t.get("created_at"), today) < min_age_days:
                 continue   # 拍板①：创建满 N 天才真升
@@ -94,6 +96,8 @@ def run_backfill(sm=None):
         for t in (sm.get_todos(limit=500) or []):
             if t.get("status") != "pending":
                 continue
+            if t.get("pin"):
+                continue   # 固定优先级（2026-10-30）：pin 不参与梯队递补
             eff = t.get("effective_priority") or t.get("priority") or "P1"
             if eff in buckets:
                 buckets[eff].append(t)   # 非法档防御：不进六档桶=不参与递补

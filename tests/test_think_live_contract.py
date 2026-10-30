@@ -268,7 +268,9 @@ class AggregatorPanelTests(unittest.TestCase):
         序，P0 置顶天然成立）+「还有 X 项」尾行；编辑模式全量。"""
         js = self.js
         html = self.html
-        self.assertIn("const compact = !todoEditing && pendingTotal > 5;", js)
+        self.assertIn(
+            "const compact = !todoEditing && pendingTotal > 5"
+            " && collapsedGroups.length === 0;", js)   # 2026-10-30 折叠交互后退出紧凑
         self.assertIn("let compactQuota = 5;", js)
         self.assertIn("const pendingRows = group.filter(t => t.status !== 'done');", js)
         self.assertIn("还有 ${compactHidden} 项待办…", js)

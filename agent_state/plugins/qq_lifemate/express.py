@@ -53,10 +53,33 @@ def send_cq(cq_message):
 
 # ────────────────────────── 语音（Edge-TTS 主 / SAPI 兜底） ──────────────────────────
 
+# TTS 清洗词表（2026-10-30 实锤"表情玩玩"被念出）：与 waker.STICKER_WORDS
+# 同源口径（express 被 waker import，反向 import 会循环——本地同表并注释）
+_TTS_STRIP_WORDS = ("开心", "可爱", "生气", "无语", "害羞", "猫猫", "委屈",
+                    "困困", "坏笑", "得意", "偷笑", "大哭", "惊讶", "疑惑",
+                    "摸鱼", "干饭", "蹭蹭", "贴贴", "玩玩")
+
+
+def clean_for_tts(text):
+    """TTS 前彻底清洗（2026-10-30 队长最高优先级）：剥表情/动作标注全形态
+    （方/全角/圆括号 × 半/全角冒号 × 裸表情）+CQ 码残留+情绪词短标注——
+    只允许朗读纯净对话正文。单一出口：synthesize_speech 入口必经。"""
+    import re
+    text = re.sub(r"\[CQ:[^\]]*\]", "", text or "")
+    text = re.sub(r"[\[（(]\s*表情\s*[:：][^\]）)]{0,12}[\]）)]", "", text)
+    text = re.sub(r"[\[（(]\s*表情\s*[\]）)]", "", text)
+    for w in _TTS_STRIP_WORDS:
+        text = re.sub(r"[\[（(][^\[\]（）()]{0,6}" + w + r"[^\[\]（）()]{0,6}[\]）)]",
+                      "", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
 def synthesize_speech(text):
     """文本 → 语音文件路径。Edge-TTS 主链（mp3）；失败 pyttsx3 SAPI 兜底
-    （wav，Huihui）；都失败返回 None（本轮放弃语音，文字仍在）。"""
-    text = (text or "").strip()
+    （wav，Huihui）；都失败返回 None（本轮放弃语音，文字仍在）。
+    入口先 clean_for_tts（2026-10-30 实锤：占位符"（表情:玩玩）"被 TTS
+    当正文念出——单一出口清洗保护所有语音调用）。"""
+    text = clean_for_tts(text)
     if not text:
         return None
     out_dir = tempfile.gettempdir()

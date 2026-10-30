@@ -133,7 +133,7 @@
            拖拽/持久化逻辑在 console.js initSidebarResize（双击复位；
            ≤768px 抽屉态 display:none——抽屉无拖宽语义）。 */
         #sidebar-resizer {
-            flex: 0 0 10px;
+            flex: 0 0 4px;                    /* 热区收窄（2026-10-30 队长：过于敏感误触，10px→4px 精确居中） */
             align-self: stretch;                /* 全高：随 body 100vh 拉满 */
             margin: 0;                          /* 色块化布局：两块紧贴，负 margin hack 退役 */
             background: #ffffff;                /* 与右区同白：热区融入白区，交界=sidebar 右缘（蓝线贴线前提） */

@@ -704,3 +704,39 @@ class WakeNaturalToneTests(unittest.TestCase):
         src = self._read_waker()
         self.assertNotIn("人称铁律", src)  # 旧死命令段已废
         self.assertNotIn("人称铁律", src)
+
+
+class StickerVariantAndTtsCleanTests(unittest.TestCase):
+    """表情占位符全角变体+TTS 清洗（2026-10-30 实锤"（表情:玩玩）"
+    直发 QQ 且 TTS 念出"表情玩玩"——双断点根治回归）。"""
+
+    def test_extract_fullwidth_paren_variant(self):
+        text, kw = waker.extract_sticker_keyword("主人在忙吗？（表情:玩玩）")
+        self.assertEqual(kw, "玩玩")
+        self.assertNotIn("表情", text)
+        self.assertNotIn("（", text)
+        self.assertEqual(text, "主人在忙吗？")
+
+    def test_extract_halfwidth_round_variants(self):
+        for mark in ("[表情:开心]", "（表情:开心）", "(表情:开心)",
+                     "［表情：开心］"):
+            text, kw = waker.extract_sticker_keyword("主人好吗" + mark)
+            self.assertEqual(kw, "开心", mark)
+            self.assertEqual(text, "主人好吗", mark)
+
+    def test_strip_prefix_noise_fullwidth_sticker(self):
+        out = waker.strip_prefix_noise("在忙吗（表情:玩玩）")
+        self.assertNotIn("表情", out)
+        self.assertNotIn("（", out)
+
+    def test_clean_for_tts_strips_all_marks(self):
+        import express
+        out = express.clean_for_tts("主人在忙吗？（表情:玩玩）")
+        self.assertEqual(out, "主人在忙吗？")
+        out2 = express.clean_for_tts("想你了[表情:猫猫]（开心）[CQ:image,file=x]")
+        self.assertEqual(out2, "想你了")
+
+    def test_clean_for_tts_keeps_normal_parenthesis(self):
+        import express
+        out = express.clean_for_tts("主人明天下午3点（记得带伞）要出门")
+        self.assertIn("记得带伞", out)   # 非表情/非情绪词括号不误伤

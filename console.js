@@ -2357,6 +2357,7 @@ var qrcode = function() {
             trash: a + '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
             x: a + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
             fileText: a + '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
+            pin: a + '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg>',
             puzzle: a + '<path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/></svg>',
             zap: a + '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
             video: a + '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
@@ -3194,7 +3195,11 @@ var qrcode = function() {
         // 未完成前 5 条（P0 置顶天然成立：组序即优先级序），超出收进
         // "还有 X 项"尾行，防把左栏撑爆；编辑模式全量（改档需看全）。
         const pendingTotal = items.filter(t => t.status !== 'done').length;
-        const compact = !todoEditing && pendingTotal > 5;
+        // 灾难②修（2026-10-30 队长实锤'P1 展不开'）：紧凑配额跨组共享——
+        // P0 吃光 5 条后，点开 P1 时 take=slice(0,0)=空=视觉无变化。
+        // 修=collapsedGroups 非空（用户已点过任一分组）即退出紧凑视图，
+        // 全量渲染按折叠隐藏；全部再折叠=恢复紧凑。语义自然。
+        const compact = !todoEditing && pendingTotal > 5 && collapsedGroups.length === 0;
         let compactQuota = 5;
         let compactHidden = 0;
         for (const pr of ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']) {
@@ -3224,6 +3229,11 @@ var qrcode = function() {
             // 徽标显示当前值（不可改）
             const prOptions = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5'].map(p =>
                 `<option value="${p}"${p === pr ? ' selected' : ''}>${p}</option>`).join('');
+            // 📌 固定优先级（2026-10-30 队长拍板）：pin=1 不参与老化/递补。
+            // 编辑模式=可点图钉切换（POST pin）；只读模式=pin 条目行首图钉标识。
+            const pinBtn = todoEditing
+                ? `<button class="todo-pin-toggle${t.pin ? ' pinned' : ''}" data-id="${t.id}" title="${t.pin ? '已固定：不参与老化/递补（点击取消）' : '固定优先级：不参与老化/递补'}" style="display:inline-flex;align-items:center;border:none;background:transparent;cursor:pointer;padding:2px;${t.pin ? 'color:#b45309;' : 'color:#9ca3af;'}">${ICON_SVGS.pin}</button>`
+                : (t.pin ? `<span class="todo-pin-flag" title="固定优先级（不参与老化）" style="display:inline-flex;align-items:center;color:#b45309;flex:none;">${ICON_SVGS.pin}</span>` : '');
             const prControl = todoEditing
                 ? `<select class="todo-pr-select" title="优先级">${prOptions}</select>`
                 : `<span class="todo-pr-badge${pr === 'P0' ? ' todo-pr-p0' : ''}" title="点齿轮图标进入编辑模式后可改">${pr}</span>`;
@@ -3258,7 +3268,7 @@ var qrcode = function() {
             const todoTime = (t.created_at || '').slice(11, 16);   // HH:MM
             return `<li class="todo-item${doneCls}" data-id="${t.id}">` +
                     `<input type="checkbox" class="todo-check"${checked} title="勾选=完成，取消=恢复">` +
-                    `${agedBadge}<span class="todo-text">${escapeHtml(t.content)}</span>` +
+                    `${pinBtn}${agedBadge}<span class="todo-text">${escapeHtml(t.content)}</span>` +
                     (todoTime ? `<span class="todo-time">${todoTime}</span>` : '') +
                     `${prControl}${delBtn}</li>` + noteHtml;
             }).join('');
@@ -3283,6 +3293,25 @@ var qrcode = function() {
         // 尾巴 I：分区标题点击 → 折叠/展开（click 事件——标题无值变化，
         // change 永不触发；v12 曾误放 change 监听器内成死代码，已纠）
         todosListEl.addEventListener('click', function (ev) {
+            // 📌 固定优先级切换（2026-10-30 队长拍板）：编辑模式图钉点击
+            const pinBtn = ev.target.closest('button.todo-pin-toggle');
+            if (pinBtn) {
+                const id = pinBtn.dataset.id;
+                const nowPinned = pinBtn.classList.contains('pinned');
+                fetch(`/api/todos/${id}/pin`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin: !nowPinned })
+                }).then(r => r.json())
+                  .then(j => {
+                      if (j && j.code === 200) {
+                          showToast(j.data.pin ? '已固定：不参与老化/递补' : '已取消固定');
+                          loadTodos();
+                      } else showToast('固定失败：' + ((j && j.error) || '未知'));
+                  })
+                  .catch(() => showToast('固定请求失败'));
+                return;
+            }
             const title = ev.target.closest('li.todo-group-title');
             if (title) {
                 toggleGroup(title.dataset.pr);
