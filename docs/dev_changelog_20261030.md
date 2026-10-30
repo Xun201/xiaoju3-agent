@@ -1,5 +1,21 @@
 # 开发者日志 2026-10-30
 
+## 批八 — feat(#363 记忆管理面板一期+社交监控日志+Today 衍生入库)（v2.2.1 内部补丁，重建部署 10:38 三进程全新）
+
+### 改了什么
+- **Today 衍生三件入库**（_dev/add_todo_20261030_today.py，生产 todos.db 备份 .bak-20261030-today）：#363 P1 记忆管理面板/#364 P2 唤醒节奏锚点/#365 P2 连接器生态。
+- **记忆管理面板一期**（对齐 Today Living Memory"可删"）：升级既有 🧰 记忆查看卡——/api/memory/list 带 id 字段；新 POST /api/memory/delete（物理删除，非法 id 400/不存在 404/成功回剩余数，零静默假成功，stdout 留痕 🗑）；前端每条记忆 trash 矢量钮（ICON_SVGS.trash，禁 Emoji）+showConfirm 确认（内容预览+不可恢复警示）+toast 反馈+即删即刷（降级形态无 id 不渲染钮）。编辑功能=二期。
+- **社交串门监控日志**（今晚首跑盯梢，队长拍板）：social_visit 跳过原因全量日志化（额度满/计数异常 fail-closed/生成失败/发送失败/无可串目标）——grep 🦊 [social] 可见完整决策链。
+
+### 怎么验证的
+- 全仓 pytest **2922+5 全绿**（+5 端点锚：list 带 id/删除真删副本库/400/404/监控日志锚）；node --check+py_compile 双语法门。
+- 重建 exe（c80b0980 双端 MATCH）+deploy_shutil 全量对账+插件/前端三处同步 md5 一致；生产负路径实测（list 首 id=11/delete 400/delete 404）。
+- 真浏览器全链：面板 11 条全带 trash 钮截图 _dev/shot_memory_panel_20261030.png；点删→showConfirm 弹窗（标题"删除这条记忆"+内容预览+确定钮）→取消→关闭→条目不动（DOM 断言；生产真删留队长手点——4 条重复"明日方舟"正好练手）。
+
+### 回滚
+- git revert 7050268；重建回滚；todos.db.bak-20261030-today 还原待办。
+
+
 ## 批六 — fix(侧栏卡片排版全打平)（v2.2.1 内部补丁，生产热同步不重启）
 
 ### 改了什么
