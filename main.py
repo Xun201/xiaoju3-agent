@@ -2418,7 +2418,17 @@ def onebot_event(data):
     # 🛡️ 任何字段异常不崩（如 sender 结构损坏 / message 类型异常）：统一
     # 兜底返回 ok，不让单条 webhook 事件拖垮接入层主流程。
     try:
-        user_id = (data.get('sender') or {}).get('user_id')
+        # user_id 双源兜底（2026-10-30 不回复案根治）：NapCat 某些事件形态
+        # sender 结构异常（user_id=None）→ 发送 payload 无效被 NapCat 拒
+        # （retcode 200"请指定正确的 group_id 或 user_id"）→ 旧代码不校验
+        # 回执静默吞=队长收不到任何回复。sender 缺失回退事件顶层 user_id；
+        # 双双缺失=无法回复的垃圾事件，记日志早退。
+        user_id = ((data.get('sender') or {}).get('user_id')
+                   or data.get('user_id'))
+        if not user_id:
+            print(f"⚠️ [/onebot] 事件无 user_id（sender 与顶层均缺失），"
+                  f"无法回复，早退: {str(data)[:80]}")
+            return {"status": "ok", "retcode": 0}
         raw_message = data.get('raw_message')
         if not raw_message:
             raw_message = _rebuild_raw_message(data)

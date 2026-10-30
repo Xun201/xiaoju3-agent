@@ -114,3 +114,20 @@ def test_send_receipt_ok_silent(monkeypatch, capsys):
         12345, None, "短回复",
         post=lambda ep, p: _OkResp(), sleep_fn=lambda s: None)
     assert "回执异常" not in capsys.readouterr().out
+
+
+# 9 user_id 双源兜底（2026-10-30 不回复案）：sender 缺失回退顶层 user_id
+def test_webhook_user_id_fallback_from_top_level():
+    data = {"post_type": "message", "user_id": 3779888268,
+            "raw_message": "在吗", "self_id": 1706205831}
+    # 直接断言取值表达式语义（webhook 内联逻辑的契约锚）
+    user_id = ((data.get('sender') or {}).get('user_id')
+               or data.get('user_id'))
+    assert user_id == 3779888268
+
+
+def test_webhook_user_id_both_missing_is_none():
+    data = {"post_type": "message", "raw_message": "x"}
+    user_id = ((data.get('sender') or {}).get('user_id')
+               or data.get('user_id'))
+    assert not user_id   # 触发早退分支（无法回复的垃圾事件）
