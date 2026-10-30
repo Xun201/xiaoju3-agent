@@ -1725,6 +1725,36 @@
         <!-- 小工具面板（MAA 式收纳）：内容由 console.js 动态构建；
              覆盖主区域+左栏（全屏 overlay），返回按钮退出 -->
     </div>
+    <script>
+    // 启动错误可视化（2026-10-30 APK 排障批）：手机端无法开控制台，
+    // 任何 JS 崩溃直接红条上屏（可截图反馈）——必须在主脚本之前注册。
+    (function () {
+        try {
+            var shown = false;
+            function showErr(msg) {
+                if (shown) return;
+                shown = true;
+                try {
+                    var bar = document.createElement('div');
+                    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;'
+                        + 'z-index:99999;background:#b91c1c;color:#fff;font-size:12px;'
+                        + 'padding:10px 12px;max-height:40%;overflow:auto;'
+                        + 'font-family:monospace;word-break:break-all;';
+                    bar.textContent = '⚠️ 前端异常: ' + msg;
+                    document.body.appendChild(bar);
+                } catch (e) { /* 渲染失败保底 */ }
+            }
+            window.addEventListener('error', function (ev) {
+                showErr((ev && (ev.message || ev.type)) || 'unknown');
+            });
+            window.addEventListener('unhandledrejection', function (ev) {
+                var r = ev && ev.reason;
+                showErr('Promise: ' + ((r && (r.message || r)) || 'rejection'));
+            });
+            window.__XJ3_ERR_HOOK_OK = true;
+        } catch (e) { /* 环境不支持则静默 */ }
+    })();
+    </script>
     <script src="/console/console.js"></script>
 </body>
 </html>
