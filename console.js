@@ -7208,13 +7208,59 @@ var qrcode = function() {
                 }
                 items.forEach(function (m) {
                     const line = document.createElement('div');
-                    line.style.cssText = 'font-size:12px;padding:4px 0;'
+                    line.style.cssText = 'display:flex;align-items:center;'
+                        + 'gap:8px;font-size:12px;padding:4px 0;'
                         + 'border-bottom:1px dashed var(--color-border,#e0e4ec);';
+                    const txt = document.createElement('div');
+                    txt.style.cssText = 'flex:1;min-width:0;'
+                        + 'overflow-wrap:anywhere;';
                     const sink = m.sink_status === 'pending_sink' ? ' 💤沉睡' : '';
                     const emo = m.emotion_tag !== 'neutral'
                         ? ' 🏷' + m.emotion_tag : '';
-                    line.textContent = '· [' + m.category + '] ' + m.content +
+                    txt.textContent = '· [' + m.category + '] ' + m.content +
                         '（权重 ' + (m.weight || 1) + emo + sink + '）';
+                    line.appendChild(txt);
+                    // #363 记忆管理面板一期（2026-10-30 队长拍板）：🗑 删除
+                    // （SVG 矢量+showConfirm 确认+物理删除；降级形态无 id 不渲染）
+                    if (m.id != null) {
+                        const del = document.createElement('button');
+                        del.title = '删除这条记忆（不可恢复）';
+                        del.style.cssText = 'flex:none;border:none;background:'
+                            + 'transparent;cursor:pointer;padding:2px;'
+                            + 'color:var(--v0-n400,#9ca3af);display:'
+                            + 'inline-flex;align-items:center;';
+                        del.innerHTML = ICON_SVGS.trash;
+                        del.addEventListener('click', function () {
+                            showConfirm('删除这条记忆',
+                                '「' + (m.content || '').slice(0, 40)
+                                    + '」\n删除后不可恢复，确定删除吗？',
+                                function () {
+                                    fetch('/api/memory/delete', {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type':
+                                                'application/json'},
+                                        body: JSON.stringify({id: m.id})
+                                    }).then(function (r) { return r.json(); })
+                                        .then(function (j2) {
+                                            if (j2 && j2.code === 200) {
+                                                showToast('已删除（剩余 '
+                                                    + (j2.data && j2.data.left
+                                                        || 0) + ' 条）');
+                                                loadMemoryInto(body);
+                                            } else {
+                                                showToast('删除失败：'
+                                                    + ((j2 && j2.error)
+                                                        || '未知错误'));
+                                            }
+                                        })
+                                        .catch(function () {
+                                            showToast('删除请求失败');
+                                        });
+                                });
+                        });
+                        line.appendChild(del);
+                    }
                     body.appendChild(line);
                 });
             })

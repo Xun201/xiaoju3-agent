@@ -3002,6 +3002,38 @@ class TestToolsPanelApis(unittest.TestCase):
         self.assertEqual(data["items"][0]["content"], "我喜欢蓝色")
         self.assertEqual(data["items"][0]["weight"], 1.0)
 
+    def test_memory_list_items_have_id(self):
+        """#363 记忆管理面板一期：list 端点带 id（删除定位）。"""
+        self.sm.save_memory("preference", "我喜欢蓝色")
+        r = self.client.get("/api/memory/list")
+        items = r.get_json()["data"]["items"]
+        self.assertIsNotNone(items[0].get("id"))
+
+    def test_memory_delete_removes_entry(self):
+        """#363 一期：删除端点物理删除+返回剩余数。"""
+        self.sm.save_memory("preference", "我喜欢蓝色")
+        items = self.client.get("/api/memory/list").get_json()["data"]["items"]
+        mid = items[0]["id"]
+        r = self.client.post("/api/memory/delete", json={"id": mid})
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()["data"]
+        self.assertEqual(data["deleted_id"], mid)
+        self.assertEqual(data["left"], 0)
+        # 副本库实证：条目真没了
+        import sqlite3
+        conn = sqlite3.connect(self.sm.memory_db)
+        n = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        conn.close()
+        self.assertEqual(n, 0)
+
+    def test_memory_delete_invalid_id_400(self):
+        r = self.client.post("/api/memory/delete", json={"id": "abc"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_memory_delete_missing_id_404(self):
+        r = self.client.post("/api/memory/delete", json={"id": 999999})
+        self.assertEqual(r.status_code, 404)
+
     def test_ha_devices_returns_text(self):
         # HA 不可达/未配置 → 错误文案也是 200 文本形态（前端 <pre> 直显）
         r = self.client.get("/api/ha/devices")

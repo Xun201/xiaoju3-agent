@@ -201,5 +201,19 @@ class TimeSpaceSanityTests(unittest.TestCase):
         self.assertIn("已聊完的旧话题", src)
 
 
+class SocialMonitorLogTests(unittest.TestCase):
+    """社交串门监控日志（2026-10-30 队长：今晚首跑要盯）——跳过原因可见，
+    不再静默。锚=inspect.getsource 语句形态。"""
+
+    def test_social_visit_logs_skip_reasons(self):
+        import inspect
+        src = inspect.getsource(waker.social_visit)
+        self.assertIn("今日额度已用完", src)
+        self.assertIn("计数库异常 fail-closed", src)
+        self.assertIn("问候生成失败", src)
+        self.assertIn("发送失败", src)
+        self.assertIn("本轮无可串目标", src)
+
+
 if __name__ == "__main__":
     unittest.main()

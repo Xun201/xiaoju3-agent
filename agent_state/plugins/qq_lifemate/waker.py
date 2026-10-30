@@ -824,8 +824,12 @@ def social_visit(db=None):
             social_date = today
             social_count = 0
         if social_count >= _SOCIAL_DAILY_CAP:
-            return False   # 今日额度用完
-    except Exception:
+            # 2026-10-30 监控日志（队长要求盯首跑）：跳过原因可见
+            print(f"🦊 [social] 今日额度已用完（{social_count}"
+                  f"/{_SOCIAL_DAILY_CAP}），跳过")
+            return False
+    except Exception as e:
+        print(f"🦊 [social] 计数库异常 fail-closed: {e}")
         return False
 
     # 随机选一个目标（洗牌后取第一个可用的）
@@ -853,12 +857,14 @@ def social_visit(db=None):
         desc = f"{'群聊' if tt == 'group' else '好友'} {tid}"
         greeting = _social_greeting(desc)
         if not greeting:
+            print(f"🦊 [social] 问候生成失败，换下个目标: {tt}:{tid}")
             continue
 
         # 发送（拟人打字延迟 3-6s 随机——风控铁律绝不秒发）
         time.sleep(_random.uniform(*_SOCIAL_DELAY))
         ok = _social_send(tt, tid, greeting)
         if not ok:
+            print(f"🦊 [social] 发送失败（回执不过），换下个目标: {tt}:{tid}")
             continue
 
         # 记录（k/v 口径 meta_set——2026-10-30 修复列名不匹配静默失效）
@@ -874,4 +880,5 @@ def social_visit(db=None):
         print(f"🦊 [social] 串门成功: {tt}:{tid} → {greeting[:40]}")
         return True
 
+    print(f"🦊 [social] 本轮无可串目标（池 {len(pool)} 个全在冷却/豁免/失败）")
     return False

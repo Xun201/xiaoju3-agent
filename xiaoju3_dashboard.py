@@ -1016,7 +1016,8 @@ def api_memory_list():
     """长期记忆清单（小工具面板「记忆查看」卡，只读）。
 
     内容+V2 权重字段（weight/emotion_tag/sink_status/emotional_impact/
-    access_count，#297 批 1 schema）——近期 100 条，新在前。"""
+    access_count，#297 批 1 schema）+ id（#363 记忆管理面板删除定位）
+    ——近期 100 条，新在前。"""
     try:
         from agent_state.state_manager import state_manager
         rows = state_manager.get_recent_memories(limit=100)
@@ -1028,23 +1029,51 @@ def api_memory_list():
         import sqlite3 as _sq
         conn = _sq.connect(state_manager.memory_db, timeout=3.0)
         raw = conn.execute(
-            "SELECT category, content, weight, emotion_tag, sink_status,"
+            "SELECT id, category, content, weight, emotion_tag, sink_status,"
             " emotional_impact, access_count, timestamp FROM memories"
             " ORDER BY id DESC LIMIT 100").fetchall()
         conn.close()
-        items = [{"category": r[0], "content": r[1], "weight": r[2],
-                  "emotion_tag": r[3], "sink_status": r[4],
-                  "emotional_impact": r[5], "access_count": r[6],
-                  "timestamp": r[7]} for r in raw]
+        items = [{"id": r[0], "category": r[1], "content": r[2],
+                  "weight": r[3], "emotion_tag": r[4], "sink_status": r[5],
+                  "emotional_impact": r[6], "access_count": r[7],
+                  "timestamp": r[8]} for r in raw]
     except Exception:
         pass   # V2 字段读失败降级为基础形态
     if not items:
-        items = [{"category": c, "content": t, "weight": 1.0,
+        items = [{"id": None, "category": c, "content": t, "weight": 1.0,
                   "emotion_tag": "neutral", "sink_status": "active",
                   "emotional_impact": 0.0, "access_count": 0,
                   "timestamp": ""} for c, t in rows]
     return jsonify({"code": 200, "data": {"items": items,
                                           "total": len(items)}})
+
+
+@app.route("/api/memory/delete", methods=["POST"])
+def api_memory_delete():
+    """删除单条长期记忆（#363 记忆管理面板一期，队长 2026-10-30 拍板）。
+
+    对齐 Today Living Memory「可删」：body {"id": int}，物理删除（记忆是
+    用户资产，用户有权删——显式用户动作，与幻觉清洗不同）；返回剩余条数。
+    id 非法/不存在=400/404，绝不静默假成功。"""
+    from agent_state.state_manager import state_manager
+    body = request.get_json(silent=True) or {}
+    try:
+        mid = int(body.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"code": 400, "error": "缺少有效 id"}), 400
+    try:
+        import sqlite3 as _sq
+        conn = _sq.connect(state_manager.memory_db, timeout=3.0)
+        cur = conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
+        conn.commit()
+        left = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        conn.close()
+    except Exception as e:
+        return jsonify({"code": 500, "error": f"删除失败: {e}"}), 500
+    if cur.rowcount == 0:
+        return jsonify({"code": 404, "error": f"记忆 id={mid} 不存在"}), 404
+    print(f"🗑 [记忆面板] 已删除长期记忆 id={mid}（剩余 {left} 条）")
+    return jsonify({"code": 200, "data": {"deleted_id": mid, "left": left}})
 
 
 @app.route("/api/events")
