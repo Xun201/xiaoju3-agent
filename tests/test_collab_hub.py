@@ -142,5 +142,67 @@ class HitlOptionsTests(unittest.TestCase):
         self.assertEqual(len(self.hub.snapshot()[-1]["options"]), 6)
 
 
+class ProtocolEdgeTests(unittest.TestCase):
+    """秘书回执①：协议行边界收严——围栏免疫/正文中段不解析/整行锚定/
+    列表前缀与加粗不认/选项截断。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xj3_proto_")
+        self.hub = _hub(self.tmp)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_code_fence_immunity(self):
+        fence = "```"
+        text = ("正文说明\n" + fence + "\n@options: 假选项A|假选项B\n"
+                "@summary: 假摘要\n" + fence + "\n@老板 请看上面的示例代码")
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(text)
+        self.assertTrue(hitl)
+        self.assertIsNone(opts)      # 围栏内协议样文本零误伤
+        self.assertIsNone(summ)
+        self.assertIn("@options", clean)   # 围栏内容原样保留
+
+    def test_mid_body_not_parsed(self):
+        # 协议行放 index 3（7 行文本的中段：3 <= idx < 4 之外皆合法区）
+        lines = ["开头行", "中间说明一", "中间说明二",
+                 "@options: 中段伪协议", "中间说明三", "中间说明四",
+                 "@老板 结尾"]
+        text = "\n".join(lines)
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(text)
+        self.assertTrue(hitl)
+        self.assertIsNone(opts)      # 正文中段（>3 行）永不解析
+        self.assertIn("@options: 中段伪协议", clean)
+
+    def test_head_and_tail_parsed(self):
+        lines = ["@summary: 头部摘要", "@老板 开头确认", "正文中间随便写",
+                 "再一行", "@options: 选项甲|选项乙", "@老板 尾部确认"]
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines("\n".join(lines))
+        self.assertEqual(opts, ["选项甲", "选项乙"])
+        self.assertEqual(summ, "头部摘要")
+
+    def test_list_prefix_and_bold_not_matched(self):
+        lines = ["- @options: 列表前缀伪协议", "**@options:** 加粗伪协议",
+                 "@老板 正文"]
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines("\n".join(lines))
+        self.assertTrue(hitl)
+        self.assertIsNone(opts)      # 列表前缀/加粗形态不认
+        self.assertIn("- @options:", clean)
+        self.assertIn("**@options:**", clean)
+
+    def test_option_truncated_at_30(self):
+        long_opt = "超长选项" * 10
+        text = "@老板 请选\n@options: " + long_opt + "|短项"
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(text)
+        self.assertEqual(len(opts[0]), 30)
+        self.assertEqual(opts[1], "短项")
+
+    def test_fullwidth_colon_accepted(self):
+        text = "@老板 请拍板\n@options：全角冒号选项"
+        clean, opts, summ, hitl = collab_hub.parse_protocol_lines(text)
+        self.assertEqual(opts, ["全角冒号选项"])
+
+
 if __name__ == "__main__":
     unittest.main()
