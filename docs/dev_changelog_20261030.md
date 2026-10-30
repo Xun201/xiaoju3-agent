@@ -1,5 +1,26 @@
 # 开发者日志 2026-10-30
 
+## 批十二 — feat(AI 多方协作控制台·Multi-Agent UI)（v2.2.1 内部补丁，重建 exe f9040416/14ac194f 部署，全仓 2936+5）
+
+### 改了什么
+- **collab_hub.py 协作总线服务**（新模块，进 PYZ）：SYNC/TASK_BUS 增量监听（1.5s 轮询）→ 角色消息（zcode/secretary/boss）ui_events.publish("collab_msg") SSE 实时推送 + 内存 deque(maxlen=200) 历史回放；秘书自动回话（XIAOJU3_BUS_ENABLED=1 才联网，日帽 15+黑名单+留痕）回复写 TASK_BUS[秘书回复]节自然闭环；emit_boss 老板拍板写[老板拍板]节；HITL=文本含「@老板」→ hitl 标记。
+- **dashboard 两端点**：GET /api/collab/history（回放）/ POST /api/collab/send（老板发言，空消息 400 零静默）；启动挂载（失败不影响主流程）。
+- **前端「协作」pane**：CHAT_TABS 五方互斥（四方 hide 清单全补 collabPaneEl）；三色气泡（秘书蓝/包工头灰/老板绿+内联 SVG 角标 brain/wrench/crown）；renderRich 复用（md-code）；HITL 确认卡片（@老板→醒目黄卡+同意/驳回写回+防重入）；输入框 Enter/按钮发送；🧰 工具面板入口卡。
+- **APK 崩溃批（c6d0a09）**：index.html 注入启动错误可视化横幅（window error→红条上屏）；新 APK d848f2de 交付。
+- **ClawChat 查证（法则 2）**：github.com/alexrudloff/clawchat 真实存在但=OpenClaw 生态 P2P 附件（前提=两端各跑 OpenClaw agent），不适用小橘自研体系——队长核心诉求由自研协作控制台覆盖，未部署。
+
+### 踩坑与修复（同批）
+- **frozen 路径陷阱二次现身**：collab_hub 按 __file__ 拼 _dev 路径，PYZ 内 __file__=_MEIPASS（_internal）→ 监听不存在路径 history 恒空（部署实锤：线程正常启动但零消息）——修=frozen 下 _ROOT=dirname(sys.executable)。
+- **生产 _dev 无总线文件**：hub 监听的生产 _dev 只有旧素材——修=路径 env 覆盖（XIAOJU3_COLLAB_SYNC/TASK），生产 .env 指向本机仓库 _dev 绝对路径（hub 与 ZCode 同机零拷贝实时监听）。
+
+### 怎么验证的
+- 全仓 **2936+5 全绿**（+7 collab 锚+互斥锚五方化）；三重建部署（f9040416/14ac194f → 终版）；Mock 演示全链=写 SYNC→zcode 气泡/TASK_BUS 秘书节→🧠气泡/@老板→HITL 卡/POST send→boss 气泡，**真浏览器实拍三色气泡+HITL 卡（_dev/shot_collab_panel_20261030.png）**。
+- 演示数据说明：SYNC/TASK_BUS 尾部有【演示】标记节（截图内容），验收后可清；历史内存 200 条自滚动。
+
+### 回滚
+- git revert 03c6fd8..本笔；重建回滚；.env.bak-20261030-collab 还原协作两行。
+
+
 ## 批十一 — 🚑 紧急排障：QQ 不回复案三刀根治（v2.2.1 内部补丁，重建 exe 7454a174 部署 11:45 三进程全新）
 
 ### 破案链
