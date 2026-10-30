@@ -159,5 +159,47 @@ class SocialPrivacyTests(unittest.TestCase):
         self.assertLessEqual(sleeps[0], 6.0)
 
 
+class TimeSpaceSanityTests(unittest.TestCase):
+    """时空错乱根治锚（2026-10-30 队长紧急插单）：主动唤醒禁补旧账/禁走神。
+
+    昨夜实锤双 bug：①_wake_loop 的 _random 未导入=社交串门从未执行；
+    ②回放固化"小橘说过：「…」引述体被唤醒模型接话补作业（选股科普）。
+    锚=语句/结构形态（inspect.getsource），非松散文本。"""
+
+    def _src(self, obj):
+        import inspect
+        return inspect.getsource(obj)
+
+    def test_wake_loop_imports_random(self):
+        body = self._src(waker._wake_loop)
+        self.assertIn("import random as _random", body)   # 5% 社交判定 NameError 根治
+
+    def test_stray_replies_no_zoushen(self):
+        for t in waker._STRAY_REPLIES:
+            self.assertNotIn("走神", t)   # 主动推送禁走神表述
+            self.assertIn("[表情:", t)    # 保留表情标注走既有链
+
+    def test_qq_recent_digest_freshness_gate(self):
+        body = self._src(waker.qq_recent_digest)
+        self.assertIn("getmtime", body)
+        self.assertIn("2 * 3600", body)   # 2h 时效门（队长死命令）
+
+    def test_wake_prompt_no_homework_no_zoushen(self):
+        prompt = waker._WAKE_PROMPT
+        self.assertNotIn("提个头呗", prompt)      # 旧走神话术退役
+        self.assertIn("不补作业", prompt)
+        self.assertIn("走神", prompt)             # 禁令条款本身含"走神"字样
+
+    def test_arb_prompt_four_questions(self):
+        prompt = waker._ARB_PROMPT
+        self.assertIn("陈旧话题", prompt)          # 第四问：补旧账否决
+        self.assertIn("走神", prompt)             # 重写禁走神表述
+
+    def test_replay_solidify_past_tense(self):
+        src = self._src(waker)
+        self.assertIn("之前聊到", src)             # 固化体改过去式
+        self.assertIn("已聊完的旧话题", src)
+
+
 if __name__ == "__main__":
     unittest.main()

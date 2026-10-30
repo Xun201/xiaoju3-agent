@@ -660,12 +660,13 @@ class LeakAndPersonaTests(unittest.TestCase):
         # 无想念语义时不强插自称（口吻交给 prompt+仲裁脑）
         self.assertEqual(waker.enforce_persona("主人最近好吗"), "主人最近好吗")
 
-    def test_ghost_followup_intercepted_to_honest_stray(self):
-        """幽灵追问拦截（2026-10-29 队长拍板）：指代不存在上文的唤醒话
-        （真机实锤"那句话呢？"）→ 整条替换为诚实走神话术。"""
+    def test_ghost_followup_intercepted_to_neutral_greeting(self):
+        """幽灵追问拦截：指代不存在上文的唤醒话（真机实锤"那句话呢？"）
+        → 整条替换为中性寒暄（2026-10-30 队长拍板改版：主动推送里说
+        "走神"=时空错乱，用户根本没在对话；旧走神话术退役）。"""
         out, kw = waker.enforce_context_independence("那句话呢？")
         self.assertNotIn("那句话", out)
-        self.assertIn("走神", out)                      # 直接承认走神，严禁瞎编
+        self.assertNotIn("走神", out)                   # 主动推送禁走神表述
         self.assertEqual(kw, "疑问")                    # 替换件自带疑问标注
 
     def test_ghost_blacklist_variants_intercepted(self):
