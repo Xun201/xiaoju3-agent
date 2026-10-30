@@ -2492,7 +2492,10 @@ var qrcode = function() {
         return [];
     }
     function pairConnect(candidates) {
-        // 逐候选探活，首个 /api/health ok 的写入 localStorage 并重载
+        // 逐候选探活（带超时，2026-10-30 审计缺口：Tailscale 100.x 离线丢包
+        // 不拒连只挂起，无超时单候选可挂浏览器默认 30s+），首个 /api/health
+        // ok 的写入 localStorage 并重载；候选全列表落存（成功者排首位）——
+        // 运行时失联自愈据此逐候选自动切换
         let i = 0;
         function next() {
             if (i >= candidates.length) {
@@ -2500,15 +2503,20 @@ var qrcode = function() {
                 return;
             }
             const base = candidates[i++];
-            fetch(base + '/api/health').then(function (r) { return r.json(); })
-                .then(function (j) {
-                    if (!j || j.status !== 'ok') throw new Error('not ok');
-                    try { localStorage.setItem('xj3_api_base', base); }
-                    catch (e) {}
-                    window.__XJ3_API_BASE = base;
-                    window.location.reload();
-                })
-                .catch(next);
+            probeBase(base).then(function (ok) {
+                if (!ok) { next(); return; }
+                try { localStorage.setItem('xj3_api_base', base); }
+                catch (e) {}
+                try {
+                    const ordered = candidates.slice();
+                    ordered.splice(ordered.indexOf(base), 1);
+                    ordered.unshift(base);
+                    localStorage.setItem('xj3_pair_candidates',
+                                        JSON.stringify(ordered));
+                } catch (e) { /* 候选存档失败不挡连接 */ }
+                window.__XJ3_API_BASE = base;
+                window.location.reload();
+            });
         }
         next();
     }
@@ -2669,21 +2677,109 @@ var qrcode = function() {
         overlay.appendChild(card);
         document.body.appendChild(overlay);
     }
+    // ── 探活带超时助手（2026-10-30 审计缺口：探活无超时控制）──
+    // AbortController 显式超时（缺省 5s）；老 WebView 无 AbortController
+    // 时退化为无超时探活（行为同旧版）。走包装后的 window.fetch：
+    // 传 '' 即探当前 base（自动带 __XJ3_API_BASE 前缀），传绝对 base 原样。
+    const PAIR_PROBE_TIMEOUT = 5000;
+    function probeBase(base, timeoutMs) {
+        const ctrl = window.AbortController ? new AbortController() : null;
+        let timer = null;
+        if (ctrl) timer = setTimeout(function () { ctrl.abort(); },
+                                     timeoutMs || PAIR_PROBE_TIMEOUT);
+        return fetch((base || '') + '/api/health')
+            .then(function (r) { return r.json(); })
+            .then(function (j) { return !!(j && j.status === 'ok'); })
+            .catch(function () { return false; })
+            .then(function (ok) {
+                if (timer) clearTimeout(timer);
+                return ok;
+            });
+    }
+    // ── 运行时失联自愈（2026-10-30 审计缺口【高】：运行时无候选自动切换
+    // +【中】运行中失联无感知）──配对成功后 fetch/EventSource 失联，此前
+    // 只靠 EventSource 原生重连（IP 变了重连永远失败且不换 base，须人工
+    // 重新扫码）；此处周期探活+逐候选自动切换+失联横幅提示。仅 Capacitor
+    // 且已配 base 时启动，桌面同源零变化。
+    let xj3LinkTimer = null;
+    let xj3LinkChecking = false;
+    function xj3LinkBanner(show) {
+        let bar = document.getElementById('xj3-link-banner');
+        if (show) {
+            if (bar) return;
+            bar = document.createElement('div');
+            bar.id = 'xj3-link-banner';
+            bar.style.cssText = 'position:fixed;top:0;left:0;right:0;'
+                + 'z-index:55000;padding:8px 14px;font-size:12px;'
+                + 'text-align:center;background:#b45309;color:#fff;';
+            bar.textContent = '与电脑的连接断开了，正在尝试重连…（恢复后自动消失，无需操作）';
+            (document.body || document.documentElement).appendChild(bar);
+        } else if (bar) {
+            bar.remove();
+        }
+    }
+    function xj3RuntimeCandidates() {
+        // 当前 base 优先 + 配对时存档的候选去重补位
+        const list = [];
+        if (window.__XJ3_API_BASE) list.push(window.__XJ3_API_BASE);
+        try {
+            const saved = JSON.parse(
+                localStorage.getItem('xj3_pair_candidates') || '[]');
+            if (Array.isArray(saved)) {
+                saved.forEach(function (b) {
+                    if (typeof b === 'string' && b
+                            && list.indexOf(b) === -1) list.push(b);
+                });
+            }
+        } catch (e) { /* 存档损坏按当前 base 单候选 */ }
+        return list;
+    }
+    function xj3LinkCheck() {
+        // 单轮：探活当前 base → 失败逐候选切换（成功即换基重载）
+        // → 全失败弹横幅留待下轮再试；探活通过则撤横幅
+        if (xj3LinkChecking) return;
+        xj3LinkChecking = true;
+        const cands = xj3RuntimeCandidates();
+        const cur = window.__XJ3_API_BASE;
+        probeBase('').then(function (ok) {
+            if (ok) { xj3LinkChecking = false; xj3LinkBanner(false); return; }
+            const rest = cands.filter(function (b) { return b !== cur; });
+            let i = 0;
+            function tryNext() {
+                if (i >= rest.length) {
+                    xj3LinkChecking = false;
+                    xj3LinkBanner(true);   // 全候选失败=横幅提示+周期重试
+                    return;
+                }
+                const alt = rest[i++];
+                probeBase(alt).then(function (ok2) {
+                    if (!ok2) { tryNext(); return; }
+                    try { localStorage.setItem('xj3_api_base', alt); }
+                    catch (e) {}
+                    window.__XJ3_API_BASE = alt;
+                    xj3LinkChecking = false;
+                    window.location.reload();   // 重载即全链路换新 base
+                });
+            }
+            tryNext();
+        });
+    }
+    function xj3LinkStart() {
+        if (xj3LinkTimer) return;
+        xj3LinkTimer = setInterval(xj3LinkCheck, 15000);
+    }
     // APK：首启/后端失联/换网 → 配对门（扫码主路径）。两段探活=立即+1.5s
     function pairProbe() {
-        fetch('/api/health').then(function (r) { return r.json(); })
-            .then(function (j) {
-                if (!j || j.status !== 'ok') throw new Error('not ok');
-            })
-            .catch(function () {
-                if (!document.querySelector('.xj3-modal-overlay')) {
-                    showPairGate();
-                }
-            });
+        probeBase('').then(function (ok) {
+            if (!ok && !document.querySelector('.xj3-modal-overlay')) {
+                showPairGate();
+            }
+        });
     }
     if (window.Capacitor) {
         pairProbe();
         setTimeout(pairProbe, 1500);
+        if (window.__XJ3_API_BASE) xj3LinkStart();   // 已配对才启动失联自愈
         // 桌面专属入口隐藏：截图提问（依赖桌面屏幕捕获链）
         const shotItem = document.querySelector(
             '.dock-menu-item[data-action="screenshot"]');
@@ -2691,6 +2787,12 @@ var qrcode = function() {
     }
     window.showPairGate = showPairGate;        // 设置页「连接手机」可复用
     window.parsePairingPayload = parsePairingPayload;
+    window.xj3LinkKick = function () {
+        // es.onerror 即时探活入口（不等待 15s 周期 tick）；桌面同源不介入，
+        // 原生重连照旧（探活通过时此处零动作）
+        if (!window.__XJ3_API_BASE) return;
+        xj3LinkCheck();
+    };
 
     // 音效引擎自持兜底（2026-10-29 穿透修复）：桌宠 DOM 物理移除时
     // desktop-pet.js 的 WebAudio 引擎随之消失——window.xiaoju3Sound 缺席
@@ -4398,7 +4500,12 @@ var qrcode = function() {
                 console.error('总线事件渲染失败', e);   // 单事件失败不拆连接
             }
         });
-        es.onerror = function () { /* EventSource 原生自动重连，无需处理 */ };
+        es.onerror = function () {
+            // EventSource 原生自动重连兜底不变；失联自愈即时探活——
+            // IP 换了原生重连永远打旧 base，此处探活失败即逐候选换基重载
+            // （2026-10-30 审计缺口【高】；探活通过=瞬时抖动，零动作）
+            if (typeof window.xj3LinkKick === 'function') window.xj3LinkKick();
+        };
         // 思考一行折叠（2026-10-28）：点击消息内思考行展开/收起全文
         document.addEventListener('click', function (ev) {
             const tl = ev.target.closest('.message.bot-message .think-live');
