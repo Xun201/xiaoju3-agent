@@ -1,5 +1,25 @@
 # 开发者日志 2026-10-30
 
+## 批十六 — feat(两两交流循环+思维链上屏+DeepSeek MCP Server 接入 ZCode)（v2.2.1 内部补丁，桌面 exe 重打，全仓 2944+5）
+
+### 改了什么
+- **桌面工作台两两交流循环**：老板需求 → 秘书方案（deepseek-reasoner，reasoning_content 抓取=**工作思维链上屏**，折叠条 UI 点击展开）→ 方案自动落 TASK_BUS [包工头任务] 节（包工头领命）→ 轮询等 [包工头回执]（10 分钟窗）→ 秘书审查回执（第三轮）→ @老板 自动总结。消息模型加 thinking/round 字段全链透传（collab_hub._emit 扩展）。
+- **DeepSeek MCP Server 接入 ZCode**：_dev/deepseek_mcp_server.py（mcp 2.x MCPServer stdio）双工具 deepseek_review（深度代码审查）/deepseek_consult（技术方案咨询）——接入用户级 ~/.zcode/cli/config.json mcp.servers（**新对话自动连接**）；Key 由 server 自读生产 .env（配置文件零明文）。
+
+### 坑与修复
+- mcp 2.x 改名：FastMCP→MCPServer；add_tool 直接注册非装饰器。
+- urllib timeout 禁 requests 元组 (10,90)——TypeError socket.settimeout。
+- waker 补 import sys（P2① 告警行 sys.modules NameError——定向测试未覆盖成功清零路径，全仓才现形）。
+- heredoc 转义五连炸终锤：含转义多行 Python/测试一律 Edit 工具。
+
+### 怎么验证的
+- 协议三连（initialize/tools list 双工具/tools call 空代码行为正确）；真 Key 真调 DeepSeek 审查真实代码（结论已交队长——**审查抓到演示样本植入的真 bug=功能货真价实**）；selftest 5/5（方案轮+审查轮思维链全抓+三节全落）；全仓 2944+5。
+- 桌面 exe 重打（dist2，两两交流版），启动烟测过（无错误日志），快捷方式已更新指向新 exe。
+
+### 回滚
+- git revert 4938d5a；config.json 删 deepseek 节即断开（server 脚本留存）。
+
+
 ## 批十五 — fix(热区越界根治+众策常驻)（v2.2.1 内部补丁，热同步，全仓 2944+5）
 
 ### 改了什么
