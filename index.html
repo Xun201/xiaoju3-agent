@@ -1777,6 +1777,29 @@
     (function () {
         try {
             var shown = false;
+            var errLog = [];
+            window.__XJ3_DIAG = function () {
+                var ls = {};
+                try {
+                    for (var i = 0; i < localStorage.length; i++) {
+                        var k = localStorage.key(i);
+                        ls[k] = (localStorage.getItem(k) || '').slice(0, 40);
+                    }
+                } catch (e) {}
+                return 'UA: ' + navigator.userAgent + '
+'
+                    + 'base: ' + (window.__XJ3_API_BASE || '(空)') + '
+'
+                    + '探活: ' + (window.__XJ3_API_BASE
+                        ? '已配置' : '未配置（首启应弹出配对门）') + '
+'
+                    + 'localStorage: ' + JSON.stringify(ls) + '
+'
+                    + '错误数: ' + errLog.length + '
+'
+                    + errLog.join('
+');
+            };
             function showErr(msg) {
                 if (shown) return;
                 shown = true;
@@ -1791,11 +1814,36 @@
                 } catch (e) { /* 渲染失败保底 */ }
             }
             window.addEventListener('error', function (ev) {
-                showErr((ev && (ev.message || ev.type)) || 'unknown');
+                var m = (ev && (ev.message || ev.type)) || 'unknown';
+                errLog.push(m + ' @' + (ev && ev.filename ? ev.filename : '') + ':'
+                    + (ev && ev.lineno ? ev.lineno : '?'));
+                showErr(m);
             });
             window.addEventListener('unhandledrejection', function (ev) {
                 var r = ev && ev.reason;
-                showErr('Promise: ' + ((r && (r.message || r)) || 'rejection'));
+                var m = 'Promise: ' + ((r && (r.message || r)) || 'rejection');
+                errLog.push(m);
+                showErr(m);
+            });
+            // 三击标题栏"小橘3号"=弹出诊断面板（无 logcat 时的自诊断）
+            document.addEventListener('click', function (ev) {
+                var t = ev.target.closest('header h1, header .logo');
+                if (!t) return;
+                var now2 = Date.now();
+                window.__xj3_taps = (window.__xj3_taps || []).filter(
+                    function (x) { return now2 - x < 1200; });
+                window.__xj3_taps.push(now2);
+                if (window.__xj3_taps.length >= 3) {
+                    window.__xj3_taps = [];
+                    var bar = document.createElement('div');
+                    bar.style.cssText = 'position:fixed;inset:0;z-index:99999;'
+                        + 'background:rgba(0,0,0,.92);color:#e2e8f0;font-size:12px;'
+                        + 'padding:16px;overflow:auto;font-family:monospace;'
+                        + 'white-space:pre-wrap;';
+                    bar.textContent = window.__XJ3_DIAG();
+                    bar.addEventListener('click', function () { bar.remove(); });
+                    document.body.appendChild(bar);
+                }
             });
             window.__XJ3_ERR_HOOK_OK = true;
         } catch (e) { /* 环境不支持则静默 */ }
