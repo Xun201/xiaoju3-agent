@@ -1,5 +1,24 @@
 # 开发者日志 2026-10-30
 
+## 批十四 — fix(三连抢救+TTS/表情双修)（v2.2.1 内部补丁，重建 exe 51b14a57 部署，全仓 2944+5）
+
+### 改了什么
+- **灾难①拖拽过于敏感**：resizer 热区 10px→**4px**（队长实锤偏左即误触；视觉蓝线位置不变——蓝线在 sidebar border-right 不在热区）。
+- **灾难②待办展不开（根因不是点击失效）**：紧凑视图 quota **跨组共享**——P0 吃光 5 条配额后点开 P1 时 `take=slice(0,0)=空`，折叠状态变了但视觉零变化="展不开"。修=**折叠交互后退出紧凑视图**（collapsedGroups 非空=全量渲染按折叠隐藏；全部再折叠=恢复紧凑，语义自然）。实拍验证 P0 组 37→0→37。
+- **灾难③老化重构（pin 固定优先级）**：todos 表 `pin` 列（幂等 ALTER 双侧迁移）+老化建议与梯队递补**算法双跳过** pin 条目+POST /api/todos/<id>/pin 端点（400/404 零静默）+前端图钉（编辑模式切换钮/只读橙色标识）。#366 Linux 评估已顺手 pin=true。
+- **TTS/表情双修**（队长 QQ 实锤"（表情:玩玩）"直发+TTS 念出）：①extract_sticker_keyword 括号族全兼容（[]/［］/（）/()×冒号全半角）②strip_prefix_noise 三堵之二扩全形 ③express.clean_for_tts（**synthesize_speech 单一出口清洗**：表情标注/CQ 码/情绪词短标注全剥，非表情括号不误伤）。
+
+### 怎么验证的
+- 全仓 **2944+5 全绿**（+11 锚：变体提取×5/TTS 清洗×2/pin 迁移与行为×4 等含既有锚五方化更新）；生产实弹 pin #366 → 200；浏览器实操：resizer=4px、P0 折叠 37→0→37、pin 标识渲染。
+- 插件同步（waker/express）+前端三处热同步+exe 51b14a57 双端 MATCH。
+
+### 回滚
+- git revert ee3dabf；waker/express .bak-20261030-ttsfix；console/index .bak 同日戳；重建回滚。
+
+## 附：agency-zc（众策）部署（队长代劳任务，非仓库代码）
+- npm 全局装 agency-zc@0.19.4（真实存在，Apache-2.0，多角色 AI 协作工作台）；DeepSeek Key 已代配（zc init --provider deepseek，生产 .env 读取不回显）；`zc web` = http://127.0.0.1:8088（后台常驻）；上手指南已交付队长。
+
+
 ## 批十三 — feat(HITL 升级:summary 摘要+多预设选项+自定义输入+老板广播双向感知)（v2.2.1 内部补丁，重建 exe f8257117 部署 13:5x，全仓 2939+5）
 
 ### 改了什么
