@@ -21,15 +21,24 @@
 import hashlib
 import os
 import re
+import sys
 import threading
 import time
 from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_TASK_BUS = os.path.join(_HERE, "_dev", "TASK_BUS.md")
-_SYNC = os.path.join(_HERE, "_dev", "SYNC_DEEPSEEK.md")
+# 路径解析（2026-10-30 frozen 路径陷阱修复）：PYZ 内 __file__ 指向
+# _MEIPASS（_internal），按 __file__ 拼出的 _dev 路径不存在=监听永远空转
+# （部署实锤：协作线程启动正常但 history 恒空）。frozen 下项目根=exe 所
+# 在目录（_internal 的父目录）；源码运行=仓库根（_HERE 的上级）。
+if getattr(sys, "frozen", False):
+    _ROOT = os.path.dirname(sys.executable)
+else:
+    _ROOT = os.path.dirname(_HERE)
+_TASK_BUS = os.path.join(_ROOT, "_dev", "TASK_BUS.md")
+_SYNC = os.path.join(_ROOT, "_dev", "SYNC_DEEPSEEK.md")
 _PROD_ENV = r"F:\XUNandxiaoju3\xiaoju3_data\.env"
-_LOG = os.path.join(_HERE, "_dev", "ai_consult_log.md")
+_LOG = os.path.join(_ROOT, "_dev", "ai_consult_log.md")
 
 POLL_SEC = 1.5
 MAX_PER_DAY = 15
