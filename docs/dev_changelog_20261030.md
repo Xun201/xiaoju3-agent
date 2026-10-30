@@ -1,5 +1,19 @@
 # 开发者日志 2026-10-30
 
+## 批十五 — fix(热区越界根治+众策常驻)（v2.2.1 内部补丁，热同步，全仓 2944+5）
+
+### 改了什么
+- **热区越界根治（队长实锤"整个左侧边栏都能触发蓝线"）**：真凶=`.sidebar:hover` 选择器——它让鼠标在侧栏**任意位置**都点亮右缘 border 蓝线（上批加":has 热区反射"时多写的第一行）。修=物理删除该选择器，只留 `:has(+ #sidebar-resizer:hover)`（4px 热区反射）+`.divider-dragging`（拖拽中）两路点亮——侧栏内部在结构上无法再亮线。锚选择器组同步。
+- **众策常驻修复**：8088 死因=zc web 前台进程被 ZCode 后台任务退出连带杀（bash 包装生命周期）。修=`start "agency-zc" cmd /k zc web` 独立 cmd 窗口常驻（ZCode 退出不影响）——8088 复活实测 200。
+
+### 怎么验证的
+- test_sidebar_resize 15/15；grep 实锤 index.html 零 `.sidebar:hover`；众策 8088 复活+独立窗口。
+- IAB 合成鼠标不刷新 :hover（cursor 生效但 matches false=模拟限制非产品问题），真实手感归队长刷新验证。
+
+### 回滚
+- git revert 30378bb；index.html.bak-20261030-errbar 链。
+
+
 ## 批十四 — fix(三连抢救+TTS/表情双修)（v2.2.1 内部补丁，重建 exe 51b14a57 部署，全仓 2944+5）
 
 ### 改了什么
