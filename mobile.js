@@ -100,15 +100,33 @@
     var FOLLOW_THRESHOLD = 80;
     var following = true;
 
+    function streamAppend(row) {
+        var s = streamEl();
+        if (!s) { return; }        /* 流缺失=静默跳过（极端时序防御） */
+        s.appendChild(row);
+    }
+
+    function streamEl() {
+        /* 惰性解析+自愈（排雷批）：内联后元素捕获时序曾致 null——
+         * 调用时重查 DOM，仍无则如实返回 null 由调用方防御 */
+        if (stream && stream.isConnected) { return stream; }
+        stream = document.getElementById('mStream');
+        return stream;
+    }
+
     function nearBottom() {
-        return stream.scrollHeight - stream.scrollTop - stream.clientHeight <= FOLLOW_THRESHOLD;
+        var s = streamEl();
+        if (!s) { return true; }   /* 无流=默认跟随（不做强制滚动） */
+        return s.scrollHeight - s.scrollTop - s.clientHeight <= FOLLOW_THRESHOLD;
     }
 
     function scrollToBottom(smooth) {
-        if (smooth && typeof stream.scrollTo === 'function') {
-            stream.scrollTo({ top: stream.scrollHeight, behavior: 'smooth' });
+        var s = streamEl();
+        if (!s) { return; }
+        if (smooth && typeof s.scrollTo === 'function') {
+            s.scrollTo({ top: s.scrollHeight, behavior: 'smooth' });
         } else {
-            stream.scrollTop = stream.scrollHeight;
+            s.scrollTop = s.scrollHeight;
         }
     }
 
@@ -118,7 +136,7 @@
     }
 
     function bindStream() {
-        stream.addEventListener('scroll', function () {
+        streamEl().addEventListener('scroll', function () {
             following = nearBottom();
             fab.classList.toggle('is-visible', !following);
         }, { passive: true });
@@ -167,6 +185,7 @@
         if (!vv) { return; }
         var MIN_KEYBOARD = 120;
         function applyViewport() {
+            if (!composer) { return; }   /* head 阶段元素未就绪防御（排雷批） */
             var scale = vv.scale || 1;
             if (Math.abs(scale - 1) > 0.01) {
                 composer.style.transform = '';
@@ -299,7 +318,7 @@
         b.className = 'bubble bubble--me';
         b.textContent = text;                     /* 用户消息 textContent=零 XSS（桌面同源纪律） */
         row.appendChild(b);
-        stream.appendChild(row);
+        streamAppend(row);
         followIfPinned();
         return b;
     }
@@ -384,7 +403,7 @@
             b.appendChild(tag);
         }
         row.appendChild(b);
-        stream.appendChild(row);
+        streamAppend(row);
         followIfPinned();
         return b;
     }
@@ -396,7 +415,7 @@
         b.className = 'bubble bubble--them bubble--error';
         b.textContent = text;
         row.appendChild(b);
-        stream.appendChild(row);
+        streamAppend(row);
         followIfPinned();
         return b;
     }
@@ -438,7 +457,7 @@
         card.appendChild(btn);
         card.appendChild(bodyEl);
         row.appendChild(card);
-        stream.appendChild(row);
+        streamAppend(row);
         followIfPinned();
         return {
             row: row, card: card, btn: btn, label: btn.querySelector('.think-label'),
@@ -538,7 +557,7 @@
             var content = el('div', 'bubble-content');
             b.appendChild(content);
             row.appendChild(b);
-            stream.appendChild(row);
+            streamAppend(row);
             answerEl = content;
             followIfPinned();
             return content;
@@ -756,7 +775,7 @@
         });
         card.appendChild(customInput);
         row.appendChild(card);
-        stream.appendChild(row);
+        streamAppend(row);
         followIfPinned();
     }
 
