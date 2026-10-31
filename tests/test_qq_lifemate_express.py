@@ -346,5 +346,81 @@ class WakeExpressIntegrationTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class MoodPolarityAlignmentTests(unittest.TestCase):
+    """2026-10-31 P1 情绪对齐回归网：『小橘想你了』落 neutral 疑惑盲盒
+    （16:17 实锤『？（满脸疑惑）』猫图）——正文情绪与表情 mood 全链脱钩
+    的根治锚：分类词表+标注映射+图库极性包+宁可不发四件。"""
+
+    def test_detect_mood_missing_maps_to_miss(self):
+        """想念/想你→miss（温情·脸红类）——不再恒落 neutral。"""
+        self.assertEqual(express.detect_mood("主人~小橘想你了(´･ω･`)"), "miss")
+        self.assertEqual(express.detect_mood("小橘好想主人呀"), "miss")
+        self.assertEqual(express.detect_mood("贴贴蹭蹭"), "miss")
+
+    def test_detect_mood_order_negative_first(self):
+        """匹配顺序：负面先行——『不开心』不得误中 happy。"""
+        self.assertEqual(express.detect_mood("主人今天不开心"), "sad")
+        self.assertEqual(express.detect_mood("小橘好开心呀"), "happy")
+        self.assertEqual(express.detect_mood("小橘生气了"), "angry")
+        self.assertEqual(express.detect_mood("困困的，想睡觉"), "sleepy")
+        self.assertEqual(express.detect_mood("害羞脸红了"), "shy")
+        self.assertEqual(express.detect_mood("主人在忙吗？"), "confused")
+        self.assertEqual(express.detect_mood("主人在干嘛呀"), "confused")  # 问句→问号类
+        self.assertIsNone(express.detect_mood("主人记得喝水"))  # 无信号=不发
+
+    def test_sticker_mood_kw_first_then_text(self):
+        """标注词优先于正文；均无映射= None（宁可不发）。"""
+        self.assertEqual(express.sticker_mood("疑问"), "confused")
+        self.assertEqual(express.sticker_mood("想念"), "miss")
+        self.assertIsNone(express.sticker_mood("忙"))
+        self.assertEqual(express.sticker_mood("忙", "小橘想你了"), "miss")
+        self.assertEqual(express.sticker_mood("猫猫"), "neutral")
+
+    def test_stray_replies_polarity_aligned(self):
+        """幽灵拦截话术极性锚：想念语义文字配温情类标注（旧版写死
+        [表情:疑问]——图文对撞焊进代码，审查实锤）。"""
+        for t in waker._STRAY_REPLIES:
+            _, kw = waker.extract_sticker_keyword(t)
+            self.assertIsNotNone(kw, t)
+            self.assertEqual(express.sticker_mood(kw), "miss", t)
+
+    def test_gallery_mood_packs_exist(self):
+        """图库极性包锚：八大 mood 目录非空（stickers/ 为本地数据，缺库
+        整体跳过——库在则每个情绪类必须有正确极性包，发错不如不发）。"""
+        root = express.sticker_root()
+        user_dir = os.path.join(root, "user")
+        if not os.path.isdir(user_dir):
+            self.skipTest("本地图库不存在（stickers/ 为不入库数据）")
+        for sub in ("miss", "confused", "neutral", "happy", "angry",
+                    "sad", "shy", "sleepy"):
+            d = os.path.join(user_dir, sub)
+            imgs = ([x for x in os.listdir(d)
+                     if x.lower().endswith((".png", ".jpg", ".gif", ".webp"))]
+                    if os.path.isdir(d) else [])
+            self.assertTrue(imgs, f"user/{sub} 池空：{sub} 类无正确极性包")
+
+    def test_send_sticker_no_mood_skips(self):
+        """mood=None/空：宁可不发（不落轨根随机盲盒）。"""
+        with patch.object(express, "send_cq", return_value=True) as cq:
+            self.assertFalse(express.send_sticker(None))
+            self.assertFalse(express.send_sticker(""))
+        cq.assert_not_called()
+
+    def test_send_api_sticker_unknown_mood_no_local_fallback(self):
+        """mood 未知的 API 链：双源挂也不降级本地盲盒（宁可不发）。"""
+        with patch.object(express, "search_sticker", return_value=None), \
+             patch.object(express, "send_sticker", return_value=True) as ls:
+            self.assertFalse(express.send_api_sticker("忙", mood=None))
+        ls.assert_not_called()
+
+    def test_clean_for_tts_bare_and_fullwidth_square(self):
+        """TTS 清洗补丁锚：全角［］+裸形态（审查实测两 miss 形态——
+        TTS 单用 clean_for_tts 时会漏念）。"""
+        self.assertEqual(express.clean_for_tts("主人好吗［表情:忙］"),
+                         "主人好吗")
+        self.assertEqual(express.clean_for_tts("在忙吗表情：开心"), "在忙吗")
+        self.assertEqual(express.clean_for_tts("小橘想你呀表情:忙"), "小橘想你呀")
+
+
 if __name__ == "__main__":
     unittest.main()

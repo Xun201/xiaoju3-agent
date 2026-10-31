@@ -119,10 +119,37 @@ _WAKE_PROMPT = (
     "绝不能再主动讲选股基金）；此刻只能做一件事——自然地打招呼问候近况。"
     "严禁出现\"走神/忘了/提个头/补上/接着说\"等表述——主动发消息不存在"
     "\"走神\"。"
+    "【表情语义死命令（2026-10-31）】带 [表情:关键词] 时，表情情绪必须与"
+    "文字语义严格一致：想念/想你→脸红/可爱/温情类（如 想念/贴贴/害羞）；"
+    "疑惑/提问→问号类（疑问）；开心→笑脸类（开心）。不确定就不带表情"
+    "标签，绝不发与文字情绪打架的表情。标注必须写成 [表情:关键词] 完整"
+    "括号形态，严禁不带括号的裸『表情:关键词』。"
+    "【时段铁律（2026-10-31 真机实锤根治：20:37 发『大家早上好呀』）】现在是"
+    "{now}——问候语的时间感必须与之一致：晚上绝不说\"早上好\"，深夜不装"
+    "白天；拿不准就用无时段问候（如\"主人在忙吗\"）。连白天黑夜都说不准"
+    "的话，宁可沉默不发。"
 )
 
 REPLAY_HOUR = 3          # 每日回放：03:00 后首个检查周期触发（内部动作不发声）
 TENSION_FAST_SILENCE_H = SILENCE_HOURS / 2.0   # 正事轨：张力高时静默阈值减半
+# ── 无回复指数退避（2026-10-31 P1 频率冷却，队长四件修复③） ──
+# 根因：静默钟只测小橘自己上次发声（proactive_wake 落账即重置），主人
+# 零回复与秒回待遇完全相同——4h 阈值+quiet 在零回复日精确产出 8/12/16/20
+# 四连（审查仿真复现），DAILY_CAP=5 永远打不满形同虚设。修：上次唤醒后
+# 主人零回信→下次间隔翻倍 1d→2d→4d 封顶（4d≈自动闭嘴）；主人一回信
+# 即复位（判据=history_qq.json mtime 晚于上次唤醒落账时刻，main 每轮
+# QQ 对话后重写该文件、唤醒自己不走 main 对话链不会自触发）。
+BACKOFF_BASE_H = 24      # 首次无回应退避 1 天
+BACKOFF_CAP_H = 96       # 封顶 4 天
+
+
+def backoff_hours(unanswered):
+    """连续无回应唤醒次数 → 退避时长（小时）：0 次=0（无退避），1 次=24h，
+    2 次=48h，≥3 次=96h 封顶（1d→2d→4d 翻倍链，队长口径）。纯函数可测。"""
+    n = int(unanswered or 0)
+    if n <= 0:
+        return 0.0
+    return float(min(BACKOFF_BASE_H * (2 ** (n - 1)), BACKOFF_CAP_H))
 
 
 def _agent_state_dir():
@@ -311,15 +338,22 @@ def in_quiet_hour(hour):
     return hour >= QUIET_START or hour < QUIET_END
 
 
-def should_wake(last_ts, now_dt, daily_count, tension=0.0):
+def should_wake(last_ts, now_dt, daily_count, tension=0.0, unanswered=0):
     """唤醒闸（切片 c 张力双轨）：硬帽/quiet/静默——静默阈值随张力自适应
     （正事轨：张力≥0.6 时阈值减半=更愿意说话；想念轨维持 4h）。返回
-    (是否唤醒, 原因)。"""
+    (是否唤醒, 原因)。
+    2026-10-31 P1 频率冷却：unanswered=连续无回应唤醒次数（meta
+    wake_unanswered，_wake_loop 读入并做回信复位）——>0 时静默阈值抬到
+    backoff_hours（1d→2d→4d 封顶），压过张力快轨（主人不理时正事轨
+    也不该加速轰炸）。默认 0 向后兼容，既有张力双轨行为不动。"""
     if daily_count >= DAILY_CAP:
         return False, "daily_cap"
     if in_quiet_hour(now_dt.hour):
         return False, "quiet"
     need = TENSION_FAST_SILENCE_H if tension >= 0.6 else SILENCE_HOURS
+    bo = backoff_hours(unanswered)
+    if bo > need:
+        need = bo
     if last_ts is None:
         return True, "first_meet"
     last_dt = parse_ts(last_ts)
@@ -329,7 +363,31 @@ def should_wake(last_ts, now_dt, daily_count, tension=0.0):
     if silent_hours >= need:
         track = "tension" if tension >= 0.6 else "miss"
         return True, "{}_{}_h".format(track, round(silent_hours, 1))
+    if bo and silent_hours >= (TENSION_FAST_SILENCE_H if tension >= 0.6
+                               else SILENCE_HOURS):
+        return False, "no_reply_backoff"   # 静默够但退避未满：可观测跳因
     return False, "not_silent"
+
+
+def _owner_replied_since_last_wake(db, history_path=None):
+    """主人回信检测（__init__.py 切片 c 欠账的最小实现，2026-10-31）：
+    main 每轮 QQ 对话后重写 history_qq.json（MEMORY_FILE_QQ 落盘）——文件
+    mtime 晚于上次唤醒落账时刻=主人发过话（唤醒走 send_qq 直发，不经
+    main 对话链，不会自触发）。文件缺失/读不到=无回信证据，保守不复位
+    （退避继续——宁少发不多发）。history_path 注入保证可测。"""
+    last_wake = meta_get(db, "wake_last_ts", "")
+    if not last_wake:
+        return True   # 从未唤醒过：谈不上"无回应"
+    last_dt = parse_ts(last_wake)
+    if last_dt is None:
+        return True
+    path = history_path or os.path.join(_agent_state_dir(), "history_qq.json")
+    try:
+        if datetime.fromtimestamp(os.path.getmtime(path)) > last_dt:
+            return True
+    except OSError:
+        return False
+    return False
 
 
 def daily_count(db, now_dt):
@@ -346,10 +404,11 @@ def daily_count(db, now_dt):
 # ────────────────────────── 唤醒动作 ──────────────────────────
 
 # 情绪词表（标注漏网扫描用——真机实锤：模型会输出 [可爱/开心] 无"表情:"
-# 前缀形态，主正则 miss 后整串留正文）
+# 前缀形态，主正则 miss 后整串留正文）。2026-10-31 补"想念"（温情类
+# 标注词——_STRAY_REPLIES 改温情标注后入表，剥除/提取链同步认识）
 STICKER_WORDS = ("开心", "可爱", "生气", "无语", "害羞", "猫猫", "委屈",
                  "困困", "坏笑", "得意", "偷笑", "大哭", "惊讶", "疑惑",
-                 "摸鱼", "干饭", "蹭蹭", "贴贴")
+                 "摸鱼", "干饭", "蹭蹭", "贴贴", "想念")
 
 
 def extract_sticker_keyword(text):
@@ -358,9 +417,17 @@ def extract_sticker_keyword(text):
     (剥除后文本, 关键词|None)。裸 [表情]（无冒号无关键词，2026-10-28
     真机泄漏实锤）也剥除——不知道情绪就交 maybe_express 概率路径。
     2026-10-30 再放宽（队长实锤"（表情:玩玩）"泄漏）：括号族全兼容
-    （半角 []/全角（）/圆 ()）+冒号全半角+内侧空格容错。"""
+    （半角 []/全角（）/圆 ()）+冒号全半角+内侧空格容错。
+    2026-10-31 P0 泄漏根治（20:17 裸『表情:忙』直发主人实锤）：补无
+    括号裸形态『表情:X/表情：X』提取——锚"表情+冒号"语句形态（非普通
+    文本子串），关键词止于空白/常见标点 1-8 字（与主形同口径）。"""
     import re
     m = re.search(r"[\[（［(]\s*表情\s*[:：]\s*([^\]）)］\s]{1,8})\s*[\]）)］]", text)
+    if m:
+        return (text[:m.start()] + text[m.end():]).strip(), m.group(1).strip()
+    # 裸形态『表情:X』（无任何括号；20:17 事故形态）：模型漏打括号时
+    # 上游每道门原本全瞎——此处为第一道，剥除+提取同主形
+    m = re.search(r"表情\s*[:：]\s*([^\s，。！？,.!?、；;）)\]］」』]{1,8})", text)
     if m:
         return (text[:m.start()] + text[m.end():]).strip(), m.group(1).strip()
     # 裸 [表情]/[表情 ]/（表情）/［表情］ 等无关键词形态：剥除不留正文（三堵之一）
@@ -378,7 +445,8 @@ def extract_sticker_keyword(text):
 def strip_prefix_noise(text):
     """格式红线兜底（切片 c 队长口径）：剥"那句话："等前缀噪声+[表情]
     全形态标注（任意位置，2026-10-28 三堵）+末尾残留短标注。正文内其他
-    方括号不动。"""
+    方括号不动。2026-10-31 P0 补两形态：全角方括号［表情:X］（旧字符类
+    不含 ［，实测 miss）+无括号裸形态『表情:X』（20:17 事故形态）。"""
     if not text:
         return text
     import re
@@ -393,15 +461,41 @@ def strip_prefix_noise(text):
         text = re.sub(pat, "", text)
     # [表情...] 全形态任意位置剥（2026-10-28 三堵之二：裸 [表情] 中段
     # 残留曾直发 QQ 成纯文本；主解析失败时这里是最后防线）。
-    # 2026-10-30 扩全角/圆括号族（队长实锤"（表情:玩玩）"直发）：
-    text = re.sub(r"\[表情[^\[\]]{0,10}\]", "", text)
+    # 2026-10-30 扩全角/圆括号族（队长实锤"（表情:玩玩）"直发）；
+    # 2026-10-31 扩全角方括号族+裸形态：
+    text = re.sub(r"[\[［]表情[^\[［\]］]{0,10}[\]］]", "", text)
     text = re.sub(r"[（(]表情[^（）()]{0,10}[）)]", "", text)
+    text = re.sub(r"表情\s*[:：]\s*[^\s，。！？,.!?、；;）)\]］」』]{1,8}",
+                  "", text)
     text = re.sub(r"\[[^\[\]]{1,10}\]\s*$", "", text)
+    text = re.sub(r"［[^［］]{1,10}］\s*$", "", text)
     text = re.sub(r"[（(][^（）()]{1,10}[）)]\s*$", "", text)
     for w in STICKER_WORDS:   # 含情绪词的短标注（任意位置）一律剥
         text = re.sub(r"\[[^\[\]]{0,6}" + w + r"[^\[\]]{0,6}\]", "", text)
+        text = re.sub(r"［[^［］]{0,6}" + w + r"[^［］]{0,6}］", "", text)
         text = re.sub(r"[（(][^（）()]{0,6}" + w + r"[^（）()]{0,6}[）)]", "", text)
     return text.strip()
+
+
+def clean_for_qq_text(text):
+    """QQ 文字出口单一消毒门（2026-10-31 P0 泄漏根治，20:17 裸『表情:忙』
+    直发主人实锤）：send_qq/_social_send 任何路径出 QQ 的文本必经——剥
+    表情标注全形态（括号族半/全角方圆×冒号全半角×无括号裸形态）+情绪词
+    短标注。上游三道门（extract/strip_prefix_noise/幽灵拦截）历史全部
+    括号锚定，裸形态在每道门都不可见——出口兜底是最后防线（与 TTS 出口
+    的 clean_for_tts 单一出口设计同构）。幂等：干净文本逐字不变。"""
+    if not text:
+        return text
+    import re
+    text = re.sub(r"[\[（［(]\s*表情\s*[:：][^\]）)］]{0,12}[\]）)］]", "", text)
+    text = re.sub(r"[\[（［(]\s*表情\s*[\]）)］]", "", text)
+    text = re.sub(r"表情\s*[:：]\s*[^\s，。！？,.!?、；;）)\]］」』]{1,8}",
+                  "", text)
+    for w in STICKER_WORDS:
+        text = re.sub(
+            r"[\[（［(][^\[\]（）［］()]{0,6}" + w + r"[^\[\]（）［］()]{0,6}[\]）)］]",
+            "", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def enforce_persona(text):
@@ -426,16 +520,18 @@ _GHOST_CONTEXT_RE = None
 # 生效（被动回复链不走此处），主动推送里说"走神"=时空错乱（用户根本没在
 # 对话）；改为中性寒暄，无话找话不如简单问候。
 _STRAY_REPLIES = (
-    "主人在忙吗？小橘突然想起你啦[表情:疑问]",
-    "咦，主人最近怎么样呀，小橘来冒个泡[表情:疑问]",
-    "主人在吗在吗？小橘想随便聊聊[表情:疑问]",
+    "主人在忙吗？小橘突然想起你啦[表情:想念]",
+    "咦，主人最近怎么样呀，小橘来冒个泡[表情:贴贴]",
+    "主人在吗在吗？小橘想随便聊聊[表情:想念]",
 )
 
 
 def enforce_context_independence(text, sticker_kw=None):
     """唤醒消息独立性死命令（出口层，全来源生效）：正文含指代前文的表述
     （那句话/刚才那/上次说…）即判"幽灵追问"，整条替换为诚实走神话术
-    （随机一条，自带[表情:疑问]标注走既有 sticker 链）。干净原文原样
+    （随机一条，自带温情类[表情:想念/贴贴]标注走既有 sticker 链——
+    2026-10-31 情绪对齐：话术文字全是想念/寒暄语义，旧版写死[表情:疑问]
+    把"想念文字×疑惑表情"的对撞焊进代码，审查实锤）。干净原文原样
     返回。不改模型输出内容本身——只做发送前的最后一道确定性闸门。"""
     global _GHOST_CONTEXT_RE
     import re
@@ -484,7 +580,10 @@ def generate_wake_text(scene_action, now_dt, db=None):
 def send_qq(text):
     """发队长私聊（防脑回三级回执，2026-10-27 拍板）：HTTP 200 + retcode==0
     + data.message_id 存在才算真实发送；失败重试 1 次；owner 未配置如实
-    False。绝不假装已发送。"""
+    False。绝不假装已发送。
+    2026-10-31 P0：入口先过 clean_for_qq_text（QQ 文字出口单一消毒门）——
+    上游全 miss 的漏括号裸『表情:忙』标注绝不外泄（20:17 实锤）。"""
+    text = clean_for_qq_text(text)
     api = (os.environ.get("ONEBOT_API_URL", "").strip()
            or os.environ.get("NAPCAT_API_URL", "").strip()
            or "http://127.0.0.1:3001").rstrip("/")
@@ -555,21 +654,26 @@ def wake_once(now_dt):
         # 幽灵追问拦截（2026-10-29 队长拍板）：指代不存在的上文→诚实走神
         # 话术（全来源最后一道闸门：本地生成/云端重写/模板统一过检）
         text, sticker_kw = enforce_context_independence(text, sticker_kw)
+        # QQ 出口消毒（2026-10-31 P0）：上游全 miss 的裸标注在此兜底剥除
+        # ——落账 chat_log 与实发一致（send_qq 内还有同门双保险）
+        text = clean_for_qq_text(text)
         if not send_qq(text):
             return False
         # 表现力编排（切片 b）：文字已发出，按概率附加语音/表情（失败
         # 静默降级——文字消息不受影响）
         try:
             import express
+            # 情绪极性对齐（2026-10-31 P1）：mood 由标注词/正文情绪推出，
+            # 不再恒落缺省 neutral 盲盒（『想你了』配疑惑脸实锤）；分不出
+            # =宁可不发（队长死命令：发错不如不发）
+            mood = express.sticker_mood(sticker_kw, text)
             if sticker_kw:
                 # 情绪驱动（队长拍板）：模型标注关键词→搜图→URL 直发→沉淀；
-                # 解析失败回退 mood 映射
-                if not express.send_api_sticker(sticker_kw):
-                    express.send_api_sticker(
-                        express.MOOD_KEYWORDS.get("neutral", "猫猫"))
+                # 质检不过/双源挂→mood 已知才降级本地图库（不再回退猫猫盲盒）
+                express.send_api_sticker(sticker_kw, mood=mood)
                 acts = "api_sticker"
             else:
-                acts = express.maybe_express(text)
+                acts = express.maybe_express(text, mood=mood)
             if acts:
                 print(f"🦊 [qq_lifemate] 表现力附加: {acts}")
         except Exception as e:
@@ -583,6 +687,15 @@ def wake_once(now_dt):
             meta_set(db, "wake_count", "1")
         else:
             meta_set(db, "wake_count", str(daily_count(db, now_dt) + 1))
+        # 无回复指数退避落账（2026-10-31 P1）：每次唤醒 unanswered+1、记录
+        # 本次唤醒时刻（now_dt 口径，生产=当下、测试可确定）；_wake_loop
+        # 检测到主人回信（history_qq.json mtime 晚于此时刻）即归零
+        meta_set(db, "wake_last_ts", now_dt.strftime("%Y-%m-%d %H:%M:%S"))
+        try:
+            prev_unanswered = int(meta_get(db, "wake_unanswered", "0") or 0)
+        except ValueError:
+            prev_unanswered = 0
+        meta_set(db, "wake_unanswered", str(prev_unanswered + 1))
         db.commit()
         print(f"🦊 [qq_lifemate] 已主动唤醒：{text[:40]}")
         return True
@@ -670,9 +783,20 @@ def _wake_loop():
             try_daily_replay(now_dt)   # 每日回放（切片 c：03:00 后首查触发）
             db = _db()
             try:
+                # 无回复指数退避（2026-10-31 P1）：先检测主人是否在上次唤醒
+                # 后回过信（history_qq.json mtime）——回过即归零退避计数
+                try:
+                    unanswered = int(meta_get(db, "wake_unanswered", "0") or 0)
+                except ValueError:
+                    unanswered = 0
+                if unanswered and _owner_replied_since_last_wake(db):
+                    meta_set(db, "wake_unanswered", "0")
+                    print("🦊 [qq_lifemate] 检测到主人回信→唤醒退避复位")
+                    unanswered = 0
                 count = daily_count(db, now_dt)
                 wake, reason = should_wake(last_speak_ts(db), now_dt, count,
-                                           tension=current_tension())
+                                           tension=current_tension(),
+                                           unanswered=unanswered)
             finally:
                 db.close()
             if not wake:
@@ -743,7 +867,10 @@ def _parse_social_pool():
 
 
 def _social_send(target_type, target_id, text):
-    """发送到群或私聊（OneBot API）。"""
+    """发送到群或私聊（OneBot API）。2026-10-31 P0：入口先过
+    clean_for_qq_text——社交线问候原文曾零格式门直发（审查实锤连
+    [表情:X] 括号形态都会漏，裸形态更瞎），任何路径出 QQ 必过同一道门。"""
+    text = clean_for_qq_text(text)
     api = (os.environ.get("ONEBOT_API_URL", "").strip()
            or os.environ.get("NAPCAT_API_URL", "").strip()
            or "http://127.0.0.1:3001").rstrip("/")
@@ -771,17 +898,41 @@ def _social_send(target_type, target_id, text):
 
 _SOCIAL_MODE_PROMPT = (
     "你是小橘，现在在一个普通的群聊/好友聊天中。请发一句符合聊天氛围的"
-    "日常问候或轻松话题（如'大家早上好呀'、'有人在摸鱼吗'、'今天天气不错呢'）。"
+    "日常问候或轻松话题（如'有人在摸鱼吗'、'今天天气不错呢'、'最近怎么样呀'）。"
     "语气自然轻松，像真人聊天。"
+    "【时段铁律（2026-10-31 时间错乱根治）】问候的时间感必须与用户消息里给出"
+    "的当前时段严格一致：晚上只说晚上好，中午说中午好，深夜不装白天；拿不准"
+    "就用无时段问候（如'在忙吗'），说错时段宁可沉默。"
     "【绝对红线】严禁暴露关于主人的任何信息（名字/习惯/偏好/日程/位置）。"
     "严禁提供任何网址、下载链接或安装教程。严禁长篇大论。1-2 句即可。")
 
 
-def _social_greeting(target_desc, chat_fn=None):
-    """生成社交模式问候语（场景隔离——零主人信息）。"""
+def _time_segment(now=None):
+    """当前时段名+该时段问候示例（时间错乱根治 2026-10-31：社交线 prompt
+    曾硬编码'大家早上好呀'示例且零时间上下文，20:37 群聊照样说早上好）。
+    纯函数可测，社交线/主人线共用。"""
+    h = (now.hour if now is not None else datetime.now().hour)
+    if 5 <= h < 11:
+        return "早上", "大家早上好呀"
+    if 11 <= h < 14:
+        return "中午", "中午好呀，饭吃了吗"
+    if 14 <= h < 18:
+        return "下午", "下午好，有人在忙吗"
+    if 18 <= h < 23:
+        return "晚上", "大家晚上好呀"
+    return "深夜", "这么晚还没睡呀"
+
+
+def _social_greeting(target_desc, chat_fn=None, now=None):
+    """生成社交模式问候语（场景隔离——零主人信息）。
+    2026-10-31 时间错乱根治：注入当前时间+时段+动态示例（对齐主人线
+    now= 传参口径），晚上只会引导说晚上好。"""
+    seg, sample = _time_segment(now)
+    now_str = (now if now is not None else datetime.now()).strftime("%H:%M")
     prompt = [{"role": "system", "content": _SOCIAL_MODE_PROMPT},
               {"role": "user", "content": f"当前目标：{target_desc}。"
-               "请生成一句问候。"}]
+               f"现在是 {now_str}（{seg}），参考示例：'{sample}'。"
+               "请生成一句符合当前时段的问候。"}]
     try:
         if chat_fn:
             return str(chat_fn(prompt) or "").strip()

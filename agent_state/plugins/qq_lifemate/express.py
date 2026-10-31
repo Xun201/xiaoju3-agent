@@ -54,23 +54,32 @@ def send_cq(cq_message):
 # ────────────────────────── 语音（Edge-TTS 主 / SAPI 兜底） ──────────────────────────
 
 # TTS 清洗词表（2026-10-30 实锤"表情玩玩"被念出）：与 waker.STICKER_WORDS
-# 同源口径（express 被 waker import，反向 import 会循环——本地同表并注释）
+# 同源口径（express 被 waker import，反向 import 会循环——本地同表并注释）；
+# 2026-10-31 补"想念"（温情类标注词随词库扩容同步）
 _TTS_STRIP_WORDS = ("开心", "可爱", "生气", "无语", "害羞", "猫猫", "委屈",
                     "困困", "坏笑", "得意", "偷笑", "大哭", "惊讶", "疑惑",
-                    "摸鱼", "干饭", "蹭蹭", "贴贴", "玩玩")
+                    "摸鱼", "干饭", "蹭蹭", "贴贴", "玩玩", "想念")
 
 
 def clean_for_tts(text):
     """TTS 前彻底清洗（2026-10-30 队长最高优先级）：剥表情/动作标注全形态
     （方/全角/圆括号 × 半/全角冒号 × 裸表情）+CQ 码残留+情绪词短标注——
-    只允许朗读纯净对话正文。单一出口：synthesize_speech 入口必经。"""
+    只允许朗读纯净对话正文。单一出口：synthesize_speech 入口必经。
+    2026-10-31 P0 泄漏根治补两形态（审查实测 miss）：①全角方括号
+    ［表情:X］（旧开类字符不含全角［）；②无括号裸形态『表情:X/
+    表情：X』（20:17 事故形态——全链防线原本全瞎，TTS 会把"表情忙"
+    当正文念出）。"""
     import re
     text = re.sub(r"\[CQ:[^\]]*\]", "", text or "")
-    text = re.sub(r"[\[（(]\s*表情\s*[:：][^\]）)]{0,12}[\]）)]", "", text)
-    text = re.sub(r"[\[（(]\s*表情\s*[\]）)]", "", text)
+    text = re.sub(r"[\[（［(]\s*表情\s*[:：][^\]）)］]{0,12}[\]）)］]", "", text)
+    text = re.sub(r"[\[（［(]\s*表情\s*[\]）)］]", "", text)
+    # 裸形态（无括号）：关键词止于空白/常见标点，1-8 字（与主形同口径）
+    text = re.sub(r"表情\s*[:：]\s*[^\s，。！？,.!?、；;）)\]］」』]{1,8}",
+                  "", text)
     for w in _TTS_STRIP_WORDS:
-        text = re.sub(r"[\[（(][^\[\]（）()]{0,6}" + w + r"[^\[\]（）()]{0,6}[\]）)]",
-                      "", text)
+        text = re.sub(
+            r"[\[（［(][^\[\]（）［］()]{0,6}" + w + r"[^\[\]（）［］()]{0,6}[\]）)］]",
+            "", text)
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
@@ -181,6 +190,14 @@ def _list_images(directory):
 
 
 def send_sticker(mood=""):
+    """本地图库按 mood 发表情。mood 空/None=分不出情绪：宁可不发也不发
+    错极性（2026-10-31 队长死命令：发错不如不发）——旧轨根随机兜底正是
+    『想你了』配疑惑脸盲盒的来源之一。非空 mood 维持轨内回退（兼容既有
+    契约锚：mood 目录缺图回退轨根随机）。"""
+    mood = (mood or "").strip().lower()
+    if not mood:
+        print("🦊 [express] 未识别情绪（宁可不发表情，不发错极性），跳过。")
+        return False
     path = pick_sticker(mood)
     if not path:
         print("🦊 [express] 图库空（stickers/ 无图片），跳过表情。")
@@ -209,9 +226,68 @@ def maybe_express(text_sent, mood="neutral", rng=None):
 _SEARCH_XCVTS = "https://api.xcvts.cn/api/img/qqbqbss"       # 主源（QQ 官方 gtimg 源）
 _SEARCH_MUMING = "https://xiaoapi.cn/v1/meme.php"             # 备选（独立封装站）
 
-# mood → 关键词回退映射（模型标注解析失败时兜底）
+# mood → 关键词回退映射（模型标注解析失败时兜底；2026-10-31 情绪对齐
+# 补 miss/confused 两类——『想念』『疑问』不再无落脚点）
 MOOD_KEYWORDS = {"neutral": "猫猫", "happy": "开心", "angry": "生气",
-                 "sad": "委屈", "shy": "害羞", "sleepy": "困"}
+                 "sad": "委屈", "shy": "害羞", "sleepy": "困",
+                 "miss": "想念", "confused": "疑问"}
+
+# ── 情绪极性对齐（2026-10-31 P1：『想你了』落 neutral 疑惑盲盒根治） ──
+# 文字情绪 → mood 目录的有序规则表。匹配顺序即声明顺序（匹配顺序修正：
+# 负面词先行——"不开心"必须先于"开心"命中，否则误中 happy；想念/温情
+# 先于泛化问号）。返回 None=分不出：宁可不发表情也不发错极性（队长
+# 死命令：发错不如不发）。
+MOOD_RULES = (
+    (r"不开心|不高兴|难过|伤心|委屈|想哭|呜", "sad"),
+    (r"(?<![不没])开心|哈哈|嘻嘻|嘿嘿|高兴|快乐|笑", "happy"),
+    (r"生气|气死|气人|发火|愤怒|笨蛋", "angry"),
+    (r"害羞|脸红|不好意思", "shy"),
+    (r"困|睡|晚安|瞌睡|打哈欠", "sleepy"),
+    (r"想念|想你|思念|好想|亲亲|抱抱|贴贴|蹭蹭|么么|撒娇", "miss"),
+    (r"疑问|疑惑|问号|懵|不懂|不明白|啥意思|为什么|怎么|在吗|忙吗|"
+     r"在干嘛|干嘛|[?？]", "confused"),
+)
+
+
+def detect_mood(text):
+    """文字情绪 → 表情库 mood（None=宁可不发）。纯分类函数，标注词与
+    正文共用；wake 侧编排见 sticker_mood（标注词优先）。"""
+    import re
+    t = str(text or "")
+    if not t:
+        return None
+    for pat, mood in MOOD_RULES:
+        if re.search(pat, t):
+            return mood
+    return None
+
+
+# 模型标注关键词（STICKER_WORDS 词表）→ mood 目录；未收录词不映射
+# （API 关键词搜图链仍可用——关键词搜图天然极性相符；本地宁缺毋滥）。
+# 可爱按队长口径归温情类（想念→脸红/可爱）。
+STICKER_MOOD = {
+    "开心": "happy", "偷笑": "happy", "得意": "happy", "坏笑": "happy",
+    "生气": "angry",
+    "委屈": "sad", "大哭": "sad",
+    "害羞": "shy",
+    "困困": "sleepy",
+    "想念": "miss", "贴贴": "miss", "蹭蹭": "miss", "可爱": "miss",
+    "疑惑": "confused", "疑问": "confused",
+    "猫猫": "neutral",
+    # 无语/摸鱼/干饭/惊讶等：无把握极性→不映射（发错不如不发）
+}
+
+
+def sticker_mood(keyword=None, text=None):
+    """表情链唯一 mood 判定入口（2026-10-31）：模型标注词优先（明示
+    情绪），标注词无映射再测正文情绪；均无=返回 None（调用方宁可不发）。
+    根治：wake_once 两分支 mood 恒为缺省 'neutral'——『想你了』(温情)
+    在代码链里不存在分类入口。"""
+    if keyword:
+        m = STICKER_MOOD.get(str(keyword).strip())
+        if m:
+            return m
+    return detect_mood(text)
 
 
 def search_sticker(keyword, page=None):
@@ -301,13 +377,13 @@ def _download_temp(url):
         return None
 
 
-def send_api_sticker(keyword, mood="neutral"):
+def send_api_sticker(keyword, mood=None):
     """API 搜图 + 视觉质检门（≥7 分才发+入 cache）：搜→下载→打分→
     发送+沉淀；不过关重搜，重搜尽仍不过=放弃本次表情（宁缺毋滥）。
-    API 双源挂/总开关关 → 降级本地图库。返回是否真发。"""
+    2026-10-31 情绪对齐：mood=None（情绪分不出）时绝不降级本地图库
+    盲盒——宁可不发；质检过的图只沉淀进已知 mood（防污染 neutral 池）。"""
     if not STICKER_API_ENABLED:
-        return send_sticker(mood)
-    mood = (mood or "neutral").strip().lower() or "neutral"
+        return send_sticker(mood) if mood else False
     for attempt in range(1 + QA_FAIL_RETRY):
         url = search_sticker(keyword)
         if not url:
@@ -321,7 +397,7 @@ def send_api_sticker(keyword, mood="neutral"):
             if score < QA_THRESHOLD:
                 continue   # 不过关：重搜
             ok = send_cq(f"[CQ:image,file={url}]")
-            if ok:
+            if ok and mood:
                 stash_sticker(url, mood, tier="cache")
             return ok
         finally:
@@ -330,4 +406,4 @@ def send_api_sticker(keyword, mood="neutral"):
             except OSError:
                 pass
     print("🦊 [express] 质检无合格图，降级本地图库")
-    return send_sticker(mood)
+    return send_sticker(mood) if mood else False

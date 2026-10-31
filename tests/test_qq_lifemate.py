@@ -663,11 +663,15 @@ class LeakAndPersonaTests(unittest.TestCase):
     def test_ghost_followup_intercepted_to_neutral_greeting(self):
         """幽灵追问拦截：指代不存在上文的唤醒话（真机实锤"那句话呢？"）
         → 整条替换为中性寒暄（2026-10-30 队长拍板改版：主动推送里说
-        "走神"=时空错乱，用户根本没在对话；旧走神话术退役）。"""
+        "走神"=时空错乱，用户根本没在对话；旧走神话术退役；2026-10-31
+        情绪对齐：替换件标注从[表情:疑问]改温情类——想念/寒暄语义文字
+        配问号脸的图文对撞不许再焊进代码）。"""
         out, kw = waker.enforce_context_independence("那句话呢？")
         self.assertNotIn("那句话", out)
         self.assertNotIn("走神", out)                   # 主动推送禁走神表述
-        self.assertEqual(kw, "疑问")                    # 替换件自带疑问标注
+        import express
+        self.assertIsNotNone(kw)                        # 替换件自带表情标注
+        self.assertEqual(express.sticker_mood(kw), "miss")   # 且为温情类极性
 
     def test_ghost_blacklist_variants_intercepted(self):
         for ghost in ("刚才那个好好玩", "上次说的东西你还记得吗",
@@ -748,3 +752,283 @@ class SocialOwnerNotConfiguredTests(unittest.TestCase):
     def test_send_qq_without_owner_skips(self):
         with patch.dict(os.environ, {"XIAOJU3_OWNER_QQ": ""}):
             self.assertFalse(waker.send_qq("测试"))   # 未配置=跳过不发送
+
+
+class BareTagLeakFixTests(unittest.TestCase):
+    """2026-10-31 P0 泄漏根治（20:17 裸『表情:忙』直发主人实锤）回归网：
+    无括号裸形态『表情:X/表情：X』提取/剥除/QQ 出口三门全锚 + 全角方括号
+    ［表情:X］补锚。根因：全链防御正则历史全部成对括号锚定——裸形态在
+    每道门都不可见，send_qq 出口零消毒即原文直发。"""
+
+    def test_bare_halfwidth_colon_extracted(self):
+        """裸『表情:忙』（半角冒号，20:17 事故形态）：提取 kw+剥除。"""
+        c, kw = waker.extract_sticker_keyword("小橘想你呀表情:忙")
+        self.assertEqual(kw, "忙")
+        self.assertEqual(c, "小橘想你呀")
+        c2, kw2 = waker.extract_sticker_keyword("表情:忙")
+        self.assertEqual(kw2, "忙")
+        self.assertEqual(c2, "")
+
+    def test_bare_fullwidth_colon_extracted(self):
+        """裸『表情：开心』（全角冒号）：同口径提取+剥除。"""
+        c, kw = waker.extract_sticker_keyword("主人好吗表情：开心")
+        self.assertEqual(kw, "开心")
+        self.assertEqual(c, "主人好吗")
+
+    def test_bracket_forms_still_extract_matrix(self):
+        """括号形态矩阵不回退：半角[]/全角圆（）/圆()/全角方［］×冒号全半角。"""
+        for mark in ("[表情:忙]", "（表情:忙）", "(表情：忙)", "［表情：忙］"):
+            c, kw = waker.extract_sticker_keyword("主人吃饭了吗" + mark)
+            self.assertEqual(kw, "忙", mark)
+            self.assertNotIn("表情", c, mark)
+
+    def test_strip_fullwidth_square_bracket(self):
+        """全角方括号［表情：忙］：strip_prefix_noise 剥除（审查实测旧字符
+        类不含 ＝ miss 形态）。"""
+        out = waker.strip_prefix_noise("在忙吗［表情：忙］")
+        self.assertNotIn("表情", out)
+        self.assertNotIn("［", out)
+
+    def test_strip_bare_anywhere(self):
+        """裸形态中段/末段均剥（B 场景『…小橘想你呀表情:忙』带出实测）。"""
+        self.assertEqual(waker.strip_prefix_noise("小橘想你呀表情:忙"),
+                         "小橘想你呀")
+
+    def test_clean_for_qq_text_single_gate_matrix(self):
+        """QQ 出口单一消毒门：括号四形态+裸形态全剥；干净文本逐字不变。"""
+        for dirty in ("[表情:忙]", "（表情：忙）", "表情:忙", "［表情：忙］"):
+            out = waker.clean_for_qq_text("主人吃饭了吗" + dirty)
+            self.assertNotIn("表情", out, dirty)
+            self.assertNotIn("［", out, dirty)
+            self.assertIn("主人吃饭了吗", out, dirty)
+        self.assertEqual(waker.clean_for_qq_text("干净的话"), "干净的话")
+
+    def test_clean_for_qq_text_bare_midtext(self):
+        out = waker.clean_for_qq_text("小橘想你呀表情:忙，主人在忙吗")
+        self.assertNotIn("表情", out)
+        self.assertIn("小橘想你呀", out)
+
+    def test_send_qq_sanitizes_at_exit(self):
+        """send_qq 出口门实锚：裸标注绝不出网（POST payload 无『表情』）。"""
+        import types
+
+        def _resp():
+            r = types.SimpleNamespace()
+            r.status_code = 200
+            r.json = lambda: {"retcode": 0, "data": {"message_id": 1}}
+            return r
+
+        with patch.dict(os.environ, {"XIAOJU3_OWNER_QQ": "123",
+                                     "ONEBOT_API_URL": "http://x",
+                                     "ONEBOT_TOKEN": ""}), \
+             patch("requests.post", return_value=_resp()) as post:
+            self.assertTrue(waker.send_qq("小橘想你呀表情:忙"))
+        self.assertNotIn("表情", post.call_args[1]["json"]["message"])
+
+    def test_social_send_sanitizes_at_exit(self):
+        """社交线出口同门：问候原文曾零格式门直发（审查实锤）补上。"""
+        import types
+        r = types.SimpleNamespace()
+        r.status_code = 200
+        r.json = lambda: {"retcode": 0, "data": {"message_id": 9}}
+        with patch("requests.post", return_value=r) as post:
+            self.assertTrue(waker._social_send("group", "1", "在吗表情：开心"))
+        self.assertNotIn("表情", post.call_args[1]["json"]["message"])
+
+    def test_wake_prompt_sticker_semantics_dead_order(self):
+        """修④锚：_WAKE_PROMPT 表情语义死命令原文（严格一致+不确定不带+
+        严禁裸形态）。"""
+        p = waker._WAKE_PROMPT
+        self.assertIn("表情情绪必须与", p)
+        self.assertIn("文字语义严格一致", p)
+        self.assertIn("不确定就不带表情", p)
+        self.assertIn("严禁不带括号", p)
+
+
+class NoReplyBackoffTests(unittest.TestCase):
+    """2026-10-31 P1 频率冷却：无回复指数退避（1d→2d→4d 封顶）+回信复位。
+    根因：静默钟只测小橘自己上次发声（proactive_wake 落账即重置）——主人
+    零回复与秒回待遇相同，4h+quiet 在零回复日精确产出 8/12/16/20 四连
+    （审查仿真复现），DAILY_CAP=5 永远打不满。"""
+
+    def setUp(self):
+        self.now = datetime(2026, 10, 27, 14, 0, 0)   # 14:00 非 quiet
+
+    def test_backoff_hours_ladder(self):
+        """退避阶梯：0→0h，1→24h，2→48h，3→96h，再大封顶 96h。"""
+        self.assertEqual(waker.backoff_hours(0), 0.0)
+        self.assertEqual(waker.backoff_hours(1), 24.0)
+        self.assertEqual(waker.backoff_hours(2), 48.0)
+        self.assertEqual(waker.backoff_hours(3), 96.0)
+        self.assertEqual(waker.backoff_hours(9), 96.0)   # 封顶=自动闭嘴
+
+    def test_unanswered_doubles_interval_timeline(self):
+        """退避时间线主锚：静默 5h（>4h 基线）但 unanswered=1 → 拒（需
+        24h）；25h → 放行；unanswered=2 需 48h；unanswered=3/4 同 96h 封顶。"""
+        wake, reason = waker.should_wake("2026-10-27 09:00:00",  # 5h 前>4h 基线
+                                         self.now, 0, unanswered=1)
+        self.assertFalse(wake)
+        self.assertEqual(reason, "no_reply_backoff")
+        self.assertTrue(waker.should_wake("2026-10-26 13:00:00",  # 25h≥24h
+                                          self.now, 0, unanswered=1)[0])
+        self.assertFalse(waker.should_wake("2026-10-26 09:00:00",  # 29h<48h
+                                           self.now, 0, unanswered=2)[0])
+        self.assertTrue(waker.should_wake("2026-10-23 09:00:00",  # 101h≥96h
+                                          self.now, 0, unanswered=3)[0])
+        self.assertFalse(waker.should_wake("2026-10-26 09:00:00",  # 29h<96h
+                                           self.now, 0, unanswered=4)[0])
+        self.assertTrue(waker.should_wake("2026-10-23 09:00:00",  # 101h≥96h 封顶同放
+                                          self.now, 0, unanswered=4)[0])
+
+    def test_zero_unanswered_keeps_legacy_gate(self):
+        """unanswered 缺省 0：4h 基线原样（既有张力双轨锚不回退）。"""
+        self.assertFalse(waker.should_wake("2026-10-27 12:00:00",
+                                           self.now, 0)[0])   # 2h<4h
+        self.assertTrue(waker.should_wake("2026-10-27 09:00:00",
+                                          self.now, 0)[0])    # 5h≥4h
+        # 张力快轨仍生效（退避=0 不压张力）
+        self.assertTrue(waker.should_wake("2026-10-27 11:30:00",
+                                          self.now, 0, tension=0.7)[0])
+
+    def test_backoff_overrides_tension_fast_track(self):
+        """主人不理时正事轨也不加速轰炸：静默 5h（张力轨 2h 早已够）+
+        unanswered=1 → 仍被退避压住拒发。"""
+        self.assertFalse(waker.should_wake("2026-10-27 09:00:00",
+                                           self.now, 0, tension=0.9,
+                                           unanswered=1)[0])
+
+    def test_owner_reply_detection_via_history_mtime(self):
+        """回信判据（审查员指认变量）：history_qq.json mtime 晚于上次唤醒
+        落账=回过信→可复位；早于/文件缺失=未回信（保守不复位）。"""
+        import time as _t
+        tmp = tempfile.mkdtemp(prefix="lm_bo_")
+        waker.set_data_dir(tmp)
+        try:
+            db = waker._db()
+            hist = os.path.join(tmp, "history_qq.json")
+            with open(hist, "w", encoding="utf-8") as f:
+                f.write("[]")
+            old = _t.time() - 7200   # 2h 前唤醒；history mtime=刚刚 → 回过信
+            waker.meta_set(db, "wake_last_ts", datetime.fromtimestamp(
+                old).strftime("%Y-%m-%d %H:%M:%S"))
+            self.assertTrue(waker._owner_replied_since_last_wake(
+                db, history_path=hist))
+            future = _t.time() + 7200   # 唤醒时刻在未来 → mtime 必然早于它
+            waker.meta_set(db, "wake_last_ts", datetime.fromtimestamp(
+                future).strftime("%Y-%m-%d %H:%M:%S"))
+            self.assertFalse(waker._owner_replied_since_last_wake(
+                db, history_path=hist))
+            self.assertFalse(waker._owner_replied_since_last_wake(
+                db, history_path=os.path.join(tmp, "nope.json")))
+            db.close()
+        finally:
+            waker.stop()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_wake_once_counts_unanswered(self):
+        """落账：每次唤醒 unanswered+1+记 wake_last_ts（回信复位的对照锚）。"""
+        tmp = tempfile.mkdtemp(prefix="lm_bo2_")
+        waker.set_data_dir(tmp)
+        try:
+            with patch.object(waker, "generate_wake_text",
+                              return_value=("嗨", None)), \
+                 patch.object(waker, "send_qq", return_value=True):
+                waker.wake_once(datetime(2026, 10, 27, 14, 0, 0))
+                waker.wake_once(datetime(2026, 10, 27, 18, 0, 0))
+            db = waker._db()
+            try:
+                self.assertEqual(waker.meta_get(db, "wake_unanswered"), "2")
+                self.assertEqual(waker.meta_get(db, "wake_last_ts"),
+                                 "2026-10-27 18:00:00")
+            finally:
+                db.close()
+        finally:
+            waker.stop()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_wake_loop_wires_backoff(self):
+        """接线锚（语句形态，防 docstring 误触）：_wake_loop 消费
+        wake_unanswered+调用回信复位。"""
+        import inspect
+        src = inspect.getsource(waker._wake_loop)
+        self.assertIn("_owner_replied_since_last_wake", src)
+        self.assertIn("wake_unanswered", src)
+
+
+class TimeSegmentSanityTests(unittest.TestCase):
+    """时间错乱根治锚（2026-10-31 真机实锤：20:37 社交串门发"大家早上好呀"）。
+
+    根因：_SOCIAL_MODE_PROMPT 硬编码早上示例+ _social_greeting 零时间注入
+    （主人线 L97 一直有 now= 传参）。修：时段纯函数+示例动态化+双线
+    时段铁律死命令。晚上只会引导说晚上好。
+    """
+
+    def test_time_segment_mapping_boundaries(self):
+        """时段映射与边界：20:37=晚上（事发时刻回归位）。"""
+        seg = lambda h, m=0: waker._time_segment(datetime(2026, 10, 31, h, m))
+        self.assertEqual(seg(20, 37)[0], "晚上")   # 事发实锤时刻
+        self.assertEqual(seg(8)[0], "早上")
+        self.assertEqual(seg(5)[0], "早上")         # 下边界含 5 点
+        self.assertEqual(seg(4, 59)[0], "深夜")     # 上边界不含
+        self.assertEqual(seg(12)[0], "中午")
+        self.assertEqual(seg(15)[0], "下午")
+        self.assertEqual(seg(22, 59)[0], "晚上")
+        self.assertEqual(seg(23)[0], "深夜")        # 下边界不含
+        self.assertIn("晚上好", seg(20, 37)[1])     # 晚上示例不带"早上"
+
+    def test_social_mode_prompt_no_hardcoded_morning(self):
+        """社交 prompt 不再硬编码早上示例（示例只在 _time_segment 动态产出）。"""
+        self.assertNotIn("大家早上好", waker._SOCIAL_MODE_PROMPT)
+
+    def test_social_mode_prompt_segment_iron_rule(self):
+        """社交 prompt 含时段铁律死命令（语句形态锚）。"""
+        self.assertIn("时段铁律", waker._SOCIAL_MODE_PROMPT)
+        self.assertIn("宁可沉默", waker._SOCIAL_MODE_PROMPT)
+
+    def test_social_greeting_injects_time_and_segment_evening(self):
+        """晚上 20:37 生成的 prompt：含时间+晚上时段+晚上示例，零早上字样。"""
+        captured = []
+
+        def fake_chat(prompt):
+            captured.append(prompt)
+            return "大家晚上好呀"
+
+        out = waker._social_greeting("测试群", chat_fn=fake_chat,
+                                     now=datetime(2026, 10, 31, 20, 37))
+        user_msg = captured[0][1]["content"]
+        self.assertIn("20:37", user_msg)
+        self.assertIn("晚上", user_msg)
+        self.assertIn("大家晚上好呀", user_msg)
+        self.assertNotIn("早上好", user_msg)
+        self.assertEqual(out, "大家晚上好呀")
+
+    def test_social_greeting_morning_dynamic_example(self):
+        """早上 8:00：动态示例正确给早上（白天黑夜不再搞反）。"""
+        captured = []
+
+        def fake_chat(prompt):
+            captured.append(prompt)
+            return "大家早上好呀"
+
+        waker._social_greeting("测试群", chat_fn=fake_chat,
+                               now=datetime(2026, 10, 31, 8, 0))
+        self.assertIn("大家早上好呀", captured[0][1]["content"])
+        self.assertNotIn("晚上好", captured[0][1]["content"])
+
+    def test_wake_prompt_segment_iron_order(self):
+        """主人线 _WAKE_PROMPT 补时段铁律死命令+{now} 占位符完好。"""
+        self.assertIn("时段铁律", waker._WAKE_PROMPT)
+        self.assertIn("宁可沉默不发", waker._WAKE_PROMPT)
+        self.assertIn("{now}", waker._WAKE_PROMPT)
+
+    def test_social_greeting_default_now_compat(self):
+        """向后兼容：不传 now 照常工作（用真实当前时间）。"""
+        captured = []
+
+        def fake_chat(prompt):
+            captured.append(prompt)
+            return "在忙吗"
+
+        out = waker._social_greeting("测试群", chat_fn=fake_chat)
+        self.assertEqual(out, "在忙吗")
+        self.assertTrue(captured, "prompt 应已构建")
