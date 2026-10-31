@@ -149,3 +149,12 @@
 - **设计文档云非强制补章**（C.2-2+红线第四条，备份 .bak-20261031-lanonly）+《长线开发计划书 v2.1》落盘 _dev/docs/。
 - **changelog 对账补齐**：缺日 4 天（10-18/21/22/25）双时间戳补档（依据 git 提交重建）；10-09/17 未跟踪件入库。
 - **三批入库**：批 A 移动端 netfix（P0-2）/批 B QQ 唤醒层三事故+时间 Bug（P0-3）/批 C 纪律+docs；全仓测试只增不减；生产热部署 waker 时间修复。
+
+## 深夜六段：云端阵地就绪（腾讯轻量 4C4G/3M 上线）
+
+- **决策背景**：中继 RS2 公网阶段需云载体；三方商讨（秘书 A/B/C 方案 vs 包工头技术评估）定案腾讯轻量 4核4G/3M/109 元/年（上海）；队长安全原则=密码绝不走聊天，全程 SSH 公钥路线。
+- **部署过程**：本地生成 ed25519 部署密钥对（_dev/relay/cloud/deploy_ed25519，chmod 600 git 外）→ 队长经 OrcaTerm 写入 ubuntu authorized_keys → ZCode 免密接管执行 6 步（00 系统更新+pip/venv→01 UFW 仅 22/8443→02 deploy 用户→03 自签 TLS→systemd 备妥→04 加固）。插曲：控制台"密钥绑定"未落盘（publickey 拒绝，-vvv 日志定位本地无罪）→改网页终端手写公钥解决；04 脚本首传遗漏一次（scp 清单漏带），补传执行。
+- **安全口径**：deploy 用户刻意无 sudo（纯服务账户最小权限，运维走 ubuntu 免密 sudo 线）；root 密码登录彻底禁用（PermitRootLogin prohibit-password + PasswordAuthentication no，加固后双用户复验登录 OK）；systemd 单元带 NoNewPrivileges/ProtectSystem 沙盒（服务未启动——server.py TLS 接线属 M1-f，本机全绿后上线，不抢跑）。
+- **服务器**：49.234.44.73（Ubuntu 22.04.5）。
+- **🔐 证书指纹（客户端公钥校验锚）**：sha256 FD:1A:B7:69:57:05:AF:EA:FA:C0:D8:16:E4:AE:F7:B8:CA:A1:51:ED:DD:EC:77:B0:CA:CA:A4:72:EA:92:3D:6D（notAfter 2036-10-28，SAN=IP 直连免备案）。
+- 队长验收：云端部署审查通过（2026-10-31 深夜）。
