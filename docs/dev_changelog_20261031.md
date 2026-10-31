@@ -158,3 +158,13 @@
 - **服务器**：49.234.44.73（Ubuntu 22.04.5）。
 - **🔐 证书指纹（客户端公钥校验锚）**：sha256 FD:1A:B7:69:57:05:AF:EA:FA:C0:D8:16:E4:AE:F7:B8:CA:A1:51:ED:DD:EC:77:B0:CA:CA:A4:72:EA:92:3D:6D（notAfter 2036-10-28，SAN=IP 直连免备案）。
 - 队长验收：云端部署审查通过（2026-10-31 深夜）。
+
+## 深夜七段：M1 本机收官——RS2 加密数据面全线贯通（队长验收标准：哨兵零命中+篡改真红）
+
+- **四片实装**（_dev/relay/，全 git 外，备份 .bak-20261031-m1）：a 鉴权（master_secret 自动生成 chmod600+account_token=SHA256(secret+device_salt)+register 带token+错token close 4003+--no-auth 兼容旗标）b KEM-DEM 模块 crypto.py（X25519 身份对+SealedBox 封 random32 会话密钥+XChaCha20-Poly1305-IETF 每帧 AEAD nonce=random24+单密钥<2^32 帧纪律注释）c 盲中继（signal/relay_data 帧+16KB 分片+片间 await 让出防心跳饿死+未鉴权拒投）d --secure 双进程 E2E+run_secure_e2e.py 编排+三方日志 PIL 合图。
+- **独立验收三道死关全过**：哨兵 XJ3-E2E-SENTINEL 服务器日志零命中/双端各命中（盲中继实证）；篡改一字节解密必真红（单测+现场双测）；E2E 重放退出码 0。**43KB 大消息穿隧双端 SHA256 一致**（分片重组正确性）。
+- **新增测试锚 ≥11**（_dev/relay/tests/：往返/篡改/错钥/nonce 万帧零重复/跨会话密钥复用负例/空帧/16KB 边界/分片重组/乱序容忍/未鉴权拒投）。
+- **JS 选型定案：libsodium-wrappers-sumo@0.8.4**（noble 无 sealed box API=手工组密码学违零自研定稿；PyNaCl 同源栈）；跨语言互操作 11/11 双向 PASS（js-spike 实测含测试向量报告 docs/js_crypto_spike_20261031）。
+- **事故与修复**：工作流尾段 artifact.file 因运行 workspace=cloud/ 子目录拒外路径+catch 内二次未包 try 连环炸（工程与验收无损，reports 存证）——AmendWorkflow 全缓存重放修尾收官；教训=CreateWorkflow 注意 cwd=workspace 根+artifact 路径须在 workspace 内。
+- **交付**：桌面「小橘M1加密E2E_20261031」（截图+合并日志）；截图卡片随工作流发布。
+- **下一步 M1-f**：server.py TLS 接线（ssl_context）→部署 49.234.44.73:8443→公网双端联测→tcpdump 明文零命中。
