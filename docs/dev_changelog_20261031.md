@@ -92,3 +92,15 @@
 - **销账**：dist 旧 v2.2.1 包删（git 零追踪证+哈希核对）；TASK_BUS 两备注→todos #11(P2)/#12(P3)
 - **拍板记录**：E2EE 确认 ✅／MA4=D 暂缓／LAN 选型=python-zeroconf+capacitor-zeroconf 锁 3.0.0（4.0.0=Cap 7 勿装）+浏览器 JS 无组播走二维码兜底
 - **交付包**：桌面「小橘RS1交付_20261031」（4 截图+README）
+
+## 深夜三段：P0 白屏排障根治（bf4b6a8 已推，全仓 2988+5 复验 152s）
+
+- **事故**：v2.3.1-cap 真机白屏 net::ERR_CONNECTION_REFUSED@http://localhost/（电脑/后端均在线）
+- **根因（行级实锤）**：MainActivity.java:25（7a0d14a 崩溃接管块）用裸 WebViewClient 整体替换桥 client，拆掉 BridgeWebViewClient.shouldInterceptRequest→WebViewLocalServer（Capacitor 本地资产拦截唯一入口）→主文档请求直落网络栈→手机本机 80 拒连。源码注释自评"影响极小"系误判；好包同带此雷只是未触发二次导航
+- **洗清**：配置层（无 server.url/包内 config 与好包逐字一致）+资产层（解包五项：入口完整/无跳转替换/无 query 毒化）+data-caps 前端（纯 CSS/DOM 属性，回归审查双证排除）
+- **修复**：RenderGoneClient extends BridgeWebViewClient 仅覆写 onRenderProcessGone+bridge.setWebViewClient 正门装回（资产拦截/外链/onPageStarted 全链保留）
+- **顺手排雷**：android_app/www 同步当前真源（87163B→88759B，防 npx cap sync 旧内容盖回）
+- **交付**：v2.3.2-fixcap（versionCode 5，3,832,843B）dist/phone+桌面双位置；坏包留证 .broken-20261031
+- **验收**：六道门自验（8 资产 md5 全等）+独立验收五条 PASS+Chrome 本地打开非白（亮度 245.99/非白像素 99.92%）
+- **🔴 新坑入档**：裸 setWebViewClient 替换=拆 Capacitor 资产拦截唯一入口，任何二次导航（进程恢复/recreate/crash 重试/reload）必白屏——APK 侧加 WebViewClient 只能继承 BridgeWebViewClient 且走 bridge.setWebViewClient 正门
+- **战报失实自纠**：工作流结论"桌面副本已交"实际 copy 退出码 1，主会话人工补齐并如实报备
