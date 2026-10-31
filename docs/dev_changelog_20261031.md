@@ -63,3 +63,10 @@
 - **APK 复仇之战**：www→mobile 入口+assets/public 白名单入库（惨案根源根除）+RECORD_AUDIO+构建成功；模拟器挂账（AEHD 驱动需管理员安装，logic 级 E2E 已全过）。
 - **紧急修复**：B4 首脚本中断致 spec/dashboard 编辑丢失→生产 desktop 引用 404 的 core.js——补齐+重建+重部署（dc7c7f04），core.js 200+页面注入实证。
 - 坑库：多段脚本内存假象（二犯）/heredoc 反斜杠（三犯）/双 dev 服务占 5077/gitignore 无斜杠锚/gradle mergeAssets 不追 www 手改（须直填 assets/public）。
+
+## 9. APK 版本号紧急修复（队长真机实锤，d163c09 已推）
+
+- **事故**：v2.3.0-ma3 APK 只改了文件名，工程内部版本标识未动——真机安装界面显示 2.2.1->2.2.1，覆盖安装被系统视为同版（缓存/覆盖语义全部失真）。
+- **修复**：android/app/build.gradle defaultConfig versionCode 2→3（覆盖安装严格递增）+versionName "2.3.0-ma3"；aapt dump badging 实证 `versionCode='3' versionName='2.3.0-ma3'`。
+- **坑库**：APK 改版必须同步动 build.gradle 版本三件套（versionCode 递增+versionName），文件名只是皮肤。
+- **交付**：桌面「小橘手机端_2.3.0修复版.apk」+dist/phone/xiaoju3-phone-v2.3.0-ma3.apk 同步（3.6MB，入口=mobile/crash.html/core.js 全在包）。
