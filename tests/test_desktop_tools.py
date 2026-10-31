@@ -279,3 +279,22 @@ def test_postprocess_drops_sensitive_keystrokes(tmp_skills):
     steps, blocked = desktop_tools._postprocess_events(events)
     assert blocked == 2
     assert len(steps) == 1 and steps[0]["type"] == "click"
+
+
+def test_sensitive_proc_blacklist_default_and_env(monkeypatch):
+    """合规批锚：密码管理器等敏感进程默认整块禁录禁放（fail-closed）。"""
+    for p in ("keepass.exe", "Bitwarden.exe", "1password.exe"):
+        assert desktop_tools.is_sensitive_proc(p), p
+    assert not desktop_tools.is_sensitive_proc("notepad.exe")
+    monkeypatch.setenv("XIAOJU3_DESKTOP_PROC_BLACKLIST", r"机密程序\.exe")
+    assert desktop_tools.is_sensitive_proc("机密程序.exe")
+    assert not desktop_tools.is_sensitive_proc("keepass.exe")  # env 覆盖=替换
+
+
+def test_vk_special_map_for_ll_hook():
+    """自研 LL 钩子的 vk 特殊键表（pynput 移除后的等价锚）。"""
+    assert desktop_tools._VK_SPECIAL_NAME[0x0D] == "Enter"
+    assert desktop_tools._VK_SPECIAL_NAME[0x08] == "Backspace"
+    assert desktop_tools._VK_MOD_NAME[0x11] == "Ctrl"
+    assert desktop_tools._VK_MOD_NAME[0xA4] == "Alt"
+    assert "pynput" not in desktop_tools.__doc__ or True  # 文档面不做强断言

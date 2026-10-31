@@ -148,20 +148,14 @@ datas=[
         'plugins.todo_text',     # #261：intent_router 字符串动态引用（importlib 对静态分析不可见，必须显式列）
         'plugins.todo_query',    # todo_query 意图（查待办直达）：intent_router 字符串动态引用，同上铁律
         # ── 桌面技能 DA1（2026-10-31）：desktop_tools 经 tool_registry
-        #    "desktop_tools:handler" 动态引用，必须显式列（同上铁律）；
-        #    pynput 的 _win32 后端为函数内动态 import，漏列=冻结包即崩 ──
+        #    "desktop_tools:handler" 动态引用，必须显式列（同上铁律）。
+        #    合规批：pynput(LGPLv3) 按队长最高红线移除，录制层=自研 ctypes
+        #    LL 钩子零依赖；在包库全部 MIT/Apache/BSD，无强传染协议 ──
         'desktop_tools',
         'uiautomation',
         'comtypes',
         'comtypes.client',
         'comtypes.stream',
-        'pynput',
-        'pynput.keyboard',
-        'pynput.mouse',
-        'pynput._util',
-        'pynput._util.win32',
-        'pynput.keyboard._win32',
-        'pynput.mouse._win32',
         'pyautogui',
         'pyscreeze',
         'pygetwindow',

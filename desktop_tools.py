@@ -5,9 +5,16 @@
 设计已过 DeepSeek 秘书审查，四条致命点全采纳（见各函数标注）。
 
 能力：
-- 录制：pynput 全局钩子捕获鼠标点击/键盘输入；点击落点经 uiautomation
+- 录制：自研 ctypes LL 钩子（WH_MOUSE_LL/WH_KEYBOARD_LL，零第三方依赖）
+  捕获鼠标点击/键盘输入；点击落点经 uiautomation
   ControlFromPoint 解析 UIA 控件树生成"祖先定位链"（比裸坐标抗 DPI/布局漂移）；
   连续字符键合并 type_text；Ctrl/Alt/Win 组合按 vk 直取记 hotkey。
+  合规批（2026-10-31）：pynput=LGPLv3 按队长最高红线移除，DeepSeek 秘书裁决
+  路线 A（自研钩子）。
+- **功能定位与防滥用（合规红线）**：本模块仅限"本地个人辅助"用途——
+  帮助主人把本人手动演示过的操作变成可回放的技能；不做也不容忍：
+  验证码绕过、批量注册、恶意爬虫、伪造点击流量等任何触犯《网络安全法》
+  的能力；敏感进程/窗口/密码框一律拒录拒放。
 - 回放：按窗口标题找顶层窗口 → 按定位链下钻 → 失败回退窗口内相对坐标
   （DPI 缩放比对不过则禁止回退、直接失败）；失败即停、诚实汇报已执行步数。
 - 安全硬拦截（最高优先级，fail-closed）：
@@ -21,8 +28,9 @@
 
 打包纪律（AGENTS.md 动态引用铁律）：本模块被 tool_registry 以
 "desktop_tools:handler" 动态引用，必须显式列 xiaoju3.spec hiddenimports；
-uiautomation/comtypes/pynput/pyautogui 全部进 hiddenimports（pynput 的
-_win32 后端是动态 import，漏了=冻结包 ModuleNotFoundError）。comtypes 的
+uiautomation(Apache-2.0)/comtypes(MIT，本地 LICENSE.txt 核实)/
+pyautogui(BSD)/psutil(BSD-3) 进 hiddenimports。pynput(LGPLv3) 已按队长
+最高红线移除——合规清单见路线图 §九。comtypes 的
 gen 缓存目录启动期重定向到 agent_state（DeepSeek 审查：onedir 只读安装目录
 下的最高频翻车点）。
 """
@@ -334,17 +342,9 @@ def _postprocess_events(events):
     return steps, blocked
 
 
-# ── hotkey：pynput vk → uiautomation SendKeys 语法 ──────────────────
-_SPECIAL_NAME = {
-    "enter": "Enter", "space": "Space", "tab": "Tab", "backspace": "Backspace",
-    "delete": "Delete", "esc": "Esc", "up": "Up", "down": "Down",
-    "left": "Left", "right": "Right", "home": "Home", "end": "End",
-    "page_up": "PageUp", "page_down": "PageDown", "insert": "Insert",
-}
-_MOD_NAME = {"ctrl_l": "Ctrl", "ctrl_r": "Ctrl", "alt_l": "Alt",
-             "alt_r": "Alt", "alt_gr": "Alt", "cmd_l": "Win", "cmd_r": "Win",
-             "cmd": "Win", "shift_l": "Shift", "shift_r": "Shift",
-             "shift": "Shift"}
+# ── hotkey：vk 直取 → uiautomation SendKeys 语法 ─────────────────────
+# （2026-10-31 合规批：pynput=LGPLv3 按队长最高红线移除，录制层换自研
+#   ctypes LL 钩子——DeepSeek 秘书裁决路线 A：零 LGPL 依赖、代码自有）
 _UIA_MOD = {"Ctrl": "{Ctrl}", "Alt": "{Alt}", "Win": "{Win}", "Shift": "{Shift}"}
 _UIA_KEY = {"Enter": "{Enter}", "Space": " ", "Tab": "{Tab}",
             "Backspace": "{Backspace}", "Delete": "{Delete}", "Esc": "{Esc}",
@@ -407,12 +407,215 @@ def _foreground_title():
         return ""
 
 
+_PROC_BLACKLIST_DEFAULT = r"keepass|bitwarden|1password|lastpass|dashlane|enpass"
+
+
+def is_sensitive_proc(proc_name):
+    """敏感进程判定（2026-10-31 合规批实装：密码管理器等凭据类进程
+    整体禁录禁放）；env XIAOJU3_DESKTOP_PROC_BLACKLIST 可覆盖。"""
+    if not proc_name:
+        return False
+    env = (os.environ.get("XIAOJU3_DESKTOP_PROC_BLACKLIST") or "").strip()
+    pattern = env if env else _PROC_BLACKLIST_DEFAULT
+    try:
+        return re.search(pattern, proc_name, re.IGNORECASE) is not None
+    except re.error:
+        return True
+
+
+def _pid_proc_name(hwnd):
+    """句柄→进程名（小写）；任何异常返回 ""（不误拦）。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return ""
+        import psutil
+        return (psutil.Process(pid.value).name() or "").lower()
+    except Exception:
+        return ""
+
+
+def _foreground_proc():
+    """前台窗口的进程名（ctypes+psutil，毫秒级——键盘钩子安全用）。"""
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        return _pid_proc_name(hwnd) if hwnd else ""
+    except Exception:
+        return ""
+
+
+# ── 自研 LL 钩子（合规批：pynput=LGPLv3 移除；DeepSeek 秘书裁决路线 A）──
+# 工程铁律（秘书审查）：①钩子回调只做"读结构体+入队+立即 CallNextHookEx"，
+# 绝不做 UIA/日志/锁竞争——不拖慢全系统输入；②停止顺序=先 UnhookWindowsHookEx
+# 再 PostThreadMessage(WM_QUIT)，反序=钩子泄漏；③钩子必须装在有消息循环的线程。
+import ctypes as _ct
+from ctypes import wintypes as _wt
+
+_HOOKPROC = _ct.WINFUNCTYPE(_ct.c_ssize_t, _ct.c_int, _ct.c_size_t, _ct.c_ssize_t)
+
+# 64 位句柄纪律（E2E 实锤：默认 restype=c_int 把 GetModuleHandleW 的 64 位
+# 句柄截断成 32 位 → SetWindowsHookExW 报 126 MOD_NOT_FOUND）——必须显式
+# 声明 argtypes/restypes，句柄全程 c_void_p。
+_user32 = _ct.windll.user32
+_kernel32 = _ct.windll.kernel32
+_kernel32.GetModuleHandleW.restype = _ct.c_void_p
+_kernel32.GetModuleHandleW.argtypes = (_wt.LPCWSTR,)
+_user32.SetWindowsHookExW.restype = _ct.c_void_p
+_user32.SetWindowsHookExW.argtypes = (_ct.c_int, _HOOKPROC, _ct.c_void_p,
+                                      _wt.DWORD)
+_user32.UnhookWindowsHookEx.argtypes = (_ct.c_void_p,)
+_user32.CallNextHookEx.restype = _ct.c_ssize_t
+_user32.CallNextHookEx.argtypes = (_ct.c_void_p, _ct.c_int, _ct.c_size_t,
+                                   _ct.c_ssize_t)
+
+
+class _POINT(_ct.Structure):
+    _fields_ = [("x", _ct.c_long), ("y", _ct.c_long)]
+
+
+class _MSLLHOOKSTRUCT(_ct.Structure):
+    _fields_ = [("pt", _POINT), ("mouseData", _wt.DWORD),
+                ("flags", _wt.DWORD), ("time", _wt.DWORD),
+                ("dwExtraInfo", _ct.c_size_t)]
+
+
+class _KBDLLHOOKSTRUCT(_ct.Structure):
+    _fields_ = [("vkCode", _wt.DWORD), ("scanCode", _wt.DWORD),
+                ("flags", _wt.DWORD), ("time", _wt.DWORD),
+                ("dwExtraInfo", _ct.c_size_t)]
+
+
+_VK_MOD_NAME = {0x10: "Shift", 0x11: "Ctrl", 0x12: "Alt",
+                0xA0: "Shift", 0xA1: "Shift", 0xA2: "Ctrl", 0xA3: "Ctrl",
+                0xA4: "Alt", 0xA5: "Alt", 0x5B: "Win", 0x5C: "Win"}
+_VK_SPECIAL_NAME = {0x0D: "Enter", 0x09: "Tab", 0x08: "Backspace",
+                    0x1B: "Esc", 0x2E: "Delete", 0x25: "Left", 0x26: "Up",
+                    0x27: "Right", 0x28: "Down", 0x24: "Home", 0x23: "End",
+                    0x21: "PageUp", 0x22: "PageDown"}
+
+
+def _vk_to_char(vk, scan, down_vks):
+    """vk→字符（ToUnicodeEx 含 Shift 态）。已知限制：IME 合成键
+    （VK_PROCESSKEY 0xE5）拿不到合成汉字——LL 钩子在输入法合成前触发，
+    pynput 同理；录制捕获的是物理按键序列（对外表述按此口径）。"""
+    try:
+        user32 = _ct.windll.user32
+        state = (_wt.BYTE * 256)()
+        for k in down_vks:
+            state[k] = 0x80
+        # 规范修饰键位（探针实锤）：ToUnicodeEx 按 VK_SHIFT/CONTROL/MENU
+        # 判状态——只置 VK_LSHIFT(0xA0) 不生效，必须同置规范位 0x10/0x11/0x12
+        if down_vks & {0x10, 0xA0, 0xA1}:
+            state[0x10] = 0x80
+        if down_vks & {0x11, 0xA2, 0xA3}:
+            state[0x11] = 0x80
+        if down_vks & {0x12, 0xA4, 0xA5}:
+            state[0x12] = 0x80
+        buf = _ct.create_unicode_buffer(8)
+        n = user32.ToUnicodeEx(vk, scan, state, buf, 8, 0,
+                               user32.GetKeyboardLayout(0))
+        if n == 1:
+            return buf.value
+    except Exception:
+        pass
+    return None
+
+
+class _WinHook(object):
+    """WH_MOUSE_LL(14)/WH_KEYBOARD_LL(13) 自研全局钩子（零第三方依赖）。"""
+
+    def __init__(self, recorder):
+        self._rec = recorder
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="xj3-winhook")
+        self.thread_id = 0
+        self.h_mouse = None
+        self.h_kbd = None
+        self.error = None
+        self._ready = threading.Event()
+
+    def start(self):
+        self._thread.start()
+        self._ready.wait(timeout=3)
+        if self.error:
+            return False
+        return self.h_mouse is not None and self.h_kbd is not None
+
+    def stop(self):
+        user32 = _user32
+        if self.h_mouse:
+            user32.UnhookWindowsHookEx(self.h_mouse)
+            self.h_mouse = None
+        if self.h_kbd:
+            user32.UnhookWindowsHookEx(self.h_kbd)
+            self.h_kbd = None
+        if self.thread_id:
+            user32.PostThreadMessageW(self.thread_id, 0x0012, 0, 0)  # WM_QUIT
+        self._thread.join(timeout=3)
+
+    def _run(self):
+        user32 = _user32
+        kernel32 = _kernel32
+        self.thread_id = kernel32.GetCurrentThreadId()
+        # 回调对象必须挂 self 持引用——临时 _HOOKPROC 被 GC 后钩子一触发
+        # 即访问违例、整个进程死（E2E 实锤：仪表盘中途消失的元凶）
+        self._mouse_proc = _HOOKPROC(self._mouse_cb)
+        self._kbd_proc = _HOOKPROC(self._kbd_cb)
+        self.h_mouse = user32.SetWindowsHookExW(
+            14, self._mouse_proc,
+            kernel32.GetModuleHandleW(None), 0)
+        self.h_kbd = user32.SetWindowsHookExW(
+            13, self._kbd_proc,
+            kernel32.GetModuleHandleW(None), 0)
+        if not self.h_mouse or not self.h_kbd:
+            self.error = kernel32.GetLastError()
+        self._ready.set()
+        if self.error:
+            return
+        msg = _wt.MSG()
+        while user32.GetMessageW(_ct.byref(msg), None, 0, 0) > 0:
+            user32.TranslateMessage(_ct.byref(msg))
+            user32.DispatchMessageW(_ct.byref(msg))
+
+    def _mouse_cb(self, nCode, wParam, lParam):
+        try:
+            if nCode >= 0 and int(wParam) == 0x201:      # WM_LBUTTONDOWN
+                info = _ct.cast(_ct.c_void_p(lParam),
+                                _ct.POINTER(_MSLLHOOKSTRUCT)).contents
+                self._rec._push({"kind": "click",
+                                 "t": int(time.time() * 1000),
+                                 "x": int(info.pt.x), "y": int(info.pt.y)})
+        except Exception:
+            pass
+        return _user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+    def _kbd_cb(self, nCode, wParam, lParam):
+        try:
+            if nCode >= 0:
+                wp = int(wParam)
+                info = _ct.cast(_ct.c_void_p(lParam),
+                                _ct.POINTER(_KBDLLHOOKSTRUCT)).contents
+                vk = int(info.vkCode)
+                if wp in (0x100, 0x104):                 # KEYDOWN/SYSKEYDOWN
+                    self._rec._key_down(vk, int(info.scanCode))
+                elif wp in (0x101, 0x105):               # KEYUP/SYSKEYUP
+                    self._rec._key_up(vk)
+        except Exception:
+            pass
+        return _user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+
 # ── 录制器 ──────────────────────────────────────────────────────────
 class SkillRecorder(object):
     """线程模型（DeepSeek 审查①③采纳）：
-    - pynput 钩子回调只打时间戳入队，微秒级返回，绝不阻塞钩子；
+    - 自研 LL 钩子回调只打时间戳入队，微秒级返回，绝不阻塞钩子；
     - 解析 worker 线程 CoInitialize 后消费队列；ControlFromPoint 可能被
-      浏览器 provider 卡数百 ms~数秒——单次解析放独立线程加 800ms 超时，
+      浏览器 provider 卡数百 ms~数秒——单次解析放独立线程加超时，
       超时降级"仅坐标"事件（locator=None），录制节奏不受 UIA 拖累。"""
 
     def __init__(self):
@@ -425,6 +628,8 @@ class SkillRecorder(object):
         self._overflow = False
         self._started = 0.0
         self._q = None
+        self._hook = None
+        self._down_vks = set()
         self._worker = None
         self._listeners = []
         self._mods = set()
@@ -447,11 +652,6 @@ class SkillRecorder(object):
             name = _safe_name(name)
             if not name:
                 return False, "❌ 技能名非法（限 1-40 位中英文/数字/-/_）。"
-            try:
-                from pynput import mouse, keyboard  # noqa: F401  缺席即报
-            except ImportError as e:
-                return False, ("❌ pynput 不可用（%s）——冻结包请核对 spec "
-                               "hiddenimports。" % e)
             _ensure_comtypes_gen_dir()
             self._name = name
             self._trigger = (trigger or "").strip()[:80]
@@ -460,16 +660,15 @@ class SkillRecorder(object):
             self._overflow = False
             self._started = time.time()
             self._mods = set()
+            self._down_vks = set()
             self._q = _queue.Queue()
-            try:
-                m_listener = mouse.Listener(on_click=self._on_click)
-                k_listener = keyboard.Listener(
-                    on_press=self._on_press, on_release=self._on_release)
-                m_listener.start()
-                k_listener.start()
-            except Exception as e:
-                return False, "❌ 全局钩子启动失败：%s" % e
-            self._listeners = [m_listener, k_listener]
+            self._hook = _WinHook(self)
+            if not self._hook.start():
+                err = self._hook.error
+                if err:
+                    return False, "❌ 全局钩子启动失败（GetLastError=%s）。" % err
+                return False, "❌ 全局钩子启动失败。"
+            self._listeners = []
             self._worker = threading.Thread(
                 target=self._resolve_loop, daemon=True, name="xj3-recorder")
             self._recording = True
@@ -486,9 +685,9 @@ class SkillRecorder(object):
             if not self._recording:
                 return False, {"message": "❌ 当前没有在录制。"}
             self._recording = False
-        for ln in self._listeners:
+        if self._hook is not None:
             try:
-                ln.stop()
+                self._hook.stop()  # 先 Unhook 再 WM_QUIT（秘书铁律②）
             except Exception:
                 pass
         self._listeners = []
@@ -514,63 +713,41 @@ class SkillRecorder(object):
                "%d 步 / 敏感拦截 %d" % (len(steps), blocked))
         return ok, summary
 
-    # -- pynput 钩子（只入队，绝不阻塞）--
-    def _on_click(self, x, y, button, pressed):
-        if not pressed:
+    # -- LL 钩子事件处理（只入队语义；解析在 worker；回调层绝不抛）--
+    def _key_down(self, vk, scan):
+        mod = _VK_MOD_NAME.get(vk)
+        if mod:
+            self._mods.add(mod)
+        self._down_vks.add(vk)
+        if mod:
             return
-        try:
-            from pynput import mouse
-            if button != mouse.Button.left:
-                return
-        except Exception:
-            return
-        self._push({"kind": "click", "t": int(time.time() * 1000),
-                    "x": int(x), "y": int(y)})
-
-    def _on_press(self, key):
-        try:
-            from pynput import keyboard
-            fg = _foreground_title()  # 前台窗口归属（敏感键记录缺口封堵）
-            sens = is_sensitive_title(fg)
-            if isinstance(key, keyboard.Key):
-                base = _MOD_NAME.get(key.name)
-                if base:
-                    self._mods.add(base)
-                    return
-                combo = "+".join(sorted(self._mods) + [_SPECIAL_NAME.get(
-                    key.name, key.name.capitalize())])
+        fg = _foreground_title()          # 前台窗口归属（敏感键记录缺口封堵）
+        proc = _foreground_proc()         # 敏感进程（合规批实装）
+        sens = (is_sensitive_title(fg) or is_sensitive_proc(proc))
+        if self._mods - {"Shift"}:
+            # 仅 Shift + 可打印字符 = 文本（大写/符号），不构成组合键；
+            # Ctrl/Alt/Win 任一在场才走组合键（E2E 实锤教训）
+            main = _vk_to_name(vk)
+            if main:
+                combo = "+".join(sorted(self._mods) + [main])
                 self._push({"kind": "hotkey", "t": int(time.time() * 1000),
                             "combo": combo, "window": fg, "sensitive": sens})
-                return
-            if self._mods:
-                # 仅 Shift + 可打印字符 = 文本（大写/符号），不构成组合键；
-                # Ctrl/Alt/Win 任一在场才走 vk 组合键（E2E 实锤：Shift 漏映射
-                # 曾把大写打字拆成 N 个 "Shift" hotkey 步骤）
-                ctrl_like = self._mods - {"Shift"}
-                if ctrl_like:
-                    main = _vk_to_name(getattr(key, "vk", None))
-                    if main:
-                        combo = "+".join(sorted(self._mods) + [main])
-                        self._push({"kind": "hotkey", "t": int(time.time() * 1000),
-                                    "combo": combo, "window": fg,
-                                    "sensitive": sens})
-                    return
-            ch = getattr(key, "char", None)
-            if ch and ch.isprintable():
-                self._push({"kind": "char", "t": int(time.time() * 1000),
-                            "ch": ch, "window": fg, "sensitive": sens})
-        except Exception:
-            pass  # 钩子里绝不抛
+            return
+        ch = _vk_to_char(vk, scan, self._down_vks)
+        if ch:
+            self._push({"kind": "char", "t": int(time.time() * 1000),
+                        "ch": ch, "window": fg, "sensitive": sens})
+            return
+        name = _VK_SPECIAL_NAME.get(vk)
+        if name:
+            self._push({"kind": "hotkey", "t": int(time.time() * 1000),
+                        "combo": name, "window": fg, "sensitive": sens})
 
-    def _on_release(self, key):
-        try:
-            from pynput import keyboard
-            if isinstance(key, keyboard.Key):
-                base = _MOD_NAME.get(key.name)
-                if base:
-                    self._mods.discard(base)
-        except Exception:
-            pass
+    def _key_up(self, vk):
+        mod = _VK_MOD_NAME.get(vk)
+        if mod:
+            self._mods.discard(mod)
+        self._down_vks.discard(vk)
 
     def _push(self, ev):
         with self._lock:
@@ -649,7 +826,13 @@ class SkillRecorder(object):
             except Exception:
                 rel = None
         pwd = is_password_control(ctrl)
-        sens = pwd or is_sensitive_title(title)
+        proc = ""
+        try:
+            hwnd = top.NativeWindowHandle if top is not None else None
+            proc = _pid_proc_name(hwnd) if hwnd else ""
+        except Exception:
+            proc = ""
+        sens = (pwd or is_sensitive_title(title) or is_sensitive_proc(proc))
         return {
             "locator": build_locator_chain(ctrl),
             "window": title,

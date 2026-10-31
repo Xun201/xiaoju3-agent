@@ -7714,7 +7714,7 @@ var qrcode = function() {
 
         const note = document.createElement('div');
         note.style.cssText = 'font-size:12px;color:var(--color-text-hint,#999);margin-bottom:8px;';
-        note.textContent = '用法：填技能名→点开始录制→去目标窗口正常操作→回来点停止录制；之后点 ▶ 一键回放。敏感窗口（银行/支付/密码类）自动拦截。';
+        note.textContent = '用法：填技能名→点开始录制→去目标窗口正常操作→回来点停止录制；之后点 ▶ 一键回放。敏感窗口（银行/支付/密码类）自动拦截。⚠️ 免责提示：自动化操作可能存在误差，重要文件请提前备份；仅限本地个人辅助用途。';
         body.appendChild(note);
 
         const row = document.createElement('div');
@@ -7826,7 +7826,8 @@ var qrcode = function() {
                         runBtn.addEventListener('click', function () {
                             window.showConfirm('回放技能「' + s.name + '」',
                                 '将真实执行该技能录制的 ' + s.steps + ' 步鼠标键盘操作'
-                                + '（敏感窗口会自动拦截中止）。确定现在执行？',
+                                + '（敏感窗口会自动拦截中止）。自动化操作可能存在误差，'
+                                + '重要文件请提前备份。确定现在执行？',
                                 function () {
                                     status.textContent = '回放中…';
                                     post('/api/desktop/skills/run', { name: s.name },
