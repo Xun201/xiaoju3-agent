@@ -33,3 +33,21 @@
 - **修 fc3b68c 回归**：index.html 写死 ?v=20261030b 打穿 dashboard mtime 自动版本注入（桌面端缓存自动失效失效）——版本注入正则化：源为裸引用或 ?v= 引用一律重写为 mtime 动态版（APK file:// 静态 ?v= 保留，桌面动态版恢复）。
 - 既有 3 个前端测试锚（chat_container_id_consistency 缺 xj3-link-banner 自建 id / desktop_pet 断言未兼容 ?v= / mtime 版本断言）随修全绿。
 - **坑库新条目**：①Git Bash `cmd /c xxx.bat` 的 /c 会被路径转换吃掉（cmd 只打横幅即退）→ 必须 MSYS_NO_PATHCONV=1；②同名进程 taskkill /IM 通杀会误杀生产（冻结烟雾曾杀掉生产三进程）→ 冒烟/部署窗口分离，窗口内通杀才安全；③comtypes/UIA 每个新线程必须自行 CoInitialize（job 线程漏 init=UIA 必败）；④Win11 UWP 记事本标题 `*` 前缀+保存加速键免疫合成输入；⑤heredoc 写含反斜杠路径必炸（\n 被吃）——铁律再锤：一律 Edit 工具；⑥Edit 工具对"被 Bash 侧脚本改过的文件"file-state 过期会拒改——重读再改。
+
+## 6. 合规批（队长最高红线：全生命周期法律合规，ee66ef0 已推已部署 exe afe265d9）
+
+- **pynput=LGPLv3 按红线移除**：录制层换自研 ctypes LL 钩子（WH_MOUSE_LL/WH_KEYBOARD_LL，零第三方依赖）；DeepSeek 秘书裁决路线 A（LGPL 不在白名单+冻结包可替换机制举证困难）。工程坑四连实锤：回调对象挂 self 防 GC（临时 _HOOKPROC 被 GC=钩子触发即访问违例进程死）、64 位句柄 argtypes 纪律（GetModuleHandleW 截断=126）、ToUnicode 规范修饰键位（VK_LSHIFT 无效须同置 VK_SHIFT）、退出先 Unhook 再 WM_QUIT。
+- **敏感进程黑名单实装**：is_sensitive_proc（密码管理器类默认表，env XIAOJU3_DESKTOP_PROC_BLACKLIST 可覆盖）——标题+进程+IsPassword 三层 fail-closed。
+- **免责声明实装**：🧰 技能录制卡常驻免责（自动化可能存在误差/重要文件请备份/仅限本地个人辅助）+回放 showConfirm 二次确认含备份提示。
+- **协议清单落档**：在包库 uiautomation=Apache-2.0/comtypes=MIT（本地 LICENSE.txt 原文核）/pyautogui=BSD/psutil=BSD-3——零强传染；调研过的沙箱方案协议全标注（EdgeBox=GPL-3.0 ⛔ 规避）。
+- **路线图新增 §九《法律与合规风险规避》**：队长五条红线逐条落实表（协议/隐私 PIPL/素材版权/爬虫 robots/防滥用）。
+- 验收：真机 E2E 复跑回放 5/5+敏感 19 拦截+Shift 大写探针 PASS；全仓 2984 全绿；PYZ 13/13+**pynput 零残留**；生产部署 exe afe265d9 验活（三进程 StartTime 全新+desktop 端点+mobile.html 200）。
+
+## 7. MA2 移动端 API 接线（计划模式拍板后落地，已部署生产 exe 70efff7e）
+
+- **计划模式流程**：两路侦察（后端 SSE 契约/console.js 可镜像面+mobile 骨架空壳点）→ 计划含队长五问逐条 → 拍板后执行。
+- **mobile.js 网络层重写**（~560 行，全部带 console.js@ee66ef0 溯源注释+同步清单 _dev/mobile_sync_checklist.md）：①探活自愈 15s 周期（probeBase 镜像，MA2 只探当前 base）②历史加载 50 条淡入③流式对话 fetch+ReadableStream（帧 pump/think 乐观卡骨架→逐行→done 折叠/answer 流式/看门狗 30-90-190s/legacy /api/chat 回退/富文本 renderRich+表格横滑）④事件总线 EventSource（bus_reply 气泡+collab_msg HITL 卡）⑤**HITL=老板手机审批面**（选项纵排全宽≥44px+自定义输入→POST /api/collab/send body.text 契约→写回 TASK_BUS [老板拍板]）。
+- **E2E 真链路五断言链全过**（IAB 412×915 视口+dev 后端 5077 真云端）：历史 50 条渲染/流式全链（含修"乐观卡僵尸"bug：done 后不移除=留'正在思考…'）/HITL 渲染+点同意→TASK_BUS 实落 [老板拍板]（含修 text 契约错发 message）/失联横幅出现+恢复自动消失/桌面 console.js+index.html 零 diff。截图 3 张 _dev/shots_ma2/。
+- **秘书复审两项落地**：①钩子存活看门狗（录制会话每 10s 自检句柄+线程，失效自动停录+hook_lost 如实上报）+入队 SimpleQueue.put_nowait 非阻塞（异常计数 dropped）②**技能文件脱敏 schema v2**：窗口标题明文禁令——落盘只存 proc+title_hash(sha256[:12])，回放两段式定位（进程名候选→哈希锁定，同进程多窗口精确匹配），v1 legacy 兼容；审计与回执零明文标题。
+- **排障实录**：HITL 测试三轮定位（页内探针→hub 日志→py-spy）——真因链=双 dev 服务同占 5077（taskkill /FI 失败残留）+端点字段 data.items 非 messages（测试解析错）+send 契约 body.text；hub 本体零 bug（插桩实证后全撤，collab_hub 零 diff）。
+- 验收：全仓 2988 全绿；PYZ 新锚（watchdog/hash）全在+mobile 三件 datas 在包；生产验活（StartTime 全新+mobile.js 200+record/status 新字段 dropped/hook_alive 在线）。

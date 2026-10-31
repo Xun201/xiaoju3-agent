@@ -6,9 +6,9 @@
          （Chrome/Android WebView 108+）；viewport-fit=cover + env(safe-area-inset-*) 手势条/挖孔安全区 -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <title>小橘3号</title>
-    <!-- 相对路径引用（未来经 /console/mobile.html 托管）；版本参数防 WebView 缓存旧 JS（架构文档 §五） -->
-    <link rel="stylesheet" href="./mobile.css?v=20261031">
-    <script src="./mobile.js?v=20261031" defer></script>
+    <!-- 相对路径引用（经 /console/mobile.html 同源托管）；版本参数防 WebView 缓存旧 JS（架构文档 §五） -->
+    <link rel="stylesheet" href="./mobile.css?v=20261031c">
+    <script src="./mobile.js?v=20261031d" defer></script>
 </head>
 <body>
     <!-- 失联橙横幅（UI 文档 §二：失联时出现，恢复自动消失；默认隐藏，MA3 探活接入触发） -->
@@ -81,66 +81,7 @@
 
         <div id="mStreamWrap" class="stream-wrap">
             <main id="mStream" class="stream" aria-label="消息流">
-                <!-- MA1 骨架演示静态数据；MA2 起 sendMessage/SSE 动态渲染（架构文档 §三） -->
-
-                <!-- 4 条气泡：短消息贴内容（fit-content）、长文本 80% 封顶；小橘左白卡 / 用户右深蓝 -->
-                <div class="msg-row msg-row--them">
-                    <div class="bubble bubble--them">早上好，队长。今天周五。</div>
-                </div>
-                <div class="msg-row msg-row--me">
-                    <div class="bubble bubble--me">今天有什么安排？</div>
-                </div>
-                <div class="msg-row msg-row--them">
-                    <div class="bubble bubble--them">已为你梳理好今天的日程：上午 10 点有迭代评审会，记得带上 APK 回归结论；下午 2 点开始是打包窗口，我会提前 15 分钟提醒你。另外待办队列里还有 3 个 P2 缺陷，需要的话我可以先列个清单。</div>
-                </div>
-                <div class="msg-row msg-row--me">
-                    <div class="bubble bubble--me">好，先把 P2 清出来，修完跑一遍全仓测试，全绿以后再向你汇报结果。</div>
-                </div>
-
-                <!-- 思维链折叠条（默认收起；图标 SVG，非 Emoji；与桌面思维链交互一致） -->
-                <div class="msg-row msg-row--them">
-                    <div class="think-card">
-                        <button id="mThinkToggle" class="think-toggle" type="button" aria-expanded="false" aria-controls="mThinkBody">
-                            <!-- lucide brain（lucide-static v0.544.0，2026-10-31 unpkg 查证） -->
-                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></svg>
-                            <span>已思考（0.8 秒）</span>
-                            <!-- feather chevron-down -->
-                            <svg class="think-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-                        </button>
-                        <div id="mThinkBody" class="think-body" hidden>
-                            <ol class="think-steps">
-                                <li>解析意图：询问今日日程与待办优先级。</li>
-                                <li>调用日程与待办插件，汇总本机数据。</li>
-                                <li>按时间线组织回复，并标注提醒时间点。</li>
-                            </ol>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- HITL 确认卡：摘要行 + 同意/驳回纵排全宽 ≥44px + 自定义输入框（UI 文档 §三） -->
-                <div class="msg-row msg-row--them">
-                    <div class="hitl-card" role="group" aria-label="操作确认卡">
-                        <div class="hitl-head">
-                            <!-- feather clipboard -->
-                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
-                            <span class="hitl-title">执行确认</span>
-                        </div>
-                        <p class="hitl-summary">小橘请求执行：清理 7 天前的临时缓存文件（约 120 MB）。</p>
-                        <div class="hitl-actions">
-                            <button class="hitl-btn hitl-btn--approve" type="button">
-                                <!-- feather check -->
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-                                <span>同意</span>
-                            </button>
-                            <button class="hitl-btn hitl-btn--reject" type="button">
-                                <!-- feather x（同 console.js ICON_SVGS.x） -->
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                                <span>驳回</span>
-                            </button>
-                        </div>
-                        <input id="mHitlInput" class="hitl-input" type="text" placeholder="自定义回复（可选）…" aria-label="自定义回复">
-                    </div>
-                </div>
+                <!-- MA2：消息流全部动态渲染——历史加载/流式对话/HITL 卡由 mobile.js 注入 -->
             </main>
 
             <!-- 回到底部悬浮钮：脱离底部（>80px）浮现，点击回底并恢复跟随（UI 文档 §六） -->

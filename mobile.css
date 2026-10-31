@@ -424,3 +424,38 @@ button:disabled { cursor: default; }
        超宽屏长句一行铺满全屏（80% 封顶仍生效） */
     .stream { padding-top: 12px; }
 }
+
+/* ==================== MA2 流式态补强（think 骨架/错误气泡/来源标签/HITL 结果） ==================== */
+.think-skeleton {
+    height: 12px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, #eceff4 25%, #f6f8fb 50%, #eceff4 75%);
+    background-size: 200% 100%;
+    animation: think-pulse 1.2s ease-in-out infinite;
+    margin: 6px 0;
+    list-style: none;
+}
+.think-skeleton:first-child { width: 82%; }
+.think-skeleton:last-child { width: 58%; }
+@keyframes think-pulse {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+.think-line { list-style: none; font-size: 13px; color: #475569; line-height: 1.5; }
+.bubble--error {
+    border: 1px solid rgba(220, 38, 38, 0.25);
+    background: #fef2f2;
+    color: #b91c1c;
+}
+.msg-src {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 11px;
+    opacity: 0.65;
+}
+.hitl-result {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #475569;
+}
+.hitl-btn:disabled { opacity: 0.45; }

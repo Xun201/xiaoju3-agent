@@ -198,7 +198,7 @@ def save_skill(name, trigger, steps, dpi=1.0):
         return False, "❌ 技能没有可保存的步骤。"
     os.makedirs(SKILLS_DIR, exist_ok=True)
     skill = {
-        "version": 1,
+        "version": 2,   # v2：窗口标题脱敏（proc+whash，秘书复审②）
         "name": name,
         "trigger": (trigger or "").strip()[:80],
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -300,7 +300,8 @@ def _postprocess_events(events):
         kind = ev.get("kind")
         if kind == "click":
             steps.append({
-                "type": "click", "window": ev.get("window", ""),
+                "type": "click", "proc": ev.get("proc", ""),
+                "whash": ev.get("whash", ""),
                 "locator": ev.get("locator"), "rel": ev.get("rel"),
                 "xy": [ev.get("x"), ev.get("y")], "delay_ms": _delay(t),
             })
@@ -309,7 +310,8 @@ def _postprocess_events(events):
         elif kind == "char":
             # 合并连续字符（≤MAX_TEXT_RUN）；窗口取最近一次 click 的窗口
             run = []
-            window = ev.get("window", "")
+            proc = ev.get("proc", "")
+            whash = ev.get("whash", "")
             j = i
             while j < n:
                 e2 = events[j]
@@ -320,19 +322,21 @@ def _postprocess_events(events):
                 if e2.get("kind") != "char" or not e2.get("ch", "").isprintable():
                     break
                 run.append(e2["ch"])
-                window = e2.get("window", "") or window
+                proc = e2.get("proc", "") or proc
+                whash = e2.get("whash", "") or whash
                 j += 1
                 if len(run) >= MAX_TEXT_RUN:
                     break
             steps.append({
-                "type": "type_text", "window": window,
+                "type": "type_text", "proc": proc, "whash": whash,
                 "text": "".join(run), "delay_ms": _delay(t),
             })
             last_t = events[j - 1].get("t", t) if j > i else t
             i = j
         elif kind == "hotkey":
             steps.append({
-                "type": "hotkey", "window": ev.get("window", ""),
+                "type": "hotkey", "proc": ev.get("proc", ""),
+                "whash": ev.get("whash", ""),
                 "combo": ev.get("combo", ""), "delay_ms": _delay(t),
             })
             last_t = t
@@ -380,6 +384,13 @@ def combo_to_uia(combo):
         else:
             out += p
     return out
+
+
+def _hash_title(title):
+    """窗口标题脱敏哈希（秘书复审②：技能文件禁存明文标题）——
+    sha256 前 12 位；回放按 进程名+标题哈希 两段式定位（不落明文）。"""
+    import hashlib
+    return hashlib.sha256((title or "").encode("utf-8", "ignore")).hexdigest()[:12]
 
 
 def _norm_title(s):
@@ -630,6 +641,9 @@ class SkillRecorder(object):
         self._q = None
         self._hook = None
         self._down_vks = set()
+        self._dropped = 0
+        self._hook_lost = False
+        self._watchdog = None
         self._worker = None
         self._listeners = []
         self._mods = set()
@@ -642,6 +656,12 @@ class SkillRecorder(object):
                 "name": self._name,
                 "events": len(self._events),
                 "blocked_sensitive": self._blocked,
+                "dropped": self._dropped,
+                "hook_alive": (self._hook is not None
+                               and self._hook.h_mouse is not None
+                               and self._hook.h_kbd is not None
+                               and self._hook._thread.is_alive()),
+                "hook_lost": self._hook_lost,
                 "seconds": round(time.time() - self._started, 1) if self._recording else 0,
             }
 
@@ -661,7 +681,7 @@ class SkillRecorder(object):
             self._started = time.time()
             self._mods = set()
             self._down_vks = set()
-            self._q = _queue.Queue()
+            self._q = _queue.SimpleQueue()  # 非阻塞入队（秘书复审①）
             self._hook = _WinHook(self)
             if not self._hook.start():
                 err = self._hook.error
@@ -673,6 +693,11 @@ class SkillRecorder(object):
                 target=self._resolve_loop, daemon=True, name="xj3-recorder")
             self._recording = True
             self._worker.start()
+            # 秘书复审①：钩子存活看门狗（LL 钩子被系统超时卸载/线程死=
+            # 静默丢事件）——每 10s 自检，失效即自动停录并如实入账
+            self._watchdog = threading.Thread(
+                target=self._hook_watchdog, daemon=True, name="xj3-hookdog")
+            self._watchdog.start()
             # UIA 冷启动预热（E2E 实锤：150% DPI 下首例 ControlFromPoint
             # 超 0.8s 超时降级）——后台打一发即弃，首击不再是冷启动
             threading.Thread(target=lambda: self._resolve_with_timeout(1, 1),
@@ -691,6 +716,9 @@ class SkillRecorder(object):
             except Exception:
                 pass
         self._listeners = []
+        if self._watchdog is not None:
+            self._watchdog.join(timeout=2)
+            self._watchdog = None
         if self._worker is not None:
             self._worker.join(timeout=3)
         with self._lock:
@@ -721,9 +749,10 @@ class SkillRecorder(object):
         self._down_vks.add(vk)
         if mod:
             return
-        fg = _foreground_title()          # 前台窗口归属（敏感键记录缺口封堵）
+        fg = _foreground_title()          # 前台窗口归属（敏感判定用，不落盘）
         proc = _foreground_proc()         # 敏感进程（合规批实装）
         sens = (is_sensitive_title(fg) or is_sensitive_proc(proc))
+        whash = _hash_title(fg)           # 落盘脱敏：只存 进程名+标题哈希
         if self._mods - {"Shift"}:
             # 仅 Shift + 可打印字符 = 文本（大写/符号），不构成组合键；
             # Ctrl/Alt/Win 任一在场才走组合键（E2E 实锤教训）
@@ -731,17 +760,20 @@ class SkillRecorder(object):
             if main:
                 combo = "+".join(sorted(self._mods) + [main])
                 self._push({"kind": "hotkey", "t": int(time.time() * 1000),
-                            "combo": combo, "window": fg, "sensitive": sens})
+                            "combo": combo, "proc": proc, "whash": whash,
+                            "sensitive": sens})
             return
         ch = _vk_to_char(vk, scan, self._down_vks)
         if ch:
             self._push({"kind": "char", "t": int(time.time() * 1000),
-                        "ch": ch, "window": fg, "sensitive": sens})
+                        "ch": ch, "proc": proc, "whash": whash,
+                        "sensitive": sens})
             return
         name = _VK_SPECIAL_NAME.get(vk)
         if name:
             self._push({"kind": "hotkey", "t": int(time.time() * 1000),
-                        "combo": name, "window": fg, "sensitive": sens})
+                        "combo": name, "proc": proc, "whash": whash,
+                        "sensitive": sens})
 
     def _key_up(self, vk):
         mod = _VK_MOD_NAME.get(vk)
@@ -749,7 +781,35 @@ class SkillRecorder(object):
             self._mods.discard(mod)
         self._down_vks.discard(vk)
 
+    def _hook_watchdog(self):
+        """秘书复审①：录制会话内每 10s 自检钩子存活——句柄被卸载/钩子线程
+        死亡=静默丢事件，立即自动停录（诚实回执优于无声残缺）。"""
+        while True:
+            time.sleep(10)
+            with self._lock:
+                if not self._recording:
+                    return
+                hook = self._hook
+            try:
+                alive = (hook is not None
+                         and hook.h_mouse is not None
+                         and hook.h_kbd is not None
+                         and hook._thread.is_alive())
+            except Exception:
+                alive = False
+            if not alive:
+                with self._lock:
+                    self._hook_lost = True
+                _audit("hook_lost", self._name, "看门狗检出钩子失效，自动停录")
+                try:
+                    self.stop()
+                except Exception:
+                    pass
+                return
+
     def _push(self, ev):
+        # 秘书复审①：入队绝对非阻塞——events 追加持锁极短（微秒级），
+        # 队列 put_nowait 永不阻塞钩子回调；异常计数丢弃，绝不拖系统输入
         with self._lock:
             if not self._recording:
                 return
@@ -759,7 +819,11 @@ class SkillRecorder(object):
             self._events.append(ev)
             ev["_idx"] = len(self._events) - 1  # worker 直取槽位（同毫秒连点不串槽）
         if self._q is not None:
-            self._q.put(ev)
+            try:
+                self._q.put_nowait(ev)
+            except Exception:
+                with self._lock:
+                    self._dropped += 1
 
     # -- 解析 worker（COM 线程；UIA 单次解析带超时降级）--
     def _resolve_loop(self):
@@ -782,7 +846,8 @@ class SkillRecorder(object):
                 slot = self._events[idx]
                 if result is None:
                     slot["locator"] = None
-                    slot["window"] = ""
+                    slot["proc"] = ""
+                    slot["whash"] = ""
                     slot["rel"] = None
                     slot["sensitive"] = False
                 else:
@@ -833,9 +898,11 @@ class SkillRecorder(object):
         except Exception:
             proc = ""
         sens = (pwd or is_sensitive_title(title) or is_sensitive_proc(proc))
+        # 脱敏（秘书复审②）：落盘只存 进程名+标题哈希，绝不存明文标题
         return {
             "locator": build_locator_chain(ctrl),
-            "window": title,
+            "proc": proc,
+            "whash": _hash_title(title),
             "rel": rel,
             "sensitive": bool(sens),
         }
@@ -846,19 +913,26 @@ _recorder = SkillRecorder()
 
 
 # ── 回放 ────────────────────────────────────────────────────────────
-def _find_window(auto, title, locator0=None):
-    """按标题在根控件子级找顶层窗口；找不到再按定位链[0]的 cls/auto 兜底。
-    UIA 枚举偶发瞬时失配（E2E 实锤：同标题 0.15s 内一中一失）——3×0.25s
-    重试 + 去空格归一化兜底。"""
-    t = _norm_title(title)
+def _find_window(auto, proc, whash, locator0=None):
+    """两段式定位（秘书复审②：不落明文标题）——①按进程名列候选
+    ②按标题哈希校验锁定（同进程多窗口可精确定位）。whash 为空=legacy
+    v1 技能（仅按进程匹配，审计标注）；定位链 cls 兜底殿后。
+    UIA 枚举偶发瞬时失配——3×0.25s 重试。"""
+    proc = (proc or "").lower()
     for attempt in range(3):
         try:
             root = auto.GetRootControl()
             children = root.GetChildren()
             for w in children:
                 try:
-                    if t and _norm_title(w.Name) == t:
-                        return w
+                    if not proc:
+                        continue
+                    wproc = _pid_proc_name(w.NativeWindowHandle)
+                    if wproc != proc:
+                        continue
+                    if whash and _hash_title(_norm_title(w.Name)) != whash:
+                        continue
+                    return w
                 except Exception:
                     continue
             if locator0 and locator0.get("cls"):
@@ -999,23 +1073,24 @@ def play_skill(name, source="tool"):
     pyautogui.FAILSAFE = False
     try:
         for idx, step in enumerate(steps, 1):
-            title = step.get("window", "")
-            if is_sensitive_title(title):
-                _audit("play_abort_sensitive", name, "第 %d 步窗口「%s」" % (idx, title))
-                return False, ("❌ 第 %d 步目标窗口命中敏感黑名单（%s），已中止。"
-                               "已执行 %d/%d 步。" % (idx, title, executed, len(steps)))
+            proc = (step.get("proc") or "").lower()
+            whash = step.get("whash", "")
+            if is_sensitive_proc(proc):
+                _audit("play_abort_sensitive", name, "第 %d 步进程「%s」" % (idx, proc))
+                return False, ("❌ 第 %d 步目标进程命中敏感黑名单（%s），已中止。"
+                               "已执行 %d/%d 步。" % (idx, proc, executed, len(steps)))
             stype = step.get("type")
             delay = max(MIN_STEP_DELAY_MS, min(MAX_STEP_DELAY_MS,
                                                int(step.get("delay_ms", 0) or 0)))
             if delay:
                 time.sleep(delay / 1000.0)
-            window = _find_window(auto, title,
-                                  (step.get("locator") or [None])[0]
-                                  if step.get("locator") else None)
-            if title and window is None:
-                _audit("play_fail_window", name, "第 %d 步找不到窗口「%s」" % (idx, title))
-                return False, ("❌ 第 %d 步找不到窗口「%s」（可能已关闭）。已执行 "
-                               "%d/%d 步。" % (idx, title, executed, len(steps)))
+            locator0 = (step.get("locator") or [None])[0] if step.get("locator") else None
+            window = _find_window(auto, proc, whash, locator0)
+            if (proc or whash) and window is None and locator0 is None:
+                _audit("play_fail_window", name,
+                       "第 %d 步找不到目标（proc=%s）" % (idx, proc))
+                return False, ("❌ 第 %d 步找不到目标窗口（进程 %s，可能已关闭）。"
+                               "已执行 %d/%d 步。" % (idx, proc, executed, len(steps)))
             if window is not None:
                 _bring_foreground(window)  # SendInput 只发给前台窗口
             if stype == "click":

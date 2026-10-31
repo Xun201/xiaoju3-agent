@@ -195,8 +195,9 @@ def test_tool_run_skill_missing(tmp_skills):
 
 
 def test_tool_run_skill_sensitive_abort(tmp_skills, monkeypatch):
-    steps = [{"type": "click", "window": "银行转账", "locator": [], "rel": None,
-              "xy": [1, 1], "delay_ms": 0}]
+    # 合规脱敏 schema v2：步骤只带 proc/whash（无明文标题）
+    steps = [{"type": "click", "proc": "keepass.exe", "whash": "abcdef123456",
+              "locator": [], "rel": None, "xy": [1, 1], "delay_ms": 0}]
     desktop_tools.save_skill("敏感技能", "", steps, dpi=1.0)
 
     class _FakeAuto:  # play 不应走到真实 UIA——敏感窗在窗口解析前就拦
@@ -209,14 +210,14 @@ def test_tool_run_skill_sensitive_abort(tmp_skills, monkeypatch):
 
 
 def test_tool_run_skill_window_missing_fail_stop(tmp_skills, monkeypatch):
-    steps = [{"type": "click", "window": "不存在的窗口XYZ", "locator": [],
-              "rel": [0.5, 0.5], "xy": [1, 1], "delay_ms": 0}]
+    steps = [{"type": "click", "proc": "ghostapp.exe", "whash": "deadbeefcafe",
+              "locator": [], "rel": [0.5, 0.5], "xy": [1, 1], "delay_ms": 0}]
     desktop_tools.save_skill("失踪窗口", "", steps, dpi=1.0)
     monkeypatch.setattr(desktop_tools, "_get_auto", lambda: object())
     monkeypatch.setattr(desktop_tools, "_find_window", lambda *a, **k: None)
     ok, msg = desktop_tools.play_skill("失踪窗口", source="test")
     assert not ok
-    assert "找不到窗口" in msg and "已执行 0/1 步" in msg
+    assert "找不到目标窗口" in msg and "已执行 0/1 步" in msg
 
 
 def test_play_password_target_abort(tmp_skills, monkeypatch):
@@ -252,8 +253,10 @@ def test_play_password_target_abort(tmp_skills, monkeypatch):
 
 def test_recorder_status_idle_and_double_start_guard(tmp_skills):
     rec = desktop_tools.SkillRecorder()
-    assert rec.status() == {"recording": False, "name": "", "events": 0,
-                            "blocked_sensitive": 0, "seconds": 0}
+    st = rec.status()
+    assert st["recording"] is False and st["events"] == 0
+    assert st["dropped"] == 0 and st["hook_lost"] is False
+    assert st["hook_alive"] is False  # 未启动=不活（秘书复审①字段）
 
 
 def test_recorder_start_rejects_bad_name(tmp_skills):
@@ -298,3 +301,73 @@ def test_vk_special_map_for_ll_hook():
     assert desktop_tools._VK_MOD_NAME[0x11] == "Ctrl"
     assert desktop_tools._VK_MOD_NAME[0xA4] == "Alt"
     assert "pynput" not in desktop_tools.__doc__ or True  # 文档面不做强断言
+
+
+# ==================== 合规脱敏（秘书复审②） ====================
+
+def test_hash_title_stable_and_short():
+    h1 = desktop_tools._hash_title("xj3_e2e.txt - Notepad")
+    h2 = desktop_tools._hash_title("xj3_e2e.txt - Notepad")
+    assert h1 == h2 and len(h1) == 12
+    assert desktop_tools._hash_title("") == desktop_tools._hash_title("")
+
+
+def test_saved_skill_has_no_plaintext_title(tmp_skills):
+    """脱敏红线锚：save_skill 落盘后，文件内不得出现明文窗口标题。"""
+    import json
+    secret_title = "银行账本2026 - 记事本"
+    steps = [{"type": "hotkey", "proc": "notepad.exe",
+              "whash": desktop_tools._hash_title(secret_title),
+              "combo": "Ctrl+s", "delay_ms": 150}]
+    ok, _ = desktop_tools.save_skill("脱敏技能", "", steps, dpi=1.0)
+    assert ok
+    raw = (tmp_skills / "脱敏技能.json").read_text(encoding="utf-8")
+    assert secret_title not in raw
+    assert "记事本" not in raw.replace("脱敏技能", "")  # 技能名本身允许
+    skill = desktop_tools.load_skill("脱敏技能")
+    assert skill["version"] == 2
+    assert skill["steps"][0]["proc"] == "notepad.exe"
+
+
+def test_find_window_matches_by_proc_and_title_hash(tmp_skills, monkeypatch):
+    """两段式定位：进程命中→标题哈希校验锁定（同进程多窗口取对的那个）。"""
+
+    class FakeWin:
+        def __init__(self, name, hwnd):
+            self.Name = name
+            self.NativeWindowHandle = hwnd
+
+    wins = [FakeWin("账本A - 记事本", 101), FakeWin("账本B - 记事本", 202)]
+
+    class FakeRoot:
+        def GetChildren(self):
+            return wins
+
+    class FakeAuto:
+        def GetRootControl(self):
+            return FakeRoot()
+
+    auto = FakeAuto()
+    monkeypatch.setattr(desktop_tools, "_pid_proc_name",
+                        lambda hwnd: "notepad.exe")
+    target_hash = desktop_tools._hash_title("账本B - 记事本")
+    hit = desktop_tools._find_window(auto, "notepad.exe", target_hash)
+    assert hit is not None and hit.NativeWindowHandle == 202
+    # 哈希不匹配 → 不误选
+    miss = desktop_tools._find_window(auto, "notepad.exe", "000000000000")
+    assert miss is None
+    # legacy v1（无 whash）→ 进程命中即返回
+    legacy = desktop_tools._find_window(auto, "notepad.exe", "")
+    assert legacy is not None and legacy.NativeWindowHandle == 101
+
+
+def test_postprocess_carries_proc_whash(tmp_skills):
+    events = [{"kind": "click", "t": 0, "x": 1, "y": 2, "proc": "notepad.exe",
+               "whash": "aaaabbbbcccc", "locator": [], "rel": None,
+               "sensitive": False},
+              {"kind": "char", "t": 300, "ch": "x", "proc": "notepad.exe",
+               "whash": "aaaabbbbcccc", "sensitive": False}]
+    steps, _ = desktop_tools._postprocess_events(events)
+    assert steps[0]["proc"] == "notepad.exe"
+    assert steps[1]["whash"] == "aaaabbbbcccc"
+    assert all("window" not in s for s in steps)  # 明文字段彻底不落
