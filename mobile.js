@@ -534,7 +534,7 @@
         /* 红线 A2：断网不发虚空——探活失败即入草稿箱（恢复自动补发） */
         if (banner && !banner.hidden) {
             draftPush(text);
-            appendUserMessage(text + '  ⏳（已存草稿箱）');
+            appendUserMessage(text + '  [已存草稿箱]');
             toast('当前离线：消息已存草稿箱，恢复后自动发送');
             return;
         }
@@ -1027,7 +1027,7 @@
                 setMicRecording(true);
                 toast('开始录音，再点一次结束');
             }).catch(function (e) {
-                toast('麦克风权限被拒绝：' + (e.name || e.message || ''), true);
+                toast('麦克风权限被拒绝，请在系统设置中允许 APP 使用麦克风后重试', true);
             });
         });
     }

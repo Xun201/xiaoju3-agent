@@ -1433,7 +1433,7 @@ button:disabled { cursor: default; }
         /* 红线 A2：断网不发虚空——探活失败即入草稿箱（恢复自动补发） */
         if (banner && !banner.hidden) {
             draftPush(text);
-            appendUserMessage(text + '  ⏳（已存草稿箱）');
+            appendUserMessage(text + '  [已存草稿箱]');
             toast('当前离线：消息已存草稿箱，恢复后自动发送');
             return;
         }
