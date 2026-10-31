@@ -79,3 +79,16 @@
 - **维特根斯坦铁律**：prompts.py 双注入+AGENTS.md 灵魂原则章+positioning 章节
 - **中继 v2 方案**：信令=Python aiohttp WS+E2EE=PyNaCl+降级链=P2P→30s→中继+成本 38-68 元/月
 - **移交**：APK 真机验证（队长）/AEHD 驱动安装（管理员）/MA4 体验补齐/RS1-RS4 拍板/生产重启（灵魂上线）
+
+---
+
+## 深夜二段：RS1 信令闭环+双端握手+E2EE 落笔+移动端降级（f461bb2 已推，全仓 2988+5 复验 142s）
+
+- **RS1 车站调度室**（_dev/relay/，git 外）：server.py（aiohttp WS+注册路由表+主动 Ping 15s 摘座+同账号广播）四需求独立验收员 9302 重放 pass；client_mock.py 四步闭环实拍（loop_proof.png）
+- **双端握手（队长拍板冲刺件）✅**：python-zeroconf 0.152.0 实装，mDNS `_xiaoju._tcp.local.`，两独立进程经信令服务器握手成功（发现→注册→招手→接受→hello 互达，三方日志合图 lan_handshake.png）
+- **E2EE 定稿落笔**：队长确认 v2.1 提案→主文档四条改毕（KEM-DEM：sealed box 封会话密钥+XChaCha20-Poly1305-IETF 数据面），独立审读逐项过+残留扫描零混写
+- **设计文档双新章**：《多终端形态分级与自适应路由》+《设备能力分级与渐进增强（Graceful Degradation）协议》（L0-L3 矩阵+capabilities 契约+统一接口红线），各过独立审读
+- **移动端能力降级上线（f461bb2）**：setConnState 唯一落点+body data-caps（l2/l0）+4 处 data-needs-server 门控+聊天/草稿箱永存；versionCode 4/2.3.1-cap；验证=node --check+静态断言+412×915 两态黑盒复验
+- **销账**：dist 旧 v2.2.1 包删（git 零追踪证+哈希核对）；TASK_BUS 两备注→todos #11(P2)/#12(P3)
+- **拍板记录**：E2EE 确认 ✅／MA4=D 暂缓／LAN 选型=python-zeroconf+capacitor-zeroconf 锁 3.0.0（4.0.0=Cap 7 勿装）+浏览器 JS 无组播走二维码兜底
+- **交付包**：桌面「小橘RS1交付_20261031」（4 截图+README）
