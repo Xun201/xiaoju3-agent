@@ -168,3 +168,11 @@
 - **事故与修复**：工作流尾段 artifact.file 因运行 workspace=cloud/ 子目录拒外路径+catch 内二次未包 try 连环炸（工程与验收无损，reports 存证）——AmendWorkflow 全缓存重放修尾收官；教训=CreateWorkflow 注意 cwd=workspace 根+artifact 路径须在 workspace 内。
 - **交付**：桌面「小橘M1加密E2E_20261031」（截图+合并日志）；截图卡片随工作流发布。
 - **下一步 M1-f**：server.py TLS 接线（ssl_context）→部署 49.234.44.73:8443→公网双端联测→tcpdump 明文零命中。
+
+## 深夜八段：M1-f 上云联测结项——跨公网加密隧道贯通（M1 全阶段正式结项）
+
+- **决策链**：队长放行 8443（腾讯控制台防火墙=UFW 之外第二堵墙，实锤"UFW 放行≠公网可达"）；放行时 22 规则被误覆盖→SSH 断（服务无恙），队长补规则恢复。
+- **部署**：server.py TLS 接线（--tls/--cert/--key+ssl_context）+client_mock --cafile（自签信任锚，check_hostname=False=IP 直连口径）；本地 TLS 冒烟先行（wss 握手+注册 ACK）；云端 venv+aiohttp+pynacl+secret.key 双侧同源；systemd ExecStart 带 TLS 拉起 0.0.0.0:8443。两坑：auth.py 依赖 nacl 漏装；证书 root 属主 600 deploy 读不了（chown 修）。
+- **联测铁证（四件套）**：①双端 SECURE-E2E-OK×2（wss://49.234.44.73:8443）②43233B 大载荷穿公网分片重组双端 SHA256 一致（0065a35d…708b5，与本地跑同哈希=链路无损）③**云端 journalctl 哨兵 XJ3-E2E-SENTINEL 零命中**+auth=token-ok×2+盲转发 relay_data 6 帧（服务器只见 80B b64 密封盒与 b64 密文头）④**tcpdump pcap（185 包/149KB）双哨兵零命中**（SENTINEL+SHA 串皆 0）——TLS+E2E 双层全密文实证。
+- **桌面交付**：「小橘M1上云铁证_20261031」（pcap+journal+双轮双端日志×4）。
+- **M1 全阶段结项**：a 鉴权/b KEM-DEM/c 盲中继/d 本机 E2E/e JS 选型（libsodium-wrappers-sumo）/f 云真环境——六片全绿。下一步 M2 双端真实接线（PC 隧道客户端+mobile BASE 挂点）。
