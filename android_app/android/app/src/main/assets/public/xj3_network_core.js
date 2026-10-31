@@ -13,14 +13,36 @@
 
     var XJ3Net = {};
 
-    /* ---------- 探活（桌面/移动共用；默认 5s 超时，可传 timeoutMs） ---------- */
-    XJ3Net.probeBase = function (base, timeoutMs) {
+    /* ---------- 探活（桌面/移动共用；默认 5s 超时，可传 timeoutMs） ----------
+     * netfix（2026-10-31 P0-2）：加第三参 onDiag（可选，诊断回调）——
+     * 旧口径 catch 全吞，失败类别（超时/网络错/非JSON劫持/判据不符）无处
+     * 透出，APK 断连排查只能瞎猜。不传 onDiag 时行为与旧版逐字等价
+     * （console.js:2689 两参转发不受影响）；回调异常绝不影响探活结果。 */
+    XJ3Net.probeBase = function (base, timeoutMs, onDiag) {
         var ctl = new AbortController();
         var timer = setTimeout(function () { ctl.abort(); }, timeoutMs || 5000);
-        return fetch((base || '') + '/api/health', { signal: ctl.signal })
-            .then(function (r) { return r.json(); })
-            .then(function (j) { return !!(j && j.status === 'ok'); })
-            .catch(function () { return false; })
+        var url = (base || '') + '/api/health';
+        function report(ok, err) {
+            if (typeof onDiag !== 'function') { return; }
+            try { onDiag({ url: url, ts: new Date(), ok: ok, err: err || '' }); }
+            catch (e) { /* 诊断回调绝不影响探活 */ }
+        }
+        return fetch(url, { signal: ctl.signal })
+            .then(function (r) {
+                return r.json().then(function (j) {
+                    var ok = !!(j && j.status === 'ok');
+                    report(ok, ok ? '' : '判据不符（status=' + (j && j.status) + '）');
+                    return ok;
+                }, function () {
+                    report(false, '返回非 JSON（疑似本地资产劫持）');
+                    return false;
+                });
+            })
+            .catch(function (e) {
+                report(false, (e && e.name === 'AbortError') ? '超时（5s abort）'
+                    : '网络错误（' + ((e && e.message) || 'fetch failed') + '）');
+                return false;
+            })
             .finally(function () { clearTimeout(timer); });
     };
 

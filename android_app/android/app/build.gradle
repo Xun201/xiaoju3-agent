@@ -7,8 +7,8 @@ android {
         applicationId "com.xun.xiaoju3"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 5                  // P0 白屏修复批递增（覆盖安装必须严格大于）
-        versionName "2.3.2-fixcap"
+        versionCode 6                  // P0-2 断连根治批递增（覆盖安装必须严格大于）
+        versionName "2.3.3-netfix"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

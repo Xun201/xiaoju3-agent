@@ -7,6 +7,9 @@
  * 拷贝复用策略（架构文档 §三）：网络与渲染函数定点拷贝自 console.js@ee66ef0，
  *   每函数带溯源注释；同步清单=_dev/mobile_sync_checklist.md；桌面 console.js 零改动。
  * 沿用 MA1：抽屉/stick-to-bottom/自增高/visualViewport 兜底/Enter=换行（无 keydown 发送）。
+ * netfix（2026-10-31 P0-2 断连根治）：旧键迁移(xj3_api_base→xj3_mobile_base)/
+ *   APK 空基址守卫(不发虚空探活)/配对门回迁(扫码+手输,22b0d12 形态)/
+ *   三击标题诊断面板(#mCssDiag)/probeBase 换 XJ3Net 核心转发+诊断回调。
  * 全局污染：唯一例外 window.__xj3Mobile（验收/调试钩子）。
  * ========================================================= */
 (function () {
@@ -31,15 +34,68 @@
 
     /* ---------- API 基址（单点；MA3 接候选切换） ----------
      * 缺省 ''=同源相对路径（mobile.html 经 /console/mobile.html 同源托管，
-     * 对齐 console.js 的相对路径策略——探活函数已按 base 参数化）。 */
+     * 对齐 console.js 的相对路径策略——探活函数已按 base 参数化）。
+     * netfix（2026-10-31 P0-2）旧键迁移：v2.2.x console.js 壳扫码配对写的
+     * 是 xj3_api_base（fce91ee:console.js:124/180 考古实锤），换 mobile 壳
+     * 后该值成孤儿数据（新壳零读取零迁移）→ 覆盖升级即 BASE='' 断连。
+     * 迁移规则：新键为空而旧键有值 → 一次性迁入 xj3_mobile_base；幂等=
+     * 新键已有值永不重迁（saved 先行早退），旧键保留不删（回滚旧 APK
+     * 配对不丢）。 */
+    var BASE_SRC = '默认空（同源相对）';
     var BASE = (function () {
         try {
             var saved = localStorage.getItem('xj3_mobile_base');
-            if (saved) { return saved; }
+            if (saved) { BASE_SRC = '已保存地址（xj3_mobile_base）'; return saved; }
+            var legacy = localStorage.getItem('xj3_api_base');
+            if (legacy) {
+                try { localStorage.setItem('xj3_mobile_base', legacy); } catch (e) { /* 忽略 */ }
+                BASE_SRC = '旧配对键迁移（xj3_api_base→xj3_mobile_base）';
+                return legacy;
+            }
         } catch (e) { /* 隐私模式忽略 */ }
-        return (typeof window.__XJ3_MOBILE_BASE === 'string')
+        var injected = (typeof window.__XJ3_MOBILE_BASE === 'string')
             ? window.__XJ3_MOBILE_BASE : '';
+        if (injected) { BASE_SRC = '注入（window.__XJ3_MOBILE_BASE）'; }
+        return injected;
     })();
+
+    /* APK 环境判定（22b0d12 console.js 同款口径 window.Capacitor）：
+     * 空基址守卫/配对门只在 Capacitor 壳内启用——浏览器同源托管
+     * （/console/mobile.html）BASE='' 是合法形态，不许弹门。 */
+    function inApk() {
+        try {
+            return !!(window.Capacitor && (
+                typeof window.Capacitor.isNativePlatform !== 'function' ||
+                window.Capacitor.isNativePlatform()));
+        } catch (e) { return false; }
+    }
+
+    /* ---------- 网络诊断（netfix：诊断面板数据源） ----------
+     * probeBase 只回 bool 的旧口径下，失败类别全被 catch 吞掉——断连排查
+     * 只能瞎猜。此处集中记录，供三击顶栏标题呼出的诊断面板（#mCssDiag
+     * 复用）与 window.__xj3Mobile.diag（验收/调试钩子）展示。 */
+    var DIAG = {
+        base: BASE, baseSrc: BASE_SRC,
+        env: inApk() ? 'APK（Capacitor）' : '浏览器',
+        last: null                       /* 最近一次探活 {url,ts,ok,err} */
+    };
+    function diagRecord(entry) {
+        DIAG.last = entry;
+        diagRender();
+    }
+    function diagRender() {
+        var d = document.getElementById('mCssDiag');
+        if (!d || d.style.display === 'none' || !DIAG.last) { return; }
+        var t = DIAG.last.ts instanceof Date ? DIAG.last.ts : new Date();
+        d.textContent = '[小橘3号 网络诊断]\n'
+            + '环境: ' + DIAG.env + ' | 能力级: '
+            + (document.body && document.body.getAttribute('data-caps')) + '\n'
+            + '基址: ' + (DIAG.base || '（空=同源相对）') + '\n'
+            + '来源: ' + DIAG.baseSrc + '\n'
+            + '最近探活: GET ' + DIAG.last.url + ' @'
+            + t.toLocaleTimeString('zh-CN', { hour12: false }) + '\n'
+            + '结果: ' + (DIAG.last.ok ? '✅ ok' : '❌ ' + DIAG.last.err);
+    }
 
     /* ==================== 1. 抽屉开合（MA1 原样） ==================== */
     function openDrawer() {
@@ -228,27 +284,273 @@
     /* ==================== 6. 探活自愈（拷贝自 console.js@ee66ef0 probeBase L2687 /
      *                        xj3LinkCheck L2739，移动端 MA2 只探当前 base 不换址） ==================== */
     function probeBase(base) {
-        var ctl = new AbortController();
-        var timer = setTimeout(function () { ctl.abort(); }, 5000);
-        return fetch((base || '') + '/api/health', { signal: ctl.signal })
-            .then(function (r) { return r.json(); })
-            .then(function (j) { return !!(j && j.status === 'ok'); })
-            .catch(function () { return false; })
-            .finally(function () { clearTimeout(timer); });
+        /* netfix：探活唯一实现=XJ3Net.probeBase（防拷贝漂移红线，桌面
+         * console.js:2689 同款转发形态）；本层只挂诊断记录（失败类别
+         * 透出）。URL/5s 超时/j.status==='ok' 判据口径零改动。 */
+        return XJ3Net.probeBase(base, 5000, diagRecord);
     }
 
     var linkTimer = null;
+    var failStreak = 0;               /* 连续探活失败计数（无效基址兜底触发器） */
     function linkCheck() {
+        /* 空基址守卫（netfix）：APK 内 BASE='' 时同源 /api/health 探活会
+         * 被 Capacitor WebViewLocalServer '**' 通配+html5mode 劫持成
+         * 200+index.html → r.json() 必炸 → 永假 → 15s 一轮的永久离线
+         * 死循环（探活请求根本没出 WebView，手机网络再好也无济于事；
+         * bf4b6a8 真机 ERR_CONNECTION_REFUSED@http://localhost/ 同根）。
+         * 守卫=不发虚空请求，直接离线态+唤起配对门——绝不静默滑进永久
+         * 离线。浏览器同源托管不触发（inApk() 门控）。 */
+        if (!BASE && inApk()) {
+            setConnState(false);
+            updateBannerText();
+            ensurePairGate();
+            return;
+        }
         probeBase(BASE).then(function (ok) {
             var was = !banner.hidden;
+            failStreak = ok ? 0 : (failStreak + 1);
             setConnState(ok);
             updateBannerText();
             if (ok) { flushDrafts(); }   /* 恢复在线→补发草稿箱（含启动遗留） */
+            /* 无效基址兜底（netfix）：APK 内地址连续 3 轮探活失败（约45s）
+             * =基址失联——唤起配对门重连。===3 只在跨越阈值那一次触发
+             * （用户取消门后不再骚扰，探活恢复即复位）；浏览器端不弹，
+             * 横幅+草稿箱口径照旧。 */
+            if (!ok && inApk() && failStreak === 3) { ensurePairGate(); }
         });
     }
     function startLinkCheck() {
         linkCheck();                                   /* 启动即探一次 */
         linkTimer = setInterval(linkCheck, 15000);     /* 15s 周期（同桌面） */
+    }
+
+    /* ==================== 6.8 配对门（netfix：22b0d12 console.js 形态回迁） ====================
+     * v2.2.x 旧壳的 pairProbe『断连自动弹门扫码秒连』+扫码主路径在换 mobile
+     * 壳时全灭（grep 零痕迹，考古实锤）——断连只剩菜单三层深的手输自救，
+     * 体感即"永久离线"。本节按 22b0d12 既有形态回迁：扫码主路径
+     * （getUserMedia 后摄+BarcodeDetector）+手输折叠兜底+xiaoju3://connect
+     * 载荷解析+逐候选探活（XJ3Net.probeBase 唯一实现，首个 ok 落键重载）。
+     * jsQR 逐帧兜底未回迁：mobile.html 全内联零外部脚本（打包纪律），
+     * 安卓 System WebView 现代版本 BarcodeDetector 原生可用；缺席时
+     * 明示走手动输入，不装死。 */
+    function parsePairingPayload(text) {
+        /* 解析二维码载荷：xiaoju3://connect?ips=a,b&port=5003（新）/
+         * http://ip:port 直填（兼容手输）。返回候选 base 列表。 */
+        var s = String(text || '').trim();
+        if (!s) { return []; }
+        var m = s.match(/^xiaoju3:\/\/connect\?([^#]+)/);
+        if (m) {
+            var q = new URLSearchParams(m[1]);
+            var ips = (q.get('ips') || '').split(',')
+                .map(function (x) { return x.trim(); }).filter(Boolean);
+            var port = q.get('port') || '5003';
+            return ips.map(function (ip) {
+                return 'http://' + ip + ':' + port;
+            });
+        }
+        if (/^https?:\/\//.test(s)) { return [s.replace(/\/+$/, '')]; }
+        return [];
+    }
+
+    function pairConnect(candidates) {
+        /* 逐候选探活，首个 /api/health ok 的写入 xj3_mobile_base 并重载
+         * （键=新壳唯一键；与 BASE 迁移链同键，无双写）。 */
+        var i = 0;
+        var gate = document.getElementById('mPairGate');
+        var statusEl = gate ? gate.querySelector('.pair-status') : null;
+        function setStatus(t) { if (statusEl) { statusEl.textContent = t; } }
+        function next() {
+            if (i >= candidates.length) {
+                setStatus('扫到的地址都连不上——请确认电脑端小橘在线，或改用手动输入');
+                return;
+            }
+            var base = candidates[i++];
+            setStatus('正在连接 ' + base + ' …');
+            XJ3Net.probeBase(base).then(function (ok) {
+                if (!ok) { next(); return; }
+                try { localStorage.setItem('xj3_mobile_base', base); } catch (e) { /* 忽略 */ }
+                window.location.reload();
+            });
+        }
+        next();
+    }
+
+    function openPairScanner() {
+        /* 扫码器（22b0d12 形态）：getUserMedia 后摄 + BarcodeDetector 原生
+         * 解码，180ms 逐帧轮询；取消键收场。 */
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,0.6);'
+            + 'display:flex;align-items:center;justify-content:center;padding:24px;';
+        var card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:16px;padding:18px;'
+            + 'width:min(86vw,340px);color:#1f2937;font-size:14px;';
+        var titleEl = document.createElement('div');
+        titleEl.style.cssText = 'font-size:16px;font-weight:700;margin-bottom:10px;';
+        titleEl.textContent = '对准电脑上的二维码';
+        var video = document.createElement('video');
+        video.setAttribute('playsinline', '');
+        video.muted = true;
+        video.style.cssText = 'width:100%;border-radius:10px;background:#111827;';
+        var hint = document.createElement('div');
+        hint.style.cssText = 'font-size:12px;color:#6b7280;margin-top:8px;';
+        hint.textContent = '打开后请稍候——首次会请求相机权限';
+        var cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'panel-btn';
+        cancelBtn.style.cssText = 'margin-top:12px;';
+        cancelBtn.textContent = '取消';
+        card.appendChild(titleEl);
+        card.appendChild(video);
+        card.appendChild(hint);
+        card.appendChild(cancelBtn);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        var stopped = false;
+        var streamRef = null;
+        function stop() {
+            stopped = true;
+            if (streamRef) { streamRef.getTracks().forEach(function (t) { t.stop(); }); }
+            if (overlay.parentNode) { overlay.remove(); }
+        }
+        cancelBtn.addEventListener('click', stop);
+        function onDecode(text) {
+            if (stopped) { return; }
+            var candidates = parsePairingPayload(text);
+            if (candidates.length) {
+                stop();
+                pairConnect(candidates);
+            } else {
+                hint.textContent = '二维码不是小橘的配对码，请重试';
+            }
+        }
+        function run() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                hint.textContent = '此设备不支持相机，请手动输入地址';
+                return;
+            }
+            navigator.mediaDevices.getUserMedia(
+                { video: { facingMode: 'environment' }, audio: false })
+                .then(function (s) {
+                    streamRef = s;
+                    video.srcObject = s;
+                    return video.play();
+                })
+                .then(function () {
+                    var Detector = window.BarcodeDetector || null;
+                    var detector = null;
+                    if (Detector) {
+                        try { detector = new Detector({ formats: ['qr_code'] }); }
+                        catch (e) { detector = null; }
+                    }
+                    if (!detector) {
+                        hint.textContent = '此 WebView 不支持扫码识别，请手动输入地址';
+                        return;
+                    }
+                    (function loop() {
+                        if (stopped) { return; }
+                        if (video.readyState >= 2) {
+                            detector.detect(video).then(function (bars) {
+                                var text = bars && bars.length ? bars[0].rawValue : null;
+                                if (text) { onDecode(text); return; }
+                                setTimeout(loop, 180);
+                            }).catch(function () { setTimeout(loop, 180); });
+                            return;
+                        }
+                        setTimeout(loop, 180);
+                    })();
+                })
+                .catch(function () {
+                    hint.textContent = '相机打开失败（权限未授予）——请用手动输入';
+                });
+        }
+        run();
+    }
+
+    function showPairGate() {
+        /* 首启/断连配对门：扫码为主（像正经 App），手动输入折叠兜底；
+         * 可"暂不连接"离线用（L0 底线：聊天+草稿箱永存，门绝不锁死）。 */
+        var overlay = document.createElement('div');
+        overlay.id = 'mPairGate';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.setAttribute('aria-label', '连接小橘主机');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,0.55);'
+            + 'display:flex;align-items:center;justify-content:center;padding:24px;';
+        var card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:16px;padding:22px 18px;'
+            + 'width:min(86vw,340px);box-shadow:0 12px 40px rgba(15,23,42,0.25);'
+            + 'color:#1f2937;font-size:14px;';
+        var titleEl = document.createElement('div');
+        titleEl.style.cssText = 'font-size:17px;font-weight:700;margin-bottom:6px;';
+        titleEl.textContent = '连接小橘';
+        var msgEl = document.createElement('p');
+        msgEl.style.cssText = 'margin:0 0 6px;color:#6b7280;line-height:1.5;';
+        msgEl.textContent = '扫电脑端「连接手机」二维码，或手动输入主机地址。'
+            + '消息会先存草稿箱，连上后自动发送。';
+        var statusEl = document.createElement('div');
+        statusEl.className = 'pair-status';
+        statusEl.style.cssText = 'min-height:18px;margin:0 0 10px;color:#b45309;'
+            + 'font-size:12px;line-height:1.4;';
+        var scanBtn = document.createElement('button');
+        scanBtn.type = 'button';
+        scanBtn.className = 'panel-btn';
+        scanBtn.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;'
+            + 'font-weight:600;background:#203170;border-color:#203170;color:#fff;';
+        scanBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+            + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+            + 'stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>'
+            + '<span>扫码连接</span>';
+        scanBtn.addEventListener('click', function () {
+            if (overlay.parentNode) { overlay.remove(); }
+            openPairScanner();
+        });
+        var manual = document.createElement('details');
+        manual.style.cssText = 'margin-top:12px;font-size:12px;color:#6b7280;';
+        var summary = document.createElement('summary');
+        summary.style.cssText = 'cursor:pointer;';
+        summary.textContent = '手动输入地址（备用）';
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'hitl-input';
+        input.placeholder = 'http://192.168.31.50:5003';
+        input.setAttribute('aria-label', '服务器地址');
+        var saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'panel-btn';
+        saveBtn.textContent = '保存并连接';
+        saveBtn.addEventListener('click', function () {
+            var base = input.value.trim().replace(/\/+$/, '');
+            if (!base) { return; }
+            try { localStorage.setItem('xj3_mobile_base', base); } catch (e) { /* 忽略 */ }
+            window.location.reload();
+        });
+        var laterBtn = document.createElement('button');
+        laterBtn.type = 'button';
+        laterBtn.className = 'panel-btn';
+        laterBtn.style.cssText = 'border:none;background:none;color:#6b7280;min-height:36px;';
+        laterBtn.textContent = '暂不连接（离线使用，消息存草稿箱）';
+        laterBtn.addEventListener('click', function () {
+            pairGateDismissed = true;   /* 记住选择：15s 周期探活不再自动弹门 */
+            if (overlay.parentNode) { overlay.remove(); }
+        });
+        manual.appendChild(summary);
+        manual.appendChild(input);
+        manual.appendChild(saveBtn);
+        card.appendChild(titleEl);
+        card.appendChild(msgEl);
+        card.appendChild(statusEl);
+        card.appendChild(scanBtn);
+        card.appendChild(manual);
+        card.appendChild(laterBtn);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+    }
+
+    var pairGateDismissed = false;   /* 用户点过「暂不连接」→ 周期探活不再骚扰 */
+    function ensurePairGate(force) {
+        if (!force && pairGateDismissed) { return; }   /* 尊重离线使用的选择 */
+        if (document.getElementById('mPairGate')) { return; }   /* 去重：同时至多一扇门 */
+        showPairGate();
     }
 
     /* ==================== 7. 富文本渲染（拷贝自 console.js@ee66ef0：
@@ -513,6 +815,12 @@
     function updateBannerText() {
         var span = banner ? banner.querySelector('span') : null;
         if (!span) { return; }
+        if (!BASE && inApk()) {
+            /* netfix：APK 空基址≠"重连中"（没有可重连的目标）——明示
+             * 未连接主机+草稿箱兜底+配对门引导，不装死不瞎转。 */
+            span.textContent = '未连接主机：消息自动存草稿箱——扫码或输入地址连接后发送';
+            return;
+        }
         var n = draftCount();
         span.textContent = n
             ? '离线模式：' + n + ' 条消息存于草稿箱，恢复后自动发送'
@@ -538,11 +846,18 @@
 
     function sendMessage(text) {
         if (generating) { return; }
-        /* 红线 A2：断网不发虚空——探活失败即入草稿箱（恢复自动补发） */
-        if (banner && !banner.hidden) {
+        /* 红线 A2：断网不发虚空——探活失败即入草稿箱（恢复自动补发）；
+         * netfix：APK 空基址=无目标可发，同走草稿箱+唤起配对门（横幅
+         * 文案引导），绝不向本地资产服务器发虚空请求。 */
+        if ((banner && !banner.hidden) || (!BASE && inApk())) {
             draftPush(text);
             appendUserMessage(text + '  [已存草稿箱]');
-            toast('当前离线：消息已存草稿箱，恢复后自动发送');
+            if (!BASE && inApk()) {
+                toast('未连接主机：消息已存草稿箱，连接后自动发送');
+                ensurePairGate(true);   /* 发送动作=明确要连，无视 dismissal */
+            } else {
+                toast('当前离线：消息已存草稿箱，恢复后自动发送');
+            }
             return;
         }
         sendRaw(text, false, null);
@@ -658,6 +973,7 @@
 
     /* ==================== 10. 历史加载（拷贝自 console.js loadHistory L4852） ==================== */
     function loadHistory() {
+        if (!BASE && inApk()) { return; }   /* 空基址守卫：不去撞资产服务器 */
         fetch(BASE + '/api/history').then(function (r) { return r.json(); })
             .then(function (res) {
                 if (!res || res.code !== 200 || !res.data || !res.data.messages) { return; }
@@ -682,6 +998,10 @@
         var esBackoff = 2000;
         var esTimer = null;
         function esConnect() {
+            /* 空基址守卫（netfix）：APK 内 SSE 同样吃资产服务器劫持的亏
+             * （200+HTML→es.onerror→被反复打回离线，探活偶然通过也会被
+             * 打穿）——BASE 空时不建连；配对成功即 reload 重建。 */
+            if (!BASE && inApk()) { return; }
             es = new EventSource(BASE + '/api/events');
             es.onopen = function () {
                 esBackoff = 2000;         /* 恢复清退避 */
@@ -928,6 +1248,10 @@
         });
         addrWrap.appendChild(saveBtn);
         body.appendChild(addrWrap);
+        var pair = el('button', 'panel-btn', '扫码配对 / 重连主机');
+        pair.type = 'button';
+        pair.addEventListener('click', function () { showPairGate(); });
+        body.appendChild(pair);
         var act = el('button', 'panel-btn', '立即检测连接');
         act.type = 'button';
         act.addEventListener('click', function () {
@@ -1065,6 +1389,28 @@
         });
     }
 
+    /* ==================== 6.9 诊断面板呼出（netfix） ====================
+     * 三击顶栏标题「小橘3号」切换 #mCssDiag（MA3 记录的三击呼出当时未
+     * 落实，本批补齐）：显示当前基址+来源/最近探活 URL+结果+失败类别/
+     * 能力级——断连排查从"瞎猜"变"看数"。600ms 内三连击生效。 */
+    function bindDiagToggle() {
+        var title = document.querySelector('.topbar-title');
+        if (!title) { return; }
+        var taps = 0, last = 0;
+        title.addEventListener('click', function () {
+            var now = Date.now();
+            taps = (now - last < 600) ? (taps + 1) : 1;
+            last = now;
+            if (taps < 3) { return; }
+            taps = 0;
+            var d = document.getElementById('mCssDiag');
+            if (!d) { return; }
+            var show = d.style.display === 'none';
+            d.style.display = show ? 'block' : 'none';
+            if (show) { diagRender(); }
+        });
+    }
+
     /* ==================== 初始化 ==================== */
     function init() {
         bindDrawer();
@@ -1073,6 +1419,7 @@
         bindMic();
         bindAttach();
         bindViewportFallback();
+        bindDiagToggle();
         following = true;
         scrollToBottom(false);
         startLinkCheck();     /* 探活横幅触发源（MA2 接入） */
@@ -1086,10 +1433,14 @@
         init();
     }
 
-    /* 验收/调试钩子（唯一全局出口） */
+    /* 验收/调试钩子（唯一全局出口；netfix 扩容：配对门+诊断） */
     window.__xj3Mobile = {
         setConnState: setConnState,
         sendMessage: sendMessage,
-        linkCheck: linkCheck
+        linkCheck: linkCheck,
+        showPairGate: showPairGate,
+        pairConnect: pairConnect,
+        parsePairingPayload: parsePairingPayload,
+        diag: DIAG
     };
 })();
