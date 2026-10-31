@@ -1,0 +1,426 @@
+/* =========================================================
+ * mobile.css — 小橘3号 移动端 MA1 骨架样式
+ * 规格来源：_dev/docs/design_mobile_ui.md §二/§三/§四/§五/§六/§八
+ *          design_mobile_architecture.md §四（键盘/视口硬规）
+ * 令牌与桌面同源：#fafafa / #ffffff / #2563eb / #22c55e / #f59e0b / #dc2626
+ * 图标：全部内联 SVG（Lucide/Feather 线性风），零 Emoji（AGENTS.md UI 图标铁律）
+ * ========================================================= */
+
+:root {
+    --bg-drawer: #fafafa;          /* 抽屉底色（UI 文档 §八） */
+    --bg-chat: #ffffff;            /* 聊天区底色 */
+    --primary: #2563eb;            /* 主色（用户气泡深蓝） */
+    --ok: #22c55e;                 /* 状态绿 */
+    --warn: #f59e0b;               /* 状态橙（失联横幅/橙点） */
+    --danger: #dc2626;             /* 状态红（驳回） */
+    --text-1: #1f2937;
+    --text-2: #6b7280;
+    --border: #e5e7eb;
+    --fill: #f3f4f6;               /* 输入框/折叠条底 */
+    --radius-bubble: 12px;         /* 气泡 12px（UI 文档 §八） */
+    --radius-card: 12px;           /* 卡片 12px */
+    --radius-btn: 10px;            /* 按钮 10px */
+    --page-margin: 16px;           /* 页面边距 16px */
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+    margin: 0;
+    background: var(--bg-chat);
+    color: var(--text-1);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px;               /* 移动正文 16px 底线（UI 文档 §三） */
+    line-height: 1.5;
+    overflow: hidden;              /* 页面级永不滚动，滚动只属于消息流 */
+    -webkit-tap-highlight-color: transparent;
+}
+
+button { font: inherit; color: inherit; touch-action: manipulation; }
+button:not(:disabled) { cursor: pointer; }
+button:disabled { cursor: default; }
+
+/* ==================== 三段布局（UI 文档 §二） ==================== */
+.app {
+    height: 100vh;
+    height: 100dvh;                /* resizes-content 下键盘弹出随布局视口收缩 */
+    display: flex;
+    flex-direction: column;
+}
+
+/* ---------- 顶栏 56px ---------- */
+.topbar {
+    flex: none;
+    background: var(--bg-chat);
+    border-bottom: 1px solid var(--border);
+    padding-top: env(safe-area-inset-top, 0px);   /* 状态栏/挖孔不遮挡顶栏 */
+}
+.topbar-row {
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 16px 0 4px;
+}
+.topbar-title {
+    flex: 1;
+    margin: 0;
+    font-size: 17px;               /* 标题 17px（UI 文档 §三） */
+    font-weight: 600;
+}
+
+.icon-btn {
+    flex: none;
+    width: 48px;                   /* 汉堡菜单钮 48px 热区（UI 文档 §二） */
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    border-radius: 12px;
+    color: var(--text-1);
+}
+.icon-btn:active { transform: scale(0.97); }   /* 按压反馈（UI 文档 §八） */
+
+/* ---------- 连接状态点（绿/橙） ---------- */
+.conn-dot {
+    flex: none;
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+.conn-dot--ok   { background: var(--ok);   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); }
+.conn-dot--warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18); }
+
+/* ---------- 失联橙横幅（默认 hidden；MA3 探活触发，恢复自动消失） ---------- */
+.conn-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 70;                   /* 高于抽屉 60/遮罩 50：失联必须可见 */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: calc(10px + env(safe-area-inset-top, 0px)) var(--page-margin) 10px;
+    background: var(--warn);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+/* ---------- 消息流：flex:1 独立滚动 ---------- */
+.stream-wrap {
+    flex: 1;
+    min-height: 0;                 /* flex 子项允许收缩 */
+    position: relative;
+    background: var(--bg-chat);
+}
+.stream {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    padding: var(--page-margin);
+}
+
+/* ---------- 气泡：fit-content + max-width:80%（UI 文档 §三） ---------- */
+.msg-row { display: flex; }
+.msg-row + .msg-row { margin-top: 12px; }             /* 跨发送方 12px */
+.msg-row--them { justify-content: flex-start; }
+.msg-row--me   { justify-content: flex-end; }
+.msg-row--them + .msg-row--them,
+.msg-row--me   + .msg-row--me   { margin-top: 4px; }  /* 同侧聚合 4px */
+
+.bubble {
+    width: fit-content;            /* 短消息贴内容，不撑满 */
+    max-width: 80%;                /* 长文本 80% 封顶 */
+    padding: 10px 14px;
+    border-radius: var(--radius-bubble);
+    font-size: 16px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+.bubble--them {
+    background: var(--bg-chat);    /* 小橘左侧白卡 */
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 2px rgba(31, 41, 55, 0.06);
+}
+.bubble--me {
+    background: var(--primary);    /* 用户右侧深蓝 */
+    color: #fff;
+}
+
+/* ---------- 思维链折叠条（默认收起；点击展开/收起） ---------- */
+.think-card { width: fit-content; max-width: 80%; }
+.think-toggle {
+    min-height: 44px;              /* 触控目标 ≥44px */
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius-card);
+    background: var(--fill);
+    color: var(--text-2);
+    font-size: 13px;               /* 次要文字 13px */
+}
+.think-toggle:active { transform: scale(0.97); }
+.think-chevron { transition: transform 0.2s ease; }
+.think-toggle.is-open .think-chevron { transform: rotate(180deg); }
+.think-body {
+    margin-top: 4px;
+    padding: 10px 14px;
+    background: var(--bg-chat);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+}
+.think-steps {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    color: var(--text-2);
+    line-height: 1.7;
+}
+
+/* ---------- HITL 确认卡（按钮纵排全宽 ≥44px；UI 文档 §三） ---------- */
+.hitl-card {
+    width: fit-content;
+    max-width: 80%;
+    min-width: 240px;
+    padding: 12px;
+    background: var(--bg-chat);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    box-shadow: 0 1px 2px rgba(31, 41, 55, 0.06);
+}
+.hitl-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--primary);
+    font-size: 14px;
+    font-weight: 600;
+}
+.hitl-summary {
+    margin: 8px 0 12px;
+    font-size: 16px;
+    line-height: 1.5;
+}
+.hitl-actions {
+    display: flex;
+    flex-direction: column;        /* 按钮纵排 */
+    gap: 8px;
+}
+.hitl-btn {
+    width: 100%;                   /* 全宽 */
+    min-height: 44px;              /* 确认卡钮 ≥44px */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: none;
+    border-radius: var(--radius-btn);
+    font-size: 16px;
+    font-weight: 500;
+}
+.hitl-btn:active { transform: scale(0.97); }
+.hitl-btn--approve { background: var(--primary); color: #fff; }
+.hitl-btn--reject {
+    background: var(--bg-chat);
+    color: var(--danger);
+    border: 1px solid var(--danger);
+}
+.hitl-input {
+    margin-top: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-btn);
+    background: var(--fill);
+    color: var(--text-1);
+    font-size: 16px;               /* 输入类 ≥16px 防聚焦缩放（架构文档 §四.4） */
+}
+.hitl-input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+
+/* ---------- 回到底部悬浮钮（≥44px，右下浮现，淡入 0.2s） ---------- */
+.scroll-fab {
+    position: absolute;
+    right: var(--page-margin);
+    bottom: var(--page-margin);
+    z-index: 5;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    background: var(--bg-chat);
+    color: var(--primary);
+    font-size: 13px;
+    box-shadow: 0 4px 12px rgba(31, 41, 55, 0.16);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+.scroll-fab.is-visible { opacity: 1; visibility: visible; pointer-events: auto; }
+.scroll-fab:active { transform: scale(0.97); }
+
+/* ---------- 底部输入条（键盘上方；安全区 padding-bottom） ---------- */
+.composer {
+    flex: none;
+    background: var(--bg-chat);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom, 0px);   /* 手势条安全区硬规 */
+}
+.composer-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 8px 12px;
+}
+.composer-input {
+    flex: 1;
+    min-width: 0;
+    min-height: 42px;              /* 1 行：22px 行高 + 上下 10px */
+    max-height: 108px;             /* 4 行封顶（22px × 4 + 20px），超出内部滚动 */
+    padding: 10px 14px;
+    border: none;
+    border-radius: var(--radius-card);
+    background: var(--fill);
+    color: var(--text-1);
+    font-size: 16px;               /* 硬规：输入框字号 16px（防 iOS 聚焦缩放） */
+    line-height: 22px;
+    resize: none;
+    outline: none;
+}
+.composer-input:focus { box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25); }
+
+.round-btn {
+    flex: none;
+    width: 48px;                   /* 语音/发送钮 48px（UI 文档 §五） */
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-2);
+}
+.round-btn:active { transform: scale(0.97); }
+.round-btn--primary { background: var(--primary); color: #fff; }
+.round-btn--primary:disabled { background: #d1d5db; color: #fff; }   /* 空内容灰态 */
+
+/* ==================== modal drawer（UI 文档 §四） ==================== */
+.drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.45);   /* 半透明遮罩，阻断下层交互 */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+.drawer-scrim.is-shown { opacity: 1; visibility: visible; }
+
+.drawer {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    width: min(85vw, 320px);       /* UI 文档 §四 */
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-drawer);
+    border-right: 1px solid var(--border);
+    transform: translateX(-102%);  /* 从左滑入 */
+    transition: transform 0.25s ease;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.drawer.is-open { transform: translateX(0); box-shadow: 0 0 24px rgba(31, 41, 55, 0.18); }
+
+.drawer-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+}
+.drawer-avatar {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--primary);
+    color: #fff;
+}
+.drawer-name { font-size: 16px; font-weight: 600; }
+.drawer-conn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    font-size: 13px;
+    color: var(--text-2);
+}
+.drawer-conn .conn-dot { width: 8px; height: 8px; }
+
+.drawer-nav {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+.drawer-foot {
+    flex: none;
+    border-top: 1px solid var(--border);
+    padding: 8px 0;
+}
+
+.drawer-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: calc(100% - 16px);
+    min-height: 48px;              /* 条目高 ≥48px（UI 文档 §四） */
+    margin: 2px 8px;
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius-btn);
+    background: transparent;
+    font-size: 16px;
+    text-align: left;
+    color: var(--text-1);
+}
+.drawer-item svg { flex: none; color: var(--text-2); }
+.drawer-item:active { transform: scale(0.98); }
+.drawer-item.is-active {
+    background: rgba(37, 99, 235, 0.10);
+    color: var(--primary);
+    font-weight: 500;
+}
+.drawer-item.is-active svg { color: var(--primary); }
+
+/* ==================== 横屏不破版（UI 文档 §七，可选级） ==================== */
+@media (orientation: landscape) {
+    /* 三段 flex 布局天然自适应高度，无需额外裁剪；此处仅约束气泡上限避免
+       超宽屏长句一行铺满全屏（80% 封顶仍生效） */
+    .stream { padding-top: 12px; }
+}
