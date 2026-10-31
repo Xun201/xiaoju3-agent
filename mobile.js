@@ -205,6 +205,13 @@
     /* ==================== 5. 连接状态（MA1 setConnState + MA2 探活触发源） ==================== */
     function setConnState(ok) {
         banner.hidden = ok;
+        /* 能力分级（2026-10-31 队长指令：移动端自适应降级）：探活状态唯一落点
+         * 追加 body 能力属性切换——可达='l2' 全面板；不可达='l0' 重型模块
+         * 由 CSS [data-needs-server] 统一门控隐藏。初值保守 'l0'（mobile.html
+         * body 标签），探活成功才升 'l2'。探活/重载逻辑本体零改动。 */
+        if (document.body) {
+            document.body.setAttribute('data-caps', ok ? 'l2' : 'l0');
+        }
         if (connDot) {
             connDot.classList.toggle('conn-dot--ok', ok);
             connDot.classList.toggle('conn-dot--warn', !ok);

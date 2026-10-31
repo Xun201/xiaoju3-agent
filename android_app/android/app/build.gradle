@@ -7,8 +7,8 @@ android {
         applicationId "com.xun.xiaoju3"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3                  // MA2.1+MA3 递增（覆盖安装必须严格大于）
-        versionName "2.3.0-ma3"
+        versionCode 4                  // cap 降级批递增（覆盖安装必须严格大于）
+        versionName "2.3.1-cap"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
