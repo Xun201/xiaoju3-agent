@@ -51,3 +51,15 @@
 - **秘书复审两项落地**：①钩子存活看门狗（录制会话每 10s 自检句柄+线程，失效自动停录+hook_lost 如实上报）+入队 SimpleQueue.put_nowait 非阻塞（异常计数 dropped）②**技能文件脱敏 schema v2**：窗口标题明文禁令——落盘只存 proc+title_hash(sha256[:12])，回放两段式定位（进程名候选→哈希锁定，同进程多窗口精确匹配），v1 legacy 兼容；审计与回执零明文标题。
 - **排障实录**：HITL 测试三轮定位（页内探针→hub 日志→py-spy）——真因链=双 dev 服务同占 5077（taskkill /FI 失败残留）+端点字段 data.items 非 messages（测试解析错）+send 契约 body.text；hub 本体零 bug（插桩实证后全撤，collab_hub 零 diff）。
 - 验收：全仓 2988 全绿；PYZ 新锚（watchdog/hash）全在+mobile 三件 datas 在包；生产验活（StartTime 全新+mobile.js 200+record/status 新字段 dropped/hook_alive 在线）。
+
+## 8. 红线加固+排雷+MA3/MA4 批（7a0d14a 已推已部署；APK v2.3.0-ma3 交付）
+
+- **双端网络核心唯一实现**（排雷红线）：xj3_network_core.js（probeBase/chatStream/看门狗/帧解析，零 DOM）；console.js+mobile.js 全部换核；契约测试锚随迁（9 个测试文件级迁移）。坑：多段 rep 脚本中断=内存假象二犯（铁律三锤：逐段落盘）。
+- **红线 A2 离线草稿箱**：断网→localStorage 队列→探活恢复自动补发（E2E 实测全链）；横幅带队列数。
+- **红线 A3 崩溃自愈**：错误红条+crash.html+MainActivity onRenderProcessGone→recreate()（RenderProcessGoneDetail=android.webkit 顶层类——嵌套写法三连编译失败的根因，秘书裁决）。
+- **B5 ES 退避重连双端**：2s→30s+抖动；文档级绑定防重复挂载。
+- **MA3**：/api/stt/transcribe（edge-tts 合成语音实测全字一致）+/api/attach_upload（doc_ingest 解析链）+麦克风录音态/附件按钮接活。
+- **MA4**：抽屉四面板全活（待办 done/reopen/快捷 chips 直发/连接设置 BASE 持久化/关于版本）。
+- **APK 复仇之战**：www→mobile 入口+assets/public 白名单入库（惨案根源根除）+RECORD_AUDIO+构建成功；模拟器挂账（AEHD 驱动需管理员安装，logic 级 E2E 已全过）。
+- **紧急修复**：B4 首脚本中断致 spec/dashboard 编辑丢失→生产 desktop 引用 404 的 core.js——补齐+重建+重部署（dc7c7f04），core.js 200+页面注入实证。
+- 坑库：多段脚本内存假象（二犯）/heredoc 反斜杠（三犯）/双 dev 服务占 5077/gitignore 无斜杠锚/gradle mergeAssets 不追 www 手改（须直填 assets/public）。
