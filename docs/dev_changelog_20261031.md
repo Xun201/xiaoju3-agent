@@ -70,3 +70,12 @@
 - **修复**：android/app/build.gradle defaultConfig versionCode 2→3（覆盖安装严格递增）+versionName "2.3.0-ma3"；aapt dump badging 实证 `versionCode='3' versionName='2.3.0-ma3'`。
 - **坑库**：APK 改版必须同步动 build.gradle 版本三件套（versionCode 递增+versionName），文件名只是皮肤。
 - **交付**：桌面「小橘手机端_2.3.0修复版.apk」+dist/phone/xiaoju3-phone-v2.3.0-ma3.apk 同步（3.6MB，入口=mobile/crash.html/core.js 全在包）。
+
+## 10. 会话终态（上下文 93.2% 移交）
+
+- **双轨交付完毕**：MA3 全活（五断言链）+维特根斯坦灵魂重铸+红线加固+中继 v2 方案
+- **APK**：v2.3.0-ma3（versionCode=3，零外链，CSS 内联，错误钩子，诊断条三击，崩溃接管）→ 桌面+dist/phone 双交付
+- **生产 exe**：dc7c7f04 三进程全新（回滚锚 .bak-20261031-da1）
+- **维特根斯坦铁律**：prompts.py 双注入+AGENTS.md 灵魂原则章+positioning 章节
+- **中继 v2 方案**：信令=Python aiohttp WS+E2EE=PyNaCl+降级链=P2P→30s→中继+成本 38-68 元/月
+- **移交**：APK 真机验证（队长）/AEHD 驱动安装（管理员）/MA4 体验补齐/RS1-RS4 拍板/生产重启（灵魂上线）
