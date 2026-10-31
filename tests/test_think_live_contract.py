@@ -61,25 +61,30 @@ class WatchdogCleanupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.js = _read("console.js")
+        cls.core = _read("xj3_network_core.js")   # 看门狗/总闸唯一实现（排雷批）
 
     def test_watchdog_cleared_on_done_and_error_and_catch(self):
-        """done 清狗 + error 帧 throw 后 catch 清狗 + legacy 无看门狗残留。"""
+        """清狗迁移锚（2026-10-31 排雷批）：看门狗/总闸移交 XJ3Net 核心后，
+        任何收口路径（流 done / 异常 reject）都拆狗——核心 clearAll 全覆盖，
+        console.js 不再残留看门狗定时器。"""
+        done_at = self.core.index("if (chunk.done) {")
+        done_body = self.core[done_at:self.core.index("return pump();", done_at)]
+        self.assertIn("clearAll();", done_body)
+        catch_body = self.core[self.core.index(".catch(function (err) {"):]
+        self.assertIn("clearAll();", catch_body)
         block = _extract_span(self.js, "function sendMessageStream",
                               "function sendMessageLegacy")
-        done_at = block.index("} else if (etype === 'done') {")
-        done_body = block[done_at:block.index("} else if (etype === 'error') {", done_at)]
-        self.assertIn("clearTimeout(watchdog);", done_body)
-        self.assertIn("clearTimeout(streamGuard);", done_body)
-        catch_body = block[block.index(".catch(function (err) {"):]
-        self.assertIn("clearTimeout(watchdog);", catch_body)
-        self.assertIn("clearTimeout(streamGuard);", catch_body)
+        self.assertNotIn("clearTimeout(watchdog);", block)   # 反锚：桌面不再持狗
 
     def test_total_guard_190s_kept(self):
-        """190s 总闸 AbortController 保留（比后端 180s 略长的最终防线）。"""
+        """190s 总闸保留（核心实现）：aborter.abort 口径不变。"""
+        self.assertIn("setTimeout(function () { fireWatchdog(); }, 190000);",
+                      self.core)
+        self.assertIn("aborter.abort()", self.core)
         block = _extract_span(self.js, "function sendMessageStream",
                               "function sendMessageLegacy")
-        self.assertIn("const streamGuard = setTimeout(() => ac.abort(), 190000);", block)
-        self.assertIn("signal: ac.signal", block)
+        self.assertIn("const ac = new AbortController();", block)
+        self.assertIn("__xj3Abort = ac;", block)          # 排队条"立即执行"中断链未动
 
     def test_watchdog_error_message_copy(self):
         """看门狗报错文案：明示自动中断+可重试（现场可懂，不抛裸异常）。"""

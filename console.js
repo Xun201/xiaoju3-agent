@@ -2685,18 +2685,8 @@ var qrcode = function() {
     // 传 '' 即探当前 base（自动带 __XJ3_API_BASE 前缀），传绝对 base 原样。
     const PAIR_PROBE_TIMEOUT = 5000;
     function probeBase(base, timeoutMs) {
-        const ctrl = window.AbortController ? new AbortController() : null;
-        let timer = null;
-        if (ctrl) timer = setTimeout(function () { ctrl.abort(); },
-                                     timeoutMs || PAIR_PROBE_TIMEOUT);
-        return fetch((base || '') + '/api/health')
-            .then(function (r) { return r.json(); })
-            .then(function (j) { return !!(j && j.status === 'ok'); })
-            .catch(function () { return false; })
-            .then(function (ok) {
-                if (timer) clearTimeout(timer);
-                return ok;
-            });
+        /* 委托 XJ3Net 核心唯一实现（2026-10-31 排雷批：双端零拷贝） */
+        return window.XJ3Net.probeBase(base, timeoutMs || PAIR_PROBE_TIMEOUT);
     }
     // ── 运行时失联自愈（2026-10-30 审计缺口【高】：运行时无候选自动切换
     // +【中】运行中失联无感知）──配对成功后 fetch/EventSource 失联，此前
@@ -4456,6 +4446,18 @@ var qrcode = function() {
     // 事件丢失兜底=「查转写状态」（既有，保留）。
     (function initUiEvents() {
         if (typeof EventSource === "undefined") return;   // 老引擎降级（status 兜底）
+        // 排雷批：指数退避重连（2s→30s+抖动）——多 tab 场景不再固定 3s 硬重试打后端
+        let esReconnectTimer = null;
+        let esBackoff = 2000;
+        function esScheduleReconnect(kick) {
+            if (esReconnectTimer) return;
+            const delay = esBackoff + Math.floor(Math.random() * 800);
+            esBackoff = Math.min(30000, esBackoff * 2);
+            esReconnectTimer = setTimeout(function () {
+                esReconnectTimer = null;
+                initUiEvents();
+            }, delay);
+        }
         const es = new EventSource('/api/events');
         es.addEventListener('video_note_done', function (ev) {
             try {
@@ -4515,12 +4517,20 @@ var qrcode = function() {
             // IP 换了原生重连永远打旧 base，此处探活失败即逐候选换基重载
             // （2026-10-30 审计缺口【高】；探活通过=瞬时抖动，零动作）
             if (typeof window.xj3LinkKick === 'function') window.xj3LinkKick();
+            // 排雷批：指数退避重建（关当前 ES→退避后重开 initUiEvents），
+            // 多 tab 场景不再以固定间隔硬重试打后端
+            try { es.close(); } catch (e) { /* 忽略 */ }
+            esScheduleReconnect();
         };
         // 思考一行折叠（2026-10-28）：点击消息内思考行展开/收起全文
+        // 排雷批：文档级绑定只挂一次（退避重连重进本 IIFE 防重复 toggle）
+        if (!window.__xj3ThinkCollapseBound) {
+            window.__xj3ThinkCollapseBound = true;
         document.addEventListener('click', function (ev) {
             const tl = ev.target.closest('.message.bot-message .think-live');
             if (tl) tl.classList.toggle('open');
         });
+        }
         // 🚌 协作总线实时推送（2026-10-30 Multi-Agent UI）：collab_msg 事件
         // → 「协作」Tab 三色气泡（秘书🧠蓝/包工头🔧灰/老板👑绿——内联 SVG 角标）
         es.addEventListener('collab_msg', function (ev) {
@@ -5043,23 +5053,11 @@ var qrcode = function() {
         if (window.__xj3HideAttach) window.__xj3HideAttach();   // 附件随本次消息消费（2026-10-26）
         // C3b 修复：自取元素与作用域解耦（裸 history 解析到 window.history）
         const history = document.getElementById('chat-history');
-        // ⏱️ 总闸 190s AbortController（比后端 180s 硬超时略长的最终防线）
+        // ⏱️ 看门狗/总闸已移交 XJ3Net.chatStream（双端唯一实现，2026-10-31
+        // 红线排雷批）——本函数保留 ac 引用（排队条"立即执行"经 __xj3Abort
+        // 中断流式）与全部 DOM 过程件，网络编排零拷贝。
         const ac = new AbortController();
         __xj3Abort = ac;
-        const streamGuard = setTimeout(() => ac.abort(), 190000);
-        // ⏱️ 看门狗（2026-10-22 救火拍板）：首帧前 30s / 帧间 90s 无任何帧
-        // → 中断并就地报错（不转 legacy——同源后端会同样卡死）。任何底层
-        // 卡死（工具挂死/模型无响应/流中断）UI 都不死锁，可继续发下一条。
-        let watchdogFired = false;
-        let watchdog = setTimeout(fireWatchdog, 30000);
-        function fireWatchdog() {
-            watchdogFired = true;
-            try { ac.abort(); } catch (e) { /* 已中断 */ }
-        }
-        function patWatchdog() {   // 每帧喂狗（首帧后转为 90s 帧间口径）
-            clearTimeout(watchdog);
-            watchdog = setTimeout(fireWatchdog, 90000);
-        }
         // ⚡ 首字零等待（2026-10-22 队长拍板）：流式状态变量提升到 fetch 之前
         // ——直出思维流骨架在点击发送的同一 tick 同步挂载，把后端 TTFT
         //（实测闲聊首帧 1.37s≈全部为模型首字延迟；指令链无模型仅 21ms）
@@ -5153,7 +5151,6 @@ var qrcode = function() {
         }
 
         function handleEvent(etype, data) {
-            patWatchdog();   // 每帧喂狗（首帧后转为 90s 帧间口径）
             if (etype === 'think') {
                 if (thinkStartTs === null) {
                     thinkStartTs = Date.now();   // A1：耗时计时起点
@@ -5180,8 +5177,6 @@ var qrcode = function() {
                 // 定稿后原地移动进最终消息（正文/工具栏/落盘口径零分叉）；
                 // 无流式块（指令单帧 done）走原重建路径零变化。
                 // 顺序：先挂最终气泡再撤 answerEl（换屏零空白）。
-                clearTimeout(streamGuard);
-                clearTimeout(watchdog);
                 maybeTimeSeparator(new Date().toISOString());
                 let adopted = null;
                 if (thinkCard) {
@@ -5224,46 +5219,19 @@ var qrcode = function() {
             }
         }
 
-        function pump() {
-            return reader.read().then(({ done, value }) => {
-                if (done) return;
-                buf += decoder.decode(value, { stream: true });
-                let idx;
-                while ((idx = buf.indexOf('\n\n')) !== -1) {
-                    const frame = buf.slice(0, idx);
-                    buf = buf.slice(idx + 2);
-                    let etype = 'message';
-                    let payload = '';
-                    frame.split('\n').forEach(l => {
-                        if (l.startsWith('event:')) etype = l.slice(6).trim();
-                        else if (l.startsWith('data:')) payload += l.slice(5).trim();
-                    });
-                    if (!payload) continue;
-                    handleEvent(etype, JSON.parse(payload));
-                }
-                return pump();
-            });
-        }
-
-        return fetch('/api/chat/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text }),
-            signal: ac.signal
-        }).then(res => {
-            if (!res.ok || !res.body) throw new Error('stream unavailable');
-            reader = res.body.getReader();
-            decoder = new TextDecoder();
-            return pump();
+        // 🌐 网络编排移交 XJ3Net.chatStream（双端唯一实现）：fetch/reader/
+        // 帧解析/看门狗全部在核心，本函数只剩 DOM 过程件与事件分派。
+        return XJ3Net.chatStream({
+            message: text,
+            aborter: ac,
+            onFrame: function (etype, data) { handleEvent(etype, data); },
         }).catch(function (err) {
-            clearTimeout(streamGuard);
-            clearTimeout(watchdog);
             // C3b：半途断流——闭包内清理过程件再处置（外层 catch 才转 legacy
             // 重答；宽 DOM 查询会误删历史消息，必须用闭包引用）
             if (thinkCard && thinkCard.parentNode) thinkCard.parentNode.removeChild(thinkCard);
             if (toolEl && toolEl.parentNode) toolEl.parentNode.removeChild(toolEl);
             if (answerEl && answerEl.parentNode) answerEl.parentNode.removeChild(answerEl);
-            if (watchdogFired) {
+            if (err && err.xj3Watchdog) {
                 // 看门狗中断：就地报错收尾，不转 legacy（同源后端会同样卡死）
                 const errMsg = document.createElement('div');
                 errMsg.className = 'message bot-message';

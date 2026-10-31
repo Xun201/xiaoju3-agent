@@ -52,6 +52,7 @@ binaries=pw_binaries + ytdlp_binaries,
 datas=[
     ('assets', 'assets'),              # 桌宠素材（pet/normal_half|full）+ ASSETS.md
     ('index.html', '.'),               # 前端三件套（dashboard 从资源根直读）
+    ('xj3_network_core.js', '.'),      # 双端共享网络核心（排雷批唯一实现）
     ('console.js', '.'),
     ('desktop-pet.js', '.'),
     ('mobile.html', '.'),              # 移动端三件套（MA1 骨架，/console/mobile.html）

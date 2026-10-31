@@ -93,7 +93,12 @@ lint/tmp/
 capacitor-cordova-android-plugins
 
 # Copied web assets
-app/src/main/assets/public
+app/src/main/assets/public/*
+!app/src/main/assets/public/index.html
+!app/src/main/assets/public/mobile.css
+!app/src/main/assets/public/mobile.js
+!app/src/main/assets/public/xj3_network_core.js
+!app/src/main/assets/public/crash.html
 
 # Generated Config files
 app/src/main/assets/capacitor.config.json

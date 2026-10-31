@@ -63,7 +63,7 @@ class DirectOutStructureTests(unittest.TestCase):
         # 代理锚；真锁由 test_streamcard_runtime_smoke 运行时烟雾承担
         self.assertIn("function ensureThinkCard", block)
         call_at = block.index("ensureThinkCard();   // ⚡ 乐观挂载骨架（点击发送同一 tick，零等待）")
-        fetch_at = block.index("return fetch('/api/chat/stream'")
+        fetch_at = block.index("XJ3Net.chatStream({")
         self.assertLess(call_at, fetch_at)
         self.assertIn("className = 'think-live'", block)
         self.assertIn("classList.add('think-live-waiting')", block)
@@ -185,7 +185,7 @@ class StrictSeparationTests(unittest.TestCase):
     def test_think_never_touches_answer_and_vice_versa(self):
         js = _read("console.js")
         start = js.index("function handleEvent")
-        end = js.index("function pump", start)
+        end = js.index("return XJ3Net.chatStream", start)
         body = js[start:end]
         think_block = body[body.index("etype === 'think'"):body.index("etype === 'tool'")]
         answer_block = body[body.index("etype === 'answer'"):body.index("} else if (etype === 'done')")]
@@ -211,28 +211,25 @@ class WatchdogTests(unittest.TestCase):
     """SSE 超时中断保护（救火拍板）：任何底层卡死 UI 都不死锁。"""
 
     def test_first_frame_and_idle_watchdog(self):
-        """首帧前 30s / 帧间 90s 无帧 → fireWatchdog 中断；handleEvent 每帧
-        喂狗。"""
-        js = _read("console.js")
-        self.assertIn("let watchdog = setTimeout(fireWatchdog, 30000);", js)
-        self.assertIn("watchdog = setTimeout(fireWatchdog, 90000);", js)
-        self.assertIn("patWatchdog();   // 每帧喂狗", js)
-        block = _extract_span(js, "function sendMessageStream",
-                              "function sendMessageLegacy")
-        catch_at = block.index(".catch(function (err) {")
-        catch_body = block[catch_at:]
-        self.assertIn("clearTimeout(watchdog);", catch_body)
+        """首帧前 30s / 帧间 90s 无帧 → fireWatchdog 中断（核心实现；
+        onFrame 前每帧喂狗）。"""
+        core = _read("xj3_network_core.js")
+        self.assertIn("setTimeout(function () { fireWatchdog(); }, 30000);", core)
+        self.assertIn("setTimeout(function () { fireWatchdog(); }, 90000);", core)
+        self.assertIn("pat();", core)
+        self.assertIn("opts.onFrame(etype, JSON.parse(payload));", core)
 
     def test_watchdog_error_inline_no_legacy(self):
         """看门狗中断就地报错（红字提示+统一工具栏），不转 legacy（同源后端
-        会同样卡死）；普通错误仍转 legacy 重答。"""
+        会同样卡死）；普通错误仍转 legacy 重答。桌面经 err.xj3Watchdog 旗标
+        区分（旗标由核心打点）。"""
         js = _read("console.js")
         block = _extract_span(js, "function sendMessageStream",
                               "function sendMessageLegacy")
         catch_body = block[block.index(".catch(function (err) {"):]
-        self.assertIn("if (watchdogFired) {", catch_body)
+        self.assertIn("if (err && err.xj3Watchdog) {", catch_body)
         self.assertIn("mountSystemToolbar(errMsg)", catch_body)
-        self.assertLess(catch_body.index("if (watchdogFired) {"),
+        self.assertLess(catch_body.index("if (err && err.xj3Watchdog) {"),
                         catch_body.rindex("throw err;"))
 
     def test_backend_hard_timeout_untouched(self):

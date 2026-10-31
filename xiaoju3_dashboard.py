@@ -355,6 +355,9 @@ def console():
     html = re.sub(r'src="/console/console\.js(?:\?v=[^"]*)?"',
                   'src="/console/console.js?v=' + _mtime_ver("console.js") + '"',
                   html)
+    html = re.sub(r'src="/console/xj3_network_core\.js(?:\?v=[^"]*)?"',
+                  'src="/console/xj3_network_core.js?v=' + _mtime_ver("xj3_network_core.js") + '"',
+                  html)
     return html
 
 
@@ -1462,6 +1465,120 @@ def api_stt_stop():
         return jsonify({"code": 200, "data": {"text": text}})
     finally:
         _stt_close_stream()   # 第二道保险：哪怕上面任何一步抛异常也已收口
+
+
+@app.route("/api/attach_upload", methods=["POST"])
+def api_attach_upload():
+    """移动端附件上传（MA3，2026-10-31 队长指令：附件按钮接活）：
+    手机浏览器 FormData 上传文件内容 → 落临时文件 → 复用 doc_ingest
+    _extract_text 解析 → 挂 _doc_attach_store（随下一次对话消费）。
+    与桌面 /api/doc_upload（JSON 绝对路径形态）互补——桌面链零改动。"""
+    f = request.files.get("file")
+    if f is None or not f.readable():
+        return jsonify({"code": 400, "error": "缺 file 字段"}), 400
+    name = os.path.basename(f.filename or "attachment")
+    ext = os.path.splitext(name)[1].lower()
+    allowed = (".txt", ".md", ".pdf", ".docx", ".xlsx",
+               ".py", ".js", ".json")
+    if ext not in allowed:
+        return jsonify({"code": 400, "error": "仅支持文档（txt/md/pdf/docx/xlsx）"
+                                             "与代码文件（py/js/json）"}), 400
+    data = f.read()
+    if len(data) > 20 * 1024 * 1024:
+        return jsonify({"code": 400, "error": "文件超 20MB 上限"}), 400
+    tmp_path = None
+    try:
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(suffix=ext, prefix="xj3_mattach_")
+        with os.fdopen(fd, "wb") as out:
+            out.write(data)
+        import plugin_loader
+        rec = plugin_loader.loaded_plugins().get("doc_ingest")
+        extract = rec["module"]._extract_text if rec else None
+        if extract is None:
+            # 兜底直导（测试哨兵关插件时仍可用）：doc_ingest 实体在
+            # agent_state/plugins/（仓库 plugins/ 为另一族），逐候选搜索
+            import importlib as _il
+            for _mn in ("agent_state.plugins.doc_ingest",
+                        "plugins.doc_ingest", "doc_ingest"):
+                try:
+                    extract = getattr(_il.import_module(_mn),
+                                      "_extract_text", None)
+                except Exception:
+                    extract = None
+                if extract:
+                    break
+        if extract is None:
+            return jsonify({"code": 503, "error": "doc_ingest 插件未装载"}), 503
+        text = str(extract(tmp_path))
+        if not text.strip():
+            return jsonify({"code": 400, "error": "提取后没有可用文本（可能是扫描件图片 PDF）"}), 400
+        mounted = _doc_attach_store([{"name": name, "text": text}])
+        return jsonify({"code": 200, "data": {"name": name,
+                                              "chars": len(text),
+                                              "mounted": mounted}})
+    except Exception as e:
+        return jsonify({"code": 400, "error": f"附件解析失败: {e}"}), 400
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+@app.route("/api/stt/transcribe", methods=["POST"])
+def api_stt_transcribe():
+    """移动端语音转写（MA2.1，2026-10-31 队长指令：语音按钮必须活）：
+    手机浏览器 MediaRecorder 录音（webm/opus）→ 上传 → PyAV 解码 16k →
+    与 /api/stt/stop 同门槛（静音门/echo 门）→ Whisper → 文字。
+    与 stop 端点的门槛逻辑为**有意复制**（零接触桌面链=零回归风险），
+    两处门槛如调整须同步（对照 mobile_sync_checklist 纪律）。"""
+    try:
+        import av as _av
+        import io as _io
+        import numpy as np
+    except ImportError as e:
+        return jsonify({"code": 503, "error": f"解码依赖缺席: {e}"}), 503
+    f = request.files.get("audio")
+    if f is None or not f.readable():
+        return jsonify({"code": 400, "error": "缺 audio 文件字段"}), 400
+    raw = f.read()
+    if len(raw) < 1000:
+        return jsonify({"code": 200, "data": {"text": "", "note": "录音太短"}})
+    try:
+        container = _av.open(_io.BytesIO(raw))
+        resampler = _av.AudioResampler(format="s16", layout="mono", rate=16000)
+        chunks = []
+        for frame in container.decode(audio=0):
+            for rf in resampler.resample(frame):
+                arr = rf.to_ndarray().flatten().astype(np.float32) / 32768.0
+                chunks.append(arr)
+        container.close()
+        if not chunks:
+            return jsonify({"code": 200, "data": {"text": "", "note": "无音频数据"}})
+        audio = np.concatenate(chunks)
+    except Exception as e:
+        return jsonify({"code": 400, "error": f"音频解码失败: {e}"}), 400
+    if audio.size < 1600:   # <0.1s 误触
+        return jsonify({"code": 200, "data": {"text": "", "note": "录音太短"}})
+    rms = float(np.sqrt(np.mean(audio ** 2)))
+    print(f"[stt] transcribe: bytes={len(raw)} dur={len(audio)/16000:.1f}s "
+          f"rms={rms:.4f}", flush=True)
+    if rms < 0.003:
+        return jsonify({"code": 200, "data": {"text": "", "note": "环境太安静，没听清"}})
+    model = _stt_whisper()
+    segments, info = model.transcribe(audio, language="zh", beam_size=1,
+                                      initial_prompt=_STT_PROMPT)
+    text = _stt_t2s(
+        "".join(s.text.strip() for s in segments if s.text.strip()))
+    _strip = lambda s: re.sub(r"[，。？！、,.?!～~\s]", "", s)
+    if (rms < 0.015 and len(_strip(text)) >= 4
+            and _strip(text) in _strip(_STT_PROMPT)):
+        return jsonify({"code": 200,
+                        "data": {"text": "", "note": "只有杂音，没听清"}})
+    print(f"[stt] transcribe ok: text_len={len(text)}", flush=True)
+    return jsonify({"code": 200, "data": {"text": text}})
 
 
 @app.route("/api/pet_pref", methods=["GET"])

@@ -23,6 +23,7 @@
     var input = $('#mInput');
     var sendBtn = $('#mSendBtn');
     var composer = $('#mComposer');
+    var micBtn = $('#mMicBtn');
     var banner = $('#mConnBanner');
     var connDot = $('#mConnDot');
     var drawerConnDot = $('#mDrawerConnDot');
@@ -31,8 +32,14 @@
     /* ---------- API 基址（单点；MA3 接候选切换） ----------
      * 缺省 ''=同源相对路径（mobile.html 经 /console/mobile.html 同源托管，
      * 对齐 console.js 的相对路径策略——探活函数已按 base 参数化）。 */
-    var BASE = (typeof window.__XJ3_MOBILE_BASE === 'string')
-        ? window.__XJ3_MOBILE_BASE : '';
+    var BASE = (function () {
+        try {
+            var saved = localStorage.getItem('xj3_mobile_base');
+            if (saved) { return saved; }
+        } catch (e) { /* 隐私模式忽略 */ }
+        return (typeof window.__XJ3_MOBILE_BASE === 'string')
+            ? window.__XJ3_MOBILE_BASE : '';
+    })();
 
     /* ==================== 1. 抽屉开合（MA1 原样） ==================== */
     function openDrawer() {
@@ -61,6 +68,10 @@
                     if (active) { it.setAttribute('aria-current', 'page'); }
                     else { it.removeAttribute('aria-current'); }
                 });
+                /* MA2.1（队长真机反馈"侧边栏按钮全死"）：每个条目必须有真实
+                 * 去处——聊天=回消息流，其余=打开对应面板（待办/快捷指令/
+                 * 连接设置/关于）。只关抽屉无下文=体感死按钮。 */
+                handleNav(item.dataset.nav);
                 closeDrawer();
             });
         });
@@ -203,7 +214,10 @@
     var linkTimer = null;
     function linkCheck() {
         probeBase(BASE).then(function (ok) {
+            var was = !banner.hidden;
             setConnState(ok);
+            updateBannerText();
+            if (ok) { flushDrafts(); }   /* 恢复在线→补发草稿箱（含启动遗留） */
         });
     }
     function startLinkCheck() {
@@ -390,9 +404,7 @@
     /* ==================== 9. 流式对话（拷贝自 console.js@ee66ef0：
      *   sendMessageStream L5042 / pump L5227 / handleEvent L5155 / ensureThinkCard L5080） ==================== */
     var generating = false;
-    var WD_FIRST_MS = 30000;     /* 首帧看门狗（桌面同款） */
-    var WD_FRAME_MS = 90000;     /* 帧间看门狗 */
-    var WD_TOTAL_MS = 190000;    /* 总闸 AbortController */
+    /* 看门狗/总闸已移交 XJ3Net.chatStream（双端唯一实现） */
 
     function el(tag, cls, textContent) {
         var e = document.createElement(tag);
@@ -454,11 +466,68 @@
         };
     }
 
+    /* ==================== 8.5 离线草稿箱（红线加固：断网不发虚空） ====================
+     * 断网时消息进 localStorage 队列（有序持久），探活恢复后按序自动补发；
+     * 横幅文案带队列数=离线模式可视化（红线 A2，2026-10-31 队长最高指令）。 */
+    var DRAFT_KEY = 'xj3_draft_queue';
+    function draftAll() {
+        try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || '[]'); }
+        catch (e) { return []; }
+    }
+    function draftSave(q) {
+        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(q)); } catch (e) { /* 隐私模式忽略 */ }
+    }
+    function draftPush(text) {
+        var q = draftAll();
+        q.push({ text: text, ts: Date.now() });
+        draftSave(q);
+        updateBannerText();
+    }
+    function draftCount() { return draftAll().length; }
+    function updateBannerText() {
+        var span = banner ? banner.querySelector('span') : null;
+        if (!span) { return; }
+        var n = draftCount();
+        span.textContent = n
+            ? '离线模式：' + n + ' 条消息存于草稿箱，恢复后自动发送'
+            : '连接断开，正在重连…';
+    }
+
+    function flushDrafts() {
+        var q = draftAll();
+        if (!q.length || generating) { return; }
+        var item = q[0];
+        toast('网络恢复，补发草稿箱消息（' + q.length + ' 条）…');
+        sendRaw(item.text, true, function (ok) {
+            if (ok) {
+                q.shift();
+                draftSave(q);
+                if (q.length) { flushDrafts(); }
+                else { updateBannerText(); toast('草稿箱已清空'); }
+            } else {
+                updateBannerText();      /* 补发失败→留队列等下一轮探活 */
+            }
+        });
+    }
+
     function sendMessage(text) {
+        if (generating) { return; }
+        /* 红线 A2：断网不发虚空——探活失败即入草稿箱（恢复自动补发） */
+        if (banner && !banner.hidden) {
+            draftPush(text);
+            appendUserMessage(text + '  ⏳（已存草稿箱）');
+            toast('当前离线：消息已存草稿箱，恢复后自动发送');
+            return;
+        }
+        sendRaw(text, false, null);
+    }
+
+    function sendRaw(text, skipUserBubble, doneCb) {
+        var failed = false;          /* 单次上报口径：失败只在 finally 报一次 */
         if (generating) { return; }
         generating = true;
         refreshSend();
-        appendUserMessage(text);
+        if (!skipUserBubble) { appendUserMessage(text); }   /* 草稿补发不重复画用户气泡 */
         var think = ensureLiveThink();
         var answerEl = null;
 
@@ -477,15 +546,9 @@
 
         var accAnswer = '';
         var accThink = '';
-        var controller = new AbortController();
-        var firstFrame = setTimeout(function () { controller.abort(); }, WD_FIRST_MS);
-        var frameTimer = firstFrame;
-        var totalTimer = setTimeout(function () { controller.abort(); }, WD_TOTAL_MS);
         var finished = false;
 
         function handleEvent(etype, data) {
-            clearTimeout(frameTimer);
-            frameTimer = setTimeout(function () { controller.abort(); }, WD_FRAME_MS);
             if (etype === 'think' && data && data.delta) {
                 accThink += data.delta;
                 think.addLine(data.delta);
@@ -497,9 +560,6 @@
                 followIfPinned();
             } else if (etype === 'done') {
                 finished = true;
-                clearTimeout(firstFrame);
-                clearTimeout(frameTimer);
-                clearTimeout(totalTimer);
                 var parts = splitThinkBlock((data && data.reply) || accAnswer);
                 var row = answerEl ? answerEl.parentNode.parentNode : null;
                 /* 乐观卡退役：done 后由静态折叠卡接位（E2E 实锤：不移除
@@ -522,52 +582,29 @@
                 followIfPinned();
             } else if (etype === 'error') {
                 finished = true;
-                clearTimeout(firstFrame);
-                clearTimeout(frameTimer);
-                clearTimeout(totalTimer);
                 if (think.row && think.row.parentNode) { think.row.remove(); }
                 appendErrorBubble('❌ ' + ((data && data.error) || '请求失败，稍后再试'));
                 followIfPinned();
+                failed = true;                   /* 服务端错误帧=草稿补发失败，留队重试 */
             }
         }
 
-        fetch(BASE + '/api/chat/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text }),
-            signal: controller.signal
-        }).then(function (res) {
-            if (!res.ok || !res.body) { throw new Error('HTTP ' + res.status); }
-            var reader = res.body.getReader();
-            var decoder = new TextDecoder();
-            var buffer = '';
-            function pump() {
-                return reader.read().then(function (chunk) {
-                    if (chunk.done) { return; }
-                    buffer += decoder.decode(chunk.value, { stream: true });
-                    var frames = buffer.split('\n\n');
-                    buffer = frames.pop();
-                    frames.forEach(function (frame) {
-                        var etype = null;
-                        var payload = '';
-                        frame.split('\n').forEach(function (line) {
-                            if (line.indexOf('event:') === 0) {
-                                etype = line.slice(6).trim();
-                            } else if (line.indexOf('data:') === 0) {
-                                payload += line.slice(5).trim();
-                            }
-                        });
-                        if (!etype || !payload) { return; }
-                        try {
-                            handleEvent(etype, JSON.parse(payload));
-                        } catch (e) { /* 坏帧丢弃（桌面同款容错） */ }
-                    });
-                    return pump();
-                });
-            }
-            return pump();
+        XJ3Net.chatStream({
+            message: text,
+            base: BASE,
+            onFrame: function (etype, data) {
+                try { handleEvent(etype, data); } catch (e) { /* 帧处置异常不上抛（移动口径） */ }
+            },
         }).catch(function (e) {
             if (finished) { return; }
+            if (e && e.xj3Watchdog) {
+                /* 看门狗中断：报错不转 legacy（桌面同款口径） */
+                if (think.row && think.row.parentNode) { think.row.remove(); }
+                appendErrorBubble('❌ ⏱️ 长时间无响应已自动中断——请直接重试');
+                followIfPinned();
+                failed = true;
+                return;
+            }
             /* 流式失败 → legacy 单帧回退（拷贝自 console.js sendMessageLegacy L5281） */
             fetch(BASE + '/api/chat', {
                 method: 'POST',
@@ -583,13 +620,13 @@
             }).catch(function () {
                 appendErrorBubble('❌ 网络异常——请检查与主机的连接');
                 followIfPinned();
+                failed = true;
             });
         }).finally(function () {
-            clearTimeout(firstFrame);
-            clearTimeout(frameTimer);
-            clearTimeout(totalTimer);
+            /* 看门狗/总闸已移交 XJ3Net 核心（唯一实现）——此处只管生成态收尾 */
             generating = false;
             refreshSend();
+            if (doneCb) { doneCb(!failed); }   /* 单次上报（成功=补发成功出队） */
         });
     }
 
@@ -613,23 +650,42 @@
      *                        bus_reply L4497 + collab_msg L4526 的移动端形态） ==================== */
     function initUiEvents() {
         if (typeof EventSource !== 'function') { return; }
-        var es = new EventSource(BASE + '/api/events');
-        es.onerror = function () {
-            setConnState(false);          /* SSE 断=连接异常，横幅示警；EventSource 自动重连 */
-        };
-        es.onopen = function () { linkCheck(); };
-        es.addEventListener('bus_reply', function (ev) {
+        /* 排雷批：指数退避重连（2s 起、30s 封顶+抖动）——多 tab/后台线程
+         * 同时连 /api/events 时不再以固定 3s 硬重试打后端；恢复即清退避。 */
+        var es = null;
+        var esBackoff = 2000;
+        var esTimer = null;
+        function esConnect() {
+            es = new EventSource(BASE + '/api/events');
+            es.onopen = function () {
+                esBackoff = 2000;         /* 恢复清退避 */
+                linkCheck();
+            };
+            es.onerror = function () {
+                setConnState(false);      /* SSE 断=连接异常，横幅示警 */
+                try { es.close(); } catch (e) { /* 忽略 */ }
+                es = null;
+                if (esTimer) { clearTimeout(esTimer); }
+                var delay = esBackoff + Math.floor(Math.random() * 800);
+                esBackoff = Math.min(30000, esBackoff * 2);
+                esTimer = setTimeout(esConnect, delay);
+            };
+            es.addEventListener('bus_reply', busReplyHandler);
+            es.addEventListener('collab_msg', collabMsgHandler);
+        }
+        var busReplyHandler = function (ev) {
             try {
                 var d = JSON.parse(ev.data);
                 if (d && d.reply) { appendBotMessage(d.reply, d.source); }
             } catch (e) { /* 坏帧丢弃 */ }
-        });
-        es.addEventListener('collab_msg', function (ev) {
+        };
+        var collabMsgHandler = function (ev) {
             try {
                 var m = JSON.parse(ev.data);
                 if (m && m.hitl) { renderHitlCard(m); }
             } catch (e) { /* 坏帧丢弃 */ }
-        });
+        };
+        esConnect();
     }
 
     /* ==================== 12. HITL 确认卡（镜像 console.js renderCollabMsg L4542 /
@@ -704,11 +760,292 @@
         followIfPinned();
     }
 
+    /* ==================== 6.5 面板系统（MA2.1：抽屉条目的真实去处） ====================
+     * 待办=真实列表（/api/todos + done/reopen）；快捷指令=chip 直发；
+     * 连接设置=连接信息+刷新+清缓存；关于=版本+免责。 */
+    function handleNav(nav) {
+        if (nav === 'chat') { closePanel(); return; }
+        openPanel(nav);
+    }
+
+    var panel = $('#mPanel');
+    var panelTitle = $('#mPanelTitle');
+    var panelBody = $('#mPanelBody');
+    var panelBack = $('#mPanelBack');
+    if (panelBack) { panelBack.addEventListener('click', closePanel); }
+
+    function openPanel(nav) {
+        if (!panel) { return; }
+        panel.hidden = false;
+        var titles = { todo: '待办', quick: '快捷指令', settings: '连接设置', about: '关于' };
+        panelTitle.textContent = titles[nav] || '';
+        panelBody.textContent = '';
+        if (nav === 'todo') { renderTodoPanel(panelBody); }
+        else if (nav === 'quick') { renderQuickPanel(panelBody); }
+        else if (nav === 'settings') { renderSettingsPanel(panelBody); }
+        else if (nav === 'about') { renderAboutPanel(panelBody); }
+    }
+
+    function closePanel() {
+        if (panel) { panel.hidden = true; panelBody.textContent = ''; }
+    }
+
+    function toast(text, isError) {
+        var t = el('div', 'toast' + (isError ? ' toast--err' : ''), text);
+        document.body.appendChild(t);
+        setTimeout(function () { t.classList.add('is-shown'); }, 30);
+        setTimeout(function () {
+            t.classList.remove('is-shown');
+            setTimeout(function () { t.remove(); }, 300);
+        }, 2600);
+    }
+
+    /* ---- 待办面板：/api/todos + done/reopen ---- */
+    function renderTodoPanel(body) {
+        body.textContent = '加载中…';
+        fetch(BASE + '/api/todos').then(function (r) { return r.json(); })
+            .then(function (res) {
+                body.textContent = '';
+                if (!res || res.code !== 200 || !res.data || !res.data.todos) {
+                    body.appendChild(el('div', 'panel-hint', '待办加载失败'));
+                    return;
+                }
+                var todos = res.data.todos || [];
+                var groups = [
+                    { key: 'pending', label: '未完成', items: todos.filter(function (t) { return t.status === 'pending'; }) },
+                    { key: 'done', label: '已完成', items: todos.filter(function (t) { return t.status !== 'pending'; }) },
+                ];
+                groups.forEach(function (g) {
+                    if (!g.items.length) { return; }
+                    body.appendChild(el('div', 'panel-group', g.label + '（' + g.items.length + '）'));
+                    g.items.forEach(function (t) {
+                        var row = el('button', 'todo-row' + (g.key === 'done' ? ' todo-row--done' : ''));
+                        row.type = 'button';
+                        var dot = el('span', 'todo-dot');
+                        var txt = el('span', 'todo-text', String(t.content || t.text || t.title || ''));
+                        row.appendChild(dot);
+                        row.appendChild(txt);
+                        if (t.priority) {
+                            row.appendChild(el('span', 'todo-pri', String(t.priority)));
+                        }
+                        row.addEventListener('click', function () {
+                            var isDone = g.key === 'done';
+                            var action = isDone ? 'reopen' : 'done';
+                            fetch(BASE + '/api/todos/' + t.id + '/' + action, { method: 'POST' })
+                                .then(function (r) { return r.json(); })
+                                .then(function (j) {
+                                    if (j && j.code === 200) { renderTodoPanel(body); }
+                                    else { toast((j && j.error) || '操作失败', true); }
+                                })
+                                .catch(function () { toast('网络异常', true); });
+                        });
+                        body.appendChild(row);
+                    });
+                });
+                if (!todos.length) {
+                    body.appendChild(el('div', 'panel-hint', '待办清单是空的——对我说"记个待办"就行。'));
+                }
+            })
+            .catch(function () { body.textContent = '待办加载失败（网络异常）'; });
+    }
+
+    /* ---- 快捷指令面板：chip 直发（对齐桌面 PLUGIN_QUICK_ACTIONS 可用子集） ---- */
+    function renderQuickPanel(body) {
+        body.appendChild(el('div', 'panel-hint', '点一下=直接对小橘说这句话：'));
+        var grid = el('div', 'quick-grid');
+        [
+            { label: '记个待办', text: '帮我记个待办：' },
+            { label: '系统自检', text: '系统自检' },
+            { label: '掷骰子', text: '掷骰子' },
+            { label: '帮我选股', text: '帮我选股' },
+        ].forEach(function (q) {
+            var chip = el('button', 'quick-chip', q.label);
+            chip.type = 'button';
+            chip.addEventListener('click', function () {
+                closePanel();
+                if (q.text.endsWith('：')) {
+                    input.value = q.text;      /* 需要补内容的指令：填入输入框 */
+                    input.focus();
+                    autoGrow();
+                    refreshSend();
+                } else {
+                    sendMessage(q.text);       /* 完整指令：直接发 */
+                }
+            });
+            grid.appendChild(chip);
+        });
+        body.appendChild(grid);
+    }
+
+    /* ---- 连接设置面板 ---- */
+    function renderSettingsPanel(body) {
+        body.textContent = '';
+        var info = el('div', 'panel-card');
+        info.appendChild(el('div', 'panel-line', '连接地址：' + (BASE || '同源（当前页面托管地址）')));
+        var online = !banner.hidden ? '重连中' : '已连接';
+        info.appendChild(el('div', 'panel-line', '连接状态：' + online));
+        body.appendChild(info);
+        var addrWrap = el('div', 'panel-card');
+        addrWrap.appendChild(el('div', 'panel-line', '服务器地址（APK/跨机场景填写，如 http://192.168.31.x:5003）：'));
+        var addrInput = el('input', 'hitl-input');
+        addrInput.type = 'text';
+        addrInput.value = BASE;
+        addrInput.placeholder = '留空=同源';
+        addrInput.setAttribute('aria-label', '服务器地址');
+        addrWrap.appendChild(addrInput);
+        var saveBtn = el('button', 'panel-btn', '保存地址并重连');
+        saveBtn.type = 'button';
+        saveBtn.addEventListener('click', function () {
+            var v = addrInput.value.trim().replace(/\/+$/, '');
+            try { localStorage.setItem('xj3_mobile_base', v); } catch (e) { /* 忽略 */ }
+            location.reload();
+        });
+        addrWrap.appendChild(saveBtn);
+        body.appendChild(addrWrap);
+        var act = el('button', 'panel-btn', '立即检测连接');
+        act.type = 'button';
+        act.addEventListener('click', function () {
+            linkCheck();
+            toast('已发起连接检测');
+        });
+        body.appendChild(act);
+        var clear = el('button', 'panel-btn panel-btn--warn', '清除本页数据并刷新');
+        clear.type = 'button';
+        clear.addEventListener('click', function () {
+            try { localStorage.clear(); sessionStorage.clear(); } catch (e) { /* 忽略 */ }
+            location.reload();
+        });
+        body.appendChild(clear);
+        body.appendChild(el('div', 'panel-hint',
+            '说明：当前经同源/局域网直连主机。独立中继通道（账号绑定+多终端管控）已立项调研，见《独立中继服务器架构设计方案》。'));
+    }
+
+    /* ---- 关于面板 ---- */
+    function renderAboutPanel(body) {
+        body.textContent = '加载中…';
+        fetch(BASE + '/api/status').then(function (r) { return r.json(); })
+            .then(function (res) {
+                body.textContent = '';
+                var v = (res && res.data && res.data.version) || '未知';
+                var card = el('div', 'panel-card');
+                card.appendChild(el('div', 'panel-line', '小橘3号 移动端'));
+                card.appendChild(el('div', 'panel-line', '服务版本：v' + v));
+                card.appendChild(el('div', 'panel-line', '定位：本地个人辅助 AI 管家'));
+                body.appendChild(card);
+                body.appendChild(el('div', 'panel-hint',
+                    '⚠️ 免责提示：自动化操作可能存在误差，重要文件请提前备份。'));
+            })
+            .catch(function () {
+                body.textContent = '';
+                body.appendChild(el('div', 'panel-hint', '版本信息获取失败（离线？）'));
+            });
+    }
+
+    /* ==================== 6.6 语音输入（MA2.1：麦克风必须活） ====================
+     * getUserMedia 权限申请 → MediaRecorder 录音 → POST /api/stt/transcribe
+     * （PyAV 解码+Whisper，与桌面 STT 同门槛）→ 文字填入输入框（可改后发送）。 */
+    var mediaStream = null;
+    var mediaRecorder = null;
+    var chunks = [];
+
+    function setMicRecording(on) {
+        micBtn.classList.toggle('mic-rec', on);
+        micBtn.setAttribute('aria-label', on ? '停止录音' : '语音输入');
+    }
+
+    function bindMic() {
+        micBtn.addEventListener('click', function () {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();          /* 停止→转写→填输入框 */
+                return;
+            }
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                toast('当前环境不支持麦克风（需 HTTPS/权限）', true);
+                return;
+            }
+            navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+                mediaStream = stream;
+                try {
+                    mediaRecorder = new MediaRecorder(stream);
+                } catch (e) {
+                    toast('录音器初始化失败：' + e.message, true);
+                    stream.getTracks().forEach(function (t) { t.stop(); });
+                    return;
+                }
+                chunks = [];
+                mediaRecorder.ondataavailable = function (e) {
+                    if (e.data && e.data.size) { chunks.push(e.data); }
+                };
+                mediaRecorder.onstop = function () {
+                    mediaStream.getTracks().forEach(function (t) { t.stop(); });
+                    setMicRecording(false);
+                    var blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+                    if (blob.size < 1000) { toast('录音太短', true); return; }
+                    toast('转写中…');
+                    var fd = new FormData();
+                    fd.append('audio', blob, 'voice.webm');
+                    fetch(BASE + '/api/stt/transcribe', { method: 'POST', body: fd })
+                        .then(function (r) { return r.json(); })
+                        .then(function (j) {
+                            if (j && j.code === 200) {
+                                var text = (j.data && j.data.text) || '';
+                                if (text) {
+                                    input.value = (input.value ? input.value + ' ' : '') + text;
+                                    input.focus();
+                                    autoGrow();
+                                    refreshSend();
+                                    toast('已转写');
+                                } else {
+                                    toast((j.data && j.data.note) || '没听清', true);
+                                }
+                            } else {
+                                toast((j && j.error) || '转写失败', true);
+                            }
+                        })
+                        .catch(function () { toast('转写请求失败', true); });
+                };
+                mediaRecorder.start();
+                setMicRecording(true);
+                toast('开始录音，再点一次结束');
+            }).catch(function (e) {
+                toast('麦克风权限被拒绝：' + (e.name || e.message || ''), true);
+            });
+        });
+    }
+
+    /* ==================== 6.7 附件上传（MA3：复用 doc_ingest 解析链） ==================== */
+    function bindAttach() {
+        var attachBtn = $('#mAttachBtn');
+        var fileInput = $('#mAttachFile');
+        if (!attachBtn || !fileInput) { return; }
+        attachBtn.addEventListener('click', function () { fileInput.click(); });
+        fileInput.addEventListener('change', function () {
+            var file = fileInput.files && fileInput.files[0];
+            fileInput.value = '';                 /* 允许重复选同一文件 */
+            if (!file) { return; }
+            toast('附件上传中：' + file.name);
+            var fd = new FormData();
+            fd.append('file', file, file.name);
+            fetch(BASE + '/api/attach_upload', { method: 'POST', body: fd })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    if (j && j.code === 200) {
+                        toast('📎 附件已就绪：' + (j.data && j.data.name) + '（随下一条消息发送）');
+                    } else {
+                        toast('❌ ' + ((j && j.error) || '附件上传失败'), true);
+                    }
+                })
+                .catch(function () { toast('附件上传失败（网络）', true); });
+        });
+    }
+
     /* ==================== 初始化 ==================== */
     function init() {
         bindDrawer();
         bindStream();
         bindComposer();
+        bindMic();
+        bindAttach();
         bindViewportFallback();
         following = true;
         scrollToBottom(false);

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>小橘3号 · 崩溃兜底</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; background:#7f1d1d;
+         color:#fff; font-family:sans-serif; text-align:center; padding:24px; }
+  h1 { font-size:22px; margin:0 0 12px; }
+  p { font-size:14px; opacity:.85; margin:0 0 28px; line-height:1.7; }
+  button { min-width:200px; min-height:48px; margin:8px 0; font-size:16px;
+           border:0; border-radius:12px; padding:12px 20px; }
+  .retry { background:#fff; color:#7f1d1d; font-weight:700; }
+  .reboot { background:rgba(255,255,255,0.15); color:#fff; }
+</style>
+</head>
+<body>
+  <h1>⚠️ APP 崩溃了</h1>
+  <p>界面进程发生异常已自动接管。<br>点击重试重新加载界面；若反复崩溃请点重启。</p>
+  <button class="retry" onclick="location.href='mobile.html'">重试</button>
+  <button class="reboot" onclick="location.href='mobile.html?reboot=' + Date.now()">重启界面</button>
+</body>
+</html>

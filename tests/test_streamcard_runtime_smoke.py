@@ -213,8 +213,10 @@ class StreamCardRuntimeSmokeTests(unittest.TestCase):
     def test_stream_and_legacy_runtime_smoke(self):
         if not shutil.which("node"):
             self.skipTest("环境无 node，跳过运行时烟雾")
+        core = open(os.path.join(PROJECT_ROOT, "xj3_network_core.js"),
+                    encoding="utf-8").read()
         src = open(os.path.join(PROJECT_ROOT, "console.js"), encoding="utf-8").read()
-        script = HARNESS + "\n" + src + "\n" + FOOTER
+        script = HARNESS + "\n" + core + "\n" + src + "\n" + FOOTER
         proc = subprocess.run(["node"], input=script.encode("utf-8"),
                               capture_output=True, timeout=60)
         self.assertEqual(proc.returncode, 0,

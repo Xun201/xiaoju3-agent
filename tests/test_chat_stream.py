@@ -269,10 +269,17 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
                   encoding="utf-8") as f:
             return f.read()
 
+    def _core(self):
+        with open(os.path.join(PROJECT_ROOT, "xj3_network_core.js"),
+                  encoding="utf-8") as f:
+            return f.read()
+
     def test_stream_branch_and_fallback(self):
         js = self._js()
-        self.assertIn("'/api/chat/stream'", js)
-        self.assertIn("getReader()", js)
+        core = self._core()   # 网络编排唯一实现（排雷批迁移）
+        self.assertIn("'/api/chat/stream'", core)
+        self.assertIn("getReader()", core)
+        self.assertIn("XJ3Net.chatStream({", js)   # 桌面已换核
         self.assertIn("sendMessageLegacy", js)     # 回退函数在位
         self.assertIn("sendMessageStream(text, loadingMsg, rotateTimer)",
                       js)
@@ -282,8 +289,9 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
 
     def test_progressive_render_anchors(self):
         js = self._js()
+        core = self._core()
         self.assertIn("think-live", js)            # 直出思维流（2026-10-22 二轮拍板）
-        self.assertIn("handleEvent(etype, JSON.parse(payload))", js)
+        self.assertIn("opts.onFrame(etype, JSON.parse(payload))", core)
         self.assertIn("textCategory" if False else "answerAcc += (data.delta || '')",
                       js)                          # answer 增量追加
         self.assertIn("escapeHtml(note)" if False else
@@ -311,13 +319,11 @@ class ChatStreamFrontendAnchorTests(unittest.TestCase):
         # window.history 内置对象，appendChild/contains 全炸——C2 遗留，
         # "实时卡"从未渲染、回退回复不显示，全靠轮询兜底掩盖）
         self.assertIn(
-            "const history = document.getElementById('chat-history');\n"
-            "        // ⏱️ 总闸 190s AbortController", js)   # 作用域解耦自取+总闸守护
-        self.assertIn("fetch('/api/chat/stream', {\n"
-                      "            method: 'POST',\n"
-                      "            headers: { 'Content-Type': 'application/json' },\n"
-                      "            body: JSON.stringify({ message: text }),\n"
-                      "            signal: ac.signal", js)   # AbortController 兜底（问题 1）
+            "const history = document.getElementById('chat-history');", js)   # 作用域解耦自取（总闸已迁核心）
+        core = open(os.path.join(PROJECT_ROOT, "xj3_network_core.js"),
+                    encoding="utf-8").read()
+        self.assertIn("fetch((opts.base || '') + '/api/chat/stream', {", core)
+        self.assertIn("signal: aborter.signal", core)   # AbortController 兜底（问题 1，核心实现）
         self.assertIn(
             "const history = document.getElementById('chat-history');\n        fetch('/api/chat'",
             js)

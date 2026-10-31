@@ -210,9 +210,11 @@ class ThinkLiveStyleTests(unittest.TestCase):
         self.assertIn("@keyframes thinkBreath", html)
         self.assertIn("@keyframes thinkSkeletonShimmer", html)
         js = self.console_js
-        self.assertIn("setTimeout(fireWatchdog, 30000)", js)
-        self.assertIn("setTimeout(fireWatchdog, 90000)", js)
-        self.assertIn("watchdogFired", js)
+        core = open(os.path.join(PROJECT_ROOT, "xj3_network_core.js"),
+                    encoding="utf-8").read()
+        self.assertIn("setTimeout(function () { fireWatchdog(); }, 30000);", core)   # 看门狗唯一实现（排雷批迁核心）
+        self.assertIn("setTimeout(function () { fireWatchdog(); }, 90000);", core)
+        self.assertIn("watchdogFired = true", core)
 
 
 # ---------------------------------------------------------------------------

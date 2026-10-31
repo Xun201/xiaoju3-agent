@@ -2036,7 +2036,7 @@ class CoTDiagnosticAndLiveFallbackTests(unittest.TestCase):
         """严格分流（队长拍板红线）：流式 handleEvent 内 think 分支只写
         thinkAcc/思维流块；answer 分支只写 answerAcc/正文气泡——互不沾。"""
         start = self.console_js.index("function handleEvent")
-        end = self.console_js.index("function pump", start)
+        end = self.console_js.index("return XJ3Net.chatStream", start)
         body = self.console_js[start:end]
         think_at = body.index("etype === 'think'")
         answer_at = body.index("etype === 'answer'")
