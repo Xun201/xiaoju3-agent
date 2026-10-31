@@ -141,6 +141,71 @@ def api_pairing_info():
                     "data": {"ips": _local_lan_ips(), "port": 5003}})
 
 
+# ============================ 桌面技能（DA1 录制回放） ============================
+# 2026-10-31 队长拍板立项：🧰 工具面板「技能录制」入口的后端。desktop_tools
+# lazy import（仪表盘启动零负担）；敏感窗口硬拦截在 desktop_tools 内 fail-closed。
+# 面板直属主人（儿童锁口径：网页控制台视为成人设备），模型工具 desktop_* 另受
+# LV4 门禁（tool_registry level:4）。
+
+def _desktop():
+    from importlib import import_module
+    return import_module("desktop_tools")
+
+
+@app.route('/api/desktop/record/start', methods=['POST'])
+def api_desktop_record_start():
+    """开始录制桌面操作（body: {name, trigger}）。"""
+    payload = request.get_json(silent=True) or {}
+    try:
+        ok, data = _desktop().api_record_start(
+            payload.get("name"), payload.get("trigger", ""))
+        return jsonify({"code": 200 if ok else 400, "data": data})
+    except Exception as e:
+        return jsonify({"code": 500, "data": {"message": "录制启动失败: %s" % e}})
+
+
+@app.route('/api/desktop/record/stop', methods=['POST'])
+def api_desktop_record_stop():
+    """停止录制并保存技能。"""
+    try:
+        ok, data = _desktop().api_record_stop()
+        return jsonify({"code": 200 if ok else 400, "data": data})
+    except Exception as e:
+        return jsonify({"code": 500, "data": {"message": "停止失败: %s" % e}})
+
+
+@app.route('/api/desktop/record/status')
+def api_desktop_record_status():
+    """录制状态轮询（录制中 1.5s 一次）。"""
+    try:
+        return jsonify({"code": 200, "data": _desktop().api_record_status()})
+    except Exception as e:
+        return jsonify({"code": 500, "data": {"recording": False,
+                                              "message": str(e)}})
+
+
+@app.route('/api/desktop/skills')
+def api_desktop_skills():
+    """技能库清单。"""
+    try:
+        ok, skills = _desktop().api_skills_list()
+        return jsonify({"code": 200 if ok else 500, "data": {"skills": skills}})
+    except Exception as e:
+        return jsonify({"code": 500, "data": {"skills": [],
+                                              "message": str(e)}})
+
+
+@app.route('/api/desktop/skills/run', methods=['POST'])
+def api_desktop_skill_run():
+    """回放技能（真实执行鼠标键盘；敏感窗口在 desktop_tools 内硬拦截）。"""
+    payload = request.get_json(silent=True) or {}
+    try:
+        ok, data = _desktop().api_skill_run(payload.get("name"))
+        return jsonify({"code": 200 if ok else 400, "data": data})
+    except Exception as e:
+        return jsonify({"code": 500, "data": {"message": "回放失败: %s" % e}})
+
+
 @app.after_request
 def _apk_cors_headers(resp):
     """APK 遥控壳跨域放行（2026-10-29）：Capacitor WebView 源
@@ -283,8 +348,13 @@ def console():
     # 桌宠动态引导（2026-10-28 默认关）：js 赋值形态的引用同样带版本参数
     html = html.replace("s.src = '/console/desktop-pet.js';",
                         f"s.src = '/console/desktop-pet.js?v={_mtime_ver('desktop-pet.js')}';")
-    html = html.replace('src="/console/console.js"',
-                        f'src="/console/console.js?v={_mtime_ver("console.js")}"')
+    # 2026-10-31 修 fc3b68c 回归：index.html 裸引用被改为带 ?v= 的静态版本
+    # （APK file:// 资产需要静态 ?v=，桌面经 Flask 托管需要 mtime 动态版本）
+    # ——replace 子串失配导致桌面端版本注入失效（mtime 变了版本不变）。
+    # 正则化：无论源是裸引用还是 ?v= 引用，一律重写为 mtime 动态版本。
+    html = re.sub(r'src="/console/console\.js(?:\?v=[^"]*)?"',
+                  'src="/console/console.js?v=' + _mtime_ver("console.js") + '"',
+                  html)
     return html
 
 

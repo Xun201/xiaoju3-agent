@@ -732,14 +732,16 @@ class SmartAskToolTests(unittest.TestCase):
         brain.tool_fuse.reset()
 
     def test_whitelist_matches_fifteen_tools(self):
-        # 2026-10-02 权限重构：+restart_service（14 项）；2026-10-04：+extract_todos（15 项）
+        # 2026-10-02：+restart_service（14）；2026-10-04：+extract_todos（15）；
+        # 2026-10-31 DA1：+desktop_* 三件（18）
         self.assertEqual(
             sorted(tools.TOOL_WHITELIST),   # #312 R1-a：brain 快照退役，消费口=tools 属性访问
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
                     "vision_tap_element", "ui_tap_element", "web_search",
                     "system_manage", "read_core_memory", "restart_service",
-                    "extract_todos"]))
+                    "extract_todos", "desktop_list_skills", "desktop_run_skill",
+                    "desktop_list_windows"]))
 
     def test_build_messages_keeps_wired_system_entries(self):
         """前情提要/长期记忆注入的 system 条目应保留，其余 system 剔除（§10 #2/#3 接线）。"""

@@ -146,7 +146,7 @@ class PetOnlineRegressionTests(unittest.TestCase):
         console.js 仍正常加载。"""
         stripped = _strip_html_comments(self.index_html)
         self.assertNotIn("desktop-pet.js", stripped)
-        self.assertIn('<script src="/console/console.js"></script>', stripped)
+        self.assertRegex(stripped, r'<script src="/console/console\.js(\?v=[^"]*)?"></script>')
         # pet_window.py（原生窗口）在项目根目录存在
         self.assertTrue(os.path.exists(os.path.join(PROJECT_ROOT, "pet_window.py")))
 

@@ -2355,6 +2355,8 @@ var qrcode = function() {
             library: a + '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>',
             message: a + '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
             trash: a + '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
+            disc: a + '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>',
+            play: a + '<polygon points="6 3 20 12 6 21 6 3"/></svg>',
             x: a + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
             fileText: a + '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
             pin: a + '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg>',
@@ -7701,6 +7703,149 @@ var qrcode = function() {
             .catch(function (e) { body.textContent = '读取失败: ' + e; });
     }
 
+    // 🎯 桌面技能（DA1 录制回放）：状态行+开始/停止录制+技能库列表
+    function loadDesktopInto(body) {
+        renderDesktopBody(body);
+    }
+
+    function renderDesktopBody(body) {
+        if (body._xj3DeskTimer) { clearTimeout(body._xj3DeskTimer); body._xj3DeskTimer = null; }
+        body.textContent = '';
+
+        const note = document.createElement('div');
+        note.style.cssText = 'font-size:12px;color:var(--color-text-hint,#999);margin-bottom:8px;';
+        note.textContent = '用法：填技能名→点开始录制→去目标窗口正常操作→回来点停止录制；之后点 ▶ 一键回放。敏感窗口（银行/支付/密码类）自动拦截。';
+        body.appendChild(note);
+
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;';
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.placeholder = '技能名，如：整理报表';
+        nameInput.style.cssText = 'flex:1;min-width:140px;padding:8px 10px;'
+            + 'font-size:14px;border:1px solid var(--color-border,#e0e4ec);'
+            + 'border-radius:8px;outline:none;';
+        row.appendChild(nameInput);
+        const recBtn = document.createElement('button');
+        recBtn.className = 'header-btn';
+        recBtn.style.cssText = 'display:inline-flex;align-items:center;gap:6px;';
+        row.appendChild(recBtn);
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'header-btn';
+        refreshBtn.innerHTML = ICON_SVGS.refresh;
+        refreshBtn.title = '刷新';
+        refreshBtn.addEventListener('click', function () { renderDesktopBody(body); });
+        row.appendChild(refreshBtn);
+        body.appendChild(row);
+
+        const status = document.createElement('div');
+        status.style.cssText = 'font-size:13px;margin-bottom:10px;min-height:18px;';
+        body.appendChild(status);
+
+        const list = document.createElement('div');
+        body.appendChild(list);
+
+        function post(url, payload, cb) {
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload || {})
+            }).then(function (r) { return r.json(); }).then(cb)
+                .catch(function (e) { status.textContent = '请求失败: ' + e; });
+        }
+
+        function pollStatus() {
+            fetch('/api/desktop/record/status').then(function (r) { return r.json(); })
+                .then(function (j) {
+                    const st = (j.data && j.data.recording) ? j.data : null;
+                    if (!body.isConnected) return;
+                    if (st) {
+                        recBtn.innerHTML = ICON_SVGS.disc + '<span>停止录制</span>';
+                        nameInput.disabled = true;
+                        status.textContent = '● 录制中「' + (st.name || '') + '」· 已捕获 '
+                            + (st.events || 0) + ' 事件 · 敏感拦截 '
+                            + (st.blocked_sensitive || 0) + ' · ' + (st.seconds || 0) + 's';
+                        body._xj3DeskTimer = setTimeout(pollStatus, 1500);
+                    } else {
+                        recBtn.innerHTML = ICON_SVGS.play + '<span>开始录制</span>';
+                        nameInput.disabled = false;
+                        if (!status.textContent) status.textContent = '空闲——填好技能名即可开始。';
+                    }
+                })
+                .catch(function () { status.textContent = '状态获取失败'; });
+        }
+
+        recBtn.addEventListener('click', function () {
+            fetch('/api/desktop/record/status').then(function (r) { return r.json(); })
+                .then(function (j) {
+                    const st = j.data || {};
+                    if (st.recording) {
+                        post('/api/desktop/record/stop', {}, function (r2) {
+                            const d = r2.data || {};
+                            status.textContent = d.message || '已停止';
+                            renderSkillList();
+                        });
+                    } else {
+                        const nm = (nameInput.value || '').trim()
+                            || ('技能_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, ''));
+                        post('/api/desktop/record/start', { name: nm }, function (r2) {
+                            status.textContent = (r2.data && r2.data.message) || '';
+                            pollStatus();
+                        });
+                    }
+                })
+                .catch(function (e) { status.textContent = '状态获取失败: ' + e; });
+        });
+
+        function renderSkillList() {
+            fetch('/api/desktop/skills').then(function (r) { return r.json(); })
+                .then(function (j) {
+                    list.textContent = '';
+                    const skills = (j.data && j.data.skills) || [];
+                    if (!skills.length) {
+                        const empty = document.createElement('div');
+                        empty.style.cssText = 'font-size:13px;opacity:.7;';
+                        empty.textContent = '技能库还是空的——录第一个吧。';
+                        list.appendChild(empty);
+                        return;
+                    }
+                    skills.forEach(function (s) {
+                        const line = document.createElement('div');
+                        line.style.cssText = 'display:flex;align-items:center;gap:8px;'
+                            + 'padding:6px 0;border-bottom:1px solid var(--color-border,#eef1f6);'
+                            + 'font-size:13px;';
+                        const label = document.createElement('span');
+                        label.style.cssText = 'flex:1;';
+                        label.textContent = s.name + '（' + s.steps + ' 步'
+                            + (s.trigger ? '· ' + s.trigger : '') + '）';
+                        line.appendChild(label);
+                        const runBtn = document.createElement('button');
+                        runBtn.className = 'header-btn';
+                        runBtn.innerHTML = ICON_SVGS.play;
+                        runBtn.title = '回放「' + s.name + '」';
+                        runBtn.addEventListener('click', function () {
+                            window.showConfirm('回放技能「' + s.name + '」',
+                                '将真实执行该技能录制的 ' + s.steps + ' 步鼠标键盘操作'
+                                + '（敏感窗口会自动拦截中止）。确定现在执行？',
+                                function () {
+                                    status.textContent = '回放中…';
+                                    post('/api/desktop/skills/run', { name: s.name },
+                                        function (r2) {
+                                            status.textContent = (r2.data && r2.data.message) || '';
+                                        });
+                                }, { confirmText: '执行回放' });
+                        });
+                        line.appendChild(runBtn);
+                        list.appendChild(line);
+                    });
+                })
+                .catch(function (e) { list.textContent = '技能库加载失败: ' + e; });
+        }
+
+        pollStatus();
+        renderSkillList();
+    }
+
     function closeToolsPanel() {
         const overlay = document.getElementById('tools-overlay');
         if (overlay) {
@@ -7794,6 +7939,12 @@ var qrcode = function() {
         const g2 = grid();
         g2.appendChild(buildToolCard('家电列表', 'HA 实体清单（只读，控制走对话）',
             function () { toggleToolBody('tool-ha-body', loadHaDevicesInto); }));
+
+        // 🎯 桌面技能（DA1 录制回放；敏感窗口硬拦截在后端 fail-closed）
+        sectionLabel('桌面技能', ICON_SVGS.disc);
+        const gDesk = grid();
+        gDesk.appendChild(buildToolCard('技能录制', '录制鼠标键盘操作→一键回放（敏感窗口自动拦截）',
+            function () { toggleToolBody('tool-desktop-body', loadDesktopInto); }));
 
         // 🔌 管理
         sectionLabel('管理', ICON_SVGS.plug);

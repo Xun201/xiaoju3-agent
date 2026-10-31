@@ -82,6 +82,20 @@ TOOL_MANIFEST = [
      "params": "url（完整分享链接，须以 https://chat.deepseek.com/share/ 开头）",
      "note": "当主人发来分享链接并表达“记下待办/整理清单”类意图时使用",
      "level": 2},
+    # ── 桌面技能（DA1 阶段一：录制回放；2026-10-31 立项，全套 Lv.4）──
+    {"name": "desktop_list_skills", "desc": "列出已保存的桌面操作技能"
+     "（录制回放，控制台 🧰 面板可录制）", "params": "无",
+     "level": 4, "module": "desktop_tools",
+     "handler": "desktop_tools:tool_list_skills"},
+    {"name": "desktop_run_skill", "desc": "回放一个已保存的桌面操作技能"
+     "（会真实执行录制时的鼠标键盘操作；敏感窗口自动拦截中止）",
+     "params": "name (技能名，先 desktop_list_skills 查询)",
+     "level": 4, "dangerous": True, "is_action": True,
+     "module": "desktop_tools", "handler": "desktop_tools:tool_run_skill"},
+    {"name": "desktop_list_windows", "desc": "列出当前打开的桌面窗口标题"
+     "（回放前确认目标窗口是否在场）", "params": "无",
+     "level": 4, "module": "desktop_tools",
+     "handler": "desktop_tools:tool_list_windows"},
     # ── 非协议能力声明（不进白名单/工具协议，仅权限分组在案）──
     {"name": "send_image", "desc": "QQ 发图（能力声明；实际门禁在 main.py "
      "/send_image 指令，模型不可直接调用）", "params": "无",

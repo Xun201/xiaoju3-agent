@@ -175,15 +175,16 @@ class WhitelistTests(ToolsTestBase):
     """白名单 15 项与 DANGER_TOOLS 集合语义。"""
 
     def test_whitelist_has_fifteen_tools(self):
-        # 14 项 + extract_todos = 15 项（2026-10-04 待办提取）
-        self.assertEqual(len(tools.TOOL_WHITELIST), 15)
+        # 15 项 + desktop_* 三件（DA1 2026-10-31 录制回放）= 18 项
+        self.assertEqual(len(tools.TOOL_WHITELIST), 18)
         self.assertEqual(
             sorted(tools.TOOL_WHITELIST),
             sorted(["list_files", "read_file", "write_file", "get_ha_devices",
                     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
                     "vision_tap_element", "ui_tap_element", "web_search",
                     "system_manage", "read_core_memory", "restart_service",
-                    "extract_todos"]))
+                    "extract_todos", "desktop_list_skills", "desktop_run_skill",
+                    "desktop_list_windows"]))
 
     def test_brain_whitelist_in_sync_with_tools(self):
         # 大脑入口白名单与工具层白名单逐元素一致（extract_todos 漏加 brain 侧
@@ -196,7 +197,8 @@ class WhitelistTests(ToolsTestBase):
         # 旧集合成员不变，门禁语义升级为 §7 新表（见各专项测试）
         self.assertEqual(
             tools.DANGER_TOOLS,
-            {"write_file", "adb_tap", "adb_swipe", "control_ha_device"},
+            {"write_file", "adb_tap", "adb_swipe", "control_ha_device",
+             "desktop_run_skill"},   # DA1 2026-10-31：技能回放=真实键鼠操作，入高危
         )
 
 

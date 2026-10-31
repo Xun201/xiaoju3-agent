@@ -23,13 +23,16 @@ _LEGACY_WHITELIST = [
     "control_ha_device", "adb_tap", "adb_swipe", "adb_screenshot",
     "vision_tap_element", "ui_tap_element", "web_search", "system_manage",
     "read_core_memory", "restart_service", "extract_todos",
+    "desktop_list_skills", "desktop_run_skill", "desktop_list_windows",
 ]
 _LEGACY_LV2 = {"read_file", "list_files", "extract_todos"}
 _LEGACY_LV3 = {"write_file"}
 _LEGACY_LV4 = {"adb_screenshot", "adb_tap", "adb_swipe", "ui_tap_element",
-               "vision_tap_element", "send_image", "restart_service"}
-_LEGACY_DANGER = {"write_file", "adb_tap", "adb_swipe", "control_ha_device"}
-_LEGACY_ACTION = {"control_ha_device", "adb_tap", "adb_swipe"}
+               "vision_tap_element", "send_image", "restart_service",
+               "desktop_list_skills", "desktop_run_skill", "desktop_list_windows"}
+_LEGACY_DANGER = {"write_file", "adb_tap", "adb_swipe", "control_ha_device",
+                  "desktop_run_skill"}
+_LEGACY_ACTION = {"control_ha_device", "adb_tap", "adb_swipe", "desktop_run_skill"}
 
 # 工具协议 15 行字面量快照（prompts.py 重构前原文，派生行必须逐字节一致）
 _LEGACY_PROMPT_BLOCK = """1. list_files - 列出工作区内的所有文件。参数：无
@@ -46,7 +49,10 @@ _LEGACY_PROMPT_BLOCK = """1. list_files - 列出工作区内的所有文件。�
 12. system_manage - 一键安装/卸载系统组件（仅 Lv.4 主人级可用）。参数：action (install/uninstall), component (组件名，仅允许字母数字._-)
 13. read_core_memory - 读取核心记忆库（仅 Lv.4 主人级可用）。参数：limit (可选，条数，默认 5)
 14. restart_service - 重启小橘3号自身进程（LV4 主人级专属，重启后需等待守护进程拉起，期间会短暂离线）。参数：无
-15. extract_todos - 提取 DeepSeek 分享链接里的待办事项并存入待办清单（后台处理，受理后立即返回）。参数：url（完整分享链接，须以 https://chat.deepseek.com/share/ 开头）。当主人发来分享链接并表达“记下待办/整理清单”类意图时使用。"""
+15. extract_todos - 提取 DeepSeek 分享链接里的待办事项并存入待办清单（后台处理，受理后立即返回）。参数：url（完整分享链接，须以 https://chat.deepseek.com/share/ 开头）。当主人发来分享链接并表达“记下待办/整理清单”类意图时使用。
+16. desktop_list_skills - 列出已保存的桌面操作技能（录制回放，控制台 🧰 面板可录制）。参数：无
+17. desktop_run_skill - 回放一个已保存的桌面操作技能（会真实执行录制时的鼠标键盘操作；敏感窗口自动拦截中止）。参数：name (技能名，先 desktop_list_skills 查询)
+18. desktop_list_windows - 列出当前打开的桌面窗口标题（回放前确认目标窗口是否在场）。参数：无"""
 
 # 模拟"新增插件模型工具"：一条登记 + handler 字符串（json:dumps 为
 # 离线可执行的真实函数，dumps(obj=..) 形参对应 args 键）
@@ -64,7 +70,7 @@ class ToolRegistrySnapshotTests(unittest.TestCase):
     def test_whitelist_matches_legacy(self):
         self.assertEqual(sorted(tool_registry.whitelist_names()),
                          sorted(_LEGACY_WHITELIST))
-        self.assertEqual(len(tool_registry.whitelist_names()), 15)
+        self.assertEqual(len(tool_registry.whitelist_names()), 18)
 
     def test_permission_sets_match_legacy(self):
         self.assertEqual(tool_registry.level_set(2), _LEGACY_LV2)
@@ -143,13 +149,13 @@ class NewToolRegistryOnlyTests(unittest.TestCase):
     def test_new_tool_appears_in_all_derivations(self):
         wl = tool_registry.whitelist_names(_EXTENDED)
         self.assertIn("weather_probe", wl)
-        self.assertEqual(len(wl), 16)                     # 15 + 1
+        self.assertEqual(len(wl), 19)                     # 18 + 1
         self.assertIn("weather_probe", tool_registry.level_set(3, _EXTENDED))
         self.assertIn("weather_probe", tool_registry.danger_set(_EXTENDED))
         self.assertIn("weather_probe", tool_registry.action_set(_EXTENDED))
         lines = tool_registry.prompt_tool_lines(_EXTENDED)
-        self.assertEqual(len(lines), 16)
-        self.assertTrue(lines[-1].startswith("16. weather_probe - 探测天气"))
+        self.assertEqual(len(lines), 19)
+        self.assertTrue(lines[-1].startswith("19. weather_probe - 探测天气"))
         self.assertIn("weather_probe",
                       tool_registry.plugin_tool_names(_EXTENDED))
 
@@ -180,10 +186,12 @@ class NewToolRegistryOnlyTests(unittest.TestCase):
         self.assertTrue(tool_registry.dispatch_plugin_tool(
             "never_registered", {}, manifest=_EXTENDED).startswith("❌"))
 
-    def test_real_manifest_has_no_handler_yet(self):
-        # 现网 16 条声明均为核心工具（执行体在 execute_tool 既有分支），
-        # handler 通道留给未来插件工具——本锚防"老工具被误改成动态分派"
-        self.assertEqual(tool_registry.plugin_tool_names(), [])
+    def test_real_manifest_handler_set_is_desktop_only(self):
+        # DA1（2026-10-31）：现网 handler 通道=desktop_* 三件（动态分派），
+        # 核心工具仍走 execute_tool 既有分支——本锚防"老工具被误改成动态分派"
+        self.assertEqual(sorted(tool_registry.plugin_tool_names()),
+                         ["desktop_list_skills", "desktop_list_windows",
+                          "desktop_run_skill"])
 
 
 if __name__ == "__main__":

@@ -54,6 +54,9 @@ datas=[
     ('index.html', '.'),               # 前端三件套（dashboard 从资源根直读）
     ('console.js', '.'),
     ('desktop-pet.js', '.'),
+    ('mobile.html', '.'),              # 移动端三件套（MA1 骨架，/console/mobile.html）
+    ('mobile.css', '.'),
+    ('mobile.js', '.'),
     ('.env.example', '.'),             # 首启配置模板（数据根引导用）
     ('mood_rules.json', '.'),          # #271① M1 规则表（缺它 frozen 静默回退最小词表——20261010 真机实锤）
     ('mood_tone.json', '.'),           # #271① M2 语气映射表（缺它 M2 静默失效）
@@ -144,6 +147,29 @@ datas=[
         'plugins.todo_aging',    # heartbeat 函数内 lazy import（modulegraph 可扫，显式列保险）
         'plugins.todo_text',     # #261：intent_router 字符串动态引用（importlib 对静态分析不可见，必须显式列）
         'plugins.todo_query',    # todo_query 意图（查待办直达）：intent_router 字符串动态引用，同上铁律
+        # ── 桌面技能 DA1（2026-10-31）：desktop_tools 经 tool_registry
+        #    "desktop_tools:handler" 动态引用，必须显式列（同上铁律）；
+        #    pynput 的 _win32 后端为函数内动态 import，漏列=冻结包即崩 ──
+        'desktop_tools',
+        'uiautomation',
+        'comtypes',
+        'comtypes.client',
+        'comtypes.stream',
+        'pynput',
+        'pynput.keyboard',
+        'pynput.mouse',
+        'pynput._util',
+        'pynput._util.win32',
+        'pynput.keyboard._win32',
+        'pynput.mouse._win32',
+        'pyautogui',
+        'pyscreeze',
+        'pygetwindow',
+        'pymsgbox',
+        'pytweening',
+        'mouseinfo',
+        'pyrect',
+        'pyperclip',
     ] + pw_hiddenimports + ytdlp_hiddenimports,
     hookspath=[],
     hooksconfig={},
